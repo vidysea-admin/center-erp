@@ -90,8 +90,23 @@ function PnlInner() {
 
   // Every tile is a button and every button names a key that exists in `detail`, so a tile can only
   // open the list its own number was summed from. Unrepresentable, rather than merely unlikely.
-  const tile = (key: string, label: string, value: any, sub?: string, tone?: "warn") => {
+  // QA-1949 (checker, cycle 1): this took a `value` argument, and the "No rate on the scheme" tile
+  // was passed `totals.accrued_unknown` (171) while opening `detail.unknown_rate` (27) - 144 of
+  // them batches with no closure figures at all, filed on screen under a heading about rates. The
+  // page and the manifest both CLAIM "a tile can only open the list its own number was summed
+  // from", and the claim was false for one of six tiles.
+  //
+  // Worse than the arithmetic: it accuses the wrong party. A finance reader seeing 171 batches
+  // under "No rate on the scheme" concludes the scheme master is unconfigured and goes to fix data
+  // that is fine - which is exactly the wrong conclusion I reached myself in QA-1947, four hours
+  // before shipping the screen that would have industrialised it.
+  //
+  // So the tile no longer ACCEPTS a number. It reads `detail[key].total` - the total of the very
+  // list it opens - and a disagreement is now unrepresentable rather than merely unlikely.
+  const tile = (key: string, label: string, fmt: (n: any) => any, sub?: string, tone?: "warn") => {
     const active = openKey === key;
+    const card = detail[key];
+    const value = card ? fmt(card.total) : <span className="text-gray-300">—</span>;
     return (
       <button key={key} type="button" onClick={() => setOpen(key)}
         aria-expanded={active} data-pnl-card={key}
@@ -168,12 +183,15 @@ function PnlInner() {
       )}
 
       <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        {tile("accrued", L.accrued ?? "Revenue earned", rupee(t.accrued), "certified head-count × the scheme rate")}
-        {tile("invoiced", L.invoiced ?? "Invoiced", rupee(t.invoiced), "what has actually been billed")}
-        {tile("received", L.received ?? "Received", rupee(t.received), "what has actually arrived")}
-        {tile("not_invoiced", "Earned, not invoiced", t.not_invoiced ?? 0, "done and never billed for", "warn")}
-        {tile("shortfall", L.shortfall ?? "Short received", rupee(t.shortfall), "billed more than came in", "warn")}
-        {tile("unknown_rate", L.unknown_rate ?? "No rate on the scheme", t.accrued_unknown ?? 0, "cannot be valued at all", "warn")}
+        {tile("accrued", L.accrued ?? "Revenue earned", rupee, "certified head-count × the scheme rate")}
+        {tile("invoiced", L.invoiced ?? "Invoiced", rupee, "what has actually been billed")}
+        {tile("received", L.received ?? "Received", rupee, "what has actually arrived")}
+        {tile("not_invoiced", "Earned, not invoiced", (n) => n ?? 0, "done and never billed for", "warn")}
+        {tile("shortfall", L.shortfall ?? "Short received", rupee, "billed more than came in", "warn")}
+        {/* The label says RATE, so the tile counts only the rate case. Batches with no closure
+            figures are a different fact and are stated in the amber note below, which now names
+            both causes separately instead of adding them together under one of them. */}
+        {tile("unknown_rate", L.unknown_rate ?? "No rate on the scheme", (n) => n ?? 0, "certified, but the scheme carries no rate", "warn")}
       </div>
 
       {open && (

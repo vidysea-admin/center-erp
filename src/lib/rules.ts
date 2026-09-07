@@ -5929,7 +5929,7 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     not_invoiced: [] as any[], shortfall: [] as any[], unknown_rate: [] as any[],
   };
 
-  let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0;
+  let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0, tNoClosure = 0, tNoRate = 0;
 
   for (const b of batches) {
     // The filter names a scheme the same way the programme does - by name. The screen's dropdown
@@ -5989,7 +5989,13 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     rows.push(row);
 
     tCost += cost;
-    if (accrued !== null) tAccrued += accrued; else tUnknown += 1;
+    if (accrued !== null) tAccrued += accrued;
+    else {
+      tUnknown += 1;
+      // Counted by CAUSE, from the inputs, not from `accrued === null`. Deriving the breakdown
+      // from the same test that produced the null is how QA-1950's tautology happened.
+      if (billable === null) tNoClosure += 1; else tNoRate += 1;
+    }
     if (invoiced !== null) tInvoiced += invoiced;
     if (received !== null) tReceived += received;
 
@@ -6046,8 +6052,17 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
       shortfall: shortfallTotal,
       batches: rows.length,
       accrued_unknown: tUnknown,
+      // QA-1949: "no closure figures yet" and "the scheme carries no rate" are DIFFERENT facts with
+      // different owners - the first is an operations gap, the second a master-data one - and
+      // reporting their sum under either heading sends somebody to fix the wrong thing.
+      accrued_unknown_no_closure: tNoClosure,
+      accrued_unknown_no_rate: tNoRate,
       accrued_note: tUnknown > 0
-        ? `${tUnknown} batch(es) could not be valued - no closure figures yet, or the scheme carries no rate. They are NOT counted as zero.`
+        ? [
+            `${tUnknown} batch(es) could not be valued, and they are NOT counted as zero.`,
+            tNoClosure ? `${tNoClosure} have no closure figures yet.` : "",
+            tNoRate ? `${tNoRate} are certified but their scheme carries no rate.` : "",
+          ].filter(Boolean).join(" ")
         : null,
       cost_note: cost_unattributed > 0
         ? "Cost not tagged to any batch is excluded from every per-batch margin above and shown separately, so the margins are not flattered by leaving it out."

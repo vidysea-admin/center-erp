@@ -3902,6 +3902,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       !!seededBatch?.linked, seedWhy);
 
 
+
+
+
     const pnl = await req(admin, "GET", "/api/reports/pnl");
     ok("QA-1831: the granted admin gets the P&L", pnl.status === 200, `got ${pnl.status}`);
     const d = pnl.data ?? {};
@@ -3912,34 +3915,98 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // THE accrual. Not "accrued is a number" - the exact multiplication, on every row that has both
     // halves. Nothing anywhere multiplied these two fields before this unit; both were on file and
     // dead.
-    const valued = reg.filter((r) => r.accrued !== null);
-    const wrong = valued.filter((r) => r.accrued !== r.billable * r.rate);
-    const seededRow = seededBatch ? reg.find((r) => String(r.key) === seededBatch.id) : null;
-    ok("QA-1831: the batch this block just certified is valued at head-count x rate, to the rupee",
-      // NOT `billable === 9`: if that batch happens to carry per-candidate rows, Rule 42 says the
-      // DERIVED figure wins and 9 is correctly discarded. The property is the multiplication and a
-      // head-count that exists at all - pinning the literal would fail for a right reason.
-      !!seededRow && seededRow.billable !== null && seededRow.rate !== null
-        && seededRow.accrued === seededRow.billable * seededRow.rate,
-      JSON.stringify(seededRow ? { billable: seededRow.billable, rate: seededRow.rate, accrued: seededRow.accrued, basis: seededRow.accrual_basis } : null));
-    ok("QA-1831: every valued row IS certified-head-count x the scheme's rate, to the rupee",
-      valued.length > 0 && wrong.length === 0,
-      wrong.length ? JSON.stringify(wrong.slice(0, 2))
-        : `${valued.length} row(s) checked - if 0, no batch has BOTH a closure head-count and a scheme rate: ${JSON.stringify(reg.slice(0, 3).map((r) => r.accrual_basis))}`);
+    // ---- QA-1950 (checker, cycle 1). The three assertions below replace three that a checker
+    // proved could not fail. It built the `(rate ?? 0)` mutant this unit's own manifest declared,
+    // and got 35/35 GREEN. Why, exactly:
+    //
+    //   a) `valued = reg.filter(r => r.accrued !== null)` measures only the rows the bug LEAVES
+    //      BEHIND. Under the mutant an unrated row has accrued 0, which is not null, so it joins
+    //      `valued` and is then checked against the mutant's own arithmetic.
+    //   b) `totals.accrued_unknown === unvalued.length` compares two things incremented by the
+    //      IDENTICAL test, so they cannot disagree - the exact "internal consistency a report of
+    //      nulls satisfies" failure this unit correctly diagnosed for QA-1948, reproduced one
+    //      assertion later by the same author.
+    //   c) `5 * null === 0` in JavaScript. The pin asserted `accrued === billable * rate`; under the
+    //      mutant `rate` is null, so the EXPECTED value computes to 0 and the actual is 0. The pin
+    //      computed the bug and then checked the bug against itself.
+    //
+    // So: every criterion below is derived from the INPUTS (billable, rate), never from the output
+    // (accrued), and the null case is anchored to a batch this block deliberately made
+    // certified-but-unrated rather than to whatever the fixture happened to contain.
+    const ratedRows = reg.filter((r) => r.billable !== null && r.rate !== null);
+    const badMath = ratedRows.filter((r) => r.accrued !== r.billable * r.rate);
+    ok("QA-1831: every row with BOTH a head-count and a rate is valued at their product",
+      ratedRows.length > 0 && badMath.length === 0,
+      badMath.length ? JSON.stringify(badMath.slice(0, 2)) : `${ratedRows.length} row(s) checked`);
 
-    // A MISSING rate is not a zero rate. This is the assertion that would have caught the lazy
-    // version of this feature, which would have shipped `(rate ?? 0)` and reported every unrated
-    // scheme as a batch that earns nothing.
-    const unvalued = reg.filter((r) => r.accrued === null);
-    ok("QA-1831: a batch that cannot be valued reports null, never 0",
-      unvalued.every((r) => r.accrued === null && typeof r.accrual_basis === "string" && r.accrual_basis.length > 8),
-      JSON.stringify(unvalued.slice(0, 2).map((r) => r.accrual_basis)));
-    ok("QA-1831: ...and those batches are COUNTED, so the gap cannot be scrolled past",
-      (d.totals?.accrued_unknown ?? -1) === unvalued.length,
-      `totals say ${d.totals?.accrued_unknown}, register has ${unvalued.length}`);
+    // The mutant killer. A row that HAS a head-count and has NO rate must report null - not 0, and
+    // not `billable * null`. This is the assertion `(rate ?? 0)` cannot survive.
+    // `rate === null` mixes three causes and only one is mutant-sensitive, so it is used below
+    // only for COUNTS, never as the subject of a behavioural claim. The behavioural claim is made
+    // further down, on a condition this block creates deliberately.
+    const unratedRows = reg.filter((r) => r.billable !== null && r.rate === null);
+
+    // ...and the COUNT is derived from the inputs too, so it cannot move in lockstep with the bug.
+    const expectUnknown = reg.filter((r) => r.billable === null || r.rate === null).length;
+    ok("QA-1831: the not-valued count is the number of rows missing a head-count or a rate",
+      (d.totals?.accrued_unknown ?? -1) === expectUnknown,
+      `totals=${d.totals?.accrued_unknown} independent=${expectUnknown}`);
+    // QA-1949: the two causes are counted separately, because they have different owners and
+    // reporting their sum under either heading sends somebody to fix the wrong thing.
+    ok("QA-1949: ...and it is split by CAUSE, no-closure apart from no-rate",
+      (d.totals?.accrued_unknown_no_closure ?? -1) === reg.filter((r) => r.billable === null).length
+        && (d.totals?.accrued_unknown_no_rate ?? -1) === unratedRows.length,
+      JSON.stringify({ noClosure: d.totals?.accrued_unknown_no_closure, noRate: d.totals?.accrued_unknown_no_rate }));
+    // QA-1949: and the tile that says RATE opens the rate list, not the sum of both causes.
+    ok("QA-1949: the 'no rate' card's total IS the length of the list it opens",
+      d.detail?.unknown_rate && d.detail.unknown_rate.total === unratedRows.length,
+      `card=${d.detail?.unknown_rate?.total} list=${unratedRows.length}`);
+    // ---- QA-1950, take two. The first attempt at this pin ALSO passed against the `(rate ?? 0)`
+    // mutant, and the reason is worth writing down because it is subtle and general.
+    //
+    // `rate === null` has THREE causes: the job role names no scheme; it names one that is absent
+    // from the master; or it names one that is present and carries no rate. Only the THIRD is
+    // touched by `(rate ?? 0)`. The fixture's rows were almost all the first kind, so the pin's
+    // subject set was full of rows the mutant cannot affect, and `.every()` was satisfied by them.
+    // Hunting the data for the right kind of row also failed - every seeded batch shares one scheme,
+    // so the "find a different scheme" loop `continue`d on all 50 and reported "not attempted".
+    //
+    // So this stops looking for the condition and CREATES it, on the batch this block already
+    // certified: take the rate away, re-read, assert, put it back. That is the exact third case, it
+    // is reached through the real code path, and it cannot be satisfied by a row of another kind.
+    if (seededBatch?.scheme) {
+      const schemeRow = ((await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [])
+        .find((sc) => String(sc.name) === seededBatch.scheme);
+      if (schemeRow) {
+        await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: null });
+        const pnl2 = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+        const row2 = (pnl2.register ?? []).find((r) => String(r.key) === seededBatch.id);
+        // The read-back IS the precondition: if the clear did not land, `rate` is still a number and
+        // this fails as a fixture problem rather than passing as a product result.
+        ok("QA-1950 fixture: the rate can be taken off a scheme that a certified batch depends on",
+          !!row2 && row2.billable !== null && row2.rate === null,
+          JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate } : null));
+        // THE MUTANT KILLER. `(rate ?? 0)` makes this 0. Nothing else in the wall distinguishes the
+        // two, and the manifest's declared mutant ran 35/35 green until this line existed.
+        ok("QA-1950: with the rate removed, a certified batch reports NULL - not 0, not billable x 0",
+          !!row2 && row2.accrued === null,
+          JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate, accrued: row2.accrued, basis: row2.accrual_basis } : null));
+        ok("QA-1950: ...and it is filed under the no-rate cause, not under no-closure",
+          (pnl2.totals?.accrued_unknown_no_rate ?? 0) >= 1
+            && (pnl2.detail?.unknown_rate?.rows ?? []).some((r) => String(r.key) === seededBatch.id),
+          JSON.stringify({ noRate: pnl2.totals?.accrued_unknown_no_rate, inCard: (pnl2.detail?.unknown_rate?.rows ?? []).length }));
+        // Put it back, so every assertion after this block sees the fixture it was written against.
+        await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: RATE });
+        const restored = ((await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [])
+          .find((sc) => String(sc.name) === seededBatch.scheme);
+        ok("QA-1950 cleanup: the rate is put back, verified by reading it",
+          !!restored && Number(restored.amount_received) === RATE, JSON.stringify(restored?.amount_received));
+      }
+    }
+
     ok("QA-1831: ...and when there are any, the payload says so in words the screen and the xlsx share",
-      unvalued.length === 0 ? d.totals?.accrued_note === null : typeof d.totals?.accrued_note === "string",
-      String(d.totals?.accrued_note).slice(0, 80));
+      (d.totals?.accrued_unknown ?? 0) === 0 ? d.totals?.accrued_note === null : typeof d.totals?.accrued_note === "string",
+      String(d.totals?.accrued_note).slice(0, 100));
 
     // The drill invariant: a card can only open the list its own number was summed from. Same
     // property reportRollup holds between a tile and its drill-down, for the same reason.
