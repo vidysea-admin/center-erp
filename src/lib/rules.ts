@@ -1078,6 +1078,14 @@ export async function activateFromEvidence(batchId: string, opts: { actor?: stri
 
 export async function transitionBatch(batchId: string, target: string, opts: {
   isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string;
+  // QA-1966 (Umesh, 07/09, on AVP-GURU-RPLAVP-DST-03): a Gurugram batch had to start on its own
+  // planned start date with readiness 4/4 green and was stopped by one number - 37 enrolled against
+  // ceil(80% x 53) = 43. The only lever that existed was the GLOBAL Defaults percentage, so the
+  // choice on the day was "start this batch" or "keep the check for every other centre", never
+  // both. Shown that, Umesh chose the narrow instrument: start below the threshold, but say why,
+  // and have the record carry it. Same shape as force-delete and as backdate_override above -
+  // the escape hatch is allowed to exist precisely because it cannot be used silently.
+  enrollment_override?: boolean;
   // -226 (Umesh, 24/08, on MUZ-CHAR-RPLHSL-SPIT-01): "allow admin to start a batch in past date and
   // all, just notify them once that this is a past date but dont stop them. humko puraane completed
   // batch bhi tho system mai daalne hai." A batch being recorded AFTER it ran cannot pass gates that
@@ -1129,7 +1137,22 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       const r = await batchReadiness(batchId);
       if (!backdating) {
         await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
-        if (!r.enrollment_ok) fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
+        if (!r.enrollment_ok) {
+          const overrideReason = String(opts.reason ?? "").trim();
+          if (opts.enrollment_override !== true) {
+            fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
+          }
+          // The reason is the whole price of the hatch. Without it this is just the gate deleted,
+          // and the next person to ask "why did this batch start 6 short?" has nowhere to look.
+          if (overrideReason.length < 10) {
+            fail("Starting below the enrolment threshold needs a reason - it is written to this batch's record and is what anyone auditing the shortfall will read.");
+          }
+          await audit({
+            entity: "Batch", entityId: batch._id, field: "enrollment_override",
+            newValue: `started below the enrolment threshold: ${r.enrolled_count} enrolled of ${r.enrollment_threshold} needed (${(await getDefaults()).enrollment_threshold_pct}% of a ${r.roster_count ?? "?"}-member roster); reason: ${overrideReason}`,
+            actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+          });
+        }
       } else if (!opts.actual_start) {
         // Recording it without the real date is the exact damage -81 was written to stop: actual_start
         // becomes today, is not editable afterwards, and Rule 32 then refuses every real day.

@@ -25,12 +25,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await requirePerm(user, "batches.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const { target, reason, actual_start, actual_end, backdate_override } = await readJson(req);
+  const { target, reason, actual_start, actual_end, backdate_override, enrollment_override } = await readJson(req);
   // Kept on the ordinary batches.manage right on purpose (Umesh, 24/08, asked which door this
   // should sit behind and chose "jiske paas batches.manage hai"). In the default matrix that is
   // Admin and Operations - Location, Enrollment and Trainer do not carry it.
   if (backdate_override === true && target !== "Active" && target !== "Completed") {
     throw new HttpError(400, "Recording a batch after the fact applies to starting and completing it, nothing else.");
+  }
+  // QA-1966: the enrolment hatch exists for STARTING a batch and nothing else. Refused up front
+  // rather than ignored, so a caller that sends it at the wrong moment learns that it did nothing -
+  // an override silently dropped is worse than one refused, because the sender believes it applied.
+  if (enrollment_override === true && target !== "Active") {
+    throw new HttpError(400, "Starting below the enrolment threshold applies to starting a batch, nothing else.");
   }
 
   // RPL M24: gated only when an Admin has enabled the action; otherwise a no-op.
@@ -61,6 +67,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     actual_start: target === "Active" ? actual_start : undefined,
     actual_end: target === "Completed" ? actual_end : undefined,
     backdate_override: backdate_override === true,
+    enrollment_override: enrollment_override === true,
     actor: user.id,
   });
   await audit({ entity: "Batch", entityId: batch._id, field: "status", newValue: target, oldValue: before?.status, actor: user.id });

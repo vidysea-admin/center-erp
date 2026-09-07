@@ -344,6 +344,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // drift ARCHITECTURE.md section 3 catalogues.
   const [backdateOpen, setBackdateOpen] = useState(false);
   const [backdateReason, setBackdateReason] = useState("");
+  // QA-1966: starting below the enrolment threshold. Deliberately its own state and its own button
+  // rather than a checkbox beside Start Batch - the ordinary press must stay the ordinary press,
+  // and this one must look like what it is.
+  const [showEnrollOverride, setShowEnrollOverride] = useState(false);
+  const [enrollOverrideReason, setEnrollOverrideReason] = useState("");
   const [backdating, setBackdating] = useState(false);
   async function recordBackdatedStart() {
     if (!startDate) return;
@@ -438,6 +443,16 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     <>
       {b.status === "Planning" && <Btn small onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
       {b.status === "Ready" && !beganAlready && <Btn small onClick={() => transition("Active")}>Start Batch</Btn>}
+      {/* QA-1966 (Umesh, 07/09, AVP-GURU-RPLAVP-DST-03 on its own start date): when the ONLY thing
+          failing is the enrolment threshold, offer the documented way past it instead of leaving the
+          centre with nothing but a global Defaults change that quietly weakens the check everywhere.
+          Shown only when that really is the only blocker - if readiness itself is failing, this
+          button would be a way to start an unprepared batch, which is not what was asked for. */}
+      {b.status === "Ready" && !beganAlready && !r.enrollment_ok && r.ready && (
+        <Btn small kind="ghost" onClick={() => setShowEnrollOverride((v) => !v)}>
+          {showEnrollOverride ? "Cancel" : "Start anyway…"}
+        </Btn>
+      )}
       {/* -226 (Umesh, 24/08, stuck on MUZ-CHAR-RPLHSL-SPIT-01): this used to be `b.status === "Ready"
           && beganAlready`, while the banner that NAMES it renders on Planning too. So on a batch
           entered after it began - which is always in Planning, because Mark Ready is disabled by a
@@ -452,6 +467,27 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         </span>
       )}
       {b.status === "Ready" && <Btn small kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+      {showEnrollOverride && b.status === "Ready" && !beganAlready && !r.enrollment_ok && (
+        <span className="mt-2 flex w-full flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2">
+          <span className="text-xs text-amber-900">
+            Starting {r.enrolled_count} enrolled against {r.enrollment_threshold} needed. Say why — it is kept on this batch&apos;s record.
+          </span>
+          <input
+            className={inputCls + " min-w-[18rem] flex-1"}
+            placeholder="Reason (required — e.g. client confirmed start, remaining candidates joining in week 1)"
+            value={enrollOverrideReason}
+            onChange={(e) => setEnrollOverrideReason(e.target.value)}
+            data-testid="enroll-override-reason"
+          />
+          <Btn
+            small
+            disabled={enrollOverrideReason.trim().length < 10}
+            onClick={() => transition("Active", { enrollment_override: true, reason: enrollOverrideReason.trim() })}
+            data-testid="enroll-override-start">
+            Start below threshold
+          </Btn>
+        </span>
+      )}
       {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
       {b.status === "Active" && <Btn small onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
       {/* -207 (Umesh, 23/08, with the screen open): "2 duplicate buttons fro similar functionlity
