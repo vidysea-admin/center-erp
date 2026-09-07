@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-292";
+export const RELEASE = "2026.08.14-293";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,23 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-293: the finance and reporting work from the 5 September review ships together. Money now " +
+  "has its own door - reading the cost ledger, the invoice book or the new Finance screen needs " +
+  "a finance right that the Admin role does not carry by default, so the people who can see " +
+  "spend are named rather than assumed. Raising a cost and approving it are now separate acts: " +
+  "whoever enters an amount can no longer approve it, an approval can be routed to named " +
+  "people rather than a whole role, and the record shows which of them decided. Cost heads " +
+  "gained a second level - a head, then a sub-head - each able to carry a budget and a " +
+  "pre-approved marker. A new Finance screen reports spend by head, centre, job role, month, " +
+  "and batch against cost head, with cost per enrolled and per certified trainee, and " +
+  "downloads the same figures as a workbook; one calculation feeds the screen and the file, so " +
+  "the two cannot disagree. The Reports screen gained training KPIs - how many are trained, how " +
+  "many are in training, which batches are about to start and how many students they plan to " +
+  "take - alongside what is blocking the rest, grouped as infrastructure, trainer, " +
+  "mobilisation and batch management, each with an owner. Every KPI card opens the list its own " +
+  "number was counted from. Where a figure cannot be worked out honestly the screen says so " +
+  "rather than printing a zero.";
+const RELEASE_NOTE_ARCHIVE_292 =
   "-292: the high-level report now reads both ways. A By Location / By Programme toggle lets " +
   "a reader pick one job role and see its target across every centre, the way Karunn sir " +
   "asked - the same figures, transposed, not a second report. The location view is unchanged " +
@@ -1318,6 +1335,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -289: ARCHIVE_288 wired in here in the SAME bump that declared it, same discipline.
   // -292: ARCHIVE_291 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
+  // -293: ARCHIVE_292 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_292 + " " +
   RELEASE_NOTE_ARCHIVE_291 + " " +
   // -291: ARCHIVE_290 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
