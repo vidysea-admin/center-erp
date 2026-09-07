@@ -2454,6 +2454,18 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   if (patch.received_amount !== undefined && patch.received_amount !== null && !(Number(patch.received_amount) > 0)) {
     throw new HttpError(400, "Amount received must be a positive number (leave it blank if nothing has come in yet).");
   }
+  // QA-1943, caught by this unit's OWN pin on its first wall. The freeze further down only engages
+  // once the invoice has reached Raised, so BEFORE that these two fields were wide open: money could
+  // be recorded as RECEIVED against an invoice nobody had issued. The P&L would then show a batch
+  // paid against an invoice that does not exist - the precise opposite of what this unit is for.
+  // Nothing can be received before it has been billed.
+  if ((patch.received_amount !== undefined && patch.received_amount !== null)
+      || (patch.receipt_ref !== undefined && patch.receipt_ref !== null && String(patch.receipt_ref) !== "")) {
+    const willBe = (target ?? inv.status) as string;
+    if (INVOICE_ORDER.indexOf(willBe) < INVOICE_ORDER.indexOf("Raised")) {
+      throw new HttpError(409, "Money received cannot be recorded before the invoice is raised.");
+    }
+  }
   // 2026-08-12 audit (sync S1-6): the money fields stayed freely editable after Raised, and a
   // field-only PATCH carried no status change so it skipped the approval gate entirely — an
   // invoice number or amount could be rewritten after the fact with nothing recording it.

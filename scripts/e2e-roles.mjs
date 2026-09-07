@@ -3803,6 +3803,26 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // a number" is satisfied by a wrong number; each of these binds the ARITHMETIC or the honesty
   // rule the number is supposed to obey.
   {
+    // SELF-SEEDING, and the first wall is why. The accrual pin needs a batch that has BOTH a
+    // certified head-count and a rate on its scheme, and the fixtures carry closures with the
+    // first and schemes without the second - so `valued` was empty and the pin reported
+    // "0 row(s) checked". It FAILED rather than passing on an empty set, which is the only reason
+    // that was visible at all; the same block written as `wrong.length === 0` would have gone
+    // green over an assertion that never ran. That is QA-1919's lesson, one unit later: a pin whose
+    // precondition the fixture does not guarantee has to establish it itself.
+    const RATE = 1850;
+    const schemes = (await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [];
+    let seeded = 0;
+    for (const sc of schemes) {
+      if (sc.amount_received === null || sc.amount_received === undefined) {
+        const up = await req(admin, "PATCH", `/api/master-lists/schemes/${sc._id}`, { amount_received: RATE });
+        if (up.status === 200) seeded++;
+      }
+    }
+    ok("QA-1831 fixture: at least one scheme carries a rate per certified candidate",
+      schemes.length > 0 && (seeded > 0 || schemes.some((sc) => sc.amount_received > 0)),
+      `${schemes.length} scheme(s), ${seeded} given a rate`);
+
     const pnl = await req(admin, "GET", "/api/reports/pnl");
     ok("QA-1831: the granted admin gets the P&L", pnl.status === 200, `got ${pnl.status}`);
     const d = pnl.data ?? {};
@@ -3817,7 +3837,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const wrong = valued.filter((r) => r.accrued !== r.billable * r.rate);
     ok("QA-1831: every valued row IS certified-head-count x the scheme's rate, to the rupee",
       valued.length > 0 && wrong.length === 0,
-      wrong.length ? JSON.stringify(wrong.slice(0, 2)) : `${valued.length} row(s) checked`);
+      wrong.length ? JSON.stringify(wrong.slice(0, 2))
+        : `${valued.length} row(s) checked - if 0, no batch has BOTH a closure head-count and a scheme rate: ${JSON.stringify(reg.slice(0, 3).map((r) => r.accrual_basis))}`);
 
     // A MISSING rate is not a zero rate. This is the assertion that would have caught the lazy
     // version of this feature, which would have shipped `(rate ?? 0)` and reported every unrated
@@ -3909,7 +3930,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // The freeze, in both directions. Recording money received before it is Raised is refused;
       // recording it AT Paid is the whole point and must work.
       const early = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { received_amount: 500 });
-      ok("QA-1831: money received cannot be recorded on an invoice that has not been raised",
+      // QA-1943: this pin FAILED on its own first wall (got 200) and that was a real product hole,
+      // not a bad expectation - the post-Raised freeze left both receipt fields wide open before
+      // Raised, so money could be recorded as received against an invoice nobody had issued.
+      ok("QA-1943: money received cannot be recorded on an invoice that has not been raised",
         early.status >= 400, `got ${early.status}`);
 
       const AMT = 10000;
