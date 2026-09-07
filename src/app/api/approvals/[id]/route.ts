@@ -42,7 +42,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // refuse the caller AFTER their Rejected had already been persisted — the request would be closed
   // by someone the product just said may not close it. So the action is read first, cheaply.
   // A Rejected is gated too: refusing a payment is a money decision as much as allowing one.
-  const pending = await ApprovalRequest.findById(id).select("action").lean<any>();
+  // QA-1981: this used to select ONLY "action", and the QA-1975 pre-validation added directly
+  // below then read `pending.payload` from it - a field that was never loaded. It was therefore
+  // `undefined` on every request, `?? {}` turned that into an empty object, and
+  // `assertCostEntryValid` refused it for having no location, batch or trainer. Every single
+  // costcategory.create approval answered 400, by both paths, mapped or not.
+  //
+  // So the fix for "the queue can half-write" shipped as "the queue cannot write at all", which is
+  // strictly worse than the defect it closed - and I did not run the suite that would have said so.
+  // e2e-cost-entry caught it immediately: 25 passed / 5 failed, and the three consequence pins
+  // ("the head now exists", "the entry is in the ledger") failed downstream of the two 400s rather
+  // than independently. The pins were right; nobody ran them.
+  const pending = await ApprovalRequest.findById(id).select("action payload").lean<any>();
   if (!pending) throw new HttpError(404, "Approval request not found");
   if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
 
