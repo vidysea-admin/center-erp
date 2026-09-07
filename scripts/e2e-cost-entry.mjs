@@ -160,7 +160,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 
   const reqId = q.data?.item?._id;
   if (reqId) {
-    const decided = await req(admin, "POST", `/api/approvals/${reqId}`, { decision: "approve", note: "pin" });
+    const decided = await req(admin, "POST", `/api/approvals/${reqId}`, { decision: "Approved", note: "pin" });
     ok("QA-1828c: approving it does BOTH writes in one decision", decided.status === 200, `got ${decided.status}`);
     const catsAfter = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
     const costsAfter = ((await req(admin, "GET", "/api/costs")).data?.items ?? []);
@@ -176,7 +176,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const q2 = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 321 }), new_subhead: `ZZ Never ${stamp}` });
   const catsBeforeMap = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
   if (q2.data?.item?._id && mapTarget) {
-    const mapped = await req(admin, "POST", `/api/approvals/${q2.data.item._id}`, { decision: "approve", note: "file it here", map_to_category: mapTarget._id });
+    const mapped = await req(admin, "POST", `/api/approvals/${q2.data.item._id}`, { decision: "Approved", note: "file it here", map_to_category: mapTarget._id });
     ok("QA-1828c: approving WITH a mapping is accepted", mapped.status === 200, `got ${mapped.status}`);
     const catsAfterMap = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
     ok("QA-1828c: ...and it creates NO new head - the proposed name never appears",
@@ -225,7 +225,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const parked = await req(ops, "POST", "/api/costs", payload);
   ok("QA-1828b [precondition] with the rule ON, an ordinary entry parks", parked.status === 202, `got ${parked.status}`);
   if (parked.data?.item?._id) {
-    const decided = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "approve", note: "pin" });
+    const decided = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", note: "pin" });
     // The first run reported only "not found", which describes the SEARCH and not the world - the
     // approval could have been refused and the pin would have said the same thing. Assert the
     // decision landed, then look for what it should have written.
