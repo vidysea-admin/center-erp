@@ -3811,6 +3811,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // green over an assertion that never ran. That is QA-1919's lesson, one unit later: a pin whose
     // precondition the fixture does not guarantee has to establish it itself.
     const RATE = 1850;
+    const TODAY_PNL = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
     const schemes = (await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [];
     let seeded = 0;
     for (const sc of schemes) {
@@ -3822,6 +3823,76 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("QA-1831 fixture: at least one scheme carries a rate per certified candidate",
       schemes.length > 0 && (seeded > 0 || schemes.some((sc) => sc.amount_received > 0)),
       `${schemes.length} scheme(s), ${seeded} given a rate`);
+    // ...and a batch that has actually been assessed. The wall's fixtures never run one through to
+    // a closure - the invoice they seed is inserted straight into Mongo - so `valued` was still
+    // empty after the scheme rates were seeded, and the pin failed a third time. It kept failing
+    // rather than passing on an empty set, which is the whole reason the emptiness was ever
+    // visible; `wrong.length === 0` alone would have been green through all three runs.
+    //
+    // Setting batch-level figures (rather than per-candidate results) is deliberate: it is Rule 41's
+    // LEGACY shape, where a batch keeps its stored figures because it has no per-candidate rows.
+    // That path is the fallback pnlRollup uses, and nothing else in the wall exercises it.
+    let seededBatch = null;
+    let seedWhy = "no batch tried";
+    for (const b of (await req(admin, "GET", "/api/batches?limit=50")).data?.items ?? []) {
+      // A Completed / Cancelled / Closed batch has its closure fields locked (2026-08-13), so those
+      // are skipped rather than counted as refusals.
+      if (["Completed", "Cancelled", "Closed"].includes(b.status)) continue;
+      // The SMALLEST figures that still exercise the multiplication. Rule 34 caps appeared by the
+      // roster ON THE ASSESSMENT DATE, and this fixture's rosters are small and partly future-dated
+      // (QA-1024 pre-registers members into batches that start later, deliberately). Asking for 12
+      // was the third thing this pin got wrong; 1 is enough to multiply.
+      const put = await req(admin, "PUT", `/api/batches/${b._id}/closure`, {
+        assessment_status: "Completed", assessment_date: TODAY_PNL, appeared: 1, passed: 1,
+        certification_status: "Completed", certification_date: TODAY_PNL, certificates_issued: 1,
+      });
+      if (put.status === 200) {
+        // ...and the batch's JOB ROLE has to point at a scheme that carries a rate, or the row is
+        // still unvaluable and the pin still has nothing to multiply. This was the FOURTH thing
+        // this fixture had to establish: a rate on the scheme, a certified head-count on the
+        // closure, an unlocked batch, and finally the link between the two ends. Seeded rather than
+        // assumed, because each of the first three was assumed once and was wrong.
+        // The batch's job role already NAMES a scheme - `Program.scheme` is an enum string, not a
+        // ref - so nothing needs linking. What has to be true is that the Scheme MASTER row of that
+        // name carries a rate. The previous version PATCHed the programme with a scheme ObjectId
+        // and got a 400 every time, then reported "linked" anyway because it asserted on the
+        // scheme it had FOUND rather than on the write it had made.
+        //
+        // That 400 is what exposed the real defect: pnlRollup was populating `scheme` as if it were
+        // a ref, which is silently a no-op, so every rate was null and the whole accrual was inert.
+        const schemeName = b.program?.scheme ? String(b.program.scheme) : null;
+        let rateStatus = "no scheme on the job role";
+        if (schemeName) {
+          const row = schemes.find((sc) => String(sc.name) === schemeName);
+          if (row && Number(row.amount_received) > 0) rateStatus = `already ${row.amount_received}`;
+          else if (row) {
+            const up = await req(admin, "PATCH", `/api/master-lists/schemes/${row._id}`, { amount_received: RATE });
+            rateStatus = `set -> ${up.status}`;
+          } else {
+            const mk = await req(admin, "POST", "/api/master-lists/schemes", { name: schemeName, amount_received: RATE });
+            rateStatus = `created -> ${mk.status}`;
+          }
+        }
+        // Read back what pnlRollup will actually see, rather than trusting the write.
+        const backSchemes = (await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [];
+        const effective = backSchemes.find((sc) => String(sc.name) === schemeName);
+        seedWhy = `batch=${b.code ?? b._id} scheme=${schemeName ?? "NONE"} rate=${rateStatus} readBack=${effective ? effective.amount_received : "absent"}`;
+        seededBatch = { id: String(b._id), passed: 1, scheme: schemeName, linked: !!(effective && Number(effective.amount_received) > 0) };
+        break;
+      }
+      // Keep the LAST refusal, so a future failure of this fixture says why instead of just "no".
+      // Every previous version of this block failed silently and cost a whole wall cycle to
+      // diagnose; the message is the difference between one run and three.
+      seedWhy = `${b.code ?? b._id}: ${put.status} ${JSON.stringify(put.data?.error ?? put.data ?? "").slice(0, 150)}`;
+    }
+    ok("QA-1831 fixture: a batch with a certified head-count exists to value",
+      !!seededBatch, seedWhy);
+    // The link is its own assertion. Folding it into the one above would let a half-built fixture
+    // report success and push the failure two assertions downstream, which is exactly how the last
+    // three cycles were spent.
+    ok("QA-1831 fixture: ...and its job role is linked to a scheme that carries a rate",
+      !!seededBatch?.linked, seedWhy);
+
 
     const pnl = await req(admin, "GET", "/api/reports/pnl");
     ok("QA-1831: the granted admin gets the P&L", pnl.status === 200, `got ${pnl.status}`);
@@ -3835,6 +3906,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // dead.
     const valued = reg.filter((r) => r.accrued !== null);
     const wrong = valued.filter((r) => r.accrued !== r.billable * r.rate);
+    const seededRow = seededBatch ? reg.find((r) => String(r.key) === seededBatch.id) : null;
+    ok("QA-1831: the batch this block just certified is valued at head-count x rate, to the rupee",
+      // NOT `billable === 9`: if that batch happens to carry per-candidate rows, Rule 42 says the
+      // DERIVED figure wins and 9 is correctly discarded. The property is the multiplication and a
+      // head-count that exists at all - pinning the literal would fail for a right reason.
+      !!seededRow && seededRow.billable !== null && seededRow.rate !== null
+        && seededRow.accrued === seededRow.billable * seededRow.rate,
+      JSON.stringify(seededRow ? { billable: seededRow.billable, rate: seededRow.rate, accrued: seededRow.accrued, basis: seededRow.accrual_basis } : null));
     ok("QA-1831: every valued row IS certified-head-count x the scheme's rate, to the rupee",
       valued.length > 0 && wrong.length === 0,
       wrong.length ? JSON.stringify(wrong.slice(0, 2))

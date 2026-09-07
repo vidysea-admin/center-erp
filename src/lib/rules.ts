@@ -5746,15 +5746,19 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
 // It returns its own basis string. A proposal that cannot say where it came from is a number the
 // reader has to trust, which is the thing this whole module exists to stop.
 export async function proposeInvoiceAmount(batchId: string) {
+  // Same join as `pnlRollup`, for the same reason: `Program.scheme` is an enum STRING, not a ref
+  // (models/index.ts:122), so a nested populate on it is silently a no-op. This function had the
+  // identical bug and would have proposed "no rate" on every batch for ever.
   const [batch, closure] = await Promise.all([
-    Batch.findById(batchId)
-      .populate({ path: "program", select: "name scheme", populate: { path: "scheme", select: "name amount_received" } })
-      .lean<any>(),
-    Closure.findOne({ batch: batchId }).select("billable_passed certification_status").lean<any>(),
+    Batch.findById(batchId).populate({ path: "program", select: "name scheme" }).lean<any>(),
+    Closure.findOne({ batch: batchId }).select("billable_passed passed certification_status").lean<any>(),
   ]);
-  const billable: number | null = closure?.billable_passed ?? null;
-  const rate: number | null = (batch as any)?.program?.scheme?.amount_received ?? null;
-  const scheme: string | null = (batch as any)?.program?.scheme?.name ?? null;
+  const scheme: string | null = (batch as any)?.program?.scheme ? String((batch as any).program.scheme) : null;
+  const schemeRow = scheme ? await Scheme.findOne({ name: scheme }).select("amount_received").lean<any>() : null;
+  // `?? closure.passed` mirrors Rule 41: a legacy batch with no per-candidate rows keeps its stored
+  // batch-level figure, and proposing nothing there would be wrong rather than merely cautious.
+  const billable: number | null = closure?.billable_passed ?? closure?.passed ?? null;
+  const rate: number | null = schemeRow?.amount_received ?? null;
 
   // Each refusal names WHICH half is missing and what to do about it. "Cannot propose an amount" on
   // its own sends somebody hunting through three screens.
@@ -5846,7 +5850,12 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
 
   const batches = await Batch.find(bq)
     .populate("location", "name code")
-    .populate({ path: "program", select: "name code scheme contract_amount", populate: { path: "scheme", select: "name amount_received" } })
+    // NOT a nested populate on `scheme`. `Program.scheme` is `{ type: String, enum: SCHEME }`
+    // (models/index.ts:122) - a NAME, not a ref - so `.populate("scheme")` is silently a no-op and
+    // every rate came back undefined. This unit's own accrual pin is the only thing that caught it;
+    // every other assertion here stayed green with the whole formula inert, because they check
+    // structure, masking and ties, and all three are satisfied by a report full of nulls.
+    .populate({ path: "program", select: "name code scheme contract_amount" })
     .sort({ planned_start: -1 })
     .lean<any[]>();
 
@@ -5857,6 +5866,16 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     CostEntry.find({ ...scope, batch: { $in: batchIds } }).select("batch amount").lean<any[]>(),
   ]);
   const closureOf = new Map(closures.map((c) => [String(c.batch), c]));
+
+  // The rate lives on the Scheme master, and the join to it is BY NAME - not by id - because that
+  // is how the data models it. The house rule elsewhere is "join on id, never on name" (dev-note #2),
+  // and this is a deliberate, disclosed exception: `Program.scheme` is an enum string, so there is
+  // no id to join on. The consequence is real and worth stating: renaming a Scheme master row
+  // silently detaches every programme pointing at the old name. That is a pre-existing property of
+  // the schema, not something this report introduces, but this is now the first place where money
+  // depends on it.
+  const schemeRows = await Scheme.find({}).select("name amount_received").lean<any[]>();
+  const rateByScheme = new Map<string, number | null>(schemeRows.map((sc) => [String(sc.name), sc.amount_received ?? null]));
 
   // "Certified" is derived the SAME WAY `costRollup` derives it - a Pass minus the dropped-but-passed,
   // read live from CandidateResult - and not from the stored `closure.billable_passed`.
@@ -5913,7 +5932,15 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
   let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0;
 
   for (const b of batches) {
-    if (filters.scheme && String(b.program?.scheme?._id ?? "") !== String(filters.scheme)) continue;
+    // The filter names a scheme the same way the programme does - by name. The screen's dropdown
+    // is fed from the Scheme master, so it sends whichever of the two the caller has; both are
+    // accepted rather than silently matching nothing.
+    if (filters.scheme) {
+      const wanted = rateByScheme.has(filters.scheme)
+        ? filters.scheme
+        : (schemeRows.find((sc) => String(sc._id) === String(filters.scheme))?.name ?? filters.scheme);
+      if (String(b.program?.scheme ?? "") !== String(wanted)) continue;
+    }
 
     const cl = closureOf.get(String(b._id));
     const inv = invoiceOf.get(String(b._id));
@@ -5925,13 +5952,18 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     const billable: number | null = hasRows.has(String(b._id))
       ? (certifiedBy.get(String(b._id)) ?? 0)
       : (cl?.billable_passed ?? cl?.passed ?? null);
-    const rate: number | null = b.program?.scheme?.amount_received ?? null;
-    const schemeName: string = b.program?.scheme?.name ?? PNL_LABELS.unassigned;
+    const schemeKey: string | null = b.program?.scheme ? String(b.program.scheme) : null;
+    const schemeName: string = schemeKey ?? PNL_LABELS.unassigned;
+    // A scheme named on the programme but ABSENT from the master is a third state, distinct from
+    // "no scheme" and from "a scheme with no rate", and it is the one a rename produces.
+    const rate: number | null = schemeKey ? (rateByScheme.get(schemeKey) ?? null) : null;
 
     let accrued: number | null = null;
     let accrual_note = "";
     if (billable === null) accrual_note = "no results and no closure figures yet, so there is nothing to bill for";
-    else if (rate === null) accrual_note = `no rate on scheme "${schemeName}"`;
+    else if (schemeKey === null) accrual_note = "this batch's job role names no scheme, so there is no rate to bill at";
+    else if (!rateByScheme.has(schemeKey)) accrual_note = `the job role names scheme "${schemeKey}", which is not in the scheme master - it may have been renamed`;
+    else if (rate === null) accrual_note = `the scheme "${schemeName}" carries no amount received per certified candidate`;
     else accrued = billable * rate;
 
     const invoiced: number | null = inv?.amount ?? null;
