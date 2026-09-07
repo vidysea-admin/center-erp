@@ -149,7 +149,7 @@ function CostsInner() {
                 offered, and the usual workaround is to file it under something close and wrong,
                 which is worse than not filing it. Naming one parks the whole entry for review. */}
             <Field label="Cost head not in the list? Name the one you need">
-              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder="e.g. Assessor travel — leave blank if you picked a head above"
+              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder={postOnly ? "e.g. Assessor travel — it goes for approval with this entry" : "e.g. Assessor travel — you can create heads, so this one is made straight away"}
                 onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
             </Field>
             <Field label="Description — what was this for?" required>

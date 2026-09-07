@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { CostEntry } from "@/models";
+import { CostEntry, CostCategory } from "@/models";
 import { assertCostEntryValid, evaluatePreApproval } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
@@ -62,7 +62,24 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // decided where it belongs (Umesh, D8). `category` is therefore optional when `new_subhead` is
   // given, and Rule 37 is checked on the replay against whichever head is finally chosen.
   const proposed = String(body.new_subhead ?? "").trim();
-  if (proposed) {
+  // Umesh, 2026-09-07: *"head jo 2-3 ceo ne bnaaye vo rakhte hai otherwise baaki others se new head
+  // bhi tho create krr skte hai naa, team kr legi"*.
+  //
+  // An Admin ALREADY creates cost heads — Rule 40, `master-lists/[list]/route.ts:64` — and the
+  // three Admins are the very people the CEO named as the evaluators. Sending them round an
+  // approval queue to reach a screen they can open in two clicks would be ceremony, not control:
+  // the request would be theirs, the decision would be theirs, and the only thing added is a step.
+  // So an Admin naming a head here just creates it; everybody else proposes and an Admin decides.
+  // That is the same split the master list already draws, applied at the place the need is felt.
+  if (proposed && user.role === "Admin") {
+    const existing = await CostCategory.findOne({ name: proposed }).select("_id").lean<any>();
+    if (existing) body.category = String(existing._id);
+    else {
+      const made = await CostCategory.create({ name: proposed, active: true });
+      body.category = String(made._id);
+      await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${proposed}" created inline while posting a cost`, actor: user.id });
+    }
+  } else if (proposed) {
     const queued = await requireApproval("costcategory.create", user, {
       entity: "CostCategory",
       summary: `New cost head "${proposed}" for a ₹${body.amount} entry by ${user.name} — ${body.note}`,
