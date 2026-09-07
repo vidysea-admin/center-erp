@@ -1139,6 +1139,19 @@ export async function transitionBatch(batchId: string, target: string, opts: {
         await assertLocationOperational(batch.location, "Starting a batch"); // Rule 1
         if (!r.enrollment_ok) {
           const overrideReason = String(opts.reason ?? "").trim();
+          // BLOCK from a senior review, and it was right: this unit's stated safety claim — "the
+          // hatch is only offered when the enrolment threshold is the ONLY thing failing" — was
+          // enforced in the React component and NOWHERE ELSE. A batches.manage caller could POST
+          // the override directly at a batch that reached Ready and then had its trainer
+          // unassigned or its room released, and the server would start it. Only ENROLMENT is
+          // waivable; every other readiness check still has to hold, and it is asserted here where
+          // the decision is actually made rather than where the button is drawn.
+          const stillFailing = Object.entries(r.checks)
+            .filter(([, v]) => !v)
+            .map(([k]) => READINESS_FAILURE_TEXT[k] ?? k.replace(/_/g, " "));
+          if (opts.enrollment_override === true && stillFailing.length) {
+            fail(`This batch is not ready for other reasons, and starting below the enrolment threshold does not waive them: ${stillFailing.join(", ")}. Fix those first.`);
+          }
           if (opts.enrollment_override !== true) {
             fail(`Enrollment threshold not met: ${r.enrolled_count}/${r.enrollment_threshold} required (${(await getDefaults()).enrollment_threshold_pct}% of roster).`);
           }
@@ -1149,7 +1162,10 @@ export async function transitionBatch(batchId: string, target: string, opts: {
           }
           await audit({
             entity: "Batch", entityId: batch._id, field: "enrollment_override",
-            newValue: `started below the enrolment threshold: ${r.enrolled_count} enrolled of ${r.enrollment_threshold} needed (${(await getDefaults()).enrollment_threshold_pct}% of a ${r.roster_count ?? "?"}-member roster); reason: ${overrideReason}`,
+            newValue: ((r.roster_count ?? 0) === 0
+              ? `started with NO ROSTER AT ALL - nobody is on this batch, so there was no enrolment figure to be below`
+              : `started below the enrolment threshold: ${r.enrolled_count} enrolled of ${r.enrollment_threshold} needed (${(await getDefaults()).enrollment_threshold_pct}% of a ${r.roster_count}-member roster)`)
+              + `; reason: ${overrideReason}`,
             actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
           });
         }

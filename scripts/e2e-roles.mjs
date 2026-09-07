@@ -4354,6 +4354,28 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           ok("QA-1973: ...and it records the threshold it was below, so the row survives the default changing",
             /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal),
             rowVal.slice(0, 140));
+
+          // ARM 3b - THE BLOCK. A senior review found this unit's stated safety claim ("the hatch
+          // is only offered when enrolment is the ONLY thing failing") lived in the React component
+          // and nowhere else, so a batches.manage caller could override-start a batch whose trainer
+          // or room had degraded after it reached Ready. The suite could not catch it because it
+          // never CONSTRUCTED a degraded-readiness Ready batch. It does now.
+          {
+            const degraded = readyAll.find((b) => String(b._id) !== String(readyStart._id)) ?? readyB;
+            const beforeTrainer = degraded.trainer ?? null;
+            const strip = await req(admin, "PATCH", `/api/batches/${degraded._id}`, { trainer: null });
+            ok("QA-1973 fixture: a Ready batch can have its trainer removed, so readiness really degrades",
+              [200, 201].includes(strip.status), `got ${strip.status}`);
+            const rd = ((await req(admin, "GET", `/api/batches/${degraded._id}`)).data ?? {}).readiness ?? {};
+            ok("QA-1973 fixture: ...and the readiness payload now says so",
+              !!rd.checks && rd.checks.trainer_ready === false, JSON.stringify({ checks: rd.checks }));
+            const forced = await req(admin, "POST", `/api/batches/${degraded._id}/transition`,
+              { target: "Active", enrollment_override: true, reason: "trying to start a batch whose trainer is gone" });
+            ok("QA-1973: the override does NOT waive the other readiness checks - only enrolment is waivable",
+              forced.status === 409 && /not ready for other reasons/i.test(String(forced.data?.error ?? "")),
+              `${forced.status} ${String(forced.data?.error ?? "").slice(0, 90)}`);
+            if (beforeTrainer) await req(admin, "PATCH", `/api/batches/${degraded._id}`, { trainer: beforeTrainer });
+          }
         }
 
         // ARM 4 - the hatch is refused anywhere it would be meaningless, rather than ignored.
