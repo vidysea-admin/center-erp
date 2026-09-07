@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-296";
+export const RELEASE = "2026.08.14-297";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,20 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-297 changes nothing about what this system does. It is a checking release, and this note "  +
+  "says so plainly rather than dressing it up. Two decisions this system already follows had no "  +
+  "automated guard on the surfaces people actually read them from. When a profit-and-loss report "  +
+  "is narrowed to a date range, the cost that belongs to no single batch is still shown, "  +
+  "labelled as not scoped to those dates, so that nothing quietly falls outside the period being "  +
+  "reported. When it is narrowed by batch, job role or scheme instead, that same figure is "  +
+  "deliberately NOT shown, because it does not apply, and the reason is given in its place. Both "  +
+  "behaviours were already correct, and both were checked only in the data the screen and the "  +
+  "spreadsheet are built from - so either surface could have lost the number in some later "  +
+  "change with no test noticing. They are now checked on the screen and inside the downloaded "  +
+  "workbook as well, and every one of those checks was deliberately broken first, to prove it "  +
+  "would catch the loss rather than merely sit beside it. No screen, number, permission or "  +
+  "stored record is different in this build.";
+const RELEASE_NOTE_ARCHIVE_296 =
   "-296: a correction to what -295 said about itself, and the documents around it. -295 described " +
   "one of its own repairs as protection against an administrator being removed by a single " +
   "ordinary request. That overstated it. The flaw was real - the check counted only accounts " +
@@ -1393,6 +1407,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -294: ARCHIVE_293 wired in here in the SAME bump that declared it, same discipline.
   // -295: ARCHIVE_294 wired in here in the SAME bump that declared it, same discipline.
   // -296: ARCHIVE_295 wired in here in the SAME bump that declared it, same discipline.
+  // -297: ARCHIVE_296 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_296 + " " +
   RELEASE_NOTE_ARCHIVE_295 + " " +
   RELEASE_NOTE_ARCHIVE_294 + " " +
   RELEASE_NOTE_ARCHIVE_293 + " " +
