@@ -344,7 +344,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // drift ARCHITECTURE.md section 3 catalogues.
   const [backdateOpen, setBackdateOpen] = useState(false);
   const [backdateReason, setBackdateReason] = useState("");
-  // QA-1971: starting below the enrolment threshold. Deliberately its own state and its own button
+  // QA-1973: starting below the enrolment threshold. Deliberately its own state and its own button
   // rather than a checkbox beside Start Batch - the ordinary press must stay the ordinary press,
   // and this one must look like what it is.
   const [showEnrollOverride, setShowEnrollOverride] = useState(false);
@@ -443,7 +443,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     <>
       {b.status === "Planning" && <Btn small onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
       {b.status === "Ready" && !beganAlready && <Btn small onClick={() => transition("Active")}>Start Batch</Btn>}
-      {/* QA-1971 (Umesh, 07/09, AVP-GURU-RPLAVP-DST-03 on its own start date): when the ONLY thing
+      {/* QA-1973 (Umesh, 07/09, AVP-GURU-RPLAVP-DST-03 on its own start date): when the ONLY thing
           failing is the enrolment threshold, offer the documented way past it instead of leaving the
           centre with nothing but a global Defaults change that quietly weakens the check everywhere.
           Shown only when that really is the only blocker - if readiness itself is failing, this

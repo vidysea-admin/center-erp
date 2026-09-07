@@ -1078,7 +1078,7 @@ export async function activateFromEvidence(batchId: string, opts: { actor?: stri
 
 export async function transitionBatch(batchId: string, target: string, opts: {
   isAdmin?: boolean; reason?: string; actual_start?: string | Date | null; actor?: string;
-  // QA-1971 (Umesh, 07/09, on AVP-GURU-RPLAVP-DST-03): a Gurugram batch had to start on its own
+  // QA-1973 (Umesh, 07/09, on AVP-GURU-RPLAVP-DST-03): a Gurugram batch had to start on its own
   // planned start date with readiness 4/4 green and was stopped by one number - 37 enrolled against
   // ceil(80% x 53) = 43. The only lever that existed was the GLOBAL Defaults percentage, so the
   // choice on the day was "start this batch" or "keep the check for every other centre", never

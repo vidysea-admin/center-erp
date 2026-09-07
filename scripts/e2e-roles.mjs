@@ -4269,7 +4269,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       }
     }
 
-    // ---- QA-1971. Umesh, 07/09, with a screenshot of AVP-GURU-RPLAVP-DST-03 on its own planned
+    // ---- QA-1973. Umesh, 07/09, with a screenshot of AVP-GURU-RPLAVP-DST-03 on its own planned
     // start date: readiness 4/4 green, stopped solely by "Enrollment threshold not met: 37/43".
     // The hatch he chose (qa/gates/qa-1966-start-below-enrolment-threshold.md) starts the batch but
     // DEMANDS a reason and writes it to the audit row. Both arms are pinned, and the condition is
@@ -4281,7 +4281,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const origPct = defBefore.enrollment_threshold_pct;
       try {
         const raised = await req(admin, "PUT", "/api/defaults", { enrollment_threshold_pct: 100 });
-        ok("QA-1971 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
+        ok("QA-1973 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
           [200, 201].includes(raised.status), `got ${raised.status}`);
 
         const readyAll = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
@@ -4293,23 +4293,23 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         // instead of passing on a 409 they never meant. The two-batch split is defence in depth, not
         // the thing that makes this block honest.
         const readyStart = readyAll[1] ?? readyAll[0];
-        ok("QA-1971 fixture: at least one Ready batch exists to work with",
+        ok("QA-1973 fixture: at least one Ready batch exists to work with",
           !!readyB, JSON.stringify(readyAll.map((b) => b.code).slice(0, 4)));
 
         if (readyB && readyStart) {
           const moved = await req(admin, "PATCH", `/api/batches/${readyB._id}`, { planned_start: "2026-06-01" });
-          ok("QA-1971 fixture: its planned start is moved into the past, so Rule 17 is not what refuses it",
+          ok("QA-1973 fixture: its planned start is moved into the past, so Rule 17 is not what refuses it",
             [200, 201].includes(moved.status), `got ${moved.status}`);
           const rr = ((await req(admin, "GET", `/api/batches/${readyB._id}`)).data ?? {}).readiness ?? {};
           // If this batch somehow still meets a 100% threshold the whole block proves nothing, so
           // the precondition is asserted rather than assumed.
-          ok("QA-1971 fixture: it is genuinely BELOW the threshold now",
+          ok("QA-1973 fixture: it is genuinely BELOW the threshold now",
             rr.enrollment_ok === false || rr.enrollment_ok === undefined,
             JSON.stringify({ enrolled: rr.enrolled_count, needed: rr.enrollment_threshold, ok: rr.enrollment_ok }));
 
           // ARM 1 - the gate still bites without the override.
           const plain = await req(admin, "POST", `/api/batches/${readyB._id}/transition`, { target: "Active" });
-          ok("QA-1971: WITHOUT the override a below-threshold start is still refused",
+          ok("QA-1973: WITHOUT the override a below-threshold start is still refused",
             plain.status === 409 && /threshold not met/i.test(String(plain.data?.error ?? "")),
             `${plain.status} ${String(plain.data?.error ?? "").slice(0, 70)}`);
 
@@ -4317,13 +4317,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           // override that works with an empty reason is the gate deleted, wearing a flag.
           const noReason = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
             { target: "Active", enrollment_override: true });
-          ok("QA-1971: the override WITHOUT a reason is refused - the reason is the whole price",
+          ok("QA-1973: the override WITHOUT a reason is refused - the reason is the whole price",
             noReason.status === 409 && /needs a reason/i.test(String(noReason.data?.error ?? "")),
             `${noReason.status} ${String(noReason.data?.error ?? "").slice(0, 70)}`);
 
           const shortReason = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
             { target: "Active", enrollment_override: true, reason: "ok" });
-          ok("QA-1971: ...and a token reason is refused too, so the field cannot be satisfied with a keystroke",
+          ok("QA-1973: ...and a token reason is refused too, so the field cannot be satisfied with a keystroke",
             shortReason.status === 409 && /needs a reason/i.test(String(shortReason.data?.error ?? "")),
             `${shortReason.status} ${String(shortReason.data?.error ?? "").slice(0, 70)}`);
 
@@ -4332,12 +4332,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           // later call then answers "Transition Active -> Active is not allowed" - a 409 that made
           // the token-reason assertion above pass for a reason that had nothing to do with reasons.
           const movedS = await req(admin, "PATCH", `/api/batches/${readyStart._id}`, { planned_start: "2026-06-01" });
-          ok("QA-1971 fixture: the start batch's planned start is moved into the past too",
+          ok("QA-1973 fixture: the start batch's planned start is moved into the past too",
             [200, 201].includes(movedS.status), `got ${movedS.status}`);
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
           const started = await req(admin, "POST", `/api/batches/${readyStart._id}/transition`,
             { target: "Active", enrollment_override: true, reason: REASON });
-          ok("QA-1971: with a real reason the batch STARTS below the threshold",
+          ok("QA-1973: with a real reason the batch STARTS below the threshold",
             [200, 201].includes(started.status) && String(started.data?.item?.status ?? "") === "Active",
             `${started.status} ${JSON.stringify(started.data).slice(0, 90)}`);
 
@@ -4345,13 +4345,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const acts = (auditRes.data?.items ?? auditRes.data?.rows ?? []);
           const row = acts.find((a) => String(a.field) === "enrollment_override");
           const rowVal = String(row?.new_value ?? row?.newValue ?? "");
-          ok("QA-1971: the audit row exists, names the shortfall, and carries the reason VERBATIM",
+          ok("QA-1973: the audit row exists, names the shortfall, and carries the reason VERBATIM",
             !!row && /below the enrolment threshold/i.test(rowVal) && rowVal.includes(REASON),
             JSON.stringify({ found: !!row, v: rowVal.slice(0, 140) }));
           // The number it was below must be IN the row, not merely implied by it (erp-af raised this:
           // a reason explains why somebody overrode the gate, it does not say what they overrode, and
           // if the global percentage moves later the row stops being interpretable without it).
-          ok("QA-1971: ...and it records the threshold it was below, so the row survives the default changing",
+          ok("QA-1973: ...and it records the threshold it was below, so the row survives the default changing",
             /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal),
             rowVal.slice(0, 140));
         }
@@ -4361,7 +4361,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         if (anyB2) {
           const wrongTarget = await req(admin, "POST", `/api/batches/${anyB2._id}/transition`,
             { target: "Ready", enrollment_override: true, reason: "this should not be accepted at all" });
-          ok("QA-1971: the override is REFUSED on a non-start transition, never silently dropped",
+          ok("QA-1973: the override is REFUSED on a non-start transition, never silently dropped",
             wrongTarget.status === 400, `got ${wrongTarget.status}`);
         }
       } finally {
@@ -4370,7 +4370,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         }
       }
       const after = (await req(admin, "GET", "/api/defaults")).data ?? {};
-      ok("QA-1971: the threshold default is restored, so this block cannot poison the rest of the run",
+      ok("QA-1973: the threshold default is restored, so this block cannot poison the rest of the run",
         after.enrollment_threshold_pct === origPct,
         JSON.stringify({ before: origPct, after: after.enrollment_threshold_pct }));
     }
