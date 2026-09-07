@@ -8,6 +8,36 @@ import { audit } from "@/lib/audit";
 import { emailError } from "@/lib/validate";
 import { renderMail, sendMail } from "@/lib/mailer";
 
+// QA-1996 (checker, cycle 1, S2) — THE GUARD BELOW WAS CHECK-THEN-WRITE, AND THE CHECK WAS A
+// COUNT. Two live Admins each deactivating the OTHER in the same instant both read "one other
+// Admin still exists", both pass, both write, and the system is left with ZERO Admins who can
+// sign in - with no way back in, because the Admin role cannot be granted from the rights screen.
+// The checker reproduced it 3 of 3 rounds on the unmutated build and then could not sign in to
+// its own copy; recovery took a direct collection write.
+//
+// The maker had told Umesh this hazard was UNREACHABLE, twice, after a pin failed to produce it.
+// That pin only ever issued requests one at a time. "I could not make it happen" is not "it
+// cannot happen", and the difference here was two requests instead of one.
+//
+// There is no transaction on this route and mongod runs standalone in CI, so `$transaction` is
+// not available to lean on. What closes the window instead is verifying AFTER the write, where
+// the race is actually visible, and UNDOING our own write if the floor broke. Both racers then
+// see zero, both restore, both are refused - the outcome lands on the safe side (two Admins
+// still standing) rather than the unrecoverable one.
+//
+// The cheap pre-check is kept as well: it gives the ordinary single-request case a clean 409
+// without a write ever happening. It is the fast path, not the guarantee.
+async function enforceAdminFloor(docId: unknown, restore: Record<string, unknown>) {
+  const effective = await User.countDocuments({
+    role: "Admin", active: true, dropped: { $ne: true }, approval_status: "Approved",
+  });
+  if (effective > 0) return;
+  await User.updateOne({ _id: docId }, { $set: restore });
+  invalidateIdentity(String(docId));
+  throw new HttpError(409,
+    "That change would have left the system with no Admin who can sign in - another Admin was being changed at the same moment. Nothing was saved. Check who is still an Admin, then try again.");
+}
+
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -61,9 +91,21 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // THREE PATHS remove an Admin and each writes separately - `drop` returns early, `active: false`
   // and a `role` change both fall through to the field loop. One helper, called before any of them
   // writes, because a guard that covers two of three is the shape this repo keeps paying for.
+  // QA-1997 (checker, cycle 1): there are FOUR doors, not three. `{approval:"reject"}` sets
+  // approval_status="Rejected" AND active=false further down this same file, and it was not in
+  // this list - so the guard that was written because "a guard covering two of three is the shape
+  // this repo keeps paying for" shipped covering three of four.
+  // Snapshot BEFORE any mutation, so enforceAdminFloor can put this row back exactly as it was.
+  const adminFloorRestore = {
+    active: doc.active, dropped: doc.dropped, role: doc.role, approval_status: doc.approval_status,
+    email: doc.email, dropped_email: doc.dropped_email,
+  };
+  const guardsTheFloor = doc.role === "Admin";
+
   const wouldRemoveAnAdmin =
     body.drop === true
     || (body.active === false && doc.active)
+    || body.approval === "reject"
     || (body.role !== undefined && body.role !== "Admin" && doc.role === "Admin");
   if (wouldRemoveAnAdmin && doc.role === "Admin") {
     // Count only Admins who can ACTUALLY sign in - `authorize()` refuses a Pending or Rejected
@@ -90,6 +132,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     doc.email = `dropped.${Date.now()}.${original}`;
     doc.active = false;
     await doc.save();
+    if (guardsTheFloor) await enforceAdminFloor(doc._id, adminFloorRestore); // QA-1996
     invalidateIdentity(String(doc._id));
     await audit({
       entity: "User", entityId: doc._id, field: "dropped",
@@ -131,6 +174,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
 
   await doc.save();
+  // QA-1996: the floor is re-verified HERE, after the write, because the two-Admin race is
+  // invisible before it. A violation undoes this write and answers 409.
+  if (guardsTheFloor && wouldRemoveAnAdmin) await enforceAdminFloor(doc._id, adminFloorRestore);
   // QA-080: a privilege/identity change must bite the person's LIVE session on their very
   // next request — not after the identity cache's TTL. Stop access = stopped now.
   if (changingPriv || body.approval) invalidateIdentity(String(doc._id));

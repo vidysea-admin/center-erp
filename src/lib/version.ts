@@ -178,8 +178,10 @@ export const RELEASE_NOTE_CURRENT =
   "approver, who either creates that head or files the cost under an existing one. Nothing " +
   "reaches the ledger in the meantime. Everyone can now change their own password from inside " +
   "the system, proving the current one first, which no role could do before - an administrator " +
-  "reset was the only route. And the system now refuses to remove its own last administrator, " +
-  "because there is no way back into the building from outside it.";
+  "reset was the only route. Removing administrators is also guarded: the system refuses a change " +
+  "that would leave it with no administrator who can sign in, and if two such changes are made at " +
+  "the same moment it undoes them rather than letting the last one through - there is no way back " +
+  "into the building from outside it.";
 
 const RELEASE_NOTE_ARCHIVE_293 =
   "-293: the finance and reporting work from the 5 September review ships together. Money now " +

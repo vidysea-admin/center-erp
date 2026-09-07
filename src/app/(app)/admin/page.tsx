@@ -227,7 +227,7 @@ function Programs({ error, setError }: any) {
 // extras: that would be a second copy of the one rule this module exists to defend, and it would
 // have been wrong on its first render — a browser-side "Admin gets everything" would show every
 // Admin holding finance.view, which is the exact thing NO_ADMIN_BYPASS was built to stop.
-function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?: any) => void; setError: (s: string) => void }) {
+function RolesOverview({ items, onOpen, setError, myId }: { items: any[]; onOpen: (u?: any) => void; setError: (s: string) => void; myId: string }) {
   const [openRole, setOpenRole] = useState<string | null>(null);
   const [rightsFor, setRightsFor] = useState<any>(null);
   const [rights, setRights] = useState<any[]>([]);
@@ -314,10 +314,17 @@ function RolesOverview({ items, onOpen, setError }: { items: any[]; onOpen: (u?:
                     it; only the view shipped. It calls the SAME PATCH the main table calls - not a
                     second write path - so every server guard applies unchanged, including the new
                     last-Admin refusal, which a second path would have had to remember to repeat. */}
-                <Btn small kind={u.active === false ? "ghost" : "danger"} disabled={busy}
-                  onClick={() => setActive(u, u.active === false)}>
-                  {u.active === false ? "Reactivate" : "Stop access"}
-                </Btn>
+                {/* QA-1998 (checker, cycle 1): this shipped rendering on the ACTOR'S OWN ROW, where it
+                    can only ever return the self-edit 400 as a red banner - the identical defect this
+                    same commit fixed one component up in the Users table, using `myId`, which was
+                    sitting in the parent and simply never passed down. A button that cannot succeed is
+                    not a smaller bug here than it was there. */}
+                {myId && String(u._id) === myId ? null : (
+                  <Btn small kind={u.active === false ? "ghost" : "danger"} disabled={busy}
+                    onClick={() => setActive(u, u.active === false)}>
+                    {u.active === false ? "Reactivate" : "Stop access"}
+                  </Btn>
+                )}
               </span>
             </div>
           ))}
@@ -460,7 +467,7 @@ function Users({ error, setError }: any) {
           person's role but never answers "who is in this role", which is the question an Admin
           asks before granting anything. This is that answer, above the list rather than instead of
           it: the list stays for editing one person, this is for seeing the shape of access. */}
-      <RolesOverview items={items.filter((u) => !u.dropped && u.approval_status !== "Pending")} onOpen={open} setError={setError} />
+      <RolesOverview items={items.filter((u) => !u.dropped && u.approval_status !== "Pending")} onOpen={open} setError={setError} myId={myId} />
       {droppedCount > 0 && (
         <label className="mb-2 flex items-center gap-2 text-sm text-gray-600">
           <input type="checkbox" checked={showDropped} onChange={(e) => setShowDropped(e.target.checked)} />
