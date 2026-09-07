@@ -182,21 +182,28 @@ if (admin && meRow) {
         survivors.length === 1 && String(survivors[0]._id) === String(a1),
         `${survivors.length} survivor(s): ${survivors.map((u) => u.email).join(",")}`);
 
-      // THE THREE PATHS, and what this pin actually established - which is NOT what it was written
-      // to establish.
+      // THE DOORS, and what this pin established - which is NOT what it was written to establish,
+      // and NOT what the version of this comment before QA-2051 concluded either.
       //
-      // It was written to prove the new 409 guard fires. It failed three times with the PRE-EXISTING
-      // self-edit 400, and following that failure showed the guard is UNREACHABLE. The enumeration:
-      // removing an Admin requires `changingPriv`, which 403s a non-Admin actor; `requireUser`
-      // (authz.ts:93) refuses an inactive or unapproved caller, so the actor is always a live Admin.
-      // Therefore either the actor is SOMEBODY ELSE - in which case they are themselves another
-      // active Admin and the target is not the last - or the actor is the target, and the self-edit
-      // refusal fires first. There is no third case.
+      // It was written to prove the new 409 guard fires. It failed three times with the
+      // PRE-EXISTING self-edit 400, and that failure was read as proof the guard was UNREACHABLE.
+      // The enumeration ran: removing an Admin requires `changingPriv`, which 403s a non-Admin
+      // actor; `requireUser` (authz.ts:93) refuses an inactive or unapproved caller, so the actor is
+      // always a live Admin. Therefore either the actor is SOMEBODY ELSE - in which case they are
+      // themselves another active Admin and the target is not the last - or the actor is the target,
+      // and the self-edit refusal fires first. "There is no third case."
       //
-      // So the last Admin already could not be removed through this API, before the guard existed.
-      // The floor is one, and the self-edit refusal is what holds it. I told Umesh twice that the
-      // lockout was reachable and wrote a runbook step around it; that was wrong, and this pin is
-      // what corrected it.
+      // THERE IS A THIRD CASE: TWO REQUESTS. Two live Admins each removing the other at the same
+      // instant both read "one other Admin still exists", both pass, both write. A checker
+      // reproduced zero effective Admins 3 of 3 rounds and then could not sign in to its own copy.
+      // Every clause of the enumeration above is true of ONE request at a time; the conclusion is
+      // false anyway. That is why it is quoted here rather than deleted.
+      //
+      // So BOTH locks hold the floor and either may answer: the self-edit refusal with 400, the
+      // last-Admin floor with 409. Umesh was told twice that the lockout was reachable, then twice
+      // that it was not; the second pair was the wrong one, and this comment was part of how that
+      // wrong answer kept being repeated - it survived QA-2016, QA-2017 and QA-2019, which fixed
+      // the same story in the source comment, the runbook and the public release note.
       //
       // The pin therefore asserts the REAL invariant - the floor is one, whatever refusal enforces
       // it - and separately records WHICH refusal is doing the work today. If a later change relaxes
@@ -214,10 +221,31 @@ if (admin && meRow) {
           r.status === 400 || r.status === 409,
           `got ${r.status} ${JSON.stringify(r.data?.error ?? "").slice(0, 90)}`);
       }
-      // Not decoration: it names which lock is load-bearing, so a change that removes the self-edit
-      // rule and leans on the new guard instead is visible here rather than silent.
-      ok("QA-1912a: ...and today it is the self-edit rule doing that work, not the last-Admin guard - the guard is defence in depth for a route that does not yet exist",
-        refusals.every(([, st]) => st === 400), JSON.stringify(refusals));
+      // QA-2051 — THIS ASSERTION USED TO STATE A DISPROVED CLAIM, AND IT STATED IT EXECUTABLY.
+      //
+      // It read: "today it is the self-edit rule doing that work, not the last-Admin guard - the
+      // guard is defence in depth for a route that does not yet exist", and it enforced that by
+      // requiring EVERY refusal to be 400. A 409 - the last-Admin guard actually firing - would
+      // have FAILED this pin. So the suite asserted that the guard does not work, and printed it
+      // green.
+      //
+      // Two costs, and the second is the one that matters. Deleting the guard entirely left this
+      // pin passing. And this was the FOURTH place the disproved "there is no third case" story
+      // survived after QA-2016 fixed the comment, QA-2017 the runbook and QA-2019 the release note
+      // - the only one of the four that a machine reads. A wrong sentence in a comment misleads the
+      // next person; a wrong sentence in an assertion enforces itself.
+      //
+      // It was also reported before it was fixed: the qa-1912a cycle-1 checker named this exact
+      // block, and the maker relayed the finding to a peer session and then did not act on it.
+      //
+      // What is true, and what this now measures: BOTH locks are load-bearing and either may answer.
+      // The self-edit rule (PRIV_FIELDS, users/[id]/route.ts:31) refuses with 400. The last-Admin
+      // floor refuses with 409. Which one speaks depends on the door and on whether another Admin
+      // is standing - so the assertion is that the change is REFUSED, and the split is recorded
+      // rather than demanded.
+      ok("QA-1912a/QA-2051: every door is refused, by one lock or the other - and it is NOT asserted which",
+        refusals.every(([, st]) => st === 400 || st === 409), JSON.stringify(refusals));
+      console.log(`      NOTE  which lock answered: ${JSON.stringify(refusals)} (400 = self-edit rule, 409 = last-Admin floor)`);
 
       // ...and it is still true afterwards: a refusal that wrote half of itself is worse than none.
       const after = (await req(sessT1, "GET", `/api/users?limit=500`)).data?.items?.find((u) => String(u._id) === String(a1));
