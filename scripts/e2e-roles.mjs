@@ -4177,6 +4177,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         const AMT_A = 1234567, AMT_B = 7654321;
         const mkCost = (loc, amount) => req(admin, "POST", "/api/costs", {
           entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount,
+          note: "QA-1960 fixture: untagged cost seeded to prove a centre filter narrows it",
         });
         const seedA = await mkCost(locsAll[0], AMT_A);
         const seedB = await mkCost(locsAll[1], AMT_B);
@@ -4284,6 +4285,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         ok("QA-1971 fixture: a Ready batch exists to start", !!readyB, String(readyB?.code ?? "none"));
 
         if (readyB) {
+          const moved = await req(admin, "PATCH", `/api/batches/${readyB._id}`, { planned_start: "2026-06-01" });
+          ok("QA-1971 fixture: its planned start is moved into the past, so Rule 17 is not what refuses it",
+            [200, 201].includes(moved.status), `got ${moved.status}`);
           const rr = ((await req(admin, "GET", `/api/batches/${readyB._id}`)).data ?? {}).readiness ?? {};
           // If this batch somehow still meets a 100% threshold the whole block proves nothing, so
           // the precondition is asserted rather than assumed.
