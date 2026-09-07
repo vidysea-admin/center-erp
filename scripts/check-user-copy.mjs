@@ -3352,18 +3352,24 @@ for (const file of walk(root)) {
     }
   }
 
-  // QA-1828b — THERE ARE TWO COST FORMS, and this is the pin for that fact rather than for a field.
+  // QA-1828b / QA-1978 — THERE ARE TWO COST FORMS, and this pin is for that fact.
   //
-  // `/costs` and the batch page's Costs tab both POST to /api/costs, and when the first gained
-  // vendor / voucher / payment mode the second was left behind: a cost posted from a batch carried
-  // none of them while the identical cost posted from /costs carried all three. Nothing in the wall
-  // could see it - the API pins pass because the API is fine, and the defect lives entirely in what
-  // one of the two screens chooses to send.
+  // `/costs` and the batch page's Costs tab both POST to /api/costs, and when one gains a field the
+  // other is left behind: a cost posted from a batch carried no vendor, voucher or payment mode
+  // while the identical cost from /costs carried all three. Nothing else in the wall can see it -
+  // the API pins pass because the API is fine, and the defect lives entirely in what one screen
+  // chooses to send.
   //
-  // It is the ARCHITECTURE section-3 shape ("the second copy did not get the fix"), which this
-  // codebase's own bug history is mostly made of. So the pin binds the PROPERTY - the two forms
-  // offer the same fields - rather than the presence of any particular one, and a field added to
-  // either screen tomorrow is covered without editing this.
+  // THE FIRST VERSION OF THIS PIN CLAIMED TO BIND THE PROPERTY AND DID NOT. Its comment said "a
+  // field added to either screen tomorrow is covered without editing this"; its body iterated a
+  // hardcoded list of three. A checker then found that `new_subhead` - added by the very same unit,
+  // one commit later - was missing from the batch form while this pin sat green at 353/1. A pin
+  // whose comment overstates its body is worse than no pin, because the next person reads the
+  // comment.
+  //
+  // So the set is DERIVED from the fuller form rather than listed. Anything a person types into
+  // /costs as `form.<name>` must be typeable on the batch form too, minus a short exception list
+  // that has to justify itself here.
   {
     const forms = ["app/(app)/costs/page.tsx", "app/(app)/batches/[id]/page.tsx"];
     const src = forms.map((rel) => {
@@ -3373,19 +3379,22 @@ for (const file of walk(root)) {
     if (src.some((x) => x === null)) {
       pushStructural("QA-1828b: one of the two cost forms is gone - " + forms.join(" / "));
     } else {
-      const missing = [];
-      for (const field of ["vendor_payee", "voucher_no", "payment_mode"]) {
-        const inA = src[0].includes(field), inB = src[1].includes(field);
-        if (inA !== inB) missing.push(`${field} is on ${inA ? forms[0] : forms[1]} but not ${inA ? forms[1] : forms[0]}`);
-      }
-      // The description is required by the SERVER on both, so a form that does not collect it has a
-      // button that can only fail.
+      // The batch supplies these itself, so the batch form does not ask for them. Every other field
+      // a person can type on /costs has to be typeable on a batch too.
+      const NOT_ON_A_BATCH = new Set(["location", "trainer", "batch", "entry_date"]);
+      const typed = new Set();
+      for (const m of src[0].matchAll(/setForm\(\{ \.\.\.form, (\w+):/g)) typed.add(m[1]);
+      const missing = [...typed].filter((f) => !NOT_ON_A_BATCH.has(f) && !src[1].includes("form." + f));
+      // ...and the description, which the SERVER requires on both, so a form that cannot collect it
+      // has a button that can only fail.
       for (const [i, rel] of forms.entries()) {
-        if (!/form\.note/.test(src[i])) missing.push(`${rel} does not collect a description, and the server requires one`);
+        if (!/form\.note/.test(src[i])) missing.push(`${rel} cannot collect a description, and the server requires one`);
       }
-      if (missing.length) {
-        pushStructural("QA-1828b: the two cost forms have drifted apart - " + missing.join(" | ")
-          + ". One concept, two screens: a field added to one belongs on both, or neither.");
+      if (!typed.size) {
+        pushStructural("QA-1828b: this pin found no typed fields on " + forms[0] + " - its own detection has drifted, so it is measuring nothing.");
+      } else if (missing.length) {
+        pushStructural("QA-1828b: the two cost forms have drifted apart - " + missing.join(", ")
+          + " missing from " + forms[1] + ". One concept, two screens: a field added to one belongs on both, or neither.");
       } else passed++;
     }
   }

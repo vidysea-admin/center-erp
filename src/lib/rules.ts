@@ -2580,13 +2580,31 @@ export async function evaluatePreApproval(categoryId: unknown, amount: number): 
     : null;
   if (!cat) return { applied: false, basis: null, reason: "no cost head on the entry" };
 
-  // The flag can sit on the SUBHEAD or be inherited from its head — a commitment is made about a
-  // kind of spending, and which level somebody recorded it at is bookkeeping, not meaning.
-  const head = cat.parent
-    ? await CostCategory.findById(cat.parent).select("name pre_approved pre_approved_amount pre_approved_basis").lean<any>()
-    : null;
-  const src = cat.pre_approved ? cat : (head?.pre_approved ? head : null);
-  if (!src) return { applied: false, basis: null, reason: `"${cat.name}" is not marked pre-approved` };
+  // QA-1976 (checker, cycle 1) — INHERITANCE REMOVED, and it was a money hole I argued myself into.
+  //
+  // This used to fall back to the parent head, on the reasoning that "a commitment is made about a
+  // kind of spending, and which level somebody recorded it at is bookkeeping, not meaning". That
+  // sentence is pleasant and it is wrong in the direction that costs money: the checker posted
+  // **90,000 unapproved** from an Operations account, under a subhead carrying no marker at all,
+  // because its parent head was capped at 100000. Every subhead drew the FULL parent cap, and per
+  // entry rather than cumulatively — so the cap bounded nothing at all.
+  //
+  // Only the category the entry actually names counts now. That is strictly the safer reading and it
+  // weakens nothing: a head that genuinely should pre-approve its children can say so on each of
+  // them, which is more typing and no ambiguity.
+  //
+  // Whether inheritance SHOULD exist is a contract question, not a code one — allowing it would
+  // weaken a money control, which is a CRITICAL-class amendment and Umesh's call, decided away from
+  // any pending verdict. Raised with him rather than settled here.
+  const src = cat.pre_approved ? cat : null;
+  if (!src) {
+    return {
+      applied: false, basis: null,
+      reason: cat.parent
+        ? `"${cat.name}" is not marked pre-approved (a marker on its parent head does NOT carry down)`
+        : `"${cat.name}" is not marked pre-approved`,
+    };
+  }
 
   const basis: string | null = src.pre_approved_basis ?? null;
   const cap: number | null = typeof src.pre_approved_amount === "number" ? src.pre_approved_amount : null;

@@ -5364,11 +5364,19 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
         </Field>
+        {/* QA-1978: the parity pin was supposed to catch this and could not - it iterated a
+            hardcoded three-field list while its own comment claimed it bound the property. So the
+            batch form shipped without the one field this unit added LAST, which is exactly the
+            case a real parity check exists for. */}
+        <Field label="Cost head not in the list? Name the one you need">
+          <input className={inputCls} value={form.new_subhead ?? ""} placeholder="leave blank if you picked a category above"
+            onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
+        </Field>
         <Field label="Description — what was this for?" required>
           <input className={inputCls} value={form.note ?? ""} placeholder="e.g. venue hire for the assessment day"
             onChange={(e) => setForm({ ...form, note: e.target.value })} />
         </Field>
-        <div className="flex items-end"><Btn onClick={save} disabled={!form.category || !form.amount || !String(form.note ?? "").trim()}>Add Cost</Btn></div>
+        <div className="flex items-end"><Btn onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>Add Cost</Btn></div>
       </div>
     </Section>
   );

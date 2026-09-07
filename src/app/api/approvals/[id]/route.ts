@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory } from "@/models";
+import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
 
 // POST { decision: "Approved" | "Rejected", note? }
@@ -45,6 +45,36 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const pending = await ApprovalRequest.findById(id).select("action").lean<any>();
   if (!pending) throw new HttpError(404, "Approval request not found");
   if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
+
+  // QA-1975 (checker, cycle 1) — THE QUEUE COULD HALF-WRITE, AND THE HALF IT WROTE WAS PERMANENT.
+  //
+  // `decideApproval` saves the request as Approved and only THEN does the replay run. So on a
+  // costcategory.create whose payload cannot make a valid CostEntry, the checker measured
+  // `headCreated=true entryCreated=false approvalStatus=Approved` — a cost head invented, no ledger
+  // row, and a request that can never be decided again because it is no longer Pending.
+  //
+  // This unit's own manifest says "a queue that half-writes is worse than no queue". That was a
+  // specification, and it failed in the one direction I never probed: I checked that NOTHING is
+  // written before approval, and never that EVERYTHING is written after it.
+  //
+  // Validating here rather than making the two writes atomic is the honest fix at this size: the
+  // route has no transaction, and a rollback that itself fails would just move the problem. What it
+  // does guarantee is that the payload which reaches the replay can produce an entry, so the second
+  // write cannot fail on data the first write already committed to.
+  if (decision === "Approved" && pending.action === "costcategory.create") {
+    const pp = (pending.payload ?? {}) as any;
+    assertCostEntryValid({ ...pp, category: pp.category ?? "pending" }); // Rule 37, before anything is written
+    if (pp.payment_mode && !COST_PAYMENT_MODE.includes(pp.payment_mode)) {
+      throw new HttpError(400, `This request carries a payment mode this system does not use ("${pp.payment_mode}"). Reject it and ask for it again.`);
+    }
+    if (map_to_category) {
+      // Checked here as well as in the replay, because reaching the replay means the decision is
+      // already saved. QA-1980: a deactivated head is not a place to file new money either.
+      const target = await CostCategory.findById(String(map_to_category)).select("_id active").lean<any>();
+      if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
+      if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it. Pick an active one, or approve the new head as proposed.");
+    }
+  }
 
   const request = await decideApproval(id, user, decision, note);
   // The REJECT path hands back the same document and was the same leak; masked identically rather
@@ -111,6 +141,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       if (categoryId) {
         const target = await CostCategory.findById(categoryId).select("_id active").lean<any>();
         if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
+        // QA-1980: `active` was selected and never read - the field was there, the check was not.
+        if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it.");
       } else {
         const name = String(p.new_subhead ?? "").trim();
         if (!name) throw new HttpError(400, "This request names no new head, and no existing head was chosen to file it under.");
