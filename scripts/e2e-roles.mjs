@@ -4292,7 +4292,17 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         // shared batch going Active under a mutant makes them fail on "Transition Active -> Active"
         // instead of passing on a 409 they never meant. The two-batch split is defence in depth, not
         // the thing that makes this block honest.
-        const readyStart = readyAll[1] ?? readyAll[0];
+        // Read each candidate's real readiness and prefer one that is green apart from enrolment.
+        const readyWithChecks = [];
+        for (const b of readyAll.slice(0, 6)) {
+          const rdb = ((await req(admin, "GET", `/api/batches/${b._id}`)).data ?? {}).readiness ?? {};
+          readyWithChecks.push({ b, checks: rdb.checks ?? {}, allGreen: Object.values(rdb.checks ?? {}).every(Boolean) });
+        }
+        const greenOne = readyWithChecks.find((x) => x.allGreen);
+        const readyStart = (greenOne?.b) ?? readyAll[1] ?? readyAll[0];
+        ok("QA-1973 fixture: the success arm uses a batch whose OTHER readiness checks hold",
+          !!greenOne,
+          JSON.stringify(readyWithChecks.map((x) => ({ code: x.b.code, failing: Object.entries(x.checks).filter(([, v]) => !v).map(([k]) => k) }))));
         ok("QA-1973 fixture: at least one Ready batch exists to work with",
           !!readyB, JSON.stringify(readyAll.map((b) => b.code).slice(0, 4)));
 
@@ -4331,7 +4341,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           // under the "override not required" mutant ARM 1 actually starts `readyB`, and every
           // later call then answers "Transition Active -> Active is not allowed" - a 409 that made
           // the token-reason assertion above pass for a reason that had nothing to do with reasons.
-          const movedS = await req(admin, "PATCH", `/api/batches/${readyStart._id}`, { planned_start: "2026-06-01" });
+          const todayIso = new Date().toISOString().slice(0, 10);
+          const movedS = await req(admin, "PATCH", `/api/batches/${readyStart._id}`, { planned_start: todayIso });
           ok("QA-1973 fixture: the start batch's planned start is moved into the past too",
             [200, 201].includes(movedS.status), `got ${movedS.status}`);
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
