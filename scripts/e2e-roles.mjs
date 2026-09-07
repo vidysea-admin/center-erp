@@ -4342,7 +4342,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           // ARM 3 - THE BLOCK a senior review raised: the hatch waives ENROLMENT and nothing else.
           // The claim used to live in the React component only, so a direct API call could start a
           // batch whose trainer had gone. Degrade it, prove the refusal, then put it back.
-          const beforeTrainer = B.trainer ?? null;
+          const bFull = ((await req(admin, "GET", `/api/batches/${B._id}`)).data ?? {}).item ?? {};
+          const beforeTrainer = bFull.trainer?._id ?? bFull.trainer ?? B.trainer?._id ?? B.trainer ?? null;
+          ok("QA-1973 fixture: the trainer id is captured BEFORE it is removed, so it can be put back",
+            !!beforeTrainer, JSON.stringify({ beforeTrainer, shape: typeof bFull.trainer }));
           const strip = await req(admin, "PATCH", `/api/batches/${B._id}`, { trainer: null });
           ok("QA-1973 fixture: the trainer can be removed, so readiness really degrades",
             [200, 201].includes(strip.status), `got ${strip.status}`);
@@ -4354,9 +4357,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           ok("QA-1973: the override does NOT waive the other readiness checks - only enrolment is waivable",
             forced.status === 409 && /not ready for other reasons/i.test(String(forced.data?.error ?? "")),
             `${forced.status} ${String(forced.data?.error ?? "").slice(0, 90)}`);
-          const restore = await req(admin, "PATCH", `/api/batches/${B._id}`, { trainer: beforeTrainer });
-          ok("QA-1973 fixture: the trainer is put back before the success arm",
-            [200, 201].includes(restore.status) && !!beforeTrainer, `got ${restore.status}`);
+          const restore = await req(admin, "PATCH", `/api/batches/${B._id}`, { trainer: String(beforeTrainer) });
+          const rdBack = ((await req(admin, "GET", `/api/batches/${B._id}`)).data ?? {}).readiness ?? {};
+          ok("QA-1973 fixture: the trainer is put back and readiness is green again before the success arm",
+            [200, 201].includes(restore.status) && rdBack.checks?.trainer_ready === true,
+            `${restore.status} ${JSON.stringify(rdBack.checks)}`);
 
           // ARM 4 - with a real reason it starts, and the record carries what was overridden.
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
