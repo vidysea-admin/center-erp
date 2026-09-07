@@ -186,6 +186,46 @@ export function Field({ label, children, required }: { label: string; children: 
   );
 }
 
+// QA-1979 (checker, cycle 1) — REQ-424's *"हेड हो, सब हेड हो"* on the POSTING form was built by
+// neither unit: qa-1828a's manifest deferred "the Costs form learning head → subhead" to qa-1828b,
+// and qa-1828b's manifest said qa-1828a had shipped it. Each pointed at the other and the select
+// stayed flat, so a person choosing where a cost belongs saw one undifferentiated list of every
+// head and subhead in the system.
+//
+// It lives HERE, once, because there are TWO cost forms (/costs and the batch Costs tab) and the
+// last thing this unit did was get charged for updating one of them and not the other (QA-1978).
+// A second copy of this grouping would be that fault again, in the fix for it.
+export function CostHeadOptions({ cats }: { cats: any[] }) {
+  const idOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
+  const heads = cats.filter((c) => !idOf(c));
+  const subsOf = (headId: string) => cats.filter((c) => idOf(c) === String(headId));
+  // A subhead whose head is missing or deactivated is still a real place a cost was filed. Hiding
+  // it would silently remove somewhere people are already posting; it is grouped under a heading
+  // that says so instead.
+  const orphans = cats.filter((c) => idOf(c) && !heads.some((h) => String(h._id) === idOf(c)));
+  return (
+    <>
+      {heads.map((h) => {
+        const subs = subsOf(String(h._id));
+        if (!subs.length) return <option key={String(h._id)} value={String(h._id)}>{h.name}</option>;
+        return (
+          <optgroup key={String(h._id)} label={h.name}>
+            {/* The head itself stays selectable: a cost can belong to "Travel" without belonging to
+                any of its subheads, and forcing a subhead would push people to pick a wrong one. */}
+            <option value={String(h._id)}>{h.name} — no subhead</option>
+            {subs.map((c) => <option key={String(c._id)} value={String(c._id)}>{c.name}</option>)}
+          </optgroup>
+        );
+      })}
+      {orphans.length > 0 && (
+        <optgroup label="Head no longer listed">
+          {orphans.map((c) => <option key={String(c._id)} value={String(c._id)}>{c.name}</option>)}
+        </optgroup>
+      )}
+    </>
+  );
+}
+
 export const inputCls = "w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none bg-white";
 
 // -128 (QA-266, Divya 18/08): "Move… ye move nahi ho raha hai" — the trainer Move reported

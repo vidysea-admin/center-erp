@@ -14,7 +14,7 @@ import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadabl
 import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
@@ -5346,7 +5346,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
         <Field label="Category" required>
           <select className={inputCls} value={form.category ?? ""} onChange={(e) => setForm({ ...form, category: e.target.value })}>
             <option value="">Select…</option>
-            {cats.map((c) => <option key={c._id} value={c._id}>{c.name}</option>)}
+            <CostHeadOptions cats={cats} />
           </select>
         </Field>
         <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
@@ -5372,6 +5372,18 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           <input className={inputCls} value={form.new_subhead ?? ""} placeholder="leave blank if you picked a category above"
             onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
         </Field>
+        {/* QA-1979: the replay has always accepted `new_head_parent` - the checker expected dead
+            code and found it working - so the two-level taxonomy was UNWIRED rather than absent.
+            Without this, every proposed head could only ever become a top-level one, which is how
+            a Head -> Subhead structure quietly flattens back out one entry at a time. */}
+        {String(form.new_subhead ?? "").trim() && (
+          <Field label="...under which head?">
+            <select className={inputCls} value={form.new_head_parent ?? ""} onChange={(e) => setForm({ ...form, new_head_parent: e.target.value })}>
+              <option value="">Make it a head of its own</option>
+              {cats.filter((c: any) => !(c.parent?._id ?? c.parent)).map((c: any) => <option key={c._id} value={c._id}>{c.name}</option>)}
+            </select>
+          </Field>
+        )}
         <Field label="Description — what was this for?" required>
           <input className={inputCls} value={form.note ?? ""} placeholder="e.g. venue hire for the assessment day"
             onChange={(e) => setForm({ ...form, note: e.target.value })} />
