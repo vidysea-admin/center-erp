@@ -4333,7 +4333,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           // a reason explains why somebody overrode the gate, it does not say what they overrode, and
           // if the global percentage moves later the row stops being interpretable without it).
           ok("QA-1971: ...and it records the threshold it was below, so the row survives the default changing",
-            /d+ enrolled of d+ needed/.test(rowVal) && /% of a/.test(rowVal),
+            /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal),
             rowVal.slice(0, 140));
         }
 
