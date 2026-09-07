@@ -125,6 +125,11 @@ const NAV = [
   // QA-1830. `routeAllowed` decides this entry too, so a login without `finance.view` never sees
   // the door — the same single statement of the rule the route gate reads, not a second copy.
   { href: "/finance", label: "Finance", Icon: IconWallet, perm: "finance.view" },
+  // QA-1831: its own entry rather than a link buried on the cost screen. The CEO named the money
+  // loop - earned, invoiced, received - as the thing that was not being traced at all; one click
+  // deep inside another report is where it would go on being untraced. Same permission, so
+  // ROUTE_RULES needs no second row: /finance/pnl is matched by the /finance prefix rule.
+  { href: "/finance/pnl", label: "Revenue & P&L", Icon: IconWallet, perm: "finance.view" },
   // -170 (QA-398): the high-level report. No new permission - Rule 38's location scope already
   // decides who sees which rows, so a centre login opening this sees its own centre and nothing
   // else. Everyone gets the entry; the report itself is what is scoped.

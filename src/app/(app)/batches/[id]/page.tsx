@@ -3349,6 +3349,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
   const [invForm, setInvForm] = useState<any>({});
+  // QA-1831: the server-computed proposal. Null for anyone without finance.view - it is money.
+  const [invProposal, setInvProposal] = useState<any>(null);
   const [legacy, setLegacy] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [perCandidate, setPerCandidate] = useState(false);
@@ -3410,7 +3412,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     finally { setAdminBusy(false); }
   }
   const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
-    setClosure(d.closure); setInvoice(d.invoice);
+    setClosure(d.closure); setInvoice(d.invoice); setInvProposal(d.invoice_proposal ?? null);
     setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
     setLegacy(d.legacy !== false);
     setSummary(d.results_summary ?? null);
@@ -3882,18 +3884,54 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               The invoice itself — amount, number, raised and paid — is handled by Finance.
             </p>
           )}
+          {/* QA-1831 (Umesh, D5): PROPOSED, never auto-saved. The amount was hand-typed before this,
+              with nothing anywhere multiplying the certified head-count by the scheme's rate — so
+              the two numbers that decide an invoice were both on file and were never brought
+              together. What this removes is the arithmetic, not the decision: the figure lands in
+              the box only when somebody presses the button, and it says where it came from either
+              way. When it CANNOT propose, it says which half is missing instead of going quiet. */}
+          {invoice && canMoveInvoice && invProposal && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-xs" data-invoice-proposal={invProposal.amount === null ? "unavailable" : "ready"}>
+              {invProposal.amount === null ? (
+                <span className="text-gray-600">No amount can be proposed. {invProposal.basis}</span>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-gray-700">
+                    Suggested amount <span className="font-semibold">₹{Number(invProposal.amount).toLocaleString("en-IN")}</span>
+                    <span className="text-gray-500"> — {invProposal.basis}</span>
+                  </span>
+                  <Btn small kind="ghost" onClick={() => setInvForm({ ...invForm, amount: invProposal.amount })}>Use this</Btn>
+                </div>
+              )}
+            </div>
+          )}
           {invoice && canMoveInvoice && (
             <div className="grid grid-cols-2 gap-3">
               <Field label="Amount (₹)"><input type="number" className={inputCls} value={invForm.amount ?? ""} onChange={(e) => setInvForm({ ...invForm, amount: +e.target.value })} /></Field>
               <Field label="Invoice no"><input className={inputCls} value={invForm.invoice_no ?? ""} onChange={(e) => setInvForm({ ...invForm, invoice_no: e.target.value })} /></Field>
               <Field label="Raised on"><input type="date" className={inputCls} value={toInputDate(invForm.raised_on)} onChange={(e) => setInvForm({ ...invForm, raised_on: e.target.value })} /></Field>
               <Field label="Paid on"><input type="date" className={inputCls} value={toInputDate(invForm.paid_on)} onChange={(e) => setInvForm({ ...invForm, paid_on: e.target.value })} /></Field>
+              {/* QA-1831: "Paid" answered whether money came and never how much, so a part payment
+                  or a deduction at source left no trace — which is the CEO's own complaint,
+                  *"advance diye the, TOT ka payment kiya tha, to trace nahi ho raha."* This is
+                  allowed to be less than the amount above; the P&L counts the difference rather
+                  than hiding it. */}
+              <Field label="Amount received (₹)"><input type="number" className={inputCls} value={invForm.received_amount ?? ""} onChange={(e) => setInvForm({ ...invForm, received_amount: e.target.value === "" ? undefined : +e.target.value })} /></Field>
+              <Field label="Receipt reference"><input className={inputCls} value={invForm.receipt_ref ?? ""} onChange={(e) => setInvForm({ ...invForm, receipt_ref: e.target.value })} /></Field>
             </div>
+          )}
+          {invoice && canMoveInvoice && invForm.received_amount != null && invForm.amount != null && Number(invForm.received_amount) < Number(invForm.amount) && (
+            <p className="text-xs text-amber-800">
+              This records ₹{Number(Number(invForm.amount) - Number(invForm.received_amount)).toLocaleString("en-IN")} less than the invoice. That is allowed and it will show as short received on the P&amp;L — record a further receipt here when the rest arrives.
+            </p>
           )}
           {invoice && canMoveInvoice && (
             <div className="flex gap-2">
               <Btn small onClick={() => saveInvoice({ ...invForm, status: "Raised" })} disabled={invoice.status !== "Ready"}>Mark Raised</Btn>
               <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={invoice.status !== "Raised"}>Mark Paid</Btn>
+              {invoice.status === "Paid" && (
+                <Btn small kind="ghost" onClick={() => saveInvoice({ ...invForm, status: "Paid" })}>Record a further receipt</Btn>
+              )}
             </div>
           )}
           {/* Rule 52 (CEO): payment aane ke baad bhi batch CLOSED tabhi jab SAB dues settle —

@@ -294,7 +294,11 @@ export async function requireFinance(user: SessionUser, level: "view" | "approve
 //
 // `status` is deliberately absent, and so is everything derived from it (`settlementStage()`, the
 // batch list's settlement-stage column, the Closure tab's "Invoice — <status>" heading).
-export const INVOICE_MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on"] as const;
+// QA-1831: `received_amount` and `receipt_ref` join the list the day they are added, not the day
+// somebody notices. Every masker, both audit-trail forms, the closure read and the home queue all
+// read THIS list, so adding them here is the whole change - which is exactly why REQ-235a could be
+// written as "on EVERY route that emits them" and still be checkable.
+export const INVOICE_MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on", "received_amount", "receipt_ref"] as const;
 
 // A masked field is OMITTED, never zeroed. A quieter control than a 403 needs to be unmistakable:
 // a client that renders `amount ?? 0` would otherwise print a confident ₹0, which is worse than

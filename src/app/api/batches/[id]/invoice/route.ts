@@ -22,7 +22,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await assertBatchInScope(user, id); // Rule 38
   const body = await readJson(req);
   const patch: Record<string, unknown> = {};
-  for (const f of ["amount", "status", "invoice_no", "raised_on", "paid_on", "file"]) {
+  // QA-1831: received_amount / receipt_ref answer "how much actually came, against what
+  // reference" - the question a status of Paid cannot answer, and the one the CEO named the
+  // trace gap over. They are frozen and gated by the same Rule 36 machinery as the rest.
+  for (const f of ["amount", "status", "invoice_no", "raised_on", "paid_on", "file", "received_amount", "receipt_ref"]) {
     if (body[f] !== undefined) patch[f] = body[f];
   }
   // RPL M24 — financial actions are the first ones an Admin would gate.

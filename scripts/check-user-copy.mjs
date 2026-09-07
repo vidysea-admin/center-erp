@@ -3322,6 +3322,7 @@ for (const file of walk(root)) {
     for (const [rel, marker, what] of [
       ["app/(app)/reports/page.tsx", "data-kpi-card", "the Training KPI cards"],
       ["app/(app)/finance/page.tsx", "data-finance-card", "the finance dashboard tiles"],
+      ["app/(app)/finance/pnl/page.tsx", "data-pnl-card", "the revenue and P&L tiles"],
     ]) {
       const f = path.join(root, rel);
       if (!fs.existsSync(f)) { bad.push(`${rel}: gone.`); continue; }
@@ -3355,7 +3356,10 @@ for (const file of walk(root)) {
   // example. The rule this file keeps relearning is that a pin written about the case somebody
   // happened to find binds only that case (QA-1882, QA-1887), so each of these names the property.
   {
-    const financeRoutes = ["app/api/reports/costs/route.ts", "app/api/reports/costs/export/route.ts"];
+    // QA-1831 adds the P&L pair. The list is what makes the pin a PROPERTY of every finance
+    // door rather than a fact about the two that existed when it was written.
+    const financeRoutes = ["app/api/reports/costs/route.ts", "app/api/reports/costs/export/route.ts",
+      "app/api/reports/pnl/route.ts", "app/api/reports/pnl/export/route.ts"];
     for (const rel of financeRoutes) {
       const f = path.join(root, rel);
       if (!fs.existsSync(f)) { bad.push(`${rel}: the finance dashboard route is gone.`); continue; }

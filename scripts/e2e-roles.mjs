@@ -2762,6 +2762,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // because the failure this probe exists to catch is a door that answers 200 — and a door
       // nobody listed is a door nobody measured.
       ["/api/reports/costs", "the finance dashboard"],
+      ["/api/reports/pnl", "the revenue and P&L report"],
       ["/api/plan-tracker", "the plan tracker"],
       ...(bId2 ? [
         [`/api/batches/${bId2}`, "a batch detail"],
@@ -3528,6 +3529,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok(`QA-1830: the finance dashboard refuses ${label}`, r.status === 403, `got ${r.status}`);
       const x = await req(who, "GET", "/api/reports/costs/export");
       ok(`QA-1830: ...and so does its .xlsx export, which no JSON probe can see inside (${label})`, x.status === 403, `got ${x.status}`);
+      // QA-1831: the P&L pair takes the same door, asserted on the same three personas rather than
+      // in a block of its own - a second door that is only tested against the persona its author
+      // happened to think of is how the eighth door (QA-1850) stayed open.
+      const pr = await req(who, "GET", "/api/reports/pnl");
+      ok(`QA-1831: the P&L refuses ${label}`, pr.status === 403, `got ${pr.status}`);
+      const px = await req(who, "GET", "/api/reports/pnl/export");
+      ok(`QA-1831: ...and so does the P&L .xlsx, the one surface the JSON leak probe is blind to (${label})`, px.status === 403, `got ${px.status}`);
     }
     const rep = await req(admin, "GET", "/api/reports/costs");
     ok("QA-1830: the granted admin gets the dashboard", rep.status === 200, `got ${rep.status}`);
@@ -3787,6 +3795,147 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok("QA-1927: ...and the scoped card total still equals its own row count",
         sd.trained && (sd.trained.truncated || sd.trained.rows.length === sd.trained.total),
         `rows=${sd.trained?.rows?.length} total=${sd.trained?.total}`);
+    }
+  }
+
+  // ---- QA-1831: revenue, receipts and P&L.
+  // The pins that matter here are the ones a payload assertion cannot reach. "The endpoint returns
+  // a number" is satisfied by a wrong number; each of these binds the ARITHMETIC or the honesty
+  // rule the number is supposed to obey.
+  {
+    const pnl = await req(admin, "GET", "/api/reports/pnl");
+    ok("QA-1831: the granted admin gets the P&L", pnl.status === 200, `got ${pnl.status}`);
+    const d = pnl.data ?? {};
+    const reg = d.register ?? [];
+    ok("QA-1831 fixture: production-shaped data reaches this report at all, so the ties below are not vacuous",
+      reg.length > 0, `${reg.length} batch row(s)`);
+
+    // THE accrual. Not "accrued is a number" - the exact multiplication, on every row that has both
+    // halves. Nothing anywhere multiplied these two fields before this unit; both were on file and
+    // dead.
+    const valued = reg.filter((r) => r.accrued !== null);
+    const wrong = valued.filter((r) => r.accrued !== r.billable * r.rate);
+    ok("QA-1831: every valued row IS certified-head-count x the scheme's rate, to the rupee",
+      valued.length > 0 && wrong.length === 0,
+      wrong.length ? JSON.stringify(wrong.slice(0, 2)) : `${valued.length} row(s) checked`);
+
+    // A MISSING rate is not a zero rate. This is the assertion that would have caught the lazy
+    // version of this feature, which would have shipped `(rate ?? 0)` and reported every unrated
+    // scheme as a batch that earns nothing.
+    const unvalued = reg.filter((r) => r.accrued === null);
+    ok("QA-1831: a batch that cannot be valued reports null, never 0",
+      unvalued.every((r) => r.accrued === null && typeof r.accrual_basis === "string" && r.accrual_basis.length > 8),
+      JSON.stringify(unvalued.slice(0, 2).map((r) => r.accrual_basis)));
+    ok("QA-1831: ...and those batches are COUNTED, so the gap cannot be scrolled past",
+      (d.totals?.accrued_unknown ?? -1) === unvalued.length,
+      `totals say ${d.totals?.accrued_unknown}, register has ${unvalued.length}`);
+    ok("QA-1831: ...and when there are any, the payload says so in words the screen and the xlsx share",
+      unvalued.length === 0 ? d.totals?.accrued_note === null : typeof d.totals?.accrued_note === "string",
+      String(d.totals?.accrued_note).slice(0, 80));
+
+    // The drill invariant: a card can only open the list its own number was summed from. Same
+    // property reportRollup holds between a tile and its drill-down, for the same reason.
+    const sum = (rows, k) => rows.reduce((a, r) => a + (r[k] ?? 0), 0);
+    ok("QA-1831: the revenue tile's total IS the sum of the rows it opens",
+      d.detail?.accrued && (d.detail.accrued.truncated || sum(d.detail.accrued.rows, "accrued") === d.totals.accrued),
+      `${sum(d.detail?.accrued?.rows ?? [], "accrued")} vs ${d.totals?.accrued}`);
+    ok("QA-1831: ...and the same holds for what was actually received",
+      d.detail?.received && (d.detail.received.truncated || sum(d.detail.received.rows, "received") === d.totals.received),
+      `${sum(d.detail?.received?.rows ?? [], "received")} vs ${d.totals?.received}`);
+    ok("QA-1831: every card names its own columns, so the screen invents no headers",
+      Object.values(d.detail ?? {}).every((c) => Array.isArray(c.columns) && c.columns.length > 0),
+      JSON.stringify(Object.keys(d.detail ?? {})));
+
+    // Margin is against EARNED revenue, not against whatever happened to be invoiced. A batch that
+    // earned and was never billed must look unprofitable, because it is - that is the leak the CEO
+    // opened the subject with, and averaging it away would hide exactly the thing he asked for.
+    const marginWrong = reg.filter((r) => r.accrued !== null && r.margin !== r.accrued - r.cost);
+    ok("QA-1831: margin is earned-minus-cost on every row, never invoiced-minus-cost",
+      marginWrong.length === 0, JSON.stringify(marginWrong.slice(0, 2)));
+    ok("QA-1831: 'earned but never invoiced' is counted rather than averaged away",
+      (d.totals?.not_invoiced ?? -1) === reg.filter((r) => r.accrued !== null && r.invoiced === null).length,
+      `${d.totals?.not_invoiced}`);
+
+    // Cost that belongs to no batch is DISCLOSED. If it were silently dropped every margin on this
+    // screen would be better than the truth, and nothing on the screen would say so.
+    ok("QA-1831: cost tagged to no batch is reported separately, not dropped",
+      typeof d.totals?.cost_unattributed === "number"
+        && ((d.totals.cost_unattributed > 0) === (typeof d.totals.cost_note === "string")),
+      `unattributed=${d.totals?.cost_unattributed} note=${!!d.totals?.cost_note}`);
+
+    // The date filter's meaning travels in the payload, so the screen and the workbook cannot
+    // describe the window differently from each other.
+    ok("QA-1831: the report states what a date filter actually selects",
+      typeof d.window_note === "string" && /batch/i.test(d.window_note), String(d.window_note).slice(0, 60));
+
+    // Scope, and the QA-1898 shape: a named ?location= NARROWS and can never widen.
+    const narrowed = await req(admin, "GET", "/api/reports/pnl?from=2020-01-01&to=2020-12-31");
+    ok("QA-1831: an empty window ties to zero rather than 500ing",
+      narrowed.status === 200 && (narrowed.data?.totals?.batches ?? -1) === 0, `got ${narrowed.status}`);
+    ok("QA-1831: ...and the filters come back so the export can state them",
+      narrowed.data?.filters_applied?.from === "2020-01-01", JSON.stringify(narrowed.data?.filters_applied));
+  }
+
+  // ---- QA-1831: the receipt. "Paid" answered whether money came and never how much, so a part
+  // payment or a deduction at source left no trace at all - the CEO's own complaint. These pins
+  // bind that a SHORT receipt survives being recorded and is then reported as short.
+  {
+    const inv = ((await req(admin, "GET", "/api/invoices?status=Ready")).data?.items ?? [])[0]
+      ?? ((await req(admin, "GET", "/api/invoices")).data?.items ?? []).find((i) => i.status === "Ready");
+    if (!inv) {
+      ok("QA-1831 fixture: an invoice at Ready exists to walk through the ladder", false, "none found");
+    } else {
+      const bId = String(inv.batch?._id ?? inv.batch);
+      // The proposal: computed server-side and gated as money.
+      const cl = await req(admin, "GET", `/api/batches/${bId}/closure`);
+      ok("QA-1831: the closure payload proposes an invoice amount for a finance reader",
+        cl.status === 200 && cl.data?.invoice_proposal && typeof cl.data.invoice_proposal.basis === "string",
+        JSON.stringify(cl.data?.invoice_proposal ?? null));
+      const prop = cl.data?.invoice_proposal;
+      if (prop && prop.amount !== null) {
+        ok("QA-1831: ...and the proposal is the same multiplication, not a second formula",
+          prop.amount === prop.billable * prop.rate, `${prop.billable} x ${prop.rate} = ${prop.amount}`);
+      }
+      // ...and it is MONEY, so a reader without finance.view gets none of it.
+      if (ops) {
+        const opsCl = await req(ops, "GET", `/api/batches/${bId}/closure`);
+        ok("QA-1831: a reader without finance.view gets the closure screen but no proposed amount",
+          opsCl.status === 200 && !opsCl.data?.invoice_proposal, `got ${opsCl.status} proposal=${!!opsCl.data?.invoice_proposal}`);
+        ok("QA-1831: ...and no received amount or receipt reference either - they are money like the rest",
+          opsCl.data?.invoice && !("received_amount" in opsCl.data.invoice) && !("receipt_ref" in opsCl.data.invoice),
+          JSON.stringify(Object.keys(opsCl.data?.invoice ?? {})));
+      }
+
+      // The freeze, in both directions. Recording money received before it is Raised is refused;
+      // recording it AT Paid is the whole point and must work.
+      const early = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { received_amount: 500 });
+      ok("QA-1831: money received cannot be recorded on an invoice that has not been raised",
+        early.status >= 400, `got ${early.status}`);
+
+      const AMT = 10000;
+      const raise = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { status: "Raised", amount: AMT, invoice_no: "QA1831-INV", raised_on: "2026-09-07" });
+      ok("QA-1831 fixture: the invoice can be raised", [200, 202].includes(raise.status), `got ${raise.status}`);
+      const paid = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { status: "Paid", paid_on: "2026-09-07", received_amount: 8000, receipt_ref: "NEFT-QA1831" });
+      ok("QA-1831: a receipt SMALLER than the invoice is accepted, not refused",
+        [200, 202].includes(paid.status), `got ${paid.status}`);
+
+      if (paid.status === 200) {
+        const after = (await req(admin, "GET", `/api/batches/${bId}/closure`)).data?.invoice ?? {};
+        ok("QA-1831: ...and it is stored as given, not rounded up to the invoice",
+          after.received_amount === 8000 && after.receipt_ref === "NEFT-QA1831",
+          JSON.stringify({ r: after.received_amount, ref: after.receipt_ref }));
+        const pn = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+        const row = (pn.register ?? []).find((r) => String(r.key) === bId);
+        ok("QA-1831: the P&L reports the difference as short received rather than showing it paid in full",
+          !!row && row.shortfall === AMT - 8000, JSON.stringify({ invoiced: row?.invoiced, received: row?.received, short: row?.shortfall }));
+        ok("QA-1831: ...and that batch is in the list the 'short received' card opens",
+          (pn.detail?.shortfall?.rows ?? []).some((r) => String(r.key) === bId),
+          `${(pn.detail?.shortfall?.rows ?? []).length} row(s) in the card`);
+        // A zero receipt is not a receipt - the same argument Rule 37 makes about a cost of zero.
+        const zero = await req(admin, "PATCH", `/api/batches/${bId}/invoice`, { status: "Paid", received_amount: 0 });
+        ok("QA-1831: a zero or negative receipt is refused - absent means 'not recorded', 0 is a claim",
+          zero.status >= 400, `got ${zero.status}`);
+      }
     }
   }
 

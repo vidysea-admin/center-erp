@@ -2448,6 +2448,12 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   if (target === "Paid" && !(patch.paid_on ?? inv.paid_on)) {
     throw new HttpError(400, "Rule 36: Paid requires paid_on.");
   }
+  // QA-1831: a negative receipt is not a receipt. Zero is refused for the same reason Rule 37
+  // refuses a zero cost - it silently shrinks a total while looking like an answer. Absent stays
+  // legal and means "not recorded yet", which is a different fact from "nothing came".
+  if (patch.received_amount !== undefined && patch.received_amount !== null && !(Number(patch.received_amount) > 0)) {
+    throw new HttpError(400, "Amount received must be a positive number (leave it blank if nothing has come in yet).");
+  }
   // 2026-08-12 audit (sync S1-6): the money fields stayed freely editable after Raised, and a
   // field-only PATCH carried no status change so it skipped the approval gate entirely — an
   // invoice number or amount could be rewritten after the fact with nothing recording it.
@@ -2468,7 +2474,21 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
       return String(a ?? "") !== String(b ?? "");
     });
     // Setting paid_on as part of the Ready→Raised→Paid move itself is legitimate.
-    const allowed = target === "Paid" ? ["paid_on"] : [];
+    //
+    // QA-1831: `received_amount` and `receipt_ref` join that exception, and they need a second
+    // clause the others do not. Money received can only ever be recorded AT or AFTER Paid, so a
+    // freeze that blocked them would make the two fields unreachable - the field would exist and
+    // could never be filled. And because Umesh's D6 allows received < invoiced, a later top-up is
+    // a real event: 80k arrives, status goes Paid, the remaining 20k lands next month.
+    //
+    // The trap to avoid is the one the comment above this records (sync S1-6): a field-only PATCH
+    // carries no status change, so it slips past the approval gate in the route, which fires only
+    // on `patch.status === "Raised" | "Paid"`. So the exception is keyed on `target`, not on the
+    // stored status. Recording a top-up means re-sending `status: "Paid"` on an already-Paid
+    // invoice - a no-op to Rule 36's ladder (it only compares when target !== inv.status) and NOT
+    // a no-op to the gate, which parks it for a finance approver exactly like the first payment.
+    // Money moving is an approved act every time, not only the first time.
+    const allowed = target === "Paid" ? ["paid_on", "received_amount", "receipt_ref"] : [];
     const blocked = changed.filter((f) => !allowed.includes(f));
     if (blocked.length) {
       throw new HttpError(409, `Rule 36: ${blocked.join(", ")} cannot be changed once the invoice is ${inv.status}.`);
@@ -5702,3 +5722,277 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     register,
   };
 }
+
+
+// QA-1831 (Umesh, D5, 2026-09-07): the invoice amount is PROPOSED and never auto-saved.
+// *"billable_passed x Scheme.amount_received"* — but written into the Invoice by a person, on
+// purpose. Two reasons it is not an autofill: the rate on the scheme master can be stale or absent
+// and the system cannot know which, and an invoice is an outward-facing claim to a client, so the
+// last hand on it is a human's. What this removes is the RE-DERIVATION, not the decision — Manish
+// sir stops multiplying two numbers by hand and starts checking one.
+//
+// It returns its own basis string. A proposal that cannot say where it came from is a number the
+// reader has to trust, which is the thing this whole module exists to stop.
+export async function proposeInvoiceAmount(batchId: string) {
+  const [batch, closure] = await Promise.all([
+    Batch.findById(batchId)
+      .populate({ path: "program", select: "name scheme", populate: { path: "scheme", select: "name amount_received" } })
+      .lean<any>(),
+    Closure.findOne({ batch: batchId }).select("billable_passed certification_status").lean<any>(),
+  ]);
+  const billable: number | null = closure?.billable_passed ?? null;
+  const rate: number | null = (batch as any)?.program?.scheme?.amount_received ?? null;
+  const scheme: string | null = (batch as any)?.program?.scheme?.name ?? null;
+
+  // Each refusal names WHICH half is missing and what to do about it. "Cannot propose an amount" on
+  // its own sends somebody hunting through three screens.
+  if (billable === null) {
+    return { amount: null, billable, rate, scheme, basis: "No certified head-count yet — the closure figures have to be entered before an amount can be worked out." };
+  }
+  if (!scheme) {
+    return { amount: null, billable, rate, scheme, basis: `This batch's job role is not linked to a scheme, so there is no rate to bill at. Link one in Admin → Master lists.` };
+  }
+  if (rate === null) {
+    return { amount: null, billable, rate, scheme, basis: `The scheme "${scheme}" carries no amount received per certified candidate, so an amount cannot be worked out. Add the rate in Admin → Master lists → Schemes.` };
+  }
+  return {
+    amount: billable * rate,
+    billable, rate, scheme,
+    basis: `${billable} certified × ${rate} per certified candidate (scheme "${scheme}")`,
+  };
+}
+
+// ============================ QA-1831: revenue, receipts and P&L ============================
+// CEO, 2026-09-05: *"time to time humne saari cost account for kar liya. Humne saara revenue
+// account for kar liya, usko invoice kar diya, wo receive ho gaya."* ... *"koi bhi cheez system se
+// chhutegi nahi."* The cost half shipped as `costRollup`. This is the other half, and it is the
+// same function shape for the same reason (note above `costRollup`): ONE function feeds the screen
+// and the export, because an export that recomputes is an export that eventually disagrees.
+//
+// FOUR judgements this function makes, each of which could have been made dishonestly and quietly:
+//
+// 1. THE WINDOW IS THE BATCH'S, NOT THE MONEY'S. A cost entry has `entry_date`, an invoice has
+//    `raised_on` and `paid_on`, a batch has `planned_start`. Filtering each by its own date would
+//    put March's costs beside a whole batch's revenue and call the difference margin. So a batch is
+//    either in the window or out of it, entirely, and its costs and its revenue travel together.
+//    `filters_applied` says so and the export's audit tab repeats it.
+// 2. A MISSING RATE IS NOT A ZERO RATE. Where a scheme carries no `amount_received`, `accrued` is
+//    `null` with a named reason, never 0 - the same rule `perHead` follows for ratios. A zero would
+//    read as "this batch earns nothing", which is a claim; null reads as "nobody has told us",
+//    which is the truth. The unknown ones are counted in totals so the gap cannot be scrolled past.
+// 3. COST THAT CANNOT BE ATTRIBUTED IS DISCLOSED, NOT DROPPED. A cost tagged only to a location or
+//    a trainer belongs to no batch, so it cannot appear in a per-batch margin. Silently omitting it
+//    would make every margin look better than it is. It is summed into `cost_unattributed` and
+//    stated on screen.
+// 4. THE STAGE COMES FROM `settlementStage`, NOT FROM A SECOND LADDER. That function (above)
+//    already names the CEO's exact chain - certified, invoice not ready, to raise, raised, payment
+//    received, ready to close. A parallel state machine here would be the section-3 fault, and the
+//    two would disagree the first time either moved.
+export const PNL_DRILL_CAP = 500;
+
+export const PNL_LABELS = {
+  accrued: "Revenue earned",
+  invoiced: "Invoiced",
+  received: "Received",
+  cost: "Cost",
+  margin: "Margin",
+  shortfall: "Short received",
+  billable: "Certified (billable)",
+  rate: "Rate per certified",
+  stage: "Stage",
+  unassigned: "Unassigned",
+  unknown_rate: "Rate not on the scheme",
+} as const;
+
+export type PnlFilters = {
+  from?: string; to?: string;
+  location?: string; program?: string; scheme?: string; batch?: string;
+};
+
+export async function pnlRollup(scope: Record<string, unknown> = {}, filters: PnlFilters = {}) {
+  const measured_at = new Date();
+
+  // ---- which batches. `find()` with the scope object, never an aggregate over it: mongoose casts
+  // a string id inside find() and does NOT inside a pipeline, which is the shape of four live
+  // defects on this codebase (QA-302/347/350/395).
+  const bq: Record<string, any> = { ...scope };
+  if (filters.from || filters.to) {
+    bq.planned_start = {};
+    if (filters.from) bq.planned_start.$gte = istStart(filters.from);
+    if (filters.to) bq.planned_start.$lte = istEnd(filters.to);
+  }
+  if (filters.location) {
+    const allowed: string[] | null = Array.isArray((scope as any).location?.$in)
+      ? (scope as any).location.$in.map(String) : null;
+    if (allowed && !allowed.includes(String(filters.location))) {
+      throw new HttpError(403, "That centre is not in your scope.");
+    }
+    bq.location = filters.location;
+  }
+  if (filters.program) bq.program = filters.program;
+  if (filters.batch) bq._id = filters.batch;
+
+  const batches = await Batch.find(bq)
+    .populate("location", "name code")
+    .populate({ path: "program", select: "name code scheme contract_amount", populate: { path: "scheme", select: "name amount_received" } })
+    .sort({ planned_start: -1 })
+    .lean<any[]>();
+
+  const batchIds = batches.map((b) => b._id);
+  const [closures, invoices, costs] = await Promise.all([
+    Closure.find({ batch: { $in: batchIds } }).select("batch billable_passed passed certification_status dues_settled").lean<any[]>(),
+    Invoice.find({ batch: { $in: batchIds } }).select("batch amount status invoice_no raised_on paid_on received_amount receipt_ref").lean<any[]>(),
+    CostEntry.find({ ...scope, batch: { $in: batchIds } }).select("batch amount").lean<any[]>(),
+  ]);
+  const closureOf = new Map(closures.map((c) => [String(c.batch), c]));
+  const invoiceOf = new Map(invoices.map((i) => [String(i.batch), i]));
+  const costOf = new Map<string, number>();
+  for (const c of costs) costOf.set(String(c.batch), (costOf.get(String(c.batch)) ?? 0) + (Number(c.amount) || 0));
+
+  // Cost that belongs to no batch cannot enter a per-batch margin. Judgement 3: it is measured and
+  // disclosed rather than quietly excluded.
+  const unattributed = await CostEntry.find({ ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] })
+    .select("amount").lean<any[]>();
+  const cost_unattributed = unattributed.reduce((a, c) => a + (Number(c.amount) || 0), 0);
+
+  // ---- ONE pass. Every grouping and every drill row is filled from the same loop over the same
+  // rows, so each sums to its total BY CONSTRUCTION rather than by a second query that can drift.
+  type Roll = { key: string; label: string; accrued: number; invoiced: number; received: number; cost: number; batches: number; accrued_unknown: number };
+  const roll = (m: Map<string, Roll>, key: string, label: string): Roll => {
+    const r = m.get(key) ?? { key, label, accrued: 0, invoiced: 0, received: 0, cost: 0, batches: 0, accrued_unknown: 0 };
+    m.set(key, r);
+    return r;
+  };
+  const byLocation = new Map<string, Roll>();
+  const byRole = new Map<string, Roll>();
+  const byScheme = new Map<string, Roll>();
+  const rows: any[] = [];
+  const drill = {
+    accrued: [] as any[], invoiced: [] as any[], received: [] as any[],
+    not_invoiced: [] as any[], shortfall: [] as any[], unknown_rate: [] as any[],
+  };
+
+  let tAccrued = 0, tInvoiced = 0, tReceived = 0, tCost = 0, tUnknown = 0;
+
+  for (const b of batches) {
+    if (filters.scheme && String(b.program?.scheme?._id ?? "") !== String(filters.scheme)) continue;
+
+    const cl = closureOf.get(String(b._id));
+    const inv = invoiceOf.get(String(b._id));
+    const cost = costOf.get(String(b._id)) ?? 0;
+
+    // DEC-4: `billable_passed` excludes dropped-but-passed, and it is already the denominator
+    // `costRollup` uses for cost-per-certified. Revenue and cost therefore share one definition of
+    // "a certified head", which is the only way a margin means anything.
+    const billable: number | null = cl?.billable_passed ?? null;
+    const rate: number | null = b.program?.scheme?.amount_received ?? null;
+    const schemeName: string = b.program?.scheme?.name ?? PNL_LABELS.unassigned;
+
+    let accrued: number | null = null;
+    let accrual_note = "";
+    if (billable === null) accrual_note = "no closure figures yet";
+    else if (rate === null) accrual_note = `no rate on scheme "${schemeName}"`;
+    else accrued = billable * rate;
+
+    const invoiced: number | null = inv?.amount ?? null;
+    const received: number | null = inv?.received_amount ?? null;
+    const stage = settlementStage(b.status, cl, inv);
+    const shortfall = invoiced !== null && received !== null ? invoiced - received : null;
+
+    const row = {
+      key: String(b._id), batch: b.code,
+      location: b.location?.name ?? PNL_LABELS.unassigned,
+      job_role: b.program?.name ?? PNL_LABELS.unassigned,
+      scheme: schemeName,
+      billable, rate, accrued,
+      accrual_basis: accrued !== null ? `${billable} certified x ${rate}` : accrual_note,
+      invoiced, received, shortfall,
+      cost,
+      // Margin is against EARNED revenue, not against what happens to have been invoiced - a batch
+      // that earned and was never billed should look unprofitable, because it is.
+      margin: accrued !== null ? accrued - cost : null,
+      invoice_status: inv?.status ?? "Not Ready",
+      stage,
+    };
+    rows.push(row);
+
+    tCost += cost;
+    if (accrued !== null) tAccrued += accrued; else tUnknown += 1;
+    if (invoiced !== null) tInvoiced += invoiced;
+    if (received !== null) tReceived += received;
+
+    for (const [m, key] of [
+      [byLocation, row.location],
+      [byRole, row.job_role],
+      [byScheme, row.scheme],
+    ] as [Map<string, Roll>, string][]) {
+      const r = roll(m, key, key);
+      r.accrued += accrued ?? 0; r.invoiced += invoiced ?? 0; r.received += received ?? 0;
+      r.cost += cost; r.batches += 1; if (accrued === null) r.accrued_unknown += 1;
+    }
+
+    // Drill rows, built HERE so a card can only ever open the list its own number was summed from.
+    if (accrued !== null) drill.accrued.push(row);
+    if (invoiced !== null) drill.invoiced.push(row);
+    if (received !== null) drill.received.push(row);
+    if (rate === null && billable !== null) drill.unknown_rate.push(row);
+    // "Earned it and never billed for it" - the leak the CEO opened the subject with.
+    if (accrued !== null && invoiced === null) drill.not_invoiced.push(row);
+    if (shortfall !== null && shortfall > 0) drill.shortfall.push(row);
+  }
+
+  const COLS: [string, string][] = [
+    ["batch", "Batch"], ["location", "Centre"], ["job_role", "Job role"], ["scheme", "Scheme"],
+    ["billable", PNL_LABELS.billable], ["rate", PNL_LABELS.rate], ["accrued", PNL_LABELS.accrued],
+    ["invoiced", PNL_LABELS.invoiced], ["received", PNL_LABELS.received], ["cost", PNL_LABELS.cost],
+    ["margin", PNL_LABELS.margin], ["stage", PNL_LABELS.stage],
+  ];
+  const card = (label: string, list: any[], total: number) => ({
+    label, total, shown: Math.min(list.length, PNL_DRILL_CAP),
+    truncated: list.length > PNL_DRILL_CAP, columns: COLS, rows: list.slice(0, PNL_DRILL_CAP),
+  });
+  const finish = (m: Map<string, Roll>) => [...m.values()]
+    .map((r) => ({ ...r, margin: r.accrued - r.cost }))
+    .sort((a, b) => b.accrued - a.accrued);
+
+  const shortfallTotal = drill.shortfall.reduce((a, r) => a + (r.shortfall || 0), 0);
+
+  return {
+    measured_at,
+    labels: PNL_LABELS,
+    filters_applied: filters,
+    // Judgement 1, said out loud in the payload so the screen and the workbook cannot describe the
+    // window differently from each other or from this function.
+    window_note: "A date filter selects BATCHES by their planned start; each batch brings all of its own cost and revenue with it, whenever those were recorded.",
+    totals: {
+      accrued: tAccrued, invoiced: tInvoiced, received: tReceived,
+      cost: tCost, cost_unattributed,
+      margin: tAccrued - tCost,
+      // Not invoiced yet, and short received: the two places money goes missing between "earned"
+      // and "in the bank", which is the whole reason this report exists.
+      not_invoiced: drill.not_invoiced.length,
+      shortfall: shortfallTotal,
+      batches: rows.length,
+      accrued_unknown: tUnknown,
+      accrued_note: tUnknown > 0
+        ? `${tUnknown} batch(es) could not be valued - no closure figures yet, or the scheme carries no rate. They are NOT counted as zero.`
+        : null,
+      cost_note: cost_unattributed > 0
+        ? "Cost not tagged to any batch is excluded from every per-batch margin above and shown separately, so the margins are not flattered by leaving it out."
+        : null,
+    },
+    by_location: finish(byLocation),
+    by_job_role: finish(byRole),
+    by_scheme: finish(byScheme),
+    detail: {
+      accrued: card(PNL_LABELS.accrued, drill.accrued, tAccrued),
+      invoiced: card(PNL_LABELS.invoiced, drill.invoiced, tInvoiced),
+      received: card(PNL_LABELS.received, drill.received, tReceived),
+      not_invoiced: card("Earned but not invoiced", drill.not_invoiced, drill.not_invoiced.length),
+      shortfall: card("Short received", drill.shortfall, shortfallTotal),
+      unknown_rate: card(PNL_LABELS.unknown_rate, drill.unknown_rate, drill.unknown_rate.length),
+    },
+    register: rows,
+  };
+}
+

@@ -1141,7 +1141,25 @@ const InvoiceSchema = new Schema({
   amount: Number,
   status: { type: String, enum: INVOICE_STATUS, required: true, default: "Not Ready" },
   invoice_no: String, raised_on: Date, paid_on: Date, file: String,
+  // QA-1831 (CEO, 2026-09-05): *"saara revenue account for kar liya, usko invoice kar diya, wo
+  // receive ho gaya"* - and the reason he gave for wanting it: *"humne jaise advance diye the,
+  // TOT ka payment kiya tha, to trace nahi ho raha."* A status of Paid answered "did money come?"
+  // and nothing answered "how much, and against what reference." Those are the two questions a
+  // shortfall hides in: TDS deducted at source and a part payment both leave status Paid.
+  //
+  // received_amount is DELIBERATELY allowed to differ from `amount` (Umesh, D6, 2026-09-07). A
+  // model that forces them equal cannot represent the very gap this field exists to surface.
+  received_amount: Number,
+  receipt_ref: String,
+  // There is deliberately NO `received_on`. `paid_on` already carries the date the money came
+  // and Rule 36 already requires it before an invoice may read Paid; a second date field would be
+  // the same fact stored twice, which is the ARCHITECTURE section-3 fault this repo keeps paying
+  // for. If part payments ever need their own dates, that is a receipts SUB-DOCUMENT, not a
+  // second scalar - and it is not this unit.
 }, { timestamps: true });
+// The P&L filters on payment state across every batch; before this the only index on the
+// collection was the implicit unique one on `batch`, so every such read was a collection scan.
+InvoiceSchema.index({ status: 1, paid_on: 1 });
 
 // ---------- CostEntry ----------
 const CostEntrySchema = new Schema({

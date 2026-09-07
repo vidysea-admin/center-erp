@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, readJson } from "@/lib/authz";
 import { requirePerm, hasPermission, maskInvoiceMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { CandidateResult, Closure, Invoice } from "@/models";
-import { assertBatchInScope, enrolledWithoutCan, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
+import { assertBatchInScope, enrolledWithoutCan, proposeInvoiceAmount, summarizeBatchResults, upsertClosureChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -26,6 +26,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // legacy === no per-candidate rows → the batch keeps its stored batch-level figures (Rule 41)
   return NextResponse.json({
     closure, invoice: maskInvoiceMoney(invoice, canSeeMoney),
+    // QA-1831: the proposed amount is MONEY, so it rides the same field rule as the rest of the
+    // invoice - a reader without finance.view gets null, not a figure. Computed here rather than in
+    // the client because the rate lives on the scheme master and a client that fetched it would be
+    // a second place the formula exists.
+    invoice_proposal: canSeeMoney ? await proposeInvoiceAmount(id) : null,
     legacy: rows.length === 0,
     results_summary: await summarizeBatchResults(id, rows),
     // -156 (QA-445): a derivation that quietly does not happen is Manish's "mark complete karne se
