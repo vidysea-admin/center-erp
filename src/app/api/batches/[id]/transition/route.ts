@@ -32,7 +32,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (backdate_override === true && target !== "Active" && target !== "Completed") {
     throw new HttpError(400, "Recording a batch after the fact applies to starting and completing it, nothing else.");
   }
-  // QA-1966: the enrolment hatch exists for STARTING a batch and nothing else. Refused up front
+  // QA-1971: the enrolment hatch exists for STARTING a batch and nothing else. Refused up front
   // rather than ignored, so a caller that sends it at the wrong moment learns that it did nothing -
   // an override silently dropped is worse than one refused, because the sender believes it applied.
   if (enrollment_override === true && target !== "Active") {
