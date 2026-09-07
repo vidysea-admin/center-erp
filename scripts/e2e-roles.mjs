@@ -3741,6 +3741,61 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         }
       }
     }
+    // ---- QA-1971. Umesh answered the gate (qa/gates/qa-1831-untagged-cost-under-a-date-window.md,
+    // 2026-09-07): a DATED P&L DISCLOSES the organisation-wide untagged-cost total, labelled as not
+    // scoped to the window, instead of withholding it. Four assertions pin that ruling above and all
+    // four read the PAYLOAD, so the WORKBOOK can drop the row - or drop the number and keep the
+    // heading - and the wall stays green. That is the QA-1959 shape exactly: the payload was right,
+    // the file was wrong, and every pin on the payload passed over it. The number is read out of the
+    // .xlsx bytes for the same reason it was there: it is the only surface this defect can live on.
+    {
+      const XLSX = await import("xlsx");
+      const DATED = "from=2020-01-01&to=2030-12-31";
+      const dated = (await req(admin, "GET", `/api/reports/pnl?${DATED}`)).data ?? {};
+      const want = dated.totals?.cost_unattributed;
+      // Asserted, not assumed. Without this a workbook that correctly omits the row (because the
+      // payload legitimately has nothing to disclose) is indistinguishable from one that lost it.
+      ok("QA-1971 precondition: the dated payload has a real untagged figure, flagged unscoped",
+        typeof want === "number" && dated.totals?.cost_unattributed_scoped === false,
+        JSON.stringify({ v: want, scoped: dated.totals?.cost_unattributed_scoped }));
+
+      const xr = await fetch(BASE + `/api/reports/pnl/export?${DATED}`, { headers: { cookie: admin } });
+      ok("QA-1971: the DATED P&L workbook downloads", xr.status === 200, `got ${xr.status}`);
+      if (xr.status === 200 && typeof want === "number") {
+        const wb = XLSX.read(new Uint8Array(await xr.arrayBuffer()), { type: "array" });
+        // defval:null for the same reason QA-1959 needed it: without it a missing cell is OMITTED
+        // and every "is it there?" test silently reads undefined, which is how that pin survived
+        // its own mutant the first time.
+        const notes = XLSX.utils.sheet_to_json(wb.Sheets["where the numbers come from"] ?? {}, { defval: null });
+        const row = notes.find((r) => /NOT scoped to the dates/i.test(String(r.Item ?? "")));
+        ok("QA-1971: ...and it carries the out-of-window row, labelled as not scoped to the dates",
+          !!row, JSON.stringify({ rows: notes.length, items: notes.map((r) => String(r.Item)).slice(0, 3) }));
+        // The NUMBER, separately from the label. Deleting the value and keeping the heading is the
+        // cheaper half of this regression and the one a reader would never notice.
+        ok("QA-1971: ...with the FIGURE itself in the file, not a heading with no number under it",
+          !!row && String(row.Detail ?? "").startsWith(String(want) + "."),
+          JSON.stringify({ want, detail: String(row?.Detail ?? "").slice(0, 60) }));
+      }
+
+      // The other arm of the ruling: a batch-selecting filter genuinely does NOT apply, and the file
+      // must say so WITHOUT a number. Otherwise "disclose it under a date window" quietly becomes
+      // "disclose it always", and the distinction Umesh's answer turns on is lost from the workbook.
+      const prog1 = ((await req(admin, "GET", "/api/programs?limit=1")).data?.items ?? [])[0];
+      ok("QA-1971 fixture: a programme exists to filter by", !!prog1, JSON.stringify({ prog: prog1?.code }));
+      if (prog1) {
+        const xn = await fetch(BASE + `/api/reports/pnl/export?program=${prog1._id}`, { headers: { cookie: admin } });
+        if (xn.status === 200) {
+          const wb2 = XLSX.read(new Uint8Array(await xn.arrayBuffer()), { type: "array" });
+          const notes2 = XLSX.utils.sheet_to_json(wb2.Sheets["where the numbers come from"] ?? {}, { defval: null });
+          const na = notes2.find((r) => /Cost not tagged to a batch \(/.test(String(r.Item ?? "")));
+          ok("QA-1971: under a batch-selecting filter the workbook says it does not apply, with NO number",
+            !!na && /not applicable/i.test(String(na.Detail ?? "")) && !/^\d/.test(String(na.Detail ?? "")),
+            JSON.stringify({ item: String(na?.Item ?? ""), detail: String(na?.Detail ?? "").slice(0, 60) }));
+        } else {
+          ok("QA-1971: the filtered P&L workbook downloads", false, `got ${xn.status}`);
+        }
+      }
+    }
   }
 
   // ---- QA-1899. `kpiRollup` excluded dropouts from "trained" with

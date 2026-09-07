@@ -500,6 +500,71 @@ if (bulkRowVisible) {
     JSON.stringify(tileKeys));
 }
 
+// ================= QA-1971: the DISCLOSURE, on the screen it was decided for =================
+// Umesh answered the gate (qa/gates/qa-1831-untagged-cost-under-a-date-window.md, 2026-09-07):
+// a DATED P&L shows the organisation-wide untagged-cost total WITH an explicit "not scoped to this
+// window" label, rather than withholding it. That ruling is pinned four ways in e2e-roles - and all
+// four read the PAYLOAD. Delete the `<b>{rupee(t.cost_unattributed)}</b>` branch from
+// src/app/(app)/finance/pnl/page.tsx and the screen shows the label with no number, which is the
+// half of the ruling that was actually contested, and nothing in the wall notices. Same defect
+// class as QA-1959 (payload right, file wrong) arriving on the third surface.
+{
+  // Create the condition rather than hunt for it (the QA-1950 move): a distinctive amount, so a
+  // coincidental match with pre-existing fixture data cannot make the comparison pass by accident.
+  const UNTAGGED = 9182736;
+  const cats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
+  const leafCat = cats.find((c) => c.parent) ?? cats[0];
+  // 201 explicitly, never "not an error": a parked cost entry answers 202 and writes NO ledger row,
+  // which would leave the figure at whatever it already was and the assertions below unearned.
+  const seeded = leafCat ? await req(admin, "POST", "/api/costs", {
+    entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount: UNTAGGED,
+    note: "QA-1971 fixture: untagged cost, so the dated screen has a real number to disclose",
+  }) : { status: 0 };
+  ok("QA-1971 fixture: an untagged cost entry exists (201, not parked)",
+    seeded.status === 201, JSON.stringify({ status: seeded.status, cat: leafCat?.name }));
+
+  const DATED = "from=2020-01-01&to=2030-12-31";
+  const payload = (await req(admin, "GET", `/api/reports/pnl?${DATED}`)).data ?? {};
+  const t = payload.totals ?? {};
+  // The precondition is asserted, not assumed. If the payload ever stops flagging this, the screen
+  // pin below would pass vacuously against an element that legitimately is not there.
+  ok("QA-1971 precondition: the dated payload discloses a real untagged figure and flags it unscoped",
+    typeof t.cost_unattributed === "number" && t.cost_unattributed >= UNTAGGED && t.cost_unattributed_scoped === false,
+    JSON.stringify({ v: t.cost_unattributed, scoped: t.cost_unattributed_scoped }));
+
+  await page.goto(`${BASE}/finance/pnl?${DATED}`, { waitUntil: "domcontentloaded" });
+  const box = page.locator('[data-warning="cost-unattributed-out-of-window"]');
+  // Wait on the THING BEING ASSERTED, never on prose - QA-1962's own instrument bug, one block up.
+  const present = await box.waitFor({ state: "attached", timeout: 45000 }).then(() => true).catch(() => false);
+  ok("QA-1971: a DATED P&L renders the out-of-window disclosure box on screen",
+    present && await box.count() === 1, `count=${await box.count()} at ${page.url()}`);
+
+  if (present) {
+    const text = (await box.innerText()).replace(/\s+/g, " ").trim();
+    // Digits, not the formatted string: en-IN grouping is the browser's ICU, not this runner's, and
+    // a pin that fails on a locale difference is a pin people learn to skip.
+    const shown = await box.locator("b").first().innerText().catch(() => "");
+    const digits = String(shown).replace(/[^0-9]/g, "");
+    ok("QA-1971: ...carrying the NUMBER, which is the half of Umesh's ruling that was contested",
+      digits === String(t.cost_unattributed),
+      JSON.stringify({ rendered: shown, digits, payload: t.cost_unattributed }));
+    ok("QA-1971: ...and the LABEL beside it, so the number is never read as scoped to the window",
+      /not scoped/i.test(text) && await box.isVisible(),
+      JSON.stringify({ visible: await box.isVisible(), text: text.slice(0, 120) }));
+  }
+
+  // The other arm of the same ruling, on the same screen: a BATCH-selecting filter genuinely does
+  // not apply, and must show the reason with NO number - otherwise "disclose it" quietly becomes
+  // "disclose it always" and the distinction the ruling turns on is lost from the screen. The
+  // filter is this suite's OWN programme, so this arm can never skip for want of a fixture.
+  await page.goto(`${BASE}/finance/pnl?program=${prog._id}`, { waitUntil: "domcontentloaded" });
+  const na = page.locator('[data-warning="cost-unattributed-na"]');
+  const naThere = await na.waitFor({ state: "attached", timeout: 45000 }).then(() => true).catch(() => false);
+  ok("QA-1971: under a batch-selecting filter the screen says the figure does not apply, and shows no number",
+    naThere && await na.locator("b").count() === 0 && /not applicable/i.test((await na.innerText()).trim()),
+    naThere ? JSON.stringify({ bolds: await na.locator("b").count(), text: (await na.innerText()).replace(/\s+/g, " ").slice(0, 100) }) : "box absent");
+}
+
 // ================= QA-573's LITERAL ASK, on /reports =================
 // "open a <details>, close it, and read what is visible". REQ-367b: the warnings stay OUTSIDE the
 // disclosure card and stay visible in BOTH states.
