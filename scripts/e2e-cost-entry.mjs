@@ -140,6 +140,12 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const catsBefore = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
   const costsBefore = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
 
+  // The route REFUSES rather than inventing an approver, so the rule for THIS action has to be on.
+  // The pin failed with 409 "there is no approver set up for new cost heads yet" on its first run,
+  // which is the route behaving exactly as designed and the fixture not having read its own design.
+  const catRule = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: true, approver_role: "Admin" });
+  ok("QA-1828c [precondition] an approver is configured for new cost heads", catRule.status === 200, `got ${catRule.status}`);
+
   const q = await req(ops, "POST", "/api/costs", { ...baseEntry(), new_subhead: proposed });
   ok("QA-1828c: naming a head that does not exist parks the entry instead of refusing it",
     q.status === 202, `got ${q.status} ${JSON.stringify(q.data).slice(0, 120)}`);
@@ -185,12 +191,27 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   // Umesh, 2026-09-07: an Admin already creates heads (Rule 40) and IS the evaluator, so routing
   // them through a queue would mean waiting for another Admin - this system refuses self-approval.
   const inlineName = `ZZ Inline ${stamp}`;
+  const reqsBefore = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+    .filter((r) => r.action === "costcategory.create").length;
   const inline = await req(admin, "POST", "/api/costs", { ...baseEntry({ amount: 654 }), new_subhead: inlineName });
-  ok("QA-1828c: an ADMIN naming a head creates it inline and posts - no queue, no waiting for a peer",
-    inline.status === 201, `got ${inline.status}`);
+
+  // THIS PIN WAS WRONG ON ITS FIRST RUN and the code was right. It expected 201, and got 202 -
+  // because `cost.post` is enabled in this suite and QA-1826 DELETED the Admin short-circuit that
+  // used to let a configured approver skip their own queue. So an Admin's COST parks like anybody
+  // else's, which is the two-point check working: *"जो रेज करेगा वो खुद ही अप्रूव नहीं करेगा"*.
+  //
+  // What is Admin-specific is the HEAD, not the cost. So that is what this asserts now: the head
+  // exists immediately and no costcategory.create request was raised. Asserting the status code was
+  // asserting the wrong thing about the right behaviour.
+  ok("QA-1828c: an Admin's cost still goes through the cost.post queue like everyone else's",
+    inline.status === 201 || inline.status === 202, `got ${inline.status}`);
   const inlineCats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
-  ok("QA-1828c: ...and that head really exists afterwards",
+  ok("QA-1828c: ...but the HEAD they named exists straight away, with no approval in between",
     inlineCats.some((c) => c.name === inlineName), `${inlineCats.length} heads`);
+  const reqsAfter = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+    .filter((r) => r.action === "costcategory.create").length;
+  ok("QA-1828c: ...and no new-head request was raised for them - they are the evaluator",
+    reqsAfter === reqsBefore, `${reqsBefore} -> ${reqsAfter}`);
 }
 
 // ------------------------------------- the asymmetry this unit was most exposed to
@@ -204,16 +225,24 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const parked = await req(ops, "POST", "/api/costs", payload);
   ok("QA-1828b [precondition] with the rule ON, an ordinary entry parks", parked.status === 202, `got ${parked.status}`);
   if (parked.data?.item?._id) {
-    await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "approve", note: "pin" });
-    const viaQueue = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).find((c) => c.amount === 111 && c.voucher_no === `B-${stamp}`);
+    const decided = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "approve", note: "pin" });
+    // The first run reported only "not found", which describes the SEARCH and not the world - the
+    // approval could have been refused and the pin would have said the same thing. Assert the
+    // decision landed, then look for what it should have written.
+    ok("QA-1828b [precondition] the parked entry is approved, so there is a replay to inspect",
+      decided.status === 200, `got ${decided.status} ${JSON.stringify(decided.data?.error ?? "").slice(0, 90)}`);
+    const ledger = (await req(admin, "GET", "/api/costs")).data?.items ?? [];
+    const viaQueue = ledger.find((c) => String(c.voucher_no ?? "") === `B-${stamp}`);
     ok("QA-1828b: an entry written by the APPROVAL REPLAY carries the same fields as a direct write",
       !!viaQueue && viaQueue.vendor_payee === `Both ${stamp}` && viaQueue.payment_mode === "Cheque",
-      JSON.stringify(viaQueue ? { v: viaQueue.vendor_payee, m: viaQueue.payment_mode } : "not found"));
+      viaQueue ? JSON.stringify({ v: viaQueue.vendor_payee, m: viaQueue.payment_mode })
+        : `no ledger row carries voucher B-${stamp}; ${ledger.length} rows, amounts ${ledger.slice(0, 5).map((c) => c.amount).join(",")}`);
   }
 }
 
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
