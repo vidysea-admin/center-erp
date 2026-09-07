@@ -11,7 +11,16 @@
 // endpoint that returns 200 and hashes nothing satisfies every other shape of assertion, and this
 // codebase has already shipped one report full of nulls that passed every structural pin around it
 // (QA-1948). A credential route is exactly where that mistake would be most expensive.
-const BASE = process.env.BASE_URL || "http://localhost:3000/erp";
+import { requireLocalBase } from "./db-guard.mjs";
+// QA-1966 (checker, cycle 1): this was the ONLY write-heavy HTTP suite in the wall with no BASE_URL
+// guard. It creates a user and changes a password through whatever server BASE_URL names, so run
+// directly against a non-local address it would have done both ON PRODUCTION - and QA-1096 already
+// records that a direct single-suite run bypasses the runner guards that would otherwise catch it.
+// The checker proved it by A/B: e2e-roles refused and sent nothing, this one ran 16/16 and wrote.
+//
+// I wrote this file thinking about what its assertions prove and not about where they would land.
+// Thirteen sibling suites already had the line.
+const BASE = requireLocalBase("e2e-password", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + "   " + x); } };
 
@@ -85,9 +94,16 @@ if (sess) {
 // re-opened the 2026-08-12 S0: a non-Admin with the grantable `users.manage` right rewriting an
 // Admin's hash. This asserts the old door is still shut, so a future "simplification" that merges
 // the two cannot pass quietly.
-if (admin) {
-  const me = (await req(admin, "GET", "/api/users?limit=200")).data?.items?.find((u) => u.email === "admin@vidysea.com");
-  if (me) {
+// QA-1969 (checker, cycle 1): these were bare `if`s. A pin inside an unasserted `if` does not FAIL
+// when its precondition disappears - it silently stops existing, and the suite still reports green.
+// That is the same family as an `.every()` over an empty set, which cost this branch three cycles
+// on a different unit. The precondition is now itself an assertion.
+const meRow = admin ? (await req(admin, "GET", "/api/users?limit=200")).data?.items?.find((u) => u.email === "admin@vidysea.com") : null;
+ok("QA-1829a [precondition] the Admin's own row is readable, so the old-door pin below actually runs",
+  !!meRow, "could not resolve admin@vidysea.com");
+if (meRow) {
+  const me = meRow;
+  {
     const self = await req(admin, "PATCH", `/api/users/${me._id}`, { password: "SomethingElse1" });
     ok("QA-1829a: PATCH /api/users/[id] still refuses a self password edit, Admin included",
       self.status === 400, `got ${self.status}`);
@@ -107,6 +123,8 @@ ok("QA-1829a: the door is closed to a caller with no session", anon.status === 4
 // is keyed on the account, not only on the caller's IP.
 {
   const s2 = await login(EMAIL, PW2) ?? await login(EMAIL, PW1);
+  ok("QA-1829a [precondition] a session exists to exhaust the limiter with, so the pin below runs",
+    !!s2, "no session");
   if (s2) {
     let sawLimit = false;
     for (let i = 0; i < 8; i++) {
@@ -117,11 +135,39 @@ ok("QA-1829a: the door is closed to a caller with no session", anon.status === 4
   }
 }
 
-// ---- tidy up: the subject is deactivated, never left able to sign in.
+// ---- QA-1970 (checker, cycle 1): TWO of nine mutants survived, and both were the calls whose
+// comments make the biggest claims - the audit write and invalidateIdentity. The second is now
+// honestly described as a no-op here rather than pinned; this pins the first, which IS load-bearing.
+// It also pins the thing nobody had asserted at all: that a credential route never writes a
+// credential into the trail it leaves behind.
 if (admin && subjectId) {
+  const trail = await req(admin, "GET", `/api/audit/User/${subjectId}`);
+  const rows = trail.data?.items ?? trail.data?.rows ?? [];
+  ok("QA-1970 [precondition] the audit trail for the subject is readable, so the pins below run",
+    trail.status === 200 && Array.isArray(rows), `got ${trail.status}`);
+  ok("QA-1970: the change is recorded as a PASSWORD change, not the generic updated the Admin path writes",
+    rows.some((r) => r.field === "password"),
+    JSON.stringify(rows.map((r) => r.field).slice(0, 6)));
+  // Neither the old nor the new password may appear ANYWHERE in the trail - not in a value, not in
+  // a summary, not inside a payload object.
+  const blob = JSON.stringify(trail.data ?? {});
+  ok("QA-1970: ...and the trail carries neither the old password nor the new one",
+    !blob.includes(PW1) && !blob.includes(PW2),
+    blob.includes(PW1) ? "the OLD password is in the audit trail" : "the NEW password is in the audit trail");
+}
+
+// ---- tidy up: the subject is deactivated, never left able to sign in.
+// QA-1968 (checker, cycle 1): this ran only on the happy path. An abort anywhere above it - a
+// thrown fetch, a killed run - stranded an ACTIVE login with a known password. The account is a
+// throwaway, but "throwaway" describes intent, not state, and the state is what can sign in.
+async function retireSubject() {
+  if (!admin || !subjectId) return;
   const off = await req(admin, "PATCH", `/api/users/${subjectId}`, { active: false });
   ok("cleanup: the throwaway subject is deactivated", off.status === 200, `got ${off.status}`);
 }
+process.on("uncaughtException", async (e) => { console.log("ABORTING: " + e?.message); await retireSubject().catch(() => {}); process.exit(1); });
+process.on("unhandledRejection", async (e) => { console.log("ABORTING: " + e); await retireSubject().catch(() => {}); process.exit(1); });
+await retireSubject();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

@@ -54,6 +54,7 @@ export default function ChangePasswordPage() {
         <div className="space-y-3 rounded-lg border border-green-200 bg-green-50 p-4">
           <p className="text-sm text-green-900">
             Your password has been changed. Use the new one from now on — nobody has been emailed it.
+            Anyone already signed in as you, on any device, stays signed in until that session expires.
           </p>
           <div className="flex gap-2">
             <Btn kind="ghost" onClick={() => router.push("/")}>Back to Home</Btn>

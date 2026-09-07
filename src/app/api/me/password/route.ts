@@ -66,8 +66,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
   doc.password_hash = await bcrypt.hash(next, 10);
   await doc.save();
 
-  // The identity cache holds `active` and `approval_status`; a credential change is exactly the
-  // moment to stop serving a cached answer about this account (same call the Admin path makes).
+  // QA-1967 (checker, cycle 1): the comment that stood here sold this as the credential-change
+  // security step - "same call the Admin path makes". It is not, and the difference matters. The
+  // identity cache (`authz.ts:69`) holds `active` and `approval_status` and NO credential state, so
+  // clearing it changes nothing about a password. On the Admin path the call is load-bearing because
+  // it fires beside `active: false`, which the cache DOES hold; here it is a no-op, and the checker
+  // measured exactly that - the pre-change cookie still returns 200 and can change the password again.
+  //
+  // The call stays because it is correct in principle and free, but the CLAIM is withdrawn.
+  //
+  // WHAT THIS ROUTE THEREFORE DOES NOT DO: it does not sign anybody out. Sessions are JWTs, so a
+  // token minted before the change stays valid until it expires - including one on somebody else's
+  // machine. Revoking that needs a token-version or password-changed-at check inside `requireUser`,
+  // which is a change to shared auth code and its own unit (QA-1967b), not a line here. The screen
+  // says so in plain words rather than letting a person assume otherwise.
   invalidateIdentity(String(doc._id));
 
   // `field: "password"` and not the generic "updated" the Admin path uses: an audit trail that
