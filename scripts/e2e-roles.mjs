@@ -4280,11 +4280,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         ok("QA-1971 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
           [200, 201].includes(raised.status), `got ${raised.status}`);
 
-        const readyB = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
-          .find((b) => String(b.status) === "Ready");
-        ok("QA-1971 fixture: a Ready batch exists to start", !!readyB, String(readyB?.code ?? "none"));
+        const readyAll = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
+          .filter((b) => String(b.status) === "Ready");
+        const readyB = readyAll[0];          // the refusal arms live here and it is never started
+        const readyStart = readyAll[1];      // the success arm lives here
+        ok("QA-1971 fixture: TWO Ready batches exist - refusals and the real start must not share one",
+          !!readyB && !!readyStart, JSON.stringify(readyAll.map((b) => b.code).slice(0, 4)));
 
-        if (readyB) {
+        if (readyB && readyStart) {
           const moved = await req(admin, "PATCH", `/api/batches/${readyB._id}`, { planned_start: "2026-06-01" });
           ok("QA-1971 fixture: its planned start is moved into the past, so Rule 17 is not what refuses it",
             [200, 201].includes(moved.status), `got ${moved.status}`);
@@ -4312,17 +4315,24 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           const shortReason = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
             { target: "Active", enrollment_override: true, reason: "ok" });
           ok("QA-1971: ...and a token reason is refused too, so the field cannot be satisfied with a keystroke",
-            shortReason.status === 409, `got ${shortReason.status}`);
+            shortReason.status === 409 && /needs a reason/i.test(String(shortReason.data?.error ?? "")),
+            `${shortReason.status} ${String(shortReason.data?.error ?? "").slice(0, 70)}`);
 
-          // ARM 3 - with a real reason it starts, AND the record carries it.
+          // ARM 3 - with a real reason it starts, AND the record carries it. On its OWN batch:
+          // under the "override not required" mutant ARM 1 actually starts `readyB`, and every
+          // later call then answers "Transition Active -> Active is not allowed" - a 409 that made
+          // the token-reason assertion above pass for a reason that had nothing to do with reasons.
+          const movedS = await req(admin, "PATCH", `/api/batches/${readyStart._id}`, { planned_start: "2026-06-01" });
+          ok("QA-1971 fixture: the start batch's planned start is moved into the past too",
+            [200, 201].includes(movedS.status), `got ${movedS.status}`);
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
-          const started = await req(admin, "POST", `/api/batches/${readyB._id}/transition`,
+          const started = await req(admin, "POST", `/api/batches/${readyStart._id}/transition`,
             { target: "Active", enrollment_override: true, reason: REASON });
           ok("QA-1971: with a real reason the batch STARTS below the threshold",
             [200, 201].includes(started.status) && String(started.data?.item?.status ?? "") === "Active",
             `${started.status} ${JSON.stringify(started.data).slice(0, 90)}`);
 
-          const auditRes = await req(admin, "GET", `/api/audit/Batch/${readyB._id}`);
+          const auditRes = await req(admin, "GET", `/api/audit/Batch/${readyStart._id}`);
           const acts = (auditRes.data?.items ?? auditRes.data?.rows ?? []);
           const row = acts.find((a) => String(a.field) === "enrollment_override");
           const rowVal = String(row?.new_value ?? row?.newValue ?? "");
