@@ -3352,6 +3352,39 @@ for (const file of walk(root)) {
     }
   }
 
+  // QA-1998 — A BUTTON THAT CANNOT SUCCEED, IN THE SECOND PLACE, AGAIN.
+  //
+  // The Users table already hides "Stop access" and "Drop" on the actor's own row, because there
+  // they only ever return the self-edit 400 as a red banner. The SAME commit that fixed it there
+  // shipped RolesOverview rendering the same control on the same row - `myId` was sitting in the
+  // parent component and simply never passed down. One concept, two screens, and the second one
+  // left behind: the exact fault this file already carries a pin for on the two cost forms.
+  //
+  // Structural rather than behavioural on purpose: nothing in the wall can drive a React row for
+  // a user who is looking at themselves, so a rendering rule is only visible in the source.
+  {
+    const rel = "app/(app)/admin/page.tsx";
+    const f = path.join(root, rel);
+    if (!fs.existsSync(f)) {
+      pushStructural("QA-1998: " + rel + " is gone - the roles overview cannot be checked");
+    } else {
+      const src = stripComments(fs.readFileSync(f, "utf-8"));
+      const decl = /function RolesOverview\(\{([^}]*)\}/.exec(src);
+      if (!decl) {
+        pushStructural("QA-1998: this pin can no longer find RolesOverview in " + rel
+          + " - its own detection has drifted, so it is measuring nothing.");
+      } else if (!/\bmyId\b/.test(decl[1])) {
+        pushStructural("QA-1998: RolesOverview does not receive `myId`, so it cannot tell whose row it is drawing."
+          + " Its row actions then render on the actor's own row, where they can only return the self-edit 400 -"
+          + " the same defect the Users table one component up already fixed with this exact prop.");
+      } else if (!/myId && String\(u\._id\) === myId \? null :/.test(src)) {
+        pushStructural("QA-1998: RolesOverview takes `myId` but does not use it to withhold its row actions on the"
+          + " actor's own row. A button that only ever produces an error banner is not a smaller bug here than it"
+          + " was in the Users table.");
+      } else passed++;
+    }
+  }
+
   // QA-1828b / QA-1978 — THERE ARE TWO COST FORMS, and this pin is for that fact.
   //
   // `/costs` and the batch page's Costs tab both POST to /api/costs, and when one gains a field the

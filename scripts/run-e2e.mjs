@@ -87,6 +87,11 @@ const SUITES = [
   // QA-1828b/c: the cost entry taxonomy. Own file for the same reason as e2e-password - a
   // concurrent session holds e2e-roles.mjs. It toggles the cost.post approval rule and puts it back.
   "e2e-cost-entry.mjs",
+  // QA-1996/QA-1997: the last-Admin floor, and it RACES on purpose. The guard was reported to
+  // Umesh as unreachable twice, on the strength of a pin that only ever sent one request at a
+  // time; a checker reached the zero-Admin lockout 3 of 3 rounds by sending two. Its own file
+  // because it deactivates Admins, which no other suite can tolerate running underneath it.
+  "e2e-admin-floor.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

@@ -240,6 +240,94 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   }
 }
 
+// ==========================================================================================
+// QA-2010 (checker, cycle 2, S2) — THE THREE FIXES THAT NOTHING PROTECTED.
+//
+// Cycle 1 filed six findings and all six were fixed. The checker then reverted three of the
+// fixes one at a time, rebuilt, and this suite stayed **30/0 every time** while its own probe
+// reproduced each original defect verbatim. A fix nothing can see is a fix that survives until
+// the next person tidies it away.
+//
+// Worse, and this is the part worth remembering: the cycle-2 manifest claimed the pin
+// "NOTHING is written yet - no head, no ledger row" proved the QA-1975 guarantee had survived
+// the QA-2013 repair. It does not. That pin tests the PARK path, and it passes identically with
+// the pre-validation entirely disabled. The sentence a PASS would have rested on could not see
+// the thing it was offered as evidence for.
+//
+// The three assertions below are the checker's own (Q1c/Q1d/Q1e, Q3a/Q3b, Q4a/Q4b/Q4c), brought
+// into the wall so the mutants that killed the probe now kill the suite.
+{
+  const catList = async () => ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
+
+  // ---- QA-1975: a replay that cannot produce a valid entry must write NEITHER half, and must
+  // leave the request decidable. Cycle 1 measured head-created + no-ledger-row + permanently
+  // Approved: a cost head invented, no money recorded, and no way to decide it again.
+  {
+    const nm = `ZZ Half ${stamp}`;
+    const before = (await catList()).length;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 777, new_subhead: nm, payment_mode: "by hand" }));
+    if (parked.data?.item?._id) {
+      await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", note: "pin" });
+      const headMade = (await catList()).some((c) => c.name === nm);
+      const ledger = (await req(admin, "GET", "/api/costs?limit=200")).data?.items ?? [];
+      const entryMade = ledger.some((c) => c.amount === 777 && String(c.note ?? "").startsWith("pin:"));
+      const reqNow = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+        .find((r) => String(r._id) === String(parked.data.item._id));
+      ok("QA-1975: a refused replay is NOT a half-write - head and ledger row are both present or both absent",
+        headMade === entryMade, `headCreated=${headMade} entryCreated=${entryMade}`);
+      ok("QA-1975: ...and the request is left PENDING, still decidable, not Approved-but-unapplied",
+        reqNow?.status === "Pending", `status=${reqNow?.status}`);
+      ok("QA-1975: ...and the head count is unchanged by the refusal",
+        (await catList()).length === before, `${before} -> ${(await catList()).length}`);
+    } else {
+      ok("QA-1975: the invalid-payload entry parked so there is a replay to refuse", false,
+        `nothing parked (status ${parked.status}) - this pin measured nothing`);
+    }
+  }
+
+  // ---- QA-1980: a DEACTIVATED head is not a place to file new money. `active` was selected and
+  // never read, so the field was there and the check was not.
+  {
+    const dead = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ Dead ${stamp}`, active: false });
+    const deadId = dead.data?.item?._id;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 999, new_subhead: `ZZ NeverMap ${stamp}`, payment_mode: "Cash" }));
+    if (deadId && parked.data?.item?._id) {
+      const d = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", map_to_category: deadId });
+      ok("QA-1980: filing a cost under a DEACTIVATED head is refused", d.status >= 400, `got ${d.status}`);
+      const reqNow = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+        .find((r) => String(r._id) === String(parked.data.item._id));
+      ok("QA-1980: ...and that refusal leaves the request still Pending", reqNow?.status === "Pending", `status=${reqNow?.status}`);
+    } else {
+      ok("QA-1980: the fixture for the deactivated-head refusal built", false,
+        `dead=${dead.status} parked=${parked.status} - this pin measured nothing`);
+    }
+  }
+
+  // ---- QA-1976: pre-approval does NOT inherit. A subhead nobody marked could ride its parent's
+  // cap and post 90,000 unapproved. Q4b/Q4c are here so the fix cannot be "disable the feature".
+  {
+    const h = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ BigHead ${stamp}`, pre_approved: true, pre_approved_amount: 100000, pre_approved_basis: "big commitment",
+    });
+    const hId = h.data?.item?._id;
+    const sub = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ CheapSub ${stamp}`, parent: hId });
+    const sId = sub.data?.item?._id;
+    if (hId && sId) {
+      const r1 = await req(ops, "POST", "/api/costs", baseEntry({ category: sId, amount: 90000, payment_mode: "Cash" }));
+      ok("QA-1976: a subhead that is not itself pre-approved does NOT ride its parent's cap - 90,000 PARKS",
+        r1.status === 202, `got ${r1.status} - 201 means it posted straight to the ledger, unapproved`);
+      const r2 = await req(ops, "POST", "/api/costs", baseEntry({ category: hId, amount: 50, payment_mode: "Cash" }));
+      ok("QA-1976: ...while the head that IS marked still pre-approves within its cap (the fix did not just disable the feature)",
+        r2.status === 201, `got ${r2.status}`);
+      const r3 = await req(ops, "POST", "/api/costs", baseEntry({ category: hId, amount: 500000, payment_mode: "Cash" }));
+      ok("QA-1976: ...and ABOVE that cap it parks - the marker is a condition, not a pass",
+        r3.status === 202, `got ${r3.status}`);
+    } else {
+      ok("QA-1976: the parent/subhead fixture built", false, `head=${h.status} sub=${sub.status} - this pin measured nothing`);
+    }
+  }
+}
+
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
