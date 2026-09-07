@@ -5931,14 +5931,13 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
   let cost_unattributed: number | null = null;
   let cost_unattributed_note: string | null = null;
   if (selectsBatches) {
-    cost_unattributed_note = "Not applicable under a batch, job-role, scheme or DATE filter: all of those select batches - the date window by planned start - and untagged cost belongs to no batch. A figure here would be chosen by a different rule than the batches beside it (QA-1961).";
+    cost_unattributed_note = "Not applicable under a batch, job-role, scheme or DATE filter: all of those select batches - the date window by planned start - and untagged cost belongs to no batch. A figure here would be chosen by a different rule than the batches beside it.";
   } else {
+    // No date clause here on purpose: a from/to filter now selects BATCHES (see selectsBatches
+    // above), so this branch is only ever reached WITHOUT a date window. An entry_date narrowing
+    // here would be unreachable code that reads as if dates still narrow this figure - which is
+    // exactly the contradiction QA-1961 was raised about.
     const uq: Record<string, any> = { ...scope, $or: [{ batch: null }, { batch: { $exists: false } }] };
-    if (filters.from || filters.to) {
-      uq.entry_date = {};
-      if (filters.from) uq.entry_date.$gte = istStart(filters.from);
-      if (filters.to) uq.entry_date.$lte = istEnd(filters.to);
-    }
     if (filters.location) uq.location = filters.location;
     const unattributed = await CostEntry.find(uq).select("amount").lean<any[]>();
     cost_unattributed = unattributed.reduce((a, c) => a + (Number(c.amount) || 0), 0);
