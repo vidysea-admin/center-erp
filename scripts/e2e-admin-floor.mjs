@@ -1,4 +1,4 @@
-// QA-1996 / QA-1997 — the system must never be left with no Admin who can sign in.
+// QA-1996 / QA-1997 / QA-2014 — the system must never be left with no Admin who can sign in.
 //
 // WHY THIS SUITE EXISTS, AND WHY IT RACES.
 //
@@ -17,8 +17,8 @@
 //
 // THE ASSERTION IS AN INVARIANT, NOT A TIMING. A pin that demanded a specific interleaving would be
 // flaky, and a flaky pin gets deleted. What is asserted instead is the property that must hold
-// however the two requests interleave: **after the dust settles, at least one Admin can still sign
-// in.** That is true on the fixed code for every ordering, and it was false on the broken code.
+// however the two requests interleave: after the dust settles, at least one Admin can still sign
+// in. That is true on the fixed code for every ordering, and it was false on the broken code.
 import { requireLocalBase } from "./db-guard.mjs";
 // This suite creates Admins and deactivates Admins. Pointed at a non-local address it would do both
 // on production — QA-1966 is the row for the suite that shipped without this line.
@@ -44,19 +44,28 @@ async function req(cookie, method, p, body) {
 }
 
 const PW = "FloorPin@123";
+const ROOT_EMAIL = "admin@vidysea.com";
+const ROOT_PW = process.env.ADMIN_PASSWORD || "admin123";
 const stamp = Date.now().toString(36);
-const root = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+let root = await login(ROOT_EMAIL, ROOT_PW);
 ok("[precondition] the seed Admin can sign in", !!root, "no session");
 
-const effectiveAdmins = async () => {
-  const users = (await req(root, "GET", "/api/users?limit=500")).data?.items ?? [];
-  return users.filter((u) => u.role === "Admin" && u.active !== false && !u.dropped && u.approval_status === "Approved");
+// QA-2014: "can sign in" is `authorize()`'s definition (src/auth.ts:53-54) — it refuses only
+// "Pending" and "Rejected". An account with NO approval_status signs in fine, and `scripts/seed.mjs`
+// creates exactly such an Admin through the raw driver. An earlier version of this helper copied the
+// guard's narrower `=== "Approved"` test, reported the seeded Admin as not existing, and that
+// disagreement is what exposed QA-2014 in the product.
+const isEffective = (u) => u.role === "Admin" && u.active !== false && !u.dropped
+  && u.approval_status !== "Pending" && u.approval_status !== "Rejected";
+const effectiveAdmins = async (cookie) => {
+  const r = await req(cookie, "GET", "/api/users?limit=500");
+  return (r.data?.items ?? []).filter(isEffective);
 };
 
 // ---------------------------------------------------------------- the fixture
-// Two extra Admins, so the seed Admin is never the one at risk and the wall's other suites keep
-// the account they expect. If either fails to build, every assertion below is meaningless — so the
-// fixture is asserted rather than assumed (QA-1214: a skip that looks like a pass is not a pass).
+// Two extra Admins, so the seed Admin is never the one at risk. If either fails to build, every
+// assertion below is meaningless — so the fixture is asserted rather than assumed (QA-1214: a skip
+// that looks like a pass is not a pass).
 const mk = async (tag) => {
   const email = `zzfloor.${tag}.${stamp}@vidysea-test.local`;
   const r = await req(root, "POST", "/api/users", {
@@ -68,84 +77,86 @@ const A = await mk("a");
 const B = await mk("b");
 ok("[precondition] two throwaway Admins were created", !!A.id && !!B.id, `a=${A.status} b=${B.status}`);
 
-// They must be able to sign in, or a "race" between two sessions is really no race at all and the
-// pin would pass for the wrong reason.
 const sessA = A.id ? await login(A.email, PW) : null;
 const sessB = B.id ? await login(B.email, PW) : null;
 ok("[precondition] both throwaway Admins can actually sign in", !!sessA && !!sessB, `a=${!!sessA} b=${!!sessB}`);
 
-const baselineCount = (await effectiveAdmins()).length;
-ok("[precondition] at least three Admins can sign in before the race", baselineCount >= 3, `count=${baselineCount}`);
+const baseline = await effectiveAdmins(root);
+ok("[precondition] at least three Admins can sign in before the race", baseline.length >= 3, `count=${baseline.length}`);
 
-// ---------------------------------------------------------------- QA-1996: the deactivation race
-// Reduce to exactly the dangerous shape: A and B are the only two effective Admins, and each tries
-// to stop the other in the same instant. The seed Admin steps aside first so the floor really is
-// these two — done through the same door everything else uses, and undone at the end.
-let rootWasParked = false;
-if (sessA && sessB) {
-  const meRoot = (await req(root, "GET", "/api/me")).data?.user ?? {};
-  const rootId = String(meRoot.id ?? meRoot._id ?? "");
-  const others = (await effectiveAdmins()).filter((u) => ![String(A.id), String(B.id)].includes(String(u._id)));
-  // Park every OTHER Admin (normally just the seed one) so A and B are the floor.
-  for (const u of others) {
+// Everything below needs both sessions; without them there is no race to run and saying so beats
+// silently passing.
+if (!sessA || !sessB) {
+  ok("QA-1996: the race could be set up at all", false, "one of the throwaway Admin sessions is missing");
+} else {
+  // Park every OTHER Admin so A and B are the floor. NOTE: deactivating the seed Admin invalidates
+  // ITS OWN session (QA-080, invalidateIdentity), so `root` is dead from here until we sign in again
+  // — an earlier version of this suite kept using it and every restore call answered 401, which is
+  // why its teardown "failed" while the product was fine.
+  const parked = [];
+  for (const u of baseline.filter((u) => ![String(A.id), String(B.id)].includes(String(u._id)))) {
     const r = await req(sessA, "PATCH", `/api/users/${u._id}`, { active: false });
-    if (r.status === 200 && String(u._id) === rootId) rootWasParked = true;
+    if (r.status === 200) parked.push(String(u._id));
   }
-  const now = await effectiveAdmins();
-  ok("[precondition] exactly the two throwaway Admins hold the floor",
-    now.length === 2 && now.every((u) => [String(A.id), String(B.id)].includes(String(u._id))),
-    `count=${now.length} ids=${now.map((u) => u.name).join(",")}`);
+  root = null; // deliberately unusable: it may have just been switched off
 
-  if (now.length === 2) {
-    // THE RACE. Both requests are in flight before either can have finished.
+  const floor = await effectiveAdmins(sessA);
+  ok("[precondition] exactly the two throwaway Admins hold the floor",
+    floor.length === 2 && floor.every((u) => [String(A.id), String(B.id)].includes(String(u._id))),
+    `count=${floor.length} ids=${floor.map((u) => u.name).join(",")}`);
+
+  if (floor.length === 2) {
+    // ---- QA-1996: the deactivation race. Both requests are in flight before either finishes.
     const [ra, rb] = await Promise.all([
       req(sessA, "PATCH", `/api/users/${B.id}`, { active: false }),
       req(sessB, "PATCH", `/api/users/${A.id}`, { active: false }),
     ]);
-    const left = await effectiveAdmins();
+    const left = await effectiveAdmins(sessA) ;
+    const leftB = left.length ? left : await effectiveAdmins(sessB);
     ok("QA-1996: two Admins deactivating each other at the same instant NEVER leave zero Admins",
-      left.length >= 1,
-      `both answered ${ra.status}/${rb.status} and ${left.length} Admins can sign in - the system is locked out with no way back`);
+      leftB.length >= 1,
+      `both answered ${ra.status}/${rb.status} and no Admin can sign in - the system is locked out with no way back`);
     ok("QA-1996: ...and at least one of the two racing requests is refused rather than both succeeding",
       ra.status >= 400 || rb.status >= 400, `got ${ra.status} and ${rb.status}`);
 
-    // put both back for the next block, whichever way the race fell
-    for (const id of [A.id, B.id]) await req(root, "PATCH", `/api/users/${id}`, { active: true });
+    // Put both back, using whichever session still works.
+    for (const c of [sessA, sessB]) for (const id of [A.id, B.id]) await req(c, "PATCH", `/api/users/${id}`, { active: true });
+
+    // ---- QA-1997: the FOURTH door. `{approval:"reject"}` sets approval_status AND active=false,
+    // and was missing from the guard's clause list.
+    const before = await effectiveAdmins(sessA);
+    if (before.length >= 2) {
+      const [rc, rd] = await Promise.all([
+        req(sessA, "PATCH", `/api/users/${B.id}`, { approval: "reject" }),
+        req(sessB, "PATCH", `/api/users/${A.id}`, { approval: "reject" }),
+      ]);
+      const after = await effectiveAdmins(sessA);
+      const afterAny = after.length ? after : await effectiveAdmins(sessB);
+      ok("QA-1997: the same race through the REJECT door also never leaves zero Admins",
+        afterAny.length >= 1, `both answered ${rc.status}/${rd.status} and no Admin can sign in`);
+    } else {
+      ok("QA-1997: the reject-door race had two Admins to race", false,
+        `count=${before.length} - this pin measured nothing`);
+    }
   }
 
-  // ------------------------------------------------------------ QA-1997: the FOURTH door
-  // `{approval:"reject"}` sets approval_status AND active=false, and was missing from the guard's
-  // clause list. The guard's own comment said "a guard that covers two of three is the shape this
-  // repo keeps paying for" - it shipped covering three of four.
-  const before = await effectiveAdmins();
-  if (before.length >= 2) {
-    const [ra, rb] = await Promise.all([
-      req(sessA, "PATCH", `/api/users/${B.id}`, { approval: "reject" }),
-      req(sessB, "PATCH", `/api/users/${A.id}`, { approval: "reject" }),
-    ]);
-    const left = await effectiveAdmins();
-    ok("QA-1997: the same race through the REJECT door also never leaves zero Admins",
-      left.length >= 1,
-      `both answered ${ra.status}/${rb.status} and ${left.length} Admins can sign in`);
-  } else {
-    ok("QA-1997: the reject-door race had two Admins to race", false, `count=${before.length} - this pin measured nothing`);
+  // ---------------------------------------------------------------- restore
+  // Bring the parked Admins back through whichever throwaway session still has rights, THEN sign in
+  // as the seed Admin again and remove the throwaways. Leaving an inactive seed Admin behind would
+  // break every later suite that logs in as one.
+  for (const c of [sessA, sessB]) {
+    for (const id of parked) await req(c, "PATCH", `/api/users/${id}`, { active: true, approval: "approve" });
+  }
+  root = await login(ROOT_EMAIL, ROOT_PW);
+  ok("[teardown] the seed Admin can sign in again", !!root, "the seed Admin is still switched off");
+  if (root) {
+    for (const id of [A.id, B.id]) if (id) await req(root, "PATCH", `/api/users/${id}`, { drop: true });
+    const final = await effectiveAdmins(root);
+    ok("[teardown] the throwaway Admins are gone and the floor is intact",
+      final.length >= 1 && !final.some((u) => String(u.email ?? "").startsWith("zzfloor.")),
+      `count=${final.length} remaining=${final.map((u) => u.email).join(",")}`);
   }
 }
-
-// ---------------------------------------------------------------- restore
-// Leave the wall exactly as we found it: the seed Admin back on, the throwaways gone. A suite that
-// quietly leaves an inactive Admin behind breaks every later suite that logs in as one.
-for (const u of await (async () => ((await req(root, "GET", "/api/users?limit=500")).data?.items ?? []))()) {
-  if (u.role === "Admin" && u.active === false && !String(u.email ?? "").startsWith("zzfloor.")) {
-    await req(root, "PATCH", `/api/users/${u._id}`, { active: true });
-  }
-}
-for (const id of [A.id, B.id]) if (id) await req(root, "PATCH", `/api/users/${id}`, { drop: true });
-
-const finalAdmins = await effectiveAdmins();
-ok("[teardown] the seed Admin is signed-in-able again and the throwaways are gone",
-  finalAdmins.length >= 1 && !finalAdmins.some((u) => String(u.email ?? "").startsWith("zzfloor.")),
-  `count=${finalAdmins.length} rootParked=${rootWasParked}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

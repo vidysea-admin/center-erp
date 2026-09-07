@@ -27,10 +27,30 @@ import { renderMail, sendMail } from "@/lib/mailer";
 //
 // The cheap pre-check is kept as well: it gives the ordinary single-request case a clean 409
 // without a write ever happening. It is the fast path, not the guarantee.
+// QA-2014 — WHO COUNTS AS AN ADMIN WHO CAN SIGN IN, and this guard had a NARROWER answer than the
+// login door does. `authorize()` (src/auth.ts:53-54) refuses only "Pending" and "Rejected"; an
+// account whose approval_status is ABSENT signs in perfectly well. This guard counted
+// `approval_status: "Approved"` and therefore could not see such an account at all.
+//
+// That is not hypothetical: `scripts/seed.mjs` inserts the very first Admin through the raw
+// driver, so no Mongoose default applies and the field is simply missing. On a fresh install the
+// ONE Admin who can actually sign in was invisible here - which meant the pre-check's
+// `isEffective` was false for them and the guard was skipped ENTIRELY when removing them. No race
+// required; one ordinary request would do it. Found by this unit's own new suite reporting
+// "at least three Admins can sign in" as count=2 - a fixture assertion that turned out to be
+// measuring the product.
+//
+// The mirror-image cost mattered too: `enforceAdminFloor` would have read zero, undone a
+// perfectly good change and answered 409, with a live Admin sitting right there.
+//
+// `$nin` matches documents where the field is absent, which is exactly the population
+// `authorize()` admits. One definition, used by both the pre-check and the post-write check.
+const CAN_SIGN_IN = { active: true, dropped: { $ne: true }, approval_status: { $nin: ["Pending", "Rejected"] } };
+const canSignIn = (u: { active?: unknown; dropped?: unknown; approval_status?: unknown }) =>
+  u.active === true && u.dropped !== true && u.approval_status !== "Pending" && u.approval_status !== "Rejected";
+
 async function enforceAdminFloor(docId: unknown, restore: Record<string, unknown>) {
-  const effective = await User.countDocuments({
-    role: "Admin", active: true, dropped: { $ne: true }, approval_status: "Approved",
-  });
+  const effective = await User.countDocuments({ role: "Admin", ...CAN_SIGN_IN });
   if (effective > 0) return;
   await User.updateOne({ _id: docId }, { $set: restore });
   invalidateIdentity(String(docId));
@@ -111,12 +131,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     // Count only Admins who can ACTUALLY sign in - `authorize()` refuses a Pending or Rejected
     // account and refuses `active: false`, so counting rows that merely say "Admin" would let the
     // system pass this check while nobody alive holds the role.
-    const isEffective = doc.active && !doc.dropped && doc.approval_status === "Approved";
+    const isEffective = canSignIn(doc as any); // QA-2014: the login door's definition, not a narrower one
     if (isEffective) {
-      const others = await User.countDocuments({
-        _id: { $ne: doc._id }, role: "Admin", active: true,
-        dropped: { $ne: true }, approval_status: "Approved",
-      });
+      const others = await User.countDocuments({ _id: { $ne: doc._id }, role: "Admin", ...CAN_SIGN_IN });
       if (others === 0) {
         throw new HttpError(409,
           "This is the only Admin who can still sign in, and there is no way to make a new one from inside the app — the Admin role cannot be granted back from the rights screen. Create and confirm another Admin first, then change this one.");
