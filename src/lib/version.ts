@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-293";
+export const RELEASE = "2026.08.14-294";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,30 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-294: the money loop closes. A batch that has been certified now carries what it EARNED, not " +
+  "only what it cost: the system works out the accrual from the trainees who actually passed and " +
+  "the rate their scheme pays, and offers that figure beside the invoice box as a proposal with " +
+  "its own arithmetic spelled out. Nothing is written by itself - a person still raises the " +
+  "invoice. Against a raised invoice you can now record what was actually received, with a " +
+  "reference, and receiving less than was invoiced is allowed and shown as a shortfall rather " +
+  "than quietly rounded away, because a part payment or a tax deduction is the exact thing a " +
+  "settlement report exists to trace. A new profit-and-loss view puts accrued, invoiced, " +
+  "received, cost and margin side by side per batch and rolls them up by centre, job role and " +
+  "scheme, and every row says which stage of the chain it has reached. Where a scheme has no " +
+  "rate recorded the earning is left blank with the reason named, never printed as zero - a " +
+  "missing rate and a rate of nothing are different facts - and margin is withheld entirely " +
+  "rather than published on top of an unknown. A cost entry now records what a voucher records: " +
+  "who was paid, against which voucher number, by which payment mode, and a description that is " +
+  "required rather than optional. Both places a cost can be entered ask for the same things. The " +
+  "cost head list is shown grouped as head and sub-head instead of one flat list, and somebody " +
+  "who cannot find the right head can name the one they need: the whole entry then waits for an " +
+  "approver, who either creates that head or files the cost under an existing one. Nothing " +
+  "reaches the ledger in the meantime. Everyone can now change their own password from inside " +
+  "the system, proving the current one first, which no role could do before - an administrator " +
+  "reset was the only route. And the system now refuses to remove its own last administrator, " +
+  "because there is no way back into the building from outside it.";
+
+const RELEASE_NOTE_ARCHIVE_293 =
   "-293: the finance and reporting work from the 5 September review ships together. Money now " +
   "has its own door - reading the cost ledger, the invoice book or the new Finance screen needs " +
   "a finance right that the Admin role does not carry by default, so the people who can see " +
@@ -1336,6 +1360,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -292: ARCHIVE_291 wired in here in the SAME bump that declared it, same discipline -
   // QA-265/-247/-256 record what happens when a bump declares an archive and forgets this line.
   // -293: ARCHIVE_292 wired in here in the SAME bump that declared it, same discipline.
+  // -294: ARCHIVE_293 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_293 + " " +
   RELEASE_NOTE_ARCHIVE_292 + " " +
   RELEASE_NOTE_ARCHIVE_291 + " " +
   // -291: ARCHIVE_290 wired in here in the SAME bump that declared it, same discipline -
