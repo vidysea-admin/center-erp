@@ -135,6 +135,90 @@ ok("QA-1829a: the door is closed to a caller with no session", anon.status === 4
   }
 }
 
+
+// ================= QA-1912a: the last Admin cannot be removed =================
+// The ONLY assertion that proves this unit. A structural pin cannot: the guard is three boolean
+// clauses and a count, and every wrong version of it still compiles, still reads sensibly, and still
+// returns 200 on the happy path. It has to be driven into the state it defends.
+//
+// Reaching that state means briefly making a throwaway Admin the LAST one, which means deactivating
+// the seeded admin. That is destructive, so three things bound it: this suite runs LAST in the wall,
+// every step is reversed in a `finally`, and the reversal is then READ BACK and asserted. I fixed a
+// cleanup-only-on-the-happy-path bug in this same file an hour ago (QA-1968); doing it again here
+// with a bigger blast radius would be the same mistake with worse consequences.
+if (admin && meRow) {
+  const t1 = `zzadmin1.${stamp}@vidysea-test.local`;
+  const t2 = `zzadmin2.${stamp}@vidysea-test.local`;
+  const TPW = "AdminPw@12345";
+  let a1 = null, a2 = null, sessT1 = null;
+  let deactivated = [];
+
+  try {
+    a1 = (await req(admin, "POST", "/api/users", { name: "ZZ Admin One", email: t1, password: TPW, role: "Admin", can_edit: true })).data?.item?._id;
+    a2 = (await req(admin, "POST", "/api/users", { name: "ZZ Admin Two", email: t2, password: TPW, role: "Admin", can_edit: true })).data?.item?._id;
+    ok("QA-1912a [precondition] two throwaway Admins exist", !!a1 && !!a2, `${a1} ${a2}`);
+    sessT1 = await login(t1, TPW);
+    ok("QA-1912a [precondition] the first can sign in, so it can act as the surviving Admin", !!sessT1, "login failed");
+
+    if (a1 && a2 && sessT1) {
+      // While more than one Admin is alive, removal is ALLOWED. Asserted FIRST so a later refusal
+      // cannot be explained by the route simply refusing everything - which is the shape a guard
+      // written one clause too wide would have.
+      const okDrop = await req(sessT1, "PATCH", `/api/users/${a2}`, { active: false });
+      ok("QA-1912a: with another Admin alive, deactivating one is allowed", okDrop.status === 200, `got ${okDrop.status}`);
+      if (okDrop.status === 200) deactivated.push(a2);
+
+      // Now make T1 the only Admin who can sign in, by deactivating every OTHER active one.
+      const all = (await req(sessT1, "GET", "/api/users?limit=500")).data?.items ?? [];
+      for (const u of all) {
+        if (u.role !== "Admin" || u.active === false || u.dropped) continue;
+        if (String(u._id) === String(a1)) continue;
+        const r = await req(sessT1, "PATCH", `/api/users/${u._id}`, { active: false });
+        if (r.status === 200) deactivated.push(String(u._id));
+      }
+      const survivors = ((await req(sessT1, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .filter((u) => u.role === "Admin" && u.active !== false && !u.dropped);
+      ok("QA-1912a [precondition] exactly one Admin can now sign in, so the guard has something to defend",
+        survivors.length === 1 && String(survivors[0]._id) === String(a1),
+        `${survivors.length} survivor(s): ${survivors.map((u) => u.email).join(",")}`);
+
+      // THE THREE PATHS. Each writes separately in the route, so each is asserted separately - a
+      // guard covering two of three is the exact failure this unit exists to prevent.
+      for (const [label, body] of [
+        ["deactivating them", { active: false }],
+        ["demoting them to another role", { role: "Operations" }],
+        ["dropping them", { drop: true }],
+      ]) {
+        // Driven by a DIFFERENT Admin session would be ideal, but there is no other Admin left -
+        // that is the whole point of the state. T1 acts on T1, so the self-edit refusal (400) would
+        // also fire; the pin therefore requires 409 specifically, not merely "an error".
+        const r = await req(sessT1, "PATCH", `/api/users/${a1}`, body);
+        ok(`QA-1912a: ${label} is refused when they are the last Admin who can sign in`,
+          r.status === 409, `got ${r.status} ${JSON.stringify(r.data?.error ?? "").slice(0, 90)}`);
+      }
+
+      // ...and it is still true afterwards: a refusal that wrote half of itself is worse than none.
+      const after = (await req(sessT1, "GET", `/api/users?limit=500`)).data?.items?.find((u) => String(u._id) === String(a1));
+      ok("QA-1912a: ...and after all three refusals they are still an active Admin, read back",
+        !!after && after.role === "Admin" && after.active !== false && !after.dropped,
+        JSON.stringify(after ? { role: after.role, active: after.active, dropped: after.dropped } : null));
+    }
+  } finally {
+    // Reverse everything, then PROVE it. An unasserted restore is how a suite leaves the next one a
+    // world it cannot explain.
+    if (sessT1) for (const id of deactivated) await req(sessT1, "PATCH", `/api/users/${id}`, { active: true }).catch(() => {});
+    const restored = admin ? (await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [] : [];
+    const adminBack = restored.find((u) => u.email === "admin@vidysea.com");
+    ok("QA-1912a cleanup: the seeded Admin is active again, read back from the server",
+      !!adminBack && adminBack.active !== false, JSON.stringify(adminBack ? { active: adminBack.active } : null));
+    if (admin) for (const id of [a1, a2]) if (id) await req(admin, "PATCH", `/api/users/${id}`, { active: false }).catch(() => {});
+    const leftovers = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+      .filter((u) => (u.email === t1 || u.email === t2) && u.active !== false);
+    ok("QA-1912a cleanup: both throwaway Admins are deactivated", leftovers.length === 0,
+      leftovers.map((u) => u.email).join(","));
+  }
+}
+
 // ---- QA-1970 (checker, cycle 1): TWO of nine mutants survived, and both were the calls whose
 // comments make the biggest claims - the audit write and invalidateIdentity. The second is now
 // honestly described as a no-op here rather than pinned; this pins the first, which IS load-bearing.
