@@ -221,8 +221,9 @@ function FinanceInner() {
           "where these numbers come from" — and it is the right one: what is MISSING has to be
           readable without a click, or the register quietly looks complete. */}
       <p className="text-[11px] leading-relaxed text-gray-500" data-warning="caveat">
-        A cost entry has no vendor / payee, voucher number or payment mode field yet, so the register
-        below cannot show those columns. Capturing them on an entry is separate work on the Costs form.
+        Untagged costs are counted under &quot;{L.unassigned ?? "Unassigned"}&quot; rather than dropped, so every
+        table here sums to the grand total. A batch with nobody enrolled shows &quot;—&quot; for cost per
+        trainee, never 0.
       </p>
 
       {/* Where these numbers come from — the same disclosure idiom the rollup report uses. The
@@ -236,7 +237,7 @@ function FinanceInner() {
           <li><b>Certified means billable.</b> A Pass minus the dropped-but-passed, which is the number the invoice bills on. Cost per certified and revenue therefore share one denominator.</li>
           <li><b>A ratio with no denominator shows “—”.</b> A batch with nobody enrolled has no cost per trainee; it does not have a cost per trainee of zero.</li>
           <li><b>Cost heads are never hard-coded.</b> Columns come from the live cost-head master, so a head added in Admin is a column here immediately — and renaming a head leaves every historical figure unchanged, because the join is on id.</li>
-          <li><b>Not here yet:</b> a cost entry has no vendor / payee, voucher number or payment mode field, so the register cannot show those columns. Capturing those on an entry is separate work on the Costs form, not part of this report.</li>
+          <li><b>Vendor / payee, voucher no and payment mode</b> are captured on a cost entry as of QA-1828b and appear in the register below. Entries posted before that carry none, and show &quot;—&quot; rather than a guess.</li>
         </ul>
       </details>
 
@@ -343,7 +344,11 @@ function FinanceInner() {
             { key: "batch", label: "Batch", sortable: true, filterable: true, render: (r: any) => r.batch },
             { key: "job_role", label: "Job role", sortable: true, filterable: true, render: (r: any) => r.job_role },
             { key: "trainer", label: "Trainer", sortable: true, filterable: true, render: (r: any) => r.trainer },
-            { key: "note", label: "Note", minWidth: 200, render: (r: any) => r.note || <span className="text-gray-300">—</span> },
+            { key: "note", label: "Description", minWidth: 220, render: (r: any) => r.note || <span className="text-gray-300">—</span> },
+            { key: "vendor_payee", label: "Paid to", sortable: true, filterable: true, render: (r: any) => r.vendor_payee || <span className="text-gray-300">—</span> },
+            { key: "voucher_no", label: "Voucher no", sortable: true, filterable: true, render: (r: any) => r.voucher_no || <span className="text-gray-300">—</span> },
+            { key: "payment_mode", label: "Paid how", sortable: true, filterable: true, render: (r: any) => r.payment_mode || <span className="text-gray-300">—</span> },
+            { key: "pre_approved", label: "Pre-approved", minWidth: 160, render: (r: any) => r.pre_approved || <span className="text-gray-300">—</span> },
             { key: "entered_by", label: "Entered by", sortable: true, filterable: true, render: (r: any) => r.entered_by },
           ]} />
       </Section>

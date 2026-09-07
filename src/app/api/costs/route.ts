@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, locationFilter, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry } from "@/models";
-import { assertCostEntryValid } from "@/lib/rules";
+import { assertCostEntryValid, evaluatePreApproval } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 
@@ -45,17 +45,36 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
   // of writing the ledger — the CostEntry is created only by the approval replay. Admin (as
   // the configured approver) passes straight through, exactly as before.
-  const parked = await requireApproval("cost.post", user, {
+  // QA-1828b: the description is the CEO's, not an optional note. *"हेड हो, सब हेड हो,
+  // डिस्क्रिप्शन हो"* — and the example is a sentence explaining a decision, which is exactly the
+  // thing that is unrecoverable later if nobody wrote it down at the time.
+  if (!String(body.note ?? "").trim()) {
+    throw new HttpError(400, "Say what this cost was for — the description is what makes it answerable later.");
+  }
+
+  // Is it pre-approved, and can a machine tell? A cap can be checked; a free-text basis cannot, so
+  // that entry parks WITH the basis quoted rather than being waved through on a flag. The CEO named
+  // the failing case himself: *"अब अगर उसके 29 रह गए… तो वो एक बार अप्रूव होनी चाहिए।"*
+  const pre = await evaluatePreApproval(body.category, Number(body.amount));
+
+  const parked = pre.applied ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
-    summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}`,
-    payload: body,
+    summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${pre.basis ? ` · pre-approved basis: ${pre.basis}` : ""}`,
+    payload: { ...body, _pre_approved_basis: pre.basis },
     location: body.location || undefined,
   });
-  if (parked) return NextResponse.json({ queued: true, item: parked.request }, { status: 202 });
+  if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
   const doc = await CostEntry.create({
     entry_date: body.entry_date ?? new Date(),
     location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
     category: body.category, amount: body.amount, note: body.note,
+    vendor_payee: body.vendor_payee || undefined,
+    voucher_no: body.voucher_no || undefined,
+    payment_mode: body.payment_mode || undefined,
+    // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
+    // head must never rewrite what was approved today.
+    pre_approved_applied: pre.applied,
+    pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
     entered_by: user.id,
   });
   await audit({ entity: "CostEntry", entityId: doc._id, newValue: "created", actor: user.id });

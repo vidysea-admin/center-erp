@@ -97,6 +97,11 @@ export const ACTOR_TYPE = ["USER", "SYSTEM", "AUTOMATION", "EXTERNAL_SYNC"] as c
 // indirect one is apportioned. Named here rather than in the schema so the Admin form and any later
 // report read the same list instead of retyping it.
 export const COST_HEAD_TYPE = ["Direct", "Indirect"] as const;
+// QA-1828b (CEO, 2026-09-05). A list rather than free text, because the whole reason this field
+// exists is that "TOT ka payment kiya tha, to trace nahi ho raha" - and a column somebody types
+// "cash"/"Cash"/"CASH"/"by hand" into cannot be grouped, which is the same as not having it. "Other"
+// is deliberate: a vocabulary with no escape hatch gets one invented inside another field.
+export const COST_PAYMENT_MODE = ["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"] as const;
 
 const oid = (ref: string, required = false) => ({ type: Schema.Types.ObjectId, ref, required });
 
@@ -1167,7 +1172,27 @@ const CostEntrySchema = new Schema({
   location: oid("Location"), batch: oid("Batch"), trainer: oid("Trainer"),
   category: oid("CostCategory", true),
   amount: { type: Number, required: true },
+  // QA-1828b (CEO, 2026-09-05): *"जब भी मैं कोई भी कॉस्ट डाल रहा हूँ तो हेड हो, सब हेड हो,
+  // डिस्क्रिप्शन हो"* — and the example he gave is a sentence, not a label: *"ये मेरे को इमरजेंसी
+  // में खाना पड़ेगा क्योंकि मैं यहाँ से वहाँ गया था… इसलिए मैंने ये सोर्स यूज़ करा"*.
+  //
+  // That is what `note` already is, so `note` IS the description (Umesh, D7, 2026-09-07) — relabelled
+  // on screen and required at post time, not duplicated into a second free-text box nobody could
+  // tell apart from it. A second field here would be the ARCHITECTURE section-3 fault in the one
+  // module that exists to report on itself.
   note: String,
+  // The three the finance screen has been openly apologising for since QA-1830: it printed
+  // "a cost entry has no vendor / payee, voucher number or payment mode field yet" on every load.
+  vendor_payee: String,
+  voucher_no: String,
+  payment_mode: { type: String, enum: COST_PAYMENT_MODE },
+  // The pre-approved decision AS IT WAS AT POST TIME. Not a live join to the head, because the head
+  // is a master row somebody edits: raising a rate next quarter must not silently rewrite what was
+  // approved last quarter. The CEO's rule is conditional — *"वो प्री अप्रूव होगा… उसमें फिर किसी की
+  // अप्रूवल नहीं चाहिए"*, and then *"अब अगर उसके 29 रह गए… तो वो एक बार अप्रूव होनी चाहिए"* — so what
+  // is recorded is the decision AND the sentence it was made against.
+  pre_approved_applied: { type: Boolean, default: false },
+  pre_approved_basis: String,
   entered_by: oid("User", true),
 }, { timestamps: true });
 

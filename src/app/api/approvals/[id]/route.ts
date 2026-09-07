@@ -104,7 +104,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
         category: p.category, amount: p.amount, note: p.note,
         entered_by: request.initiator,
-      });
+              // QA-1828b: the SECOND place a CostEntry is built. The inbound payload was never filtered
+        // (`payload: body` in costs/route.ts), so a new form field reaches the queue for free and is
+        // then dropped HERE unless it is named — which would make an entry's contents depend on
+        // whether the cost.post rule happened to be enabled. Same fields, same order, deliberately.
+        vendor_payee: p.vendor_payee || undefined,
+        voucher_no: p.voucher_no || undefined,
+        payment_mode: p.payment_mode || undefined,
+        // An entry that went through the queue was NOT pre-approved - somebody decided it. The basis
+        // is still recorded, because it is what they decided against.
+        pre_approved_applied: false,
+        pre_approved_basis: p._pre_approved_basis || undefined,
+});
       await audit({ entity: "CostEntry", entityId: cost._id, newValue: `created via approval ${request._id}`, actor: user.id });
       break;
     }

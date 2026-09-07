@@ -36,7 +36,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
   const patch: Record<string, unknown> = {};
-  for (const f of ["entry_date", "location", "batch", "trainer", "category", "amount", "note"]) {
+  // QA-1828b: the new entry-side fields are editable by the same finance.approve holder who can
+  // already edit the amount. NOT the pre-approved snapshot - that is a record of what was decided at
+  // post time, and a field somebody can edit afterwards is not a record of anything.
+  for (const f of ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode"]) {
     if (body[f] !== undefined) patch[f] = body[f] === "" ? undefined : body[f];
   }
   const before = doc.toObject();

@@ -70,6 +70,10 @@ function CostsInner() {
     setForm({
       entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
       category: r.category?._id ?? "", location: r.location?._id ?? "", trainer: r.trainer?._id ?? "",
+      // QA-1828b: an edit that does not repopulate a field posts it back empty. The PATCH filters
+      // "" out so nothing is erased today, but that is the route being forgiving rather than this
+      // form being right, and the next field added here would not get that courtesy.
+      vendor_payee: r.vendor_payee ?? "", voucher_no: r.voucher_no ?? "", payment_mode: r.payment_mode ?? "",
     });
   }
 
@@ -116,13 +120,34 @@ function CostsInner() {
                 </select>
               </Field>
               <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
+              {/* QA-1828b (CEO, 2026-09-05): the three the finance screen has been apologising for
+                  on every load since QA-1830 — *"a cost entry has no vendor / payee, voucher number
+                  or payment mode field yet"*. That caveat is deleted in this same change; a screen
+                  that keeps describing a gap after the gap is closed is its own kind of wrong. */}
+              <Field label="Paid to (vendor / payee)"><input className={inputCls} value={form.vendor_payee ?? ""} onChange={(e) => setForm({ ...form, vendor_payee: e.target.value })} /></Field>
+              <Field label="Voucher no"><input className={inputCls} value={form.voucher_no ?? ""} onChange={(e) => setForm({ ...form, voucher_no: e.target.value })} /></Field>
+              <Field label="Payment mode">
+                <select className={inputCls} value={form.payment_mode ?? ""} onChange={(e) => setForm({ ...form, payment_mode: e.target.value })}>
+                  <option value="">—</option>
+                  {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </Field>
               <div className="flex items-end gap-2">
-                <Btn onClick={addCost} disabled={!form.category || !form.amount}>{editId ? "Save" : "Add"}</Btn>
+                <Btn onClick={addCost} disabled={!form.category || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
               </div>
             </div>
-            {editId && <Field label="Note"><input className={inputCls + " mt-2"} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>}
+            {/* The description was rendered ONLY when editing, so the person posting the cost - the
+                one who knows why - could not write it, and the person editing it later, who does
+                not, could. The CEO asked for it at entry: *"डिस्क्रिप्शन हो, फॉर्म डालें"*, and his
+                example is a sentence explaining a decision, which is exactly what is unrecoverable
+                afterwards if nobody wrote it down at the time. Required, and required on the server
+                too - a disabled button is a courtesy, not a rule. */}
+            <Field label="Description — what was this for?" required>
+              <input className={inputCls + " mt-2"} value={form.note ?? ""} placeholder="e.g. emergency meal while travelling between centres — used this vendor because…"
+                onChange={(e) => setForm({ ...form, note: e.target.value })} />
+            </Field>
             <p className="mt-2 text-xs text-gray-500">
               {postOnly
                 ? "Your entry goes to the Admin for approval; the ledger is written only on approval."

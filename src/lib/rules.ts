@@ -2511,6 +2511,65 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
   return inv;
 }
 
+// ============ QA-1828b: is this cost PRE-APPROVED, and can a machine tell? ============
+// CEO, 2026-09-05: *"प्री अप्रूव का मतलब ये होता है जैसे कि हमने ऑलरेडी एक अप्रूवल दे रखा है
+// प्रिंसिपल को कि ₹50 पर बच्चा… तो उसमें मनीष जी को ज्यादा दिमाग नहीं लगाना है, टिक करना है, आगे
+// बढ़ना है।"* — and then the sentence that makes it a RULE rather than a flag: *"अब अगर उसके 29 रह
+// गए… तो वो एक बार अप्रूव होनी चाहिए।"*
+//
+// So `pre_approved` on the head is not permission to skip the queue. It is a CONDITION, and the
+// condition is evaluated when the cost is posted. Two cases, and the second is the common one:
+//
+//   1. The head carries `pre_approved_amount` — a number. That IS machine-checkable: an entry at or
+//      under it satisfies the commitment and goes straight to the ledger. Nobody is asked to
+//      re-derive arithmetic somebody already agreed to.
+//   2. The head carries only `pre_approved_basis` — free text, deliberately so
+//      (models/index.ts: *"the CEO's examples are rules, not numbers"*). *"per batch at 30+
+//      pass-outs"* cannot be evaluated here without knowing which batch, whose pass-outs, and as of
+//      when. So the entry PARKS — but the summary quotes the basis, so the approver ticks against
+//      the commitment instead of rediscovering it. That is *"ज्यादा दिमाग नहीं लगाना है, टिक करना
+//      है"* implemented honestly, rather than a flag that waves everything through.
+//
+// The alternative — treating `pre_approved: true` as "no approval needed" — would have been three
+// lines and would have shipped the CEO's 29-vs-30 example backwards: the one case he named as
+// needing approval is exactly the one it would have skipped.
+export type PreApproval = { applied: boolean; basis: string | null; reason: string };
+
+export async function evaluatePreApproval(categoryId: unknown, amount: number): Promise<PreApproval> {
+  const cat = categoryId
+    ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis").lean<any>()
+    : null;
+  if (!cat) return { applied: false, basis: null, reason: "no cost head on the entry" };
+
+  // The flag can sit on the SUBHEAD or be inherited from its head — a commitment is made about a
+  // kind of spending, and which level somebody recorded it at is bookkeeping, not meaning.
+  const head = cat.parent
+    ? await CostCategory.findById(cat.parent).select("name pre_approved pre_approved_amount pre_approved_basis").lean<any>()
+    : null;
+  const src = cat.pre_approved ? cat : (head?.pre_approved ? head : null);
+  if (!src) return { applied: false, basis: null, reason: `"${cat.name}" is not marked pre-approved` };
+
+  const basis: string | null = src.pre_approved_basis ?? null;
+  const cap: number | null = typeof src.pre_approved_amount === "number" ? src.pre_approved_amount : null;
+
+  if (cap === null) {
+    return {
+      applied: false, basis,
+      reason: basis
+        ? `pre-approved on "${src.name}", but the basis is a rule this system cannot check by itself: ${basis}`
+        : `"${src.name}" is marked pre-approved but carries neither an amount nor a basis, so there is nothing to check it against`,
+    };
+  }
+  if (Number(amount) <= cap) {
+    return { applied: true, basis, reason: `within the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}` };
+  }
+  return {
+    applied: false, basis,
+    reason: `above the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}`,
+  };
+}
+
+
 // Rule 37
 export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; trainer?: unknown; amount?: unknown }) {
   if (!e.location && !e.batch && !e.trainer) {
@@ -5612,6 +5671,13 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     register.push({
       id: String(e._id),
       entry_date: e.entry_date ?? null,
+      // QA-1828b: the three the screen apologised for on every load, and the pre-approved decision
+      // AS RECORDED - not re-derived from the head, because the head is a master row somebody edits
+      // and this column has to say what was true when the money went out.
+      vendor_payee: e.vendor_payee ?? null,
+      voucher_no: e.voucher_no ?? null,
+      payment_mode: e.payment_mode ?? null,
+      pre_approved: e.pre_approved_applied ? (e.pre_approved_basis || "yes") : null,
       head: headLabel, subhead: subLabel,
       head_type: head?.head_type ?? null,
       amount: amt,

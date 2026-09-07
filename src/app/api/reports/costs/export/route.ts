@@ -83,7 +83,12 @@ export const GET = apiHandler(async (req: NextRequest) => {
       Date: r.entry_date ? String(r.entry_date).slice(0, 10) : "",
       Head: r.head, Subhead: r.subhead, Type: r.head_type ?? "",
       Amount: r.amount, Location: r.location, Batch: r.batch, "Job role": r.job_role,
-      Trainer: r.trainer, Note: r.note, "Entered by": r.entered_by,
+      Trainer: r.trainer, Description: r.note, "Entered by": r.entered_by,
+      // QA-1828b: the workbook gets the same columns as the screen in the SAME change. The P&L
+      // export was fixed one cycle late for exactly this reason (QA-1959) - the producer changed
+      // and the consumer did not, so the file and the screen disagreed about one number.
+      "Paid to": r.vendor_payee ?? "—", "Voucher no": r.voucher_no ?? "—",
+      "Paid how": r.payment_mode ?? "—", "Pre-approved": r.pre_approved ?? "—",
     })),
   ), "cost entry register");
 
