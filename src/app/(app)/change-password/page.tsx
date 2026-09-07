@@ -55,7 +55,16 @@ export default function ChangePasswordPage() {
           <p className="text-sm text-green-900">
             Your password has been changed. Use the new one from now on — nobody has been emailed it.
           </p>
-          <Btn kind="ghost" onClick={() => router.push("/")}>Back to Home</Btn>
+          <div className="flex gap-2">
+            <Btn kind="ghost" onClick={() => router.push("/")}>Back to Home</Btn>
+            {/* check-user-copy caught this: `done` gated a panel and setDone was only ever called
+                with true, so the form was a one-way door - change it once and the only way back was
+                to navigate away and return. That is a small thing on this screen and the pin is
+                still right: a surface that opens and cannot close is a shape, not a severity, and
+                the ceiling exists so the shape stays rare. Raising the ceiling would have been the
+                one-line answer and would have spent a real finding`s worth of attention later. */}
+            <Btn kind="ghost" onClick={() => { setDone(false); setError(""); }}>Change it again</Btn>
+          </div>
         </div>
       ) : (
         <form onSubmit={submit} className="space-y-4 rounded-2xl border bg-white p-6 shadow-sm">
