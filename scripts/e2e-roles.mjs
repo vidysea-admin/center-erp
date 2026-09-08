@@ -4715,10 +4715,25 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     : { status: 0 };
                   const C = mkC.data?.item;
                   if (C?._id) {
-                    await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Ready" });
-                    await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Active" });
-                    await req(admin, "PUT", `/api/batches/${C._id}/closure`,
+                    // EVERY step asserted, not just the last. The first version of this fixture ran
+                    // all four calls blind: the Active step failed (an empty-roster batch needs the
+                    // enrolment hatch and a reason, exactly as batch E does thirty lines above), the
+                    // batch stayed at Ready, and the only thing that spoke was the LAST call, whose
+                    // "Ready -> Closing is not allowed" said nothing about which step had actually
+                    // broken. A fixture that reports only its final call is a fixture that lies
+                    // about where it failed.
+                    const cReady = await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Ready" });
+                    const cActive = await req(admin, "POST", `/api/batches/${C._id}/transition`,
+                      { target: "Active", enrollment_override: true,
+                        reason: "QA-2271 fixture: an empty-roster batch driven to Closing through the legacy arm" });
+                    ok("QA-2271 fixture: the batch reaches Active (empty roster, through the enrolment hatch)",
+                      [200, 201].includes(cActive.status) && String(cActive.data?.item?.status ?? "") === "Active",
+                      `ready=${cReady.status} active=${cActive.status} ${String(cActive.data?.error ?? "").slice(0, 120)}`);
+                    const cClosure = await req(admin, "PUT", `/api/batches/${C._id}/closure`,
                       { assessment_status: "Completed", appeared: 0, passed: 0 });
+                    ok("QA-2271 fixture: ...and its assessment is marked Completed through the LEGACY batch-level arm",
+                      [200, 201].includes(cClosure.status),
+                      `${cClosure.status} ${String(cClosure.data?.error ?? "").slice(0, 120)}`);
                     const toClosing = await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Closing" });
                     // Named out loud, because the whole point is that this state EXISTS. If the
                     // product ever stops allowing it, this line says so instead of the Closing pins
