@@ -4816,7 +4816,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // silently loses Cancelled fails, where "3 of 5" would have passed on any three.
                   const mustCover = ["Planning", "Closing", "Completed", "Cancelled"];
                   const missing = mustCover.filter((s) => !coveredStatuses.includes(s));
-                  ok("QA-2265: the guard was probed on Planning, Completed AND Cancelled - named, not counted",
+                  // The label names the set from the VARIABLE, not from a sentence typed beside it.
+                  // Cycle 5 added Closing to `mustCover` and left the label reading "Planning,
+                  // Completed AND Cancelled" - a label describing a weaker assertion than the one
+                  // that runs. Harmless in effect and exactly the wrong direction to be sloppy in,
+                  // in a unit whose entire history is labels that promised more than they delivered.
+                  ok(`QA-2265: the guard was probed on every required status (${mustCover.join(", ")}) - named, not counted`,
                     missing.length === 0,
                     `covered=[${coveredStatuses.join(", ")}] missing=[${missing.join(", ")}]`);
                 }
