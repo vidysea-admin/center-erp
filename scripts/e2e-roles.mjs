@@ -4811,6 +4811,16 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       })
                     : { status: 0 };
                   const DB_ = mkD.data?.item;
+                  // ASSERTED, not guarded away. The first version of this fixture wrapped everything
+                  // in `if (DB_?._id)` and the batch create failed - so the whole assertion VANISHED
+                  // from the run: not PASS, not FAIL, absent. The coverage pin caught it (that is
+                  // what it is for), but the line that would have said WHY was the one being
+                  // skipped. This is the same silent-skip shape as QA-2133 twenty lines up, written
+                  // by me into the fixture whose whole purpose is to stop a status disappearing
+                  // quietly.
+                  ok("QA-2280 fixture: the Closed-path batch and its room are created",
+                    !!DB_?._id,
+                    `room=${roomD.status} batch=${mkD.status} ${String(mkD.data?.error ?? JSON.stringify(mkD.data ?? {})).slice(0, 180)}`);
                   if (DB_?._id) {
                     const stampD = Date.now();
                     const todayD = new Date().toISOString().slice(0, 10);
