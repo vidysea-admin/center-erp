@@ -9,6 +9,9 @@
 // file did not. On 2026-08-24 an entire day went into proving the live matrix had NOT changed; one
 // accidental run of this script would have made that impossible to prove.
 import { requireLocalBase } from "./db-guard.mjs";
+// QA-2280: the QA-2250 arm reads BATCH_STATUS out of the model rather than hand-typing the list
+// beside a comment claiming it is complete. Read-only, and it reads the copy this suite runs in.
+import fs from "node:fs";
 const BASE = requireLocalBase("e2e-roles", process.env.BASE_URL || "http://localhost:3000/erp");
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
@@ -4742,9 +4745,35 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       [200, 201].includes(toClosing.status) && String(toClosing.data?.item?.status ?? "") === "Closing",
                       `${toClosing.status} status=${String(toClosing.data?.item?.status ?? "")} ${String(toClosing.data?.error ?? "").slice(0, 120)}`);
                   }
-                  // Every status the guard's condition covers. The required set below is DERIVED
-                  // from this list (QA-2276), so the two can no longer drift apart.
-                  const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
+                  // QA-2280 (cycle 7, filed by the cycle-6 checker) — THE SEVENTH, and it is the
+                  // second half of QA-2276's root, arriving from the direction the cycle-6 fix left
+                  // open. That fix derived `mustCover` from `nonActive`, which is safe when a status
+                  // is ADDED and useless when one is MISSING: the derivation faithfully inherited an
+                  // omission. `nonActive` was hand-typed with FIVE names, directly under a comment
+                  // saying "every status the guard's condition covers" - and `BATCH_STATUS` has
+                  // SEVEN, because "Closed" was added in 2026-08 (Rule 52: Completed = training
+                  // over, Closed = money over). So the guard covers SIX non-Active statuses and this
+                  // suite named five. Five cycles argued about which members of `nonActive` belonged
+                  // in `mustCover`; nobody checked `nonActive` against the enum.
+                  //
+                  // Measured, not argued: the checker's M-CLOSED breaks the guard for Closed alone
+                  // and the diff of the wall's PASS/FAIL lines against the control is EMPTY.
+                  //
+                  // So the list is READ FROM THE PRODUCT, not typed here. A status added to the
+                  // model from now on arrives in this suite by itself, and if no fixture exists for
+                  // it the coverage assertion says so by name.
+                  const modelSrc = fs.readFileSync(new URL("../src/models/index.ts", import.meta.url), "utf8");
+                  const enumLine = /export const BATCH_STATUS = \[([^\]]+)\]/.exec(modelSrc);
+                  // Fail loudly rather than silently falling back to a hand-typed list - a fallback
+                  // here would reintroduce exactly the defect this line exists to remove.
+                  ok("QA-2280: the status list is READ FROM THE MODEL, not hand-typed beside a claim that it is complete",
+                    !!enumLine, enumLine ? "parsed" : "BATCH_STATUS not found in src/models/index.ts");
+                  const allStatuses = (enumLine?.[1] ?? "").split(",")
+                    .map((x) => x.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
+                  const nonActive = allStatuses.filter((s) => s !== "Active");
+                  ok("QA-2280: ...and it carries every non-Active status the guard covers, six of them",
+                    nonActive.length === allStatuses.length - 1 && allStatuses.includes("Active") && nonActive.length >= 6,
+                    `all=[${allStatuses.join(", ")}] nonActive=[${nonActive.join(", ")}]`);
                   // QA-2276: and a batch that STAYS at Ready. The QA-2271 fixture above proves a
                   // clean Ready batch is one call away - it makes one and then drives it onward -
                   // so "seed-dependent" was never true of this suite, only of the seed it happened
