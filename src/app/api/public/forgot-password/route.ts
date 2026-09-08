@@ -185,10 +185,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // If the checker disagrees, the fix is to keep the honest message and drop the DISTINCT
       // wording — i.e. return `retry_after_sec` with the same generic sentence, so the page can
       // stop promising a mail while the response stays uniform.
+      // QA-2268 (checker, cycle 6): the gate refuses for TWO reasons and this branch served ONE
+      // sentence for both. Spaced past the 60-second cooldown, the sixth request in an hour trips
+      // `per_email` and returned `retry_after_sec: 3290` beside the words "in the last minute" and
+      // "shortly" — the page rendered "shortly. (about 3290s)", which is 55 minutes. The sentence
+      // was not wrong about the cooldown; it was wrong to be the only sentence. `enrol-otp`
+      // (route.ts:72) already branches on `gate.reason` for exactly this, so this is that shape.
       return NextResponse.json({
         ok: true,
         retry_after_sec: gate.retryAfterSec ?? null,
-        message: "A code was already sent to that address in the last minute. Check your inbox — the code you have still works. You can ask for another one shortly.",
+        message:
+          gate.reason === "cooldown"
+            ? "A code was already sent to that address in the last minute. Check your inbox — the code you have still works. You can ask for another one shortly."
+            : "Too many codes have been requested for that address. The last code sent still works if you have it; otherwise please try again later.",
       });
     }
 

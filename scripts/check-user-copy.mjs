@@ -1864,6 +1864,44 @@ for (const file of walk(root)) {
   if (namedRight) passed++;
   else { failed++; pushStructural("app/(app)/reports/page.tsx: the first column is not a filterable \"Batch Location\" - QA-558. Umesh named these two columns himself and asked for filters on both."); }
 
+  // QA-2267 (checker, cycle 6): the resend control had NO assertion anywhere, and the manifest's
+  // Limits paragraph - the one place whose job is to UNDERSTATE - said its presence "is asserted as
+  // a string in the copy". It was not. The only grep that ever looked at it lived in a scratchpad
+  // wall script, outside the repo, invisible to the suite and to any checker. Coverage was zero and
+  // the sentence describing it was written from the work intended rather than the evidence on disk.
+  //
+  // Two assertions, because there are two ways to lose this and they fail differently:
+  //   (a) the control is deleted - then the ONLY route back to `request` is "Use a different email
+  //       address", which clears the token, and the keep-what-you-hold branch is unreachable again,
+  //       which is exactly QA-2259 returning.
+  //   (b) the control survives but its handler starts clearing the token - the button is still on
+  //       the screen, still reads the same, and the branch is just as dead. A pin that only checked
+  //       the label would stay green through that, which is this repo's most-filed defect.
+  const forgotSrc = stripComments(fs.readFileSync(path.join(root, "app/forgot/page.tsx"), "utf8"));
+  const resendBtn = (forgotSrc.match(/<button[^>]*onClick=\{\(\)\s*=>\s*\{[^}]*requestCode\([^}]*\}\}[\s\S]{0,220}?<\/button>/) ?? [""])[0];
+  const resendPresent = /Send another code/.test(resendBtn);
+  const resendKeepsToken = resendPresent && !/setToken\(\s*""\s*\)/.test(resendBtn);
+  if (resendPresent) passed++;
+  else { failed++; pushStructural("app/forgot/page.tsx: the code step has no resend control that calls requestCode - QA-2259/QA-2267. Without it the only way back is \"Use a different email address\", which clears the token, so a person whose challenge was burned inside the cooldown is stranded behind a message promising a mail that was never sent."); }
+  if (resendKeepsToken) passed++;
+  else { failed++; pushStructural("app/forgot/page.tsx: the resend control CLEARS the token - QA-2259/QA-2267. The button is on the screen and the keep-what-you-hold branch is still unreachable, which is the defect wearing the fix's clothes."); }
+
+  // QA-2268 (checker, cycle 6): `emailChallengeGate` refuses for TWO reasons - `cooldown` (60 s) and
+  // `per_email` (5 an hour) - and one sentence was answering both. Spaced past the cooldown, the
+  // sixth request returned retry_after_sec 3290 beside the words "in the last minute" and "shortly";
+  // the page rendered "shortly. (about 3290s)", which is 55 minutes.
+  //
+  // This pin is STRUCTURAL and that is a real limit, stated rather than hidden: a behavioural pin
+  // would have to send five requests more than sixty seconds apart, because the cooldown fires
+  // first on every rapid one and `emailChallengeGate` takes its windows as call-site options with
+  // no env knob to shrink them. Five minutes of real waiting inside the wall buys a slower, flakier
+  // version of what the two lines below decide in microseconds - so the source is asserted, and no
+  // claim is made here that a person was watched receiving the right sentence.
+  const fpSrc = stripComments(fs.readFileSync(path.join(root, "app/api/public/forgot-password/route.ts"), "utf8"));
+  const cooldownGuarded = /gate\.reason\s*===\s*"cooldown"[\s\S]{0,400}?in the last minute/.test(fpSrc);
+  if (cooldownGuarded) passed++;
+  else { failed++; pushStructural("app/api/public/forgot-password/route.ts: the \"in the last minute\" sentence is not guarded by gate.reason === \"cooldown\" - QA-2268. The per-address cap uses the same branch, so a person told to wait \"shortly\" is being told that about a wait of up to an hour."); }
+
   // QA-559: and the verdict WORD is computed once, server-side, so the screen and the Excel export
   // cannot answer "is this centre approved" differently. rules.ts pulls in mongoose, so the page
   // cannot import centreVerdict() - it reads the value off the row instead of deriving its own.
