@@ -4419,6 +4419,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
             `${restore.status} ${JSON.stringify(rdBack.checks)}`);
 
           // ARM 4 - with a real reason it starts, and the record carries what was overridden.
+          // QA-2005: snapshot the audit trail FIRST, so the pins below can tell this arm's row from
+          // any row that was already there.
+          const auditPre = await req(admin, "GET", `/api/audit/Batch/${B._id}`);
+          const auditBefore = new Set((auditPre.data?.items ?? auditPre.data?.rows ?? [])
+            .map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
           const REASON = "client confirmed the start date; remaining candidates join in week 1";
           const started = await req(admin, "POST", `/api/batches/${B._id}/transition`,
             { target: "Active", enrollment_override: true, reason: REASON });
@@ -4426,14 +4431,88 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
             [200, 201].includes(started.status) && String(started.data?.item?.status ?? "") === "Active",
             `${started.status} ${JSON.stringify(started.data).slice(0, 90)}`);
 
+          // QA-2005. These two pins used to take `acts.find(a => a.field === "enrollment_override")`
+          // - ANY such row on the batch, not the one THIS arm wrote. The cycle-2 checker demonstrated
+          // the threshold pin passing on an EARLIER ARM'S row while the success arm never started the
+          // batch at all: the assertion was green and the thing it named had not happened. So the rows
+          // are snapshotted BEFORE the transition and the pins read only what appeared after it.
+          const idsOf = (r) => new Set((r.data?.items ?? r.data?.rows ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
           const auditRes = await req(admin, "GET", `/api/audit/Batch/${B._id}`);
           const acts = (auditRes.data?.items ?? auditRes.data?.rows ?? []);
-          const row = acts.find((a) => String(a.field) === "enrollment_override");
+          const fresh = acts.filter((a) => !auditBefore.has(String(a._id ?? a.id ?? JSON.stringify(a))));
+          const newOverrideRows = fresh.filter((a) => String(a.field) === "enrollment_override");
+          // EXACTLY one, not "at least one": two would mean the arm ran twice or an earlier arm wrote
+          // one it should not have, and either way the pins below would be reading an ambiguous row.
+          ok("QA-2005: the success arm wrote EXACTLY ONE new enrollment_override audit row",
+            newOverrideRows.length === 1,
+            JSON.stringify({ newRows: fresh.length, overrideRows: newOverrideRows.length, before: auditBefore.size }));
+          const row = newOverrideRows[0];
           const rowVal = String(row?.new_value ?? row?.newValue ?? "");
           ok("QA-1973: the audit row exists and carries the reason VERBATIM",
             !!row && rowVal.includes(REASON), JSON.stringify({ found: !!row, v: rowVal.slice(0, 140) }));
           ok("QA-1973: ...and it records the threshold it was below, so the row survives the default moving",
-            /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal), rowVal.slice(0, 140));
+            !!row && /\d+ enrolled of \d+ needed/.test(rowVal) && /% of a/.test(rowVal), rowVal.slice(0, 140));
+
+          // ---- ARM 6 (QA-2007). rules.ts:1166 writes a DIFFERENT audit sentence when the batch has
+          // nobody on it at all - "started with NO ROSTER AT ALL - nobody is on this batch, so there
+          // was no enrolment figure to be below". That sentence exists because the cycle-1 checker
+          // FAILED this unit for claiming a shortfall that could not be computed: with an empty roster
+          // there is no "37 of 44", and printing one would be a false number in an audit row.
+          // It shipped with NO assertion anywhere in the wall, so deleting the branch and letting the
+          // ordinary sentence print "0 enrolled of 0 needed (NaN% of a 0-member roster)" would be
+          // invisible. The empty-roster case needs target_size 0, because at any normal target the
+          // roster_80pct gate refuses the batch long before enrolment is reached - that is what the
+          // cycle-2 checker measured, and it is why this arm builds its own batch instead of reusing B.
+          {
+            const full = (await req(admin, "GET", `/api/batches/${B._id}`)).data?.item ?? {};
+            const idOf = (v) => (v && typeof v === "object" ? String(v._id ?? v.id ?? "") : String(v ?? ""));
+            const [loc, prog, trn, rm] = [full.location, full.program, full.trainer, full.room].map(idOf);
+            // Stated rather than skipped: if the known-good batch stops carrying these, this arm has
+            // no fixture and must say so loudly instead of passing on an empty set.
+            ok("QA-2007 fixture: the green batch supplies a centre, programme, trainer and room to reuse",
+              !!(loc && prog && trn && rm), JSON.stringify({ loc: !!loc, prog: !!prog, trn: !!trn, rm: !!rm }));
+            if (loc && prog && trn && rm) {
+              const todayIso2 = new Date().toISOString().slice(0, 10);
+              const mk = await req(admin, "POST", "/api/batches", {
+                location: loc, program: prog, trainer: trn, room: rm,
+                planned_start: todayIso2, target_size: 0,
+              });
+              ok("QA-2007 fixture: a batch with target_size 0 can be created",
+                [200, 201].includes(mk.status), `${mk.status} ${JSON.stringify(mk.data).slice(0, 120)}`);
+              const E = mk.data?.item;
+              if (E) {
+                const toReady = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Ready" });
+                ok("QA-2007 fixture: ...and reaches Ready with nobody on it, because 0 >= 80% of 0",
+                  [200, 201].includes(toReady.status), `${toReady.status} ${JSON.stringify(toReady.data?.error ?? "").slice(0, 110)}`);
+                const rdE = ((await req(admin, "GET", `/api/batches/${E._id}`)).data ?? {}).readiness ?? {};
+                ok("QA-2007 fixture: its roster is genuinely EMPTY and enrolment is not satisfied",
+                  (rdE.roster_count ?? 0) === 0 && rdE.enrollment_ok === false,
+                  JSON.stringify({ roster: rdE.roster_count, ok: rdE.enrollment_ok }));
+
+                const R2 = "no candidates were mapped to this batch before it began; roster to follow";
+                const startedE = await req(admin, "POST", `/api/batches/${E._id}/transition`,
+                  { target: "Active", enrollment_override: true, reason: R2 });
+                ok("QA-2007: an empty-roster batch starts through the same hatch, with a reason",
+                  [200, 201].includes(startedE.status) && String(startedE.data?.item?.status ?? "") === "Active",
+                  `${startedE.status} ${JSON.stringify(startedE.data?.error ?? "").slice(0, 110)}`);
+
+                const aE = await req(admin, "GET", `/api/audit/Batch/${E._id}`);
+                const rowE = (aE.data?.items ?? aE.data?.rows ?? [])
+                  .find((a) => String(a.field) === "enrollment_override");
+                const valE = String(rowE?.new_value ?? rowE?.newValue ?? "");
+                ok("QA-2007: the audit row says NO ROSTER AT ALL, not a shortfall it could not compute",
+                  !!rowE && /NO ROSTER AT ALL/.test(valE) && valE.includes(R2),
+                  JSON.stringify({ found: !!rowE, v: valE.slice(0, 160) }));
+                // The mutant-killer, and the reason this arm is worth its cost: delete the empty-roster
+                // branch at rules.ts:1166 and the ordinary sentence prints a shortfall computed from
+                // zero. The assertion above would still pass on the reason alone, so the ABSENCE of a
+                // fabricated figure is pinned separately.
+                ok("QA-2007: ...and it carries NO enrolled-of-needed figure, because there is none to state",
+                  !!rowE && !/\d+ enrolled of \d+ needed/.test(valE) && !/NaN/.test(valE),
+                  valE.slice(0, 160));
+              }
+            }
+          }
         }
 
         // ARM 5 - refused anywhere it would be meaningless, rather than silently ignored.
@@ -4441,8 +4520,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         if (anyB2) {
           const wrongTarget = await req(admin, "POST", `/api/batches/${anyB2._id}/transition`,
             { target: "Ready", enrollment_override: true, reason: "this should not be accepted at all" });
+          // QA-2006: this was the one refusal arm still asserting a bare status, in a block whose
+          // stated lesson is the opposite. A 400 alone cannot tell "refused for THIS reason" from
+          // "refused because the payload was malformed" - and a guard that stops refusing would have
+          // to be replaced by some other 400 to be caught. Message text from
+          // src/app/api/batches/[id]/transition/route.ts:39.
           ok("QA-1973: the override is REFUSED on a non-start transition, never silently dropped",
-            wrongTarget.status === 400, `got ${wrongTarget.status}`);
+            wrongTarget.status === 400
+              && /applies to starting a batch, nothing else/i.test(String(wrongTarget.data?.error ?? "")),
+            `${wrongTarget.status} ${JSON.stringify(wrongTarget.data?.error ?? "").slice(0, 120)}`);
         }
       } finally {
         if (typeof origPct === "number") {
