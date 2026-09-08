@@ -11,6 +11,8 @@
 // endpoint that returns 200 and hashes nothing satisfies every other shape of assertion, and this
 // codebase has already shipped one report full of nulls that passed every structural pin around it
 // (QA-1948). A credential route is exactly where that mistake would be most expensive.
+import { MongoClient } from "mongodb";
+import crypto from "node:crypto";
 import { requireLocalBase } from "./db-guard.mjs";
 // QA-1966 (checker, cycle 1): this was the ONLY write-heavy HTTP suite in the wall with no BASE_URL
 // guard. It creates a user and changes a password through whatever server BASE_URL names, so run
@@ -302,6 +304,180 @@ async function retireSubject() {
 process.on("uncaughtException", async (e) => { console.log("ABORTING: " + e?.message); await retireSubject().catch(() => {}); process.exit(1); });
 process.on("unhandledRejection", async (e) => { console.log("ABORTING: " + e); await retireSubject().catch(() => {}); process.exit(1); });
 await retireSubject();
+
+
+// ==========================================================================================
+// QA-1829b — FORGOT PASSWORD. The half of QA-1829 that needs mail.
+//
+// WHY THE SUITE CANNOT JUST READ THE CODE, and why that is correct. QA-142 keeps the code out of
+// the mail LOG on purpose - the Admin mail panel must not become a list of live reset codes - so
+// `GET /api/test-email` shows only the masked subject. There is no way for a test to learn the
+// code, and building one (returning it in the response under a test flag, say) would be a door
+// that exists in production and is one env var away from being open.
+//
+// So the fixture SETS the challenge instead of reading it: the request path is asserted on its own
+// evidence (a MailLog row exists, addressed to the right person, with no digits in the logged
+// subject), and then the token's `otp_hash` is replaced with the hash of a code this file chose.
+// Everything security-critical after that - single use, attempt burn, expiry, the password floor,
+// and that the new password actually works at the login door - is driven for real.
+{
+  const dbUrl = process.env.MONGODB_URL, dbName = process.env.MONGODB_DB;
+  const sha = (x) => crypto.createHash("sha256").update(x).digest("hex");
+  const CODE = "424242";
+  const fpEmail = `fp.${stamp}@vidysea-test.local`;
+  const FP1 = "FirstPass@123", FP2 = "SecondPass@456";
+
+  if (!dbUrl || !dbName) {
+    ok("QA-1829b: the suite had a database to seed the challenge into", false,
+      "MONGODB_URL/MONGODB_DB not set - this block measured nothing");
+  } else {
+    const client = new MongoClient(dbUrl);
+    try {
+      await client.connect();
+      const db = client.db(dbName);
+      // "" not null: a null header value is not something fetch has to accept, and this door is
+      // public - it takes no cookie at all.
+      const post = (b) => req("", "POST", "/api/public/forgot-password", b);
+
+      // ---- THE PAGE MUST BE REACHABLE WITHOUT A SESSION. src/proxy.ts (Next 16's middleware) is
+      // an ALLOWLIST, and a route not on it redirects 307 to /login - which for a
+      // forgot-password screen means the only person who needs it is the only person who cannot
+      // open it. That is exactly what shipped in this unit's first build, and this pin is why it
+      // did not survive. `redirect: "manual"` so the 307 is seen instead of being followed into a
+      // 200 that looks fine.
+      const pageRes = await fetch(`${BASE}/forgot`, { redirect: "manual" });
+      ok("QA-1829b: /forgot opens WITHOUT a session - it is on the proxy allowlist",
+        pageRes.status === 200, `got ${pageRes.status}${pageRes.headers.get("location") ? " -> " + pageRes.headers.get("location") : ""}`);
+      const pageHtml = pageRes.status === 200 ? await pageRes.text() : "";
+      ok("QA-1829b: ...and it renders the reset screen rather than something else",
+        /Reset your password/.test(pageHtml), `${pageHtml.length} bytes`);
+      ok("QA-1829b: ...with NO signed-in shell chrome on it (it sits outside the (app) group)",
+        !/Sign out/.test(pageHtml), "the app shell rendered to a logged-out visitor");
+
+      const made = await req(admin, "POST", "/api/users", { name: `FP ${stamp}`, email: fpEmail, password: FP1, role: "Trainer" });
+      ok("QA-1829b [precondition] a subject account exists", made.status === 201, `got ${made.status}`);
+      const subjectId = made.data?.item?._id;
+
+      // ---- ANTI-ENUMERATION. The two answers must be INDISTINGUISHABLE, because this door is
+      // public and a difference between them is a free list of who works here.
+      const known = await post({ action: "request", email: fpEmail });
+      const unknown = await post({ action: "request", email: `nobody.${stamp}@vidysea-test.local` });
+      ok("QA-1829b: a real and an unknown address get the SAME status",
+        known.status === 200 && unknown.status === 200, `known=${known.status} unknown=${unknown.status}`);
+      ok("QA-1829b: ...and the SAME message, word for word",
+        String(known.data?.message ?? "") === String(unknown.data?.message ?? "") && !!known.data?.message,
+        JSON.stringify({ known: known.data?.message, unknown: unknown.data?.message }));
+
+      // ---- THE MAIL. Asserted on the log row, never on delivery (mail is suppressed outside
+      // MONGODB_DB=center_erp, so a delivery assertion could never run here).
+      const logs = (await req(admin, "GET", "/api/test-email")).data?.log ?? [];
+      const row = logs.find((l) => l.to === fpEmail);
+      ok("QA-1829b: the request produced a MailLog row addressed to the account holder", !!row,
+        `${logs.length} rows, none to ${fpEmail}`);
+      ok("QA-1829b: ...and the LOGGED subject carries NO code - the mail panel is not a list of live codes (QA-142)",
+        !!row && !/\d{6}/.test(String(row.subject ?? "")), JSON.stringify(row?.subject));
+      const noRow = logs.find((l) => String(l.to ?? "").startsWith(`nobody.${stamp}`));
+      ok("QA-1829b: ...and NOTHING was mailed for the address that does not exist", !noRow, JSON.stringify(noRow?.to));
+
+      // ---- Drive the rest for real, with a challenge this file controls.
+      const arm = async () => {
+        const t = await db.collection("publictokens").findOne({ purpose: "password_reset", email: fpEmail, active: true }, { sort: { _id: -1 } });
+        if (!t) return null;
+        await db.collection("publictokens").updateOne({ _id: t._id }, { $set: { otp_hash: sha(CODE), otp_attempts: 0, otp_expires_at: new Date(Date.now() + 10 * 60_000) } });
+        return t.token;
+      };
+      // Mint a challenge directly. The request path is covered above; the cooldown that blocks a
+      // second request inside a minute is the feature working, not something to sleep through.
+      const mint = async () => {
+        const token = crypto.randomBytes(16).toString("hex");
+        await db.collection("publictokens").insertOne({
+          token, purpose: "password_reset", email: fpEmail, active: true,
+          otp_hash: sha(CODE), otp_attempts: 0, otp_verified: false,
+          otp_expires_at: new Date(Date.now() + 10 * 60_000),
+          createdAt: new Date(), updatedAt: new Date(),
+        });
+        return token;
+      };
+      const tok = await arm();
+      ok("QA-1829b [precondition] a password_reset token was minted for the real address", !!tok, "none found");
+
+      if (tok) {
+        const wrong = await post({ action: "verify", token: tok, code: "000000" });
+        ok("QA-1829b: a wrong code is refused", wrong.status === 400, `got ${wrong.status}`);
+        ok("QA-1829b: ...and the refusal does not say WHICH thing was wrong (no session/code split)",
+          /expired or already been used/i.test(String(wrong.data?.error ?? "")), JSON.stringify(wrong.data?.error));
+
+        const good = await post({ action: "verify", token: tok, code: CODE });
+        ok("QA-1829b: the right code verifies", good.status === 200, `got ${good.status} ${JSON.stringify(good.data?.error ?? "")}`);
+
+        const short = await post({ action: "reset", token: tok, password: "abc" });
+        ok("QA-1829b: a password under 8 characters is refused", short.status === 400, `got ${short.status}`);
+        const asEmail = await post({ action: "reset", token: tok, password: fpEmail });
+        ok("QA-1829b: a password equal to the account's own email is refused", asEmail.status === 400, `got ${asEmail.status}`);
+
+        const done = await post({ action: "reset", token: tok, password: FP2 });
+        ok("QA-1829b: the new password is accepted", done.status === 200, `got ${done.status} ${JSON.stringify(done.data?.error ?? "")}`);
+
+        // The whole point of the feature: the new password must work at the LOGIN door, and the
+        // old one must not. A reset that changes a row but not the credential is not a reset.
+        const newSess = await login(fpEmail, FP2);
+        ok("QA-1829b: the account can sign in with the NEW password", !!newSess, "no session");
+        const oldSess = await login(fpEmail, FP1);
+        ok("QA-1829b: ...and the OLD password no longer works", !oldSess, "the old password still signs in");
+
+        // SINGLE USE. The token was burned by the reset, so a replay must fail even though the
+        // code is still correct - this is what stops a forwarded or shoulder-surfed code being
+        // used twice.
+        const replay = await post({ action: "reset", token: tok, password: "ThirdPass@789" });
+        ok("QA-1829b: the token is SINGLE USE - replaying it is refused", replay.status === 400, `got ${replay.status}`);
+        const stillNew = await login(fpEmail, FP2);
+        ok("QA-1829b: ...and the replay changed nothing - the password set by the first reset still works",
+          !!stillNew, "the replay altered the password");
+      }
+
+      // ---- ATTEMPT BURN. Five wrong tries must kill the challenge, so a 6-digit code cannot be
+      // walked through.
+      const tok2 = await mint();
+      if (tok2) {
+        for (let i = 0; i < 5; i++) await post({ action: "verify", token: tok2, code: "111111" });
+        const afterBurn = await post({ action: "verify", token: tok2, code: CODE });
+        ok("QA-1829b: five wrong tries burn the challenge - even the RIGHT code is then refused",
+          afterBurn.status === 400, `got ${afterBurn.status}`);
+      } else {
+        ok("QA-1829b: a second challenge could be minted for the attempt-burn test", false, "none - this pin measured nothing");
+      }
+
+      // ---- EXPIRY, forced rather than waited for.
+      const tok3 = await mint();
+      if (tok3) {
+        await db.collection("publictokens").updateOne({ token: tok3 }, { $set: { otp_expires_at: new Date(Date.now() - 1000) } });
+        const expired = await post({ action: "verify", token: tok3, code: CODE });
+        ok("QA-1829b: an expired code is refused", expired.status === 400, `got ${expired.status}`);
+      } else {
+        ok("QA-1829b: a third challenge could be minted for the expiry test", false, "none - this pin measured nothing");
+      }
+
+      // ---- A DEACTIVATED ACCOUNT MUST NOT BE ABLE TO START A RESET. Otherwise this door mails a
+      // working code to somebody the system has switched off - the same population authorize()
+      // refuses (auth.ts:53-54), and QA-2014 is the row for a check that was narrower than that one.
+      if (subjectId) {
+        await req(admin, "PATCH", `/api/users/${subjectId}`, { active: false });
+        const before = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === fpEmail).length;
+        const off = await post({ action: "request", email: fpEmail });
+        const after = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === fpEmail).length;
+        ok("QA-1829b: a deactivated account still gets the SAME answer (it does not leak that it is off)",
+          off.status === 200, `got ${off.status}`);
+        ok("QA-1829b: ...but NO code is mailed to it", after === before, `${before} -> ${after}`);
+        await req(admin, "PATCH", `/api/users/${subjectId}`, { active: true });
+        await req(admin, "PATCH", `/api/users/${subjectId}`, { drop: true });
+      }
+    } catch (e) {
+      ok("QA-1829b: the block ran without error", false, String((e && e.message) || e));
+    } finally {
+      try { await client.close(); } catch {}
+    }
+  }
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

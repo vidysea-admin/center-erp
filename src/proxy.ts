@@ -10,6 +10,12 @@ export async function proxy(req: NextRequest) {
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
+    // QA-1829b: THIS FILE IS THE GATE, and forgetting it would have shipped a forgot-password page
+    // that only signed-in people could open - useless to the one person who needs it. The unit plan
+    // for this feature stated "there is no middleware in this repo", which is false: Next 16 calls it
+    // proxy.ts. Caught because the page was fetched without a session and answered 307 to /login.
+    // The API half needed nothing - /api/public/ is already allowed below.
+    pathname.startsWith("/forgot") ||
     pathname.startsWith("/api/auth") ||
     pathname.startsWith("/api/files") ||
     // Public capability-URL pages (2026-08-11): candidate self-registration + feedback.

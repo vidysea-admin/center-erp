@@ -60,6 +60,36 @@ export function rateLimit(key: string, max: number, windowMs: number): void {
 //
 // Same in-process, self-evicting Map as above; same honest scope (raises the cost of abuse, does
 // not defeat a distributed attacker — Redis is the complete answer and stays deferred).
+// QA-1829b: `rateLimit` above is per-IP AND per-PROCESS. In ECS with N tasks the real allowance is
+// N x max, and a password-reset mail is delivered to a THIRD PARTY - so per-IP limits alone let
+// someone flood a real persons inbox by rotating IPs, and a reset code is a far more interesting
+// thing to spam at somebody than a registration code.
+//
+// Same shape as phoneChallengeGate below and deliberately in the SAME file: what is protected is
+// the SUBJECT being mailed, not the caller. No global daily cap here - email costs nothing, and a
+// ceiling that stops password resets for the whole company is a worse outage than the abuse it
+// prevents. That asymmetry with SMS is the point, not an oversight.
+export function emailChallengeGate(email: string, opts: {
+  perEmailMax?: number; perEmailWindowMs?: number; cooldownMs?: number;
+} = {}): { ok: true } | { ok: false; reason: "cooldown" | "per_email"; retryAfterSec?: number } {
+  const perEmailMax = opts.perEmailMax ?? 5, perEmailWindowMs = opts.perEmailWindowMs ?? 60 * 60_000;
+  const cooldownMs = opts.cooldownMs ?? 60_000;
+  const now = Date.now();
+  const key = "reset-email:" + email;
+
+  const last = buckets.get("reset-last:" + email);
+  if (last && now - last.windowStart < cooldownMs) {
+    return { ok: false, reason: "cooldown", retryAfterSec: Math.ceil((cooldownMs - (now - last.windowStart)) / 1000) };
+  }
+  const e = buckets.get(key);
+  if (e && now - e.windowStart <= perEmailWindowMs && e.count >= perEmailMax) {
+    return { ok: false, reason: "per_email", retryAfterSec: Math.ceil((perEmailWindowMs - (now - e.windowStart)) / 1000) };
+  }
+  if (!e || now - e.windowStart > perEmailWindowMs) buckets.set(key, { count: 1, windowStart: now }); else e.count++;
+  buckets.set("reset-last:" + email, { count: 1, windowStart: now });
+  return { ok: true };
+}
+
 export function phoneChallengeGate(phone: string, opts: {
   perPhoneMax?: number; perPhoneWindowMs?: number; cooldownMs?: number; dailyMax?: number;
 } = {}): { ok: true } | { ok: false; reason: "cooldown" | "per_phone" | "daily_cap"; retryAfterSec?: number } {

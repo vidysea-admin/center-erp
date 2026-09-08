@@ -3,6 +3,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Btn, Field, inputCls, ErrorBanner } from "@/components/ui";
+import { BASE_PATH } from "@/lib/base-path";
 
 function LoginForm() {
   const router = useRouter();
@@ -38,13 +39,25 @@ function LoginForm() {
         <input className={inputCls} type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
       </Field>
       <Btn type="submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</Btn>
-      {/* 2026-08-11 (CEO): single login — new trainers/SPOCs sign themselves up, Admin approves */}
+      {/* QA-1829b — THIS BLOCK USED TO DESCRIBE A DOOR THAT HAS BEEN SHUT SINCE 2026-08-14.
+          It read "New here? Create an account — an Admin approves it before first login", which is
+          the STAFF SELF-SIGNUP the CEO killed: `api/public/signup/route.ts` answers 410 and staff
+          accounts are created by an Admin. So the one thing this screen offered a person who could
+          not get in was a flow that no longer exists.
+
+          The hrefs were also relative (`signup`, `p/me`). From `/erp/login` that resolves
+          correctly; from `/erp/login/` it resolves to `/erp/login/signup` and 404s. Rather than
+          reason about which form the URL takes, both now use BASE_PATH, which is right either way
+          and is what `src/lib/base-path.ts` exists for. */}
       <p className="text-center text-xs text-gray-500">
-        New here? <a href="signup" className="font-medium text-blue-700 hover:underline">Create an account</a> — an Admin approves it before first login.
+        Forgot your password? <a href={`${BASE_PATH}/forgot`} className="font-medium text-blue-700 hover:underline">Email yourself a code</a>
+      </p>
+      <p className="text-center text-xs text-gray-500">
+        No account yet? An Admin creates staff accounts — ask yours to add you.
       </p>
       {/* 2026-08-13 (Umesh): candidates get their own portal, not a staff account. */}
       <p className="text-center text-xs text-gray-500">
-        Training candidate? <a href="p/me" className="font-medium text-blue-700 hover:underline">View your training here</a> — no account needed.
+        Training candidate? <a href={`${BASE_PATH}/p/me`} className="font-medium text-blue-700 hover:underline">View your training here</a> — no account needed.
       </p>
     </form>
   );

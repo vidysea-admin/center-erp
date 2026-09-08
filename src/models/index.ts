@@ -1490,7 +1490,11 @@ StoredFileSchema.index({ entity_id: 1, staged_certificate: 1 });
 // plan added 2026-08-15 (QA-152 part 2, Umesh): the batch's backward plan as a shareable
 // artifact — "jaise self-registration form open hota hai" — the creator edits, the person
 // holding the link reads, and (only when the link was minted with allow_updates) ticks status.
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "phone_otp", "plan"] as const; // -110: phone_otp = the same challenge over SMS
+// QA-1829b: "password_reset" is ONE new value, and it inherits the whole challenge apparatus
+// already on this schema - hash-only storage, 10-minute expiry, attempt burn, and `active`
+// revocation. New `User.reset_token_*` columns would have been a second copy of a concept that
+// exists (ARCHITECTURE section 3), and the copy that drifts is always the one nobody is reading.
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "phone_otp", "plan", "password_reset"] as const; // -110: phone_otp = the same challenge over SMS
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },

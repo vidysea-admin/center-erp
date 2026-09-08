@@ -190,7 +190,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }
-  if (body.password) doc.password_hash = await bcrypt.hash(body.password, 10);
+  // QA-1829b: this was `if (body.password)`, which treats an EMPTY string as "no field sent" and
+  // returns 200 - so an Admin who cleared the box and saved was told the reset worked and it had
+  // not. The field being PRESENT is the intent; its being empty is a mistake worth saying aloud.
+  if (body.password !== undefined) {
+    const next = String(body.password);
+    if (next.length < 8) throw new HttpError(400, "A password must be at least 8 characters. Leave the field out entirely to keep the current one.");
+    doc.password_hash = await bcrypt.hash(next, 10);
+  }
 
   // 2026-08-11 (CEO): approve/reject self-signups. Approval activates the account with the
   // (possibly adjusted) role, scope and edit flag; rejection keeps it locked out.
