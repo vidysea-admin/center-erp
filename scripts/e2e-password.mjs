@@ -748,5 +748,116 @@ await retireSubject();
   }
 }
 
+// ---- QA-2276 (checker, cycle 9) - THE PIN THAT ENDS THE CLASS, NOT THE INSTANCE ----
+//
+// Cycles 6-9 each closed a real hole and each left the CLASS untouched. Every one of those pins is
+// a regex over source text, and a regex over source text can always be walked around: the checker
+// re-created QA-2272 by writing the plain setter with SINGLE quotes (the pin tested for two double
+// ones), and again by parking the functional updater in a helper nothing calls. Four cycles of
+// patching the last evasion is four cycles of not addressing why an evasion is always available.
+//
+// This drives the journey in a real browser instead, and kills the whole family at once - a plain
+// setter, a single-quoted plain setter, an always-disabled control, a control on the wrong step, an
+// updater in dead code - because none of them survives a person actually completing the journey.
+// `e2e-rendered-candidates.mjs` already carries the mechanism; this borrows it.
+//
+// It costs one chromium launch and NO waiting: the cooldown is never waited out, it is USED. The
+// resend happens INSIDE the cooldown, which is exactly the case the keep-branch exists for.
+{
+  const uiDbUrl = process.env.MONGODB_URL, uiDbName = process.env.MONGODB_DB;
+  if (!uiDbUrl || !uiDbName) {
+    ok("QA-2276 [precondition] MONGODB_URL/MONGODB_DB are set so the journey can be armed", false,
+      "not set - this block measured NOTHING, and says so in red rather than passing quietly");
+  } else {
+    let uiBrowser, uiClient;
+    try {
+      const { chromium } = await import("playwright");
+      uiClient = new MongoClient(uiDbUrl);
+      await uiClient.connect();
+      const uiDb = uiClient.db(uiDbName);
+      const uiSha = (x) => crypto.createHash("sha256").update(x).digest("hex");
+      const UI_CODE = "424242";
+      const uiEmail = "fp-ui." + stamp + "@vidysea-test.local";
+      await uiDb.collection("users").insertOne({
+        name: "FP UI", email: uiEmail, role: "Admin", active: true,
+        password_hash: "x", createdAt: new Date(), updatedAt: new Date(),
+      });
+
+      try {
+        uiBrowser = await chromium.launch({ headless: true });
+      } catch (e) {
+        // Not a skip. A missing browser means this block verified NOTHING, and it says so in red.
+        ok("QA-2276 [precondition] chromium launches from the `playwright` devDependency", false,
+          String(e.message).slice(0, 200) + " -- run `npx playwright install chromium`");
+        throw e;
+      }
+      // The per-IP `pwreset-req` limiter is 5/hour and PER PROCESS, so a browser sharing the wall's
+      // own client key arrives with the budget already spent by earlier suites - the page then shows a
+      // refusal, never reaches the code step, and this block reports the PRODUCT broken when what
+      // refused was the queue. Measured, not guessed: the first run of this pin failed exactly that
+      // way. Every arm gets its own client key, and the reach-the-code-step assertion below is the
+      // precondition that proves it worked.
+      const uiCtx = await uiBrowser.newContext({
+        viewport: { width: 1280, height: 900 },
+        extraHTTPHeaders: { "x-forwarded-for": "10.77." + (stamp % 250 + 1) + ".9" },
+      });
+      const uiPage = await uiCtx.newPage();
+
+      await uiPage.goto(BASE + "/forgot", { waitUntil: "networkidle" });
+      // This page renders inside a <Suspense> boundary, like /erp/login. Querying after
+      // domcontentloaded reports controls missing that are simply not hydrated yet - that exact
+      // trap produced a false "there is no link to /forgot" finding on this unit.
+      const uiEmailBox = uiPage.locator('input[type="email"], input[name="email"]').first();
+      await uiEmailBox.waitFor({ timeout: 20000 });
+      await uiEmailBox.fill(uiEmail);
+      await uiPage.locator('button[type="submit"]').first().click();
+
+      const uiCodeBox = uiPage.locator('input[inputmode="numeric"]').first();
+      await uiCodeBox.waitFor({ timeout: 20000 }).catch(() => {});
+      const reachedCode = (await uiCodeBox.count()) > 0;
+      ok("QA-2276: the page reaches the code step after asking for a code",
+        reachedCode, "url=" + uiPage.url() + " body=" + (await uiPage.locator("body").innerText()).slice(0, 160));
+
+      // Arm the challenge the PAGE is holding with a code we know. The code is never in the
+      // response - that is QA-142 working - so this is the only way to complete the journey.
+      const uiArmed = await uiDb.collection("publictokens").updateOne(
+        { purpose: "password_reset", email: uiEmail, active: true },
+        { $set: { otp_hash: uiSha(UI_CODE), otp_attempts: 0 } },
+      );
+      ok("QA-2276 [precondition] the challenge the page is holding was armed with a known code",
+        uiArmed.modifiedCount === 1,
+        "modifiedCount=" + uiArmed.modifiedCount + " - nothing armed means every assertion below would be vacuous");
+
+      const uiResend = uiPage.getByRole("button", { name: /send another code/i }).first();
+      const resendCount = await uiResend.count();
+      const resendEnabled = resendCount ? await uiResend.isEnabled() : false;
+      ok("QA-2276: the code step offers a resend control a person can actually press",
+        resendCount > 0 && resendEnabled,
+        "count=" + resendCount + " enabled=" + resendEnabled + " - absent, on another step, or permanently disabled all fail HERE, and all three passed the structural pins at some point in this unit's history");
+
+      if (reachedCode && resendCount > 0 && resendEnabled && uiArmed.modifiedCount === 1) {
+        // INSIDE the cooldown on purpose: the server answers with no token, and the page must KEEP
+        // the one it holds. This is the exact journey QA-2201/QA-2251/QA-2259 broke four times.
+        await uiResend.click();
+        await uiPage.waitForTimeout(1500);
+        await uiCodeBox.fill(UI_CODE);
+        await uiPage.locator('button[type="submit"]').first().click();
+        const uiPw = uiPage.locator('input[type="password"]').first();
+        await uiPw.waitFor({ timeout: 20000 }).catch(() => {});
+        ok("QA-2276: after an in-cooldown resend, the code the person ALREADY HOLDS still works and the journey continues",
+          (await uiPw.count()) > 0,
+          "still on: " + (await uiPage.locator("body").innerText()).slice(0, 220) + " - the page threw away the token it was holding when the cooldown response carried none, which is QA-2251 by whichever route the source found this time");
+      }
+
+      await uiDb.collection("users").deleteOne({ email: uiEmail });
+    } catch (e) {
+      ok("QA-2276: the browser journey ran without error", false, String((e && e.message) || e).slice(0, 300));
+    } finally {
+      try { if (uiBrowser) await uiBrowser.close(); } catch {}
+      try { if (uiClient) await uiClient.close(); } catch {}
+    }
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);
