@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-298";
+export const RELEASE = "2026.08.14-299";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,25 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-299 adds two things people asked for and corrects a sentence this endpoint published about "  +
+  "-298. FIRST: anyone with an account can now set their own password without anybody sharing "  +
+  "one. The login screen carries a link; you give your email address, the system mails you a "  +
+  "code, and the code lets you choose a new password. The code is never shown on the screen or "  +
+  "returned by the server - it only ever arrives in the mail - and asking again does not cancel a "  +
+  "code you are already holding. SECOND: a batch can now be moved to Result Awaited before its "  +
+  "results exist. That state means the assessment has been held and the results have not come "  +
+  "back yet, and until this build it could not be entered until every candidate already had a "  +
+  "final result, which is the opposite requirement and left at least one live batch with nowhere "  +
+  "to go. Moving it there is now a deliberate press that records who said the assessment was held "  +
+  "and when, on the batch's own activity trail. Nothing about COMPLETING a batch has changed: "  +
+  "that still requires every roster member to have a final result. THIRD, and smaller: -298's "  +
+  "note said its fault meant the release checks could only be run by working around it by hand. "  +
+  "That was true of one local setup order and not of the automated checks, which were never "  +
+  "affected; the reviewer disproved it from the build logs. That correction is in this build "  +
+  "because -298 shipped before it was written. This release changed 13 source files, and its two "  +
+  "features were each verified by an independent reviewer rather than by the author - the "  +
+  "password flow over ten review cycles, the batch change over seven.";
+const RELEASE_NOTE_ARCHIVE_298 =
   "-298 does not change the system at all. It repairs a fault in the automated test harness "  +
   "that runs before every release, and nothing in it can reach a screen, a number, a permission "  +
   "or a stored record. The check that verifies the database is protected against duplicate "  +
