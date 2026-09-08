@@ -1878,7 +1878,17 @@ for (const file of walk(root)) {
   //       the screen, still reads the same, and the branch is just as dead. A pin that only checked
   //       the label would stay green through that, which is this repo's most-filed defect.
   const forgotSrc = stripComments(fs.readFileSync(path.join(root, "app/forgot/page.tsx"), "utf8"));
-  const resendBtn = (forgotSrc.match(/<button[^>]*onClick=\{\(\)\s*=>\s*\{[^}]*requestCode\([^}]*\}\}[\s\S]{0,220}?<\/button>/) ?? [""])[0];
+  // The checker's mutant D: moving the control OUT of the code step left both pins green, because
+  // they matched the button anywhere in the file. The manifest named this gap and did not close it;
+  // it is closed here by searching only the code step's own block. A resend control rendered on the
+  // password step is not a resend control a stranded person can reach.
+  // `{step === "code" &&` appears TWICE - once for the heading line and once for the form - and a
+  // non-greedy match takes the heading pair and a 92-character block with no button in it, which
+  // would have failed this pin for the wrong reason. Take the LAST one: that is the form.
+  const codeFormAt = forgotSrc.lastIndexOf('{step === "code" &&');
+  const pwStepAt = forgotSrc.indexOf('{step === "password" &&', codeFormAt);
+  const codeStepBlock = codeFormAt < 0 ? "" : forgotSrc.slice(codeFormAt, pwStepAt < 0 ? undefined : pwStepAt);
+  const resendBtn = (codeStepBlock.match(/<button[^>]*onClick=\{\(\)\s*=>\s*\{[^}]*requestCode\([^}]*\}\}[\s\S]{0,220}?<\/button>/) ?? [""])[0];
   const resendPresent = /Send another code/.test(resendBtn);
   const resendKeepsToken = resendPresent && !/setToken\(\s*""\s*\)/.test(resendBtn);
   if (resendPresent) passed++;
@@ -1898,7 +1908,15 @@ for (const file of walk(root)) {
   // version of what the two lines below decide in microseconds - so the source is asserted, and no
   // claim is made here that a person was watched receiving the right sentence.
   const fpSrc = stripComments(fs.readFileSync(path.join(root, "app/api/public/forgot-password/route.ts"), "utf8"));
-  const cooldownGuarded = /gate\.reason\s*===\s*"cooldown"[\s\S]{0,400}?in the last minute/.test(fpSrc);
+  // QA-2270 (checker, cycle 7): the first version of this pin was a 400-character PROXIMITY match,
+  // and the checker killed it by swapping the two ternary arms - which re-creates QA-2268 verbatim
+  // while the false arm still sits inside the window, so the assertion written for QA-2268 passed
+  // over QA-2268. An assertion that cannot fail for the defect it names, in the fix for a defect of
+  // exactly that shape. So: capture the two arms and judge them SEPARATELY, which is the only form
+  // a swap cannot survive.
+  const ternary = fpSrc.match(/gate\.reason\s*===\s*"cooldown"\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"/);
+  const cooldownArm = ternary?.[1] ?? "", cappedArm = ternary?.[2] ?? "";
+  const cooldownGuarded = !!ternary && /in the last minute/.test(cooldownArm) && !/in the last minute/.test(cappedArm);
   if (cooldownGuarded) passed++;
   else { failed++; pushStructural("app/api/public/forgot-password/route.ts: the \"in the last minute\" sentence is not guarded by gate.reason === \"cooldown\" - QA-2268. The per-address cap uses the same branch, so a person told to wait \"shortly\" is being told that about a wait of up to an hour."); }
 
