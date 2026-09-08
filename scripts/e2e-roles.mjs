@@ -4793,6 +4793,57 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       [200, 201].includes(rReady.status) && String(rReady.data?.item?.status ?? "") === "Ready",
                       `${rReady.status} status=${String(rReady.data?.item?.status ?? "")} ${String(rReady.data?.error ?? "").slice(0, 120)}`);
                   }
+                  // QA-2280: and a CLOSED batch. This is the expensive one - Rule 52 means Closed is
+                  // the MONEY outcome, so it needs certification Completed, an invoice actually PAID
+                  // and dues attested, on top of everything Closing needs. The cheap alternative was
+                  // an EXCLUDED_WITH_REASON entry saying "too expensive to build" - and that is
+                  // exactly the move that produced QA-2271 and QA-2276, twice, in this same block.
+                  // The checker measured it at eleven ordinary calls, all 200. So it gets built.
+                  //
+                  // Its own batch, not C's: driving C onward would take the Closing fixture with it
+                  // and trade one covered status for another.
+                  const roomD = loc ? await req(admin, "POST", `/api/locations/${loc}/rooms`,
+                    { name: "QA-2280-" + Date.now(), type: "Classroom", capacity: 10 }) : { status: 0 };
+                  const mkD = (loc && prog && trn && roomD.data?.item?._id)
+                    ? await req(admin, "POST", "/api/batches", {
+                        location: loc, program: prog, trainer: trn, room: roomD.data.item._id,
+                        planned_start: new Date().toISOString().slice(0, 10), target_size: 0,
+                      })
+                    : { status: 0 };
+                  const DB_ = mkD.data?.item;
+                  if (DB_?._id) {
+                    const stampD = Date.now();
+                    const todayD = new Date().toISOString().slice(0, 10);
+                    // Every step named and asserted - the QA-2271 fixture reported only its last
+                    // call and the error it printed was three steps downstream of the break.
+                    const stepsD = [
+                      ["reaches Ready", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`, { target: "Ready" })],
+                      ["reaches Active", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`,
+                        { target: "Active", enrollment_override: true, reason: "QA-2280 fixture: empty-roster batch driven to Closed" })],
+                      ["assessment Completed (legacy arm)", () => req(admin, "PUT", `/api/batches/${DB_._id}/closure`,
+                        { assessment_status: "Completed", appeared: 0, passed: 0 })],
+                      ["reaches Closing", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`, { target: "Closing" })],
+                      ["certification Completed", () => req(admin, "PUT", `/api/batches/${DB_._id}/closure`,
+                        { certification_status: "Completed", certificates_issued: 0 })],
+                      ["reaches Completed", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`, { target: "Completed" })],
+                      ["invoice Raised", () => req(admin, "PATCH", `/api/batches/${DB_._id}/invoice`,
+                        { status: "Raised", invoice_no: "INV-2280-" + stampD, raised_on: todayD, amount: 100000 })],
+                      ["invoice Paid", () => req(admin, "PATCH", `/api/batches/${DB_._id}/invoice`, { status: "Paid", paid_on: todayD })],
+                      ["dues settled", () => req(admin, "PUT", `/api/batches/${DB_._id}/closure`,
+                        { dues_settled: true, dues_note: "QA-2280 fixture: trainer + centre settled" })],
+                      ["reaches Closed", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`, { target: "Closed" })],
+                    ];
+                    let brokeAt = null;
+                    for (const [name, run] of stepsD) {
+                      const r = await run();
+                      if (![200, 201].includes(r.status)) {
+                        brokeAt = `${name} -> ${r.status} ${String(r.data?.error ?? "").slice(0, 140)}`;
+                        break;
+                      }
+                    }
+                    ok("QA-2280 fixture: a CLEAN Closed batch is built through the whole Rule 52 money path",
+                      brokeAt === null, brokeAt ?? "all ten steps 200");
+                  }
                   const coveredStatuses = [];
                   let covered = 0;
                   for (const st of nonActive) {
