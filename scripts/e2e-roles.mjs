@@ -4616,10 +4616,18 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // through the closure PUT. THIS is the requirement QA-2250 moved OFF the
                   // Active->Closing door, and the whole defensibility of that move rests on it still
                   // refusing here. B has a real roster with results outstanding.
+                  // ...and this assertion COULD NEVER HAVE PASSED in its first form, which is the
+                  // mirror image of the defect this repo keeps filing. It required /Rule 43/ in the
+                  // response body. `plain()` (lib/user-copy.ts:31) deliberately STRIPS a leading
+                  // "Rule 43: " from every user-facing message, and check-user-copy.mjs fails the
+                  // wall if a rule code appears in a shape it cannot strip. So the number is
+                  // guaranteed absent by design: an assertion that cannot SUCCEED, sitting where I
+                  // had put the one that proves this unit did not weaken anything.
+                  // It now asserts the sentence a person actually receives.
                   const r43 = await req(admin, "PUT", `/api/batches/${B._id}/closure`, { assessment_status: "Completed" });
-                  ok("QA-2250: Rule 43 is UNMOVED - marking assessment Completed with results outstanding is still refused",
-                    r43.status === 409 && /Rule 43/.test(String(r43.data?.error ?? "")),
-                    `${r43.status} ${String(r43.data?.error ?? "").slice(0, 140)}`);
+                  ok("QA-2250: Rule 43 is UNMOVED - marking assessment Completed with the work outstanding is still refused",
+                    r43.status === 409 && /before completing assessment/i.test(String(r43.data?.error ?? "")),
+                    `${r43.status} ${String(r43.data?.error ?? "").slice(0, 160)}`);
 
                   // The flag is a fact about THIS transition and nothing else - same shape and same
                   // refusal as enrollment_override (QA-1973). An override silently dropped is worse
