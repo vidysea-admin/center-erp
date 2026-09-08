@@ -379,6 +379,45 @@ await retireSubject();
           typeof asked.data?.token === "string" && asked.data.token.length >= 16,
           `token=${JSON.stringify(asked.data?.token)} - /forgot does setToken(d.token ?? "") and then verifies with it`);
 
+        // ---- QA-2246 (S1) — THE COOLDOWN BRANCH MUST NEVER HAND BACK THE LIVE TOKEN ----
+        // A cycle-3 fix returned the address's LIVE challenge token to whoever asked inside the
+        // per-address cooldown. `reset` authenticates on the token STRING ALONE, so once the
+        // victim entered their own mailed code and promoted that token, a stranger holding the
+        // same string could set the password. It never reached production, and the reason it
+        // never reached production was a checker probing both builds - not this suite, which was
+        // green across the vulnerable build.
+        //
+        // So this pin exists to make the NEXT one impossible to ship silently. `asked` above just
+        // created a live challenge for email2, which puts us inside the 60s cooldown for that
+        // address. A second request - from a DIFFERENT client key, which is the attacker's
+        // position - must not receive the token that `asked` holds.
+        //
+        // The x-forwarded-for is not decoration: without it this second request shares the per-IP
+        // budget with the first, and a 429 would make the pin pass for a reason that has nothing
+        // to do with the property (the QA-2160 lesson, one block down).
+        const stranger = await req("", "POST", "/api/public/forgot-password",
+          { action: "request", email: email2 }, { "x-forwarded-for": "198.51.100.7" });
+        ok("QA-2246 [precondition] the stranger's in-cooldown request is answered, not rate-limited",
+          stranger.status === 200,
+          `got ${stranger.status} - a 429 here means this pin measured the per-IP queue, not the door`);
+        ok("QA-2246 (S1): a stranger asking inside the cooldown does NOT receive the victim's live token",
+          typeof stranger.data?.token === "string" && stranger.data.token !== asked.data?.token,
+          `stranger token=${JSON.stringify(stranger.data?.token)} vs live token=${JSON.stringify(asked.data?.token)} - identical means the account-takeover regression is back`);
+
+        // And the token it DID receive must be a decoy - not a row anybody can promote. Checked
+        // against the database rather than inferred from the string, because "different" and
+        // "useless" are not the same claim and only the second one is the security property.
+        const strangerRow = await db.collection("publictokens").findOne({ token: stranger.data?.token });
+        ok("QA-2246 (S1): ...and that token corresponds to NO stored challenge at all",
+          strangerRow === null,
+          `a row exists for the token handed to the stranger: ${JSON.stringify(strangerRow && { email: strangerRow.email, otp_verified: strangerRow.otp_verified })}`);
+
+        // The victim's own challenge must be untouched by the stranger's request - the fix must
+        // not have closed the hole by destroying the thing it was protecting.
+        const victimRow = await db.collection("publictokens").findOne({ token: asked.data?.token });
+        ok("QA-2246: the victim's live challenge is still active after the stranger asked",
+          !!victimRow && victimRow.active === true,
+          `victim row: ${JSON.stringify(victimRow && { active: victimRow.active, email: victimRow.email })}`);
         // An unknown address must ALSO get one, or the token's presence is the enumeration tell
         // this endpoint refuses to give.
         const decoy = await post({ action: "request", email: `nobody2.${stamp}@vidysea-test.local` });
