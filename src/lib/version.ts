@@ -164,6 +164,7 @@ export const RELEASE_NOTE_CURRENT =
   "records was itself building one of those protections in the wrong shape, which stopped that "  +
   "whole set of tests from running on a fresh database - so for some time the release checks "  +
   "could not be run at all in one of the two ways a developer sets that database up locally. The "  +
+  "protection is now built in the shape the "  +
   "system actually declares, and it was verified both that the tests run again and that genuine "  +
   "duplicates are still caught, which was the risk worth checking. Recorded publicly because "  +
   "this build exists and deserves a name of its own rather than being folded silently into "  +
