@@ -4484,9 +4484,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                 location: loc, program: prog, trainer: trn, room: rm,
                 planned_start: todayIso2, target_size: 0,
               });
-              ok("QA-2007 fixture: a batch with target_size 0 can be created",
-                [200, 201].includes(mk.status), `${mk.status} ${JSON.stringify(mk.data).slice(0, 120)}`);
+              // QA-2133. This assertion used to take `[200,201].includes(mk.status)` alone - green on a
+              // 200 that carried no `item` - and the FIVE pins below sit behind `if (E)`. A create that
+              // answered 200 with an empty body would have shown one green fixture line and silently
+              // skipped every assertion this arm exists for. That is the same shape as the QA-1973 block
+              // skipping wholesale on a dirty database, which is how a run that tests NOTHING looks green.
               const E = mk.data?.item;
+              ok("QA-2007 fixture: a batch with target_size 0 can be created, and the response carries it",
+                [200, 201].includes(mk.status) && !!E?._id,
+                `${mk.status} item=${!!E?._id} ${JSON.stringify(mk.data).slice(0, 100)}`);
               if (E) {
                 const toReady = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Ready" });
                 ok("QA-2007 fixture: ...and reaches Ready with nobody on it, because 0 >= 80% of 0",
@@ -4497,22 +4503,41 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   JSON.stringify({ roster: rdE.roster_count, ok: rdE.enrollment_ok }));
 
                 const R2 = "no candidates were mapped to this batch before it began; roster to follow";
+                // QA-2132: snapshot E's trail BEFORE the start, so the pins below read only what this
+                // transition wrote rather than anything that happens to carry the right field name.
+                const beforeE = new Set(((await req(admin, "GET", `/api/audit/Batch/${E._id}`))
+                  .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
                 const startedE = await req(admin, "POST", `/api/batches/${E._id}/transition`,
                   { target: "Active", enrollment_override: true, reason: R2 });
                 ok("QA-2007: an empty-roster batch starts through the same hatch, with a reason",
                   [200, 201].includes(startedE.status) && String(startedE.data?.item?.status ?? "") === "Active",
                   `${startedE.status} ${JSON.stringify(startedE.data?.error ?? "").slice(0, 110)}`);
 
-                const aE = await req(admin, "GET", `/api/audit/Batch/${E._id}`);
-                const rowE = (aE.data?.items ?? aE.data?.rows ?? [])
-                  .find((a) => String(a.field) === "enrollment_override");
+                // QA-2132, and it is this unit's own defect arriving one arm later: these two lines
+                // used to be `acts.find(a => a.field === "enrollment_override")` over E's WHOLE trail -
+                // the exact pattern QA-2005 was filed to remove from ARM 4, ten lines up. It happened to
+                // be safe because E is created inside this arm and can carry no foreign row, but that
+                // precondition was written NOWHERE, so the safety was luck a reader could not check.
+                // Same snapshot-diff as ARM 4, for the same reason.
+                const rowsE = (r) => (r.data?.items ?? r.data?.rows ?? []);
+                const startedE_rows = rowsE(await req(admin, "GET", `/api/audit/Batch/${E._id}`));
+                const freshE = startedE_rows.filter((a) => !beforeE.has(String(a._id ?? a.id ?? JSON.stringify(a))));
+                const overrideE = freshE.filter((a) => String(a.field) === "enrollment_override");
+                ok("QA-2132: the empty-roster start wrote EXACTLY ONE new enrollment_override row",
+                  overrideE.length === 1,
+                  JSON.stringify({ newRows: freshE.length, overrideRows: overrideE.length, before: beforeE.size }));
+                const rowE = overrideE[0];
                 const valE = String(rowE?.new_value ?? rowE?.newValue ?? "");
                 ok("QA-2007: the audit row says NO ROSTER AT ALL, not a shortfall it could not compute",
                   !!rowE && /NO ROSTER AT ALL/.test(valE) && valE.includes(R2),
                   JSON.stringify({ found: !!rowE, v: valE.slice(0, 160) }));
                 // The mutant-killer, and the reason this arm is worth its cost: delete the empty-roster
                 // branch at rules.ts:1166 and the ordinary sentence prints a shortfall computed from
-                // zero. The assertion above would still pass on the reason alone, so the ABSENCE of a
+                // zero - reading "0 enrolled of 0 needed (80% of a 0-member roster)", NOT the NaN an
+                // earlier version of this comment predicted: the percentage comes from the defaults, not
+                // from dividing by the roster. Corrected by the cycle-1 checker; the pins go red either
+                // way, but a comment that mispredicts the mutant teaches the next reader the wrong thing.
+                // The assertion above would still pass on the reason alone, so the ABSENCE of a
                 // fabricated figure is pinned separately.
                 ok("QA-2007: ...and it carries NO enrolled-of-needed figure, because there is none to state",
                   !!rowE && !/\d+ enrolled of \d+ needed/.test(valE) && !/NaN/.test(valE),
