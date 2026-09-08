@@ -4693,6 +4693,40 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   //
                   // The guard says "not Active". So the pin must walk every status that is not
                   // Active, not one representative of them.
+                  // QA-2271 (cycle 5, filed by the cycle-4 checker). Cycle 4's comment below used to
+                  // claim a CLEAN Closing batch "cannot be constructed", and used that to justify
+                  // leaving Closing unprobed. THE CLAIM WAS FALSE, and the checker disproved it in
+                  // four calls on the unmutated build - through the legacy all-results-in arm that
+                  // the sentence itself names. The cost was not theoretical: a mutant breaking the
+                  // guard for Closing ALONE returned a wall byte-identical to the control, because
+                  // nothing looked there.
+                  //
+                  // So build the fixture instead of arguing that it cannot exist: target_size 0 ->
+                  // Ready -> Active -> closure marked Completed with 0 appeared / 0 passed -> a
+                  // transition to Closing with NO exam_held. That batch is Closing, clean, and the
+                  // search below finds it like any other.
+                  const roomC = loc ? await req(admin, "POST", `/api/locations/${loc}/rooms`,
+                    { name: "QA-2271-" + Date.now(), type: "Classroom", capacity: 10 }) : { status: 0 };
+                  const mkC = (loc && prog && trn && roomC.data?.item?._id)
+                    ? await req(admin, "POST", "/api/batches", {
+                        location: loc, program: prog, trainer: trn, room: roomC.data.item._id,
+                        planned_start: new Date().toISOString().slice(0, 10), target_size: 0,
+                      })
+                    : { status: 0 };
+                  const C = mkC.data?.item;
+                  if (C?._id) {
+                    await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Ready" });
+                    await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Active" });
+                    await req(admin, "PUT", `/api/batches/${C._id}/closure`,
+                      { assessment_status: "Completed", appeared: 0, passed: 0 });
+                    const toClosing = await req(admin, "POST", `/api/batches/${C._id}/transition`, { target: "Closing" });
+                    // Named out loud, because the whole point is that this state EXISTS. If the
+                    // product ever stops allowing it, this line says so instead of the Closing pins
+                    // quietly disappearing from the run the way they did for two whole cycles.
+                    ok("QA-2271 fixture: a CLEAN Closing batch can be built via the legacy arm - the sentence that said it could not was wrong",
+                      [200, 201].includes(toClosing.status) && String(toClosing.data?.item?.status ?? "") === "Closing",
+                      `${toClosing.status} status=${String(toClosing.data?.item?.status ?? "")} ${String(toClosing.data?.error ?? "").slice(0, 120)}`);
+                  }
                   const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
                   const coveredStatuses = [];
                   let covered = 0;
@@ -4757,17 +4791,15 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // instructive direction: it demanded 4 of 5, measured 3, and the tempting fix was
                   // to lower the floor to 3 - weakening a guard to match what it found, which is how
                   // a guard becomes decoration. The right question was WHICH three, and why the
-                  // other two are absent:
-                  //   - Closing: a CLEAN one cannot be constructed. The only routes into Closing are
-                  //     this very press (which sets the flag, by design) or the legacy all-results-in
-                  //     arm. So "a Closing batch with no exam_held" is close to a contradiction, and
-                  //     demanding one is demanding a state the product does not produce.
-                  //   - Ready: seed-dependent, and genuinely absent here.
-                  // Planning, Completed and Cancelled are each reachable clean and each on the far
-                  // side of the narrowing mutant, so requiring exactly those three is both honest and
-                  // strictly stronger than a count: a seed that silently loses Cancelled fails, where
-                  // "3 of 5" would have passed on any three.
-                  const mustCover = ["Planning", "Completed", "Cancelled"];
+                  // other two are absent - and CYCLE 4 GOT THAT SECOND HALF WRONG TOO. It wrote that
+                  // Closing "cannot be constructed clean", which was a guess presented as a
+                  // structural fact, and it excused the very gap a mutant then walked through
+                  // unseen. Closing is now BUILT above (QA-2271) and required here. Ready stays
+                  // genuinely seed-dependent: the loop picks it up automatically when a seed has
+                  // one, and the cycle-4 checker confirmed the product refuses correctly on Ready.
+                  // Requiring a named set remains strictly stronger than a count: a seed that
+                  // silently loses Cancelled fails, where "3 of 5" would have passed on any three.
+                  const mustCover = ["Planning", "Closing", "Completed", "Cancelled"];
                   const missing = mustCover.filter((s) => !coveredStatuses.includes(s));
                   ok("QA-2265: the guard was probed on Planning, Completed AND Cancelled - named, not counted",
                     missing.length === 0,
