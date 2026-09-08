@@ -4696,7 +4696,25 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
                   let covered = 0;
                   for (const st of nonActive) {
-                    const row = ((await req(admin, "GET", `/api/batches?status=${st}&limit=1`)).data?.items ?? [])[0];
+                    // A CLEAN batch, not merely the first one. The first version of this loop took
+                    // `limit=1` and went red on Closing - and the finding was the PIN's, not the
+                    // product's: batch E is transitioned to Result Awaited WITH exam_held a few
+                    // lines above, legitimately, so `?status=Closing` returned the one batch in the
+                    // database that is SUPPOSED to carry the flag. The pin was demanding an absence
+                    // it had itself just made impossible.
+                    //
+                    // The tempting repair - snapshot the flag and assert it did not CHANGE - is
+                    // worse, and worth naming: on a batch already carrying the flag, removing the
+                    // guard would set it true again, the value would not change, and the pin could
+                    // not fail. That is an assertion that cannot fail, dressed as a fixture fix,
+                    // inside the unit that has now filed four of them. So: find a batch that does
+                    // not already carry the flag, and keep the assertion absolute.
+                    const candidates = (await req(admin, "GET", `/api/batches?status=${st}&limit=5`)).data?.items ?? [];
+                    let row = null;
+                    for (const c of candidates) {
+                      const cl = (await req(admin, "GET", `/api/batches/${c._id}/closure`)).data ?? {};
+                      if (!cl.closure?.exam_held) { row = c; break; }
+                    }
                     if (!row) continue;   // counted below, never silently skipped
                     covered++;
                     const beforeP = new Set(((await req(admin, "GET", `/api/audit/Batch/${row._id}`))
