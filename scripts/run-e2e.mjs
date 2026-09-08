@@ -302,15 +302,42 @@ const SUITES = [
 // three indexes ourselves, in the same shape as the QA-851/QA-1065 refusals above only as a REPAIR
 // rather than a passive detector - and refuse loudly only if the assertion itself fails, which
 // means real duplicate data already sits in the collection and creation is genuinely impossible.
+//
+// QA-2057 (2026-09-08), and it is the third instalment of the same story: this guard, written to
+// stop the wall lying, made the wall UNRUNNABLE FROM A CLEAN DATABASE - in both seeding orders,
+// and neither message pointed at the guard.
+//   - `createIndex` was called with a bare `{ unique: true }` for all three. Two of the three are
+//     bare in the schema and were fine. `Location.institution_id` is `unique + SPARSE`
+//     (src/models/index.ts:154), and on a clean database mongoose has not built its own index yet,
+//     so the `already` check finds nothing and this guard installs the NON-SPARSE one instead.
+//   - Seed-only: every subsequent `POST /api/locations` without an institution_id collides with
+//     the previous one - "That qa1771 guard is already in use" - and TWENTY-ONE suites crash,
+//     each dying several lines later as `Cannot read properties of undefined (reading '_id')`,
+//     which names the symptom and never the guard.
+//   - Seed + seed:sample: seed-sample writes 8 locations with a null institution_id, the bare
+//     index cannot be built at all, and the banner below REFUSED THE WALL while telling the
+//     operator their data was corrupt. Eight nulls are exactly what a sparse index is for.
+//   - And the wall REQUIRES seed:sample (e2e-roles.mjs:65 says so in its own fixture line), so the
+//     two orders blocked each other and there was no order that worked.
+// Found by a maker running the wall before a push, four attempts in. The fix is the fourth element
+// of EXPECTED: carry each index's real schema options instead of assuming every one is bare.
+// Same family as QA-1813 above - that was this guard's options mismatch seen from the NAME side
+// (mongoose's index and a plain one colliding by name); this is the same mismatch seen from the
+// BEHAVIOUR side. And the same family as the CLAUDE.md rule corrected on 2026-09-07: a guard that
+// fires on correct work gets skipped, and a guard that BREAKS correct work gets worked around in
+// somebody's shell history and never written down.
 {
   const { MongoClient } = await import("mongodb");
   const url = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
   const dbName = (process.env.MONGODB_DB || "center_erp_ci").trim();
-  // [collection, index key spec, human name] - one from each area QA-1771 measured inverting.
+  // [collection, index key spec, human name, EXTRA SCHEMA OPTIONS] - one from each area QA-1771
+  // measured inverting. The fourth element is QA-2057 and it is not decoration: this guard used to
+  // create every index as a bare { unique: true }, and one of the three is NOT bare. Each entry
+  // below cites the schema line it copies, because that is the only thing that keeps them in step.
   const EXPECTED = [
-    ["trainers", { phone: 1 }, "Trainer.phone unique"],
-    ["locations", { institution_id: 1 }, "Location.institution_id unique"],
-    ["batchmembers", { batch: 1, candidate: 1 }, "BatchMember (batch, candidate) unique"],
+    ["trainers", { phone: 1 }, "Trainer.phone unique", {}],                                    // src/models/index.ts:599
+    ["locations", { institution_id: 1 }, "Location.institution_id unique", { sparse: true }],  // src/models/index.ts:154
+    ["batchmembers", { batch: 1, candidate: 1 }, "BatchMember (batch, candidate) unique", {}], // src/models/index.ts:924
   ];
   let client;
   try {
@@ -318,7 +345,7 @@ const SUITES = [
     await client.connect();
     const db = client.db(dbName);
     const failed = [];
-    for (const [coll, keySpec, label] of EXPECTED) {
+    for (const [coll, keySpec, label, extra] of EXPECTED) {
       // QA-1813 (found on THIS guard's own next release wall, right after the first fix landed):
       // creating with a bare { unique: true } can collide by NAME with an index mongoose already
       // built for the same key but with EXTRA schema-level options (Location.institution_id is
@@ -332,7 +359,7 @@ const SUITES = [
       const already = existing.some((ix) => ix.unique && JSON.stringify(ix.key) === JSON.stringify(keySpec));
       if (already) continue;
       try {
-        await db.collection(coll).createIndex(keySpec, { unique: true, name: "qa1771_guard_" + coll });
+        await db.collection(coll).createIndex(keySpec, { unique: true, ...extra, name: "qa1771_guard_" + coll });
       } catch (e) {
         failed.push(label + " - " + String(e?.message ?? e).slice(0, 140));
       }
@@ -343,9 +370,14 @@ const SUITES = [
       console.error("##  WALL REFUSED TO START (QA-1771)");
       console.error("##  " + failed.length + " expected UNIQUE index(es) could NOT be built on " + dbName + ":");
       for (const m of failed) console.error("##    - " + m);
-      console.error("##  Creating a unique index fails only when the collection already holds a");
-      console.error("##  genuine DUPLICATE under that key - i.e. real corrupt data, not a harness");
-      console.error("##  timing issue. Fix the underlying duplicate before running the wall.");
+      console.error("##  Usually this means the collection already holds a genuine DUPLICATE under");
+      console.error("##  that key - real data to fix, not a harness timing issue.");
+      console.error("##  BUT CHECK THE OPTIONS FIRST (QA-2057). This guard once created every index",);
+      console.error("##  as a bare { unique: true } while Location.institution_id is declared");
+      console.error("##  unique + SPARSE - and a sparse index exists precisely to permit many nulls.");
+      console.error("##  seed-sample writes 8 locations with no institution_id, so the bare index");
+      console.error("##  could not be built and this banner blamed the data for being correct.");
+      console.error("##  If the key below is nullable, compare EXPECTED here against its schema line.");
       console.error("################################################################");
       console.error("");
       await client.close().catch(() => {});
