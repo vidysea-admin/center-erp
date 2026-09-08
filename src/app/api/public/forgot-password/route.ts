@@ -103,30 +103,41 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // reads out of Mongo, so no test has ever used a token the PAGE was handed. The resend
       // path is pinned in a real browser now (`scripts/e2e-password.mjs`), because that is the
       // second time a defect has lived exactly where no test touches the page's state machine.
-      // WHAT THIS HANDS A STRANGER, stated because a peer session asked and the answer is not
-      // self-evident: a caller who asks for SOMEBODY ELSE'S address inside that person's 60s
-      // window now receives that person's live token, and can therefore burn `otp_attempts` on a
-      // challenge the victim is actively using.
+      // QA-2246 (checker, cycle 3, S1) — THE FIX THAT STOOD HERE OPENED AN UNAUTHENTICATED
+      // ACCOUNT TAKEOVER, AND THE COMMENT BESIDE IT ARGUED THE OPPOSITE. It is reverted, and the
+      // argument is kept as a worked example of how the reasoning failed.
       //
-      // That capability is NOT introduced here, and it is strictly WEAKER than what the same
-      // caller already has one second later. Outside the cooldown, a request for the same address
-      // runs the `updateMany({ active: true }, { active: false })` above — it DESTROYS the
-      // victim's live challenge outright and mints a new one whose token it is handed anyway. So
-      // the pre-existing capability is "invalidate their code completely"; the one added here is
-      // "spend attempts on it". Closing the second while the first stands open would be theatre.
+      // WHAT IT DID: on the cooldown branch it returned the address's LIVE challenge token to
+      // whoever asked. `reset` authenticates on the token STRING ALONE (see `action === "reset"`
+      // below: `PublicToken.findOne({ token, purpose, active: true, otp_verified: true })`). So
+      // once the victim entered their own mailed code and promoted that token to
+      // `otp_verified`, the stranger holding the same string could set the password. The checker
+      // built both branches and probed each: post-fix the attacker's `reset` returned 200 with
+      // the credential replaced; pre-fix, with the decoy, the tokens differed and `reset` gave
+      // 400. And the window was not 60 seconds — `emailChallengeGate`'s `per_email` arm is
+      // 5/HOUR (`rate-limit.ts`), so a sixth request keeps returning the live token for an hour
+      // with no race to win.
       //
-      // The real answer to both is per-subject rate limiting, which is what `emailChallengeGate`
-      // is, and a distributed attacker defeats it because the buckets are per-process — Redis,
-      // still deferred, still the complete answer (`rate-limit.ts`).
-      const live = await PublicToken.findOne({
-        purpose: "password_reset", email, active: true, otp_expires_at: { $gt: new Date() },
-      }).select("token").lean<any>();
-      if (!live?.token) return okResponse;
-      return NextResponse.json({
-        ok: true,
-        token: live.token,
-        message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
-      });
+      // WHY THE ARGUMENT FAILED, which is the part worth keeping. It said the capability was
+      // "strictly weaker" than what the same caller already had — outside the cooldown they can
+      // run the `updateMany` above and DESTROY the challenge. That comparison is the error:
+      // destroying a challenge is DENIAL OF SERVICE, obtaining its token is TAKEOVER. They were
+      // put on one axis ("can interfere with the victim's reset") and ranked by nuisance, so a
+      // change of KIND was scored as a change of DEGREE. A capability argument has to name what
+      // an attacker ENDS UP HOLDING, not how rude the interference is.
+      //
+      // And the case used to justify it WAS the attack. The stated reason for returning the live
+      // token rather than omitting it: "somebody landing on /forgot fresh inside another
+      // request's cooldown window holds no token to keep, and would still dead-end." A caller
+      // who holds no token and asks about an address whose challenge they did not create is
+      // exactly the attacker — the two are indistinguishable at this door, which is why it must
+      // not serve either.
+      //
+      // THE REAL BUG IS STILL FIXED, in the right place: the page no longer discards a token it
+      // already holds (`src/app/forgot/page.tsx`). The person who asked keeps their own token
+      // and their own mailed code still works — no disclosure required. The fresh lander waits
+      // out the cooldown, which is a usability cost and not a takeover.
+      return okResponse;
     }
 
     const doc = await User.findOne({ email }).select("_id name active dropped approval_status").lean<any>();

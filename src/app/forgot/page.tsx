@@ -49,7 +49,21 @@ export default function ForgotPasswordPage() {
     setBusy(true); setError("");
     try {
       const d = await call("request", { email });
-      setToken(d.token ?? "");
+      // QA-2201 / QA-2246 — THE BUG IS HERE, NOT AT THE DOOR, and the first fix put it at the
+      // door and opened an S1 (see `forgot-password/route.ts`, the cooldown branch).
+      //
+      // Asking again for the same address inside the 60-second per-address cooldown gets a DECOY
+      // token — 16 random bytes that were never stored — because the endpoint deliberately
+      // refuses to say whether an address exists. Overwriting unconditionally discarded the good
+      // token this page was already holding, so the code in the person's inbox became
+      // unreachable while the screen said one was on its way, and the screen's own advice
+      // ("request a new one") reproduced the failure.
+      //
+      // Keeping the token we hold fixes that WITHOUT the endpoint disclosing anything: the
+      // person who made the first request already possesses their token, and their mailed code
+      // still verifies against it. A caller who holds nothing is not distinguishable from a
+      // stranger, and gets nothing — correctly.
+      setToken((prev) => prev || (d.token ?? ""));
       // The message is the SAME whether or not the address is known — the endpoint refuses to say,
       // and this screen must not say it either by wording the two cases differently.
       setNote(d.message ?? "");

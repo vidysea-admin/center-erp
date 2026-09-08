@@ -524,11 +524,23 @@ await retireSubject();
       // the suite at 70/0. Pending had no fixture at all.
       //
       // So two states below are driven by a DIRECT DATABASE WRITE rather than through PATCH,
-      // for one reason: the API routes cannot express the case. Every route that sets an
-      // approval outcome also deactivates the account, so an approval-only fixture is
-      // unreachable through them — and an approval-only fixture is exactly what makes the
-      // approval clause the ONLY thing that can refuse. That is the difference between an
-      // assertion that names a guard and one that can fail when the guard is broken.
+      // for one reason, and QA-2247 corrected the reason after the first version overstated it.
+      //
+      // WHAT IS TRUE: every **PATCH** route that sets an approval outcome also deactivates the
+      // account (`approval: "reject"` sets approval_status AND active=false), so an
+      // approval-only state is unreachable through the PATCH door these fixtures use.
+      //
+      // WHAT THE FIRST VERSION CLAIMED AND WAS FALSE: that NO route can express it. `POST
+      // /api/users` — the route called two lines above — passes `active: body.active ?? true`
+      // and `approval_status: body.approval_status` straight through (`users/route.ts`), so the
+      // fixture could be built at creation. The checker measured 201/201 doing exactly that.
+      // The sentence was written from the door in front of me rather than from the routes.
+      //
+      // The direct write stays because it is the narrower instrument — it sets ONE field on an
+      // already-created account, so the fixture differs from its siblings in exactly the way
+      // under test — but it is now a choice, not a necessity, and the precondition below is what
+      // makes either route safe: it asserts active===true, so a fixture that quietly became
+      // another copy of [deactivated] says so instead of passing.
       for (const [idx, [label, mutate]] of [
         ["deactivated", (id) => req(admin, "PATCH", `/api/users/${id}`, { active: false })],
         ["rejected", (id) => req(admin, "PATCH", `/api/users/${id}`, { approval: "reject" })],
