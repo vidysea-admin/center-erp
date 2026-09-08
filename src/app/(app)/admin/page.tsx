@@ -365,10 +365,18 @@ function RolesOverview({ items, onOpen, setError, myId }: { items: any[]; onOpen
 }
 
 function Users({ error, setError }: any) {
-  // QA-1912a: the row-action comment below claimed "the button only renders where it can succeed",
-  // and that was false for exactly one row - the actor's own. "Stop access" and "Drop" rendered
-  // there and returned the 400 self-edit refusal as a red banner. The page had no way to know which
-  // row was the reader's, which is WHY the claim was false rather than merely unchecked.
+  // QA-1912a: the row-action comment below claimed "the button only renders where it can succeed".
+  // This summary used to say that was *"false for exactly one row - the actor's own"*.
+  //
+  // QA-2110: **"exactly one row" was already wrong when it was written, and wrong by the same
+  // commit.** Filtering the actor's own row closed that class; shipping `enforceAdminFloor` in the
+  // same change opened a second one, where the last remaining Admin's row renders both actions and
+  // the server answers 409. The correction read to the end of the own-row problem and stopped
+  // before the end of the sentence it was correcting — the seventh instance of that exact habit,
+  // and the one place a reader of THIS screen's code would look.
+  //
+  // `myId` below exists for the own-row half and is still needed. The last-Admin half is answered
+  // by the server, on purpose — see the cell's own comment.
   const { data: _session } = useSession();
   const myId = String((_session?.user as any)?.id ?? "");
   const [items, setItems] = useState<any[]>([]);
@@ -504,11 +512,28 @@ function Users({ error, setError }: any) {
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No"), render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
           {
             // CEO 14/08 [35:13]: "we should be able to stop access to certain people if need
-            // be … right away" — one click on the row, no drawer hunt. API guards apply
-            // (Admin-only, never yourself), so the button only renders where it can succeed - which
-            // is true now that the actor's OWN row is filtered below. It was not true before
-            // QA-1912a: the buttons rendered on your own row and returned the self-edit refusal as
-            // a red banner, so the comment described an intention rather than the code.
+            // be … right away" — one click on the row, no drawer hunt.
+            //
+            // QA-2110 — THIS COMMENT CLAIMED "the button only renders where it can succeed", and
+            // this unit had already corrected that sentence once and banked it as a win. It was
+            // still false, and THE SAME COMMIT made it false a second way: filtering the actor's
+            // own row closed one class of rows that cannot succeed, while shipping
+            // enforceAdminFloor opened another. On the row of the only Admin who can still sign
+            // in, "Stop access" and "Drop…" both render and are both answered 409.
+            //
+            // The parenthetical that licensed the claim — "(Admin-only, never yourself)" —
+            // enumerated TWO refusals and concluded completeness from them. The third is the
+            // last-Admin floor. That is QA-1997's fault class ("a guard that covers two of three
+            // is the shape this repo keeps paying for") written in a comment instead of in code.
+            //
+            // WHAT IS TRUE, and it is a design choice rather than a gap: this cell renders the
+            // action for every row the actor is ALLOWED TO ATTEMPT, and the server decides. Two
+            // rows are filtered because their refusal carries nothing a person could act on — a
+            // Pending signup has no access to stop, and your own row is refused for being yours,
+            // which you already know. **The last-Admin row is deliberately NOT filtered:** its
+            // refusal is the one sentence here worth reading, and pre-computing it would put a
+            // copy of that rule in the browser. The comment at the top of this file's drawer
+            // says exactly that, and is why nothing here pre-checks it.
             key: "_stop", label: "", mobile: false,
             render: (r: any) => (r.approval_status === "Pending" || (myId && String(r._id) === myId)) ? null : (
               <span onClick={(e) => e.stopPropagation()} className="flex gap-1.5">
