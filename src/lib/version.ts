@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-297";
+export const RELEASE = "2026.08.14-298";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,17 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-298 does not change the system at all. It repairs a fault in the automated test harness "  +
+  "that runs before every release, and nothing in it can reach a screen, a number, a permission "  +
+  "or a stored record. The check that verifies the database is protected against duplicate "  +
+  "records was itself building one of those protections in the wrong shape, which stopped that "  +
+  "whole set of tests from running on a fresh database - so for some time the release checks "  +
+  "could only be run by working around it by hand. The protection is now built in the shape the "  +
+  "system actually declares, and it was verified both that the tests run again and that genuine "  +
+  "duplicates are still caught, which was the risk worth checking. Recorded publicly because "  +
+  "this build exists and deserves a name of its own rather than being folded silently into "  +
+  "somebody else's release.";
+const RELEASE_NOTE_ARCHIVE_297 =
   "-297 changes nothing about what this system does. It is a checking release, and this note "  +
   "says so plainly rather than dressing it up. Two decisions this system already follows had no "  +
   "automated guard on the surfaces people actually read them from. When a profit-and-loss report "  +
@@ -1408,6 +1419,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -295: ARCHIVE_294 wired in here in the SAME bump that declared it, same discipline.
   // -296: ARCHIVE_295 wired in here in the SAME bump that declared it, same discipline.
   // -297: ARCHIVE_296 wired in here in the SAME bump that declared it, same discipline.
+  // -298: ARCHIVE_297 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_297 + " " +
   RELEASE_NOTE_ARCHIVE_296 + " " +
   RELEASE_NOTE_ARCHIVE_295 + " " +
   RELEASE_NOTE_ARCHIVE_294 + " " +
