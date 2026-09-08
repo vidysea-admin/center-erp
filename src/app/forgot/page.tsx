@@ -44,8 +44,17 @@ export default function ForgotPasswordPage() {
     return data;
   }
 
-  async function requestCode(e: FormEvent) {
-    e.preventDefault();
+  // QA-2259 — THE KEEP-BRANCH OF THE QA-2251 FIX WAS UNREACHABLE, and the checker proved it by
+  // reading the JOURNEYS rather than the code: `requestCode` was bound ONLY to the `step ===
+  // "email"` form, `token` initialises to "", and the one control returning from `code` to
+  // `email` clears the token. So `prev` was ALWAYS "" when a cooldown response arrived, and
+  // `?? prev` rendered identically to `?? ""` for every journey a person can actually take.
+  // The fix was correct about the response shape and dead in the page.
+  //
+  // `Send another code` below calls this FROM THE CODE STEP without clearing the token, which is
+  // what makes the keep-branch reachable at all.
+  async function requestCode(e: FormEvent | null) {
+    e?.preventDefault();
     setBusy(true); setError("");
     try {
       const d = await call("request", { email });
@@ -75,7 +84,11 @@ export default function ForgotPasswordPage() {
       setToken((prev) => d.token ?? prev);
       // The message is the SAME whether or not the address is known — the endpoint refuses to say,
       // and this screen must not say it either by wording the two cases differently.
-      setNote(d.message ?? "");
+      // The endpoint's own words. On the cooldown branch it now says a code was ALREADY sent and
+      // the one in hand still works, rather than promising a fresh one that was never sent.
+      setNote(typeof d.retry_after_sec === "number" && d.retry_after_sec > 0
+        ? `${d.message} (about ${d.retry_after_sec}s)`
+        : (d.message ?? ""));
       setStep("code");
     } catch (err) { setError(String((err as Error).message)); }
     setBusy(false);
@@ -139,6 +152,13 @@ export default function ForgotPasswordPage() {
             </Field>
             <Btn type="submit" disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Continue"}</Btn>
             {/* A way back that does not require reloading and losing the tab's state. */}
+            {/* QA-2259: a resend that does NOT clear the token. Without this the only route back
+                to `request` was "Use a different email address", which clears it - so the
+                keep-what-you-hold branch could never run. */}
+            <button type="button" disabled={busy} className="w-full text-center text-xs text-blue-700 hover:underline disabled:text-gray-400"
+              onClick={() => { void requestCode(null); }}>
+              Didn&apos;t get it? Send another code
+            </button>
             <button type="button" className="w-full text-center text-xs text-gray-500 hover:underline"
               onClick={() => { setStep("email"); setCode(""); setError(""); setNote(""); setToken(""); }} /* QA-2251: clearing the token here too - going back to type a DIFFERENT address must not carry the old one across, and this button is exactly what a person presses after mistyping */>
               Use a different email address
