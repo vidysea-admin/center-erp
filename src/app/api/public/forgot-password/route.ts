@@ -155,9 +155,40 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // this address recently', which the caller already knows — it says nothing about whether
       // the address belongs to anyone. Unlike the decoy, it also cannot be mistaken by the page
       // for a usable handle.
+      // QA-2259 (checker, cycle 5, S2) — THIS BRANCH WAS TELLING THE TRUTH ABOUT THE TOKEN AND
+      // LYING ABOUT THE MAIL. It said "a 6-digit code is on its way" when the cooldown had just
+      // refused to send one. The person then waits for a mail that will never arrive, and the
+      // code they already hold is refused with "request a new one" — advice that reproduces the
+      // failure. `gate.retryAfterSec` was computed by `emailChallengeGate` and thrown away.
+      //
+      // It is returned now, and it leaks nothing: the gate is keyed on the ADDRESS and fires
+      // identically whether or not an account exists (the cycle-5 checker measured the two
+      // branches byte-identical here), so the number says "you asked about this address
+      // recently" — which the caller already knows.
+      // A TRADE-OFF I AM DISCLOSING RATHER THAN SHIPPING QUIETLY, because I only noticed it while
+      // verifying the change above, and the checker should get to disagree with me about it.
+      //
+      // Until now this branch returned the SAME sentence as every other, so it was invisible.
+      // Distinct wording makes the cooldown OBSERVABLE. What that discloses, exactly:
+      //   • NOT account existence — the gate is keyed on the address and fires for an unknown
+      //     address identically (the cycle-5 checker measured both branches byte-identical).
+      //   • It DOES reveal that SOMEBODY asked about this address in the last 60 seconds. An
+      //     attacker who asks twice learns only what they caused themselves; but one who asks
+      //     ONCE, just after the real owner requested a reset, learns that a reset is in flight.
+      //
+      // I judge that worth it, and here is the reasoning rather than the conclusion: the silent
+      // version told a person their code was on its way when nothing had been sent, and then
+      // advised the exact action that reproduces the failure. That is a defect every user of the
+      // feature can hit; the disclosure is a signal an attacker must already be targeting a
+      // specific address to collect, and it reveals timing, not identity or access.
+      //
+      // If the checker disagrees, the fix is to keep the honest message and drop the DISTINCT
+      // wording — i.e. return `retry_after_sec` with the same generic sentence, so the page can
+      // stop promising a mail while the response stays uniform.
       return NextResponse.json({
         ok: true,
-        message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
+        retry_after_sec: gate.retryAfterSec ?? null,
+        message: "A code was already sent to that address in the last minute. Check your inbox — the code you have still works. You can ask for another one shortly.",
       });
     }
 

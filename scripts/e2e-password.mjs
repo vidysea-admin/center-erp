@@ -435,6 +435,44 @@ await retireSubject();
           typeof retyped.data?.token === "string" && retyped.data.token.length >= 16,
           `token=${JSON.stringify(retyped.data?.token)} - absent here means a mistyped address strands the person, which is QA-2201 rebuilt out of its own fix`);
 
+        // ---- QA-2260 — THE KEEP JOURNEY, END TO END, WHICH THE PREVIOUS PIN NAMED BUT DID NOT
+        // REACH. Its comment described two cases and its assertion covered only the mistype one:
+        // it requested a FRESH address, never the SAME address inside the cooldown. So the branch
+        // that keeps a held token had no assertion at all, and QA-2259 (the keep-branch being
+        // unreachable from the page) shipped underneath a green suite.
+        //
+        // This drives what a person actually does: ask, don't see the mail, ask AGAIN for the same
+        // address, then enter the code from the FIRST mail. The token they hold must still work.
+        const heldRow = await db.collection("publictokens").findOne({ token: asked.data?.token });
+        ok("QA-2260 [precondition] the person's own challenge row exists to drive the keep journey",
+          !!heldRow, `no row for the token the request returned: ${JSON.stringify(asked.data?.token)}`);
+        if (heldRow) {
+          // Arm it with a code this file knows - the mailed code is unrecoverable by design
+          // (QA-142: the logged subject is masked), which is the same reason `arm()` exists below.
+          await db.collection("publictokens").updateOne({ _id: heldRow._id },
+            { $set: { otp_hash: sha(CODE), otp_attempts: 0, otp_verified: false, otp_expires_at: new Date(Date.now() + 10 * 60_000) } });
+
+          const again = await req("", "POST", "/api/public/forgot-password",
+            { action: "request", email: email2 }, { "x-forwarded-for": "198.51.100.11" });
+          ok("QA-2260 [precondition] the in-cooldown resend for the SAME address is answered, not rate-limited",
+            again.status === 200, `got ${again.status}`);
+          ok("QA-2260: an in-cooldown resend for the SAME address returns no token, so the page keeps what it holds",
+            again.data !== undefined && !("token" in again.data),
+            `keys: ${JSON.stringify(Object.keys(again.data ?? {}))}`);
+          ok("QA-2260: ...and it says so honestly - it does NOT claim a fresh code was sent",
+            !/on its way/i.test(String(again.data?.message ?? "")),
+            `message: ${JSON.stringify(again.data?.message)} - promising a mail that the cooldown refused to send is QA-2259`);
+
+          // THE ASSERTION THAT MATTERS: the token the person was holding before the resend must
+          // still verify. If the resend burned or replaced the challenge, this goes red - which is
+          // exactly the journey that stranded people through four cycles of this unit.
+          const heldVerify = await req("", "POST", "/api/public/forgot-password",
+            { action: "verify", token: asked.data?.token, code: CODE });
+          ok("QA-2260: the token the person HELD still verifies after an in-cooldown resend",
+            heldVerify.status === 200,
+            `got ${heldVerify.status} - the held token stopped working after asking again, which is QA-2201 by its fourth route`);
+        }
+
         // The victim's own challenge must be untouched by the stranger's request - the fix must
         // not have closed the hole by destroying the thing it was protecting.
         const victimRow = await db.collection("publictokens").findOne({ token: asked.data?.token });
