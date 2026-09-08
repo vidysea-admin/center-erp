@@ -38,8 +38,8 @@ async function login(email, password) {
     .map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
   return session ? [csrfCookie, session].join("; ") : null;
 }
-async function req(cookie, method, p, body) {
-  const res = await fetch(BASE + p, { method, headers: { "Content-Type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+async function req(cookie, method, p, body, extraHeaders = {}) {
+  const res = await fetch(BASE + p, { method, headers: { "Content-Type": "application/json", cookie, ...extraHeaders }, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
@@ -516,11 +516,11 @@ await retireSubject();
       // thing that can stop its mail is the guard itself. Three states are covered rather than
       // one, because `authorize()` refuses on three different grounds and a guard that covers
       // some of them is this repo's most-repeated shape (QA-1997).
-      for (const [label, mutate] of [
+      for (const [idx, [label, mutate]] of [
         ["deactivated", (id) => req(admin, "PATCH", `/api/users/${id}`, { active: false })],
         ["rejected", (id) => req(admin, "PATCH", `/api/users/${id}`, { approval: "reject" })],
         ["dropped", (id) => req(admin, "PATCH", `/api/users/${id}`, { drop: true })],
-      ]) {
+      ].entries()) {
         const stEmail = `fpst.${label}.${stamp}@vidysea-test.local`;
         const made2 = await req(admin, "POST", "/api/users", { name: `FPST ${label} ${stamp}`, email: stEmail, password: "StateFix@123", role: "Trainer" });
         if (made2.status !== 201 || !made2.data?.item?._id) {
@@ -528,12 +528,76 @@ await retireSubject();
           continue;
         }
         await mutate(made2.data.item._id);
-        const r = await post({ action: "request", email: stEmail });
-        const mailed = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === stEmail).length;
+
+        // QA-2160 — MY OWN CYCLE-2 REWRITE FAILED FIVE WAYS ON THE FIRST HONEST WALL, AND BOTH
+        // CAUSES WERE IN THIS FIXTURE, NOT IN THE DOOR. Worth writing down, because I introduced
+        // them while "fixing" a pin that could not fail — a wrong pin is the same defect class as
+        // an inert one, arriving from the other side.
+        //
+        //   (a) COUNTING MAIL ROWS ABSOLUTELY. `POST /api/users` sends a welcome mail
+        //       (`users/route.ts:101`), so a freshly created account ALREADY has one row before
+        //       this door is touched. `mailed === 0` measured that welcome mail and called it a
+        //       leaked reset code. The version I replaced used a before/after DELTA and was immune;
+        //       I dropped the delta while removing the stale-address bug and swapped one fixture
+        //       defect for another. The delta is back, and it is taken AFTER the mutation so the
+        //       welcome mail is inside the baseline where it belongs.
+        //
+        //   (b) THE PER-IP BUDGET IS SHARED BY THE WHOLE SUITE. The door is
+        //       `rateLimit("pwreset-req:" + clientKey(req), 5, 1h)` — five per hour per CLIENT, and
+        //       earlier blocks in this file had already spent them, so states 2 and 3 got 429 and
+        //       the pin reported a state leak that was really a queue. Each state now arrives from
+        //       its own `x-forwarded-for`, which is the key `clientKey()` actually reads
+        //       (`rate-limit.ts`, last hop). That is the production keying path, exercised rather
+        //       than bypassed — no guard is weakened and no test-only escape hatch exists to rot.
+        const from = { "x-forwarded-for": `203.0.113.${1 + idx}` };
+        const mailRows = async () => ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === stEmail).length;
+        const before = await mailRows();
+        const r = await req("", "POST", "/api/public/forgot-password", { action: "request", email: stEmail }, from);
+        const after = await mailRows();
+
         ok(`QA-2099 [${label}] the answer is the SAME - the door does not leak the account's state`,
-          r.status === 200, `got ${r.status}`);
+          r.status === 200, `got ${r.status}${r.status === 429 ? " - the per-IP budget was spent; this pin measured the queue, not the door" : ""}`);
         ok(`QA-2099 [${label}] ...and NO code is mailed, on an address that has never asked before`,
-          mailed === 0, `${mailed} mail row(s) for ${stEmail} - the cooldown cannot be the reason here`);
+          after === before, `mail rows for ${stEmail}: ${before} -> ${after}. The address is fresh, so the 60s cooldown cannot be the reason; the welcome mail is inside the baseline.`);
+
+        // QA-2161 — MEASURED, NOT ASSUMED: I mutated the state guard to `canSignIn = !!doc` and
+        // rebuilt. [deactivated] and [rejected] both went RED (1 -> 2 mail rows), so those two
+        // pins have real power over the thing they name. **[dropped] STAYED GREEN**, and the
+        // reason is not that the guard is good:
+        //
+        //   `drop: true` RENAMES the address (`users/[id]/route.ts:175`, to
+        //   `dropped.<ts>.<original>`), so `User.findOne({ email })` on the original address
+        //   returns null and the branch is never reached. The [dropped] pin above is therefore
+        //   pinning the RENAME, not the state check - a true and worthwhile property, but not the
+        //   one its label implies, and it cannot fail under any mutation of `canSignIn`.
+        //
+        // Saying that plainly is the point. An assertion whose label promises more than its
+        // mutation-power delivers is this repo's most-repeated defect, and it is invisible in a
+        // pass count. So the dropped STATE gets its own pin below, aimed at the address that
+        // still resolves to the row - the renamed one. That request DOES reach the guard, and it
+        // is the realistic hostile case too: the internal address is derivable from the original.
+        if (label === "dropped") {
+          // There is NO GET handler on /api/users/[id] - the first version of this asked for one
+          // and got `undefined`, and the precondition caught it rather than letting the pin
+          // report a pass over a measurement it never made. Read the row from the database
+          // instead, keyed on `dropped_email` (set to the original address by
+          // `users/[id]/route.ts:174`) so no ObjectId import is needed.
+          const dropped = await db.collection("users").findOne({ dropped_email: stEmail });
+          const dEmail = dropped?.email;
+          ok("QA-2161 [precondition] dropping renamed the address, so the original no longer resolves",
+            typeof dEmail === "string" && dEmail !== stEmail && dEmail.includes(stEmail),
+            `email after drop: ${JSON.stringify(dEmail)} (expected a dropped.<ts>. prefix on ${stEmail})`);
+          if (dEmail && dEmail !== stEmail) {
+            const dRows = async () => ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === dEmail).length;
+            const dBefore = await dRows();
+            const dr = await req("", "POST", "/api/public/forgot-password", { action: "request", email: dEmail }, { "x-forwarded-for": "203.0.113.90" });
+            const dAfter = await dRows();
+            ok("QA-2161 [dropped] the RENAMED address answers the same - it does not leak that the row exists",
+              dr.status === 200, `got ${dr.status}`);
+            ok("QA-2161 [dropped] ...and NO code is mailed to it - this one DOES reach the state guard",
+              dAfter === dBefore, `mail rows for ${dEmail}: ${dBefore} -> ${dAfter}. This address resolves to a dropped row, so only the state guard can refuse it.`);
+          }
+        }
         if (label !== "dropped") await req(admin, "PATCH", `/api/users/${made2.data.item._id}`, { drop: true });
       }
       if (subjectId) await req(admin, "PATCH", `/api/users/${subjectId}`, { drop: true });
