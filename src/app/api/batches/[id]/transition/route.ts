@@ -104,7 +104,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     await audit({
       entity: "Batch", entityId: id, field: "exam_held",
       oldValue: "false",
-      newValue: "true - the assessment was HELD; results are NOT required to reach Result Awaited (QA-2250)",
+      // QA-2263 (cycle 3, filed by the cycle-2 checker): this string used to end "(QA-2250)". An
+      // audit row is read by a PERSON on the batch's Activity tab, and a QA number means nothing to
+      // them - which is the whole reason `check-user-copy.mjs` exists and fails the wall on a code
+      // in a shape `plain()` cannot strip. That suite is part of the wall and this unit never ran
+      // it, so the failure it caused was carried through two cycles as if it were baseline.
+      newValue: "true - the assessment was HELD; results are NOT required to reach Result Awaited",
       actor: user.id, actorType: "USER",
     });
   }

@@ -4700,6 +4700,25 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       .filter((a) => String(a.field) === "exam_held");
                     ok("QA-2261: ...and NOTHING was stamped - the refused press leaves no exam_held record behind",
                       afterP.length === 0, `rows=${afterP.length}`);
+                    // QA-2264 (cycle 3, filed by the cycle-2 checker): the pin above counts AUDIT
+                    // rows, and the audit row is written AFTER the Closure write. So it is killed by
+                    // DELETING the guard and not by MOVING it: the checker's M-D relocated the guard
+                    // to sit between the Closure write and audit(), and the entire wall came back
+                    // 796/4 byte-identical to the control with both pins above green - while
+                    // exam_held was in fact being stamped on all five non-Active statuses. The pin's
+                    // own comment claimed exactly the resistance it did not have, which is this
+                    // repo's most-filed defect appearing for the THIRD time inside this one unit,
+                    // each time in the pin written to close the previous one.
+                    //
+                    // THE FLAG ITSELF is the thing that must not exist, so assert the flag. The
+                    // closure GET already exposes it - which also corrects cycle 1's claim that no
+                    // response does.
+                    const clAfter = (await req(admin, "GET", `/api/batches/${planningRow._id}/closure`)).data ?? {};
+                    // The GET returns `{ closure, invoice, ... }` - closure is null when no document
+                    // exists at all, which is itself a pass: no document means nothing was stamped.
+                    const heldFlag = clAfter.closure?.exam_held;
+                    ok("QA-2264: ...and the CLOSURE carries no exam_held - red if the guard is MOVED, not only if it is deleted",
+                      !heldFlag, `exam_held=${JSON.stringify(heldFlag ?? null)}`);
                   }
                 }
               }
