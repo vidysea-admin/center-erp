@@ -63,7 +63,16 @@ export default function ForgotPasswordPage() {
       // person who made the first request already possesses their token, and their mailed code
       // still verifies against it. A caller who holds nothing is not distinguishable from a
       // stranger, and gets nothing — correctly.
-      setToken((prev) => prev || (d.token ?? ""));
+      // QA-2251 — `prev || d.token` NEVER REPLACED, and that rebuilt QA-2201 out of its own fix:
+      // a mistyped address, or a burned challenge followed by the new code the screen tells you
+      // to request, left this tab sending a dead token forever. Both proven in a real browser.
+      //
+      // The decision is now made from the RESPONSE SHAPE rather than a truthiness test:
+      //   • the endpoint sends a token  → a challenge exists for what was just asked; REPLACE.
+      //   • the endpoint sends none     → the per-address cooldown refused; KEEP what we hold,
+      //                                    which is the token whose code is already in the inbox.
+      // `??` and not `||` is the whole point — an empty-string token must count as present.
+      setToken((prev) => d.token ?? prev);
       // The message is the SAME whether or not the address is known — the endpoint refuses to say,
       // and this screen must not say it either by wording the two cases differently.
       setNote(d.message ?? "");
@@ -131,7 +140,7 @@ export default function ForgotPasswordPage() {
             <Btn type="submit" disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Continue"}</Btn>
             {/* A way back that does not require reloading and losing the tab's state. */}
             <button type="button" className="w-full text-center text-xs text-gray-500 hover:underline"
-              onClick={() => { setStep("email"); setCode(""); setError(""); setNote(""); }}>
+              onClick={() => { setStep("email"); setCode(""); setError(""); setNote(""); setToken(""); }} /* QA-2251: clearing the token here too - going back to type a DIFFERENT address must not carry the old one across, and this button is exactly what a person presses after mistyping */>
               Use a different email address
             </button>
           </form>

@@ -401,16 +401,39 @@ await retireSubject();
           stranger.status === 200,
           `got ${stranger.status} - a 429 here means this pin measured the per-IP queue, not the door`);
         ok("QA-2246 (S1): a stranger asking inside the cooldown does NOT receive the victim's live token",
-          typeof stranger.data?.token === "string" && stranger.data.token !== asked.data?.token,
+          stranger.data?.token !== asked.data?.token,
           `stranger token=${JSON.stringify(stranger.data?.token)} vs live token=${JSON.stringify(asked.data?.token)} - identical means the account-takeover regression is back`);
 
-        // And the token it DID receive must be a decoy - not a row anybody can promote. Checked
-        // against the database rather than inferred from the string, because "different" and
-        // "useless" are not the same claim and only the second one is the security property.
-        const strangerRow = await db.collection("publictokens").findOne({ token: stranger.data?.token });
-        ok("QA-2246 (S1): ...and that token corresponds to NO stored challenge at all",
+        // QA-2251 — THE COOLDOWN BRANCH RETURNS NO `token` KEY AT ALL, and that is the property
+        // the page's rule depends on: it keeps what it holds ONLY when the key is absent, and
+        // replaces whenever one arrives. A decoy here would be indistinguishable from a real
+        // handle to the page, which is what made the first version of that fix never replace.
+        ok("QA-2251: ...and the cooldown response carries NO token key, so the page can tell keep from replace",
+          stranger.data !== undefined && !("token" in stranger.data),
+          `cooldown response keys: ${JSON.stringify(Object.keys(stranger.data ?? {}))} - a token here is either the S1 or a decoy the page cannot distinguish from a live handle`);
+
+        // Whatever it returned, it must correspond to no stored row. Checked against the database
+        // rather than inferred from the string, because "different" and "useless" are two claims
+        // and only the second is the security property.
+        const strangerRow = stranger.data?.token
+          ? await db.collection("publictokens").findOne({ token: stranger.data.token })
+          : null;
+        ok("QA-2246 (S1): ...and nothing it returned corresponds to a stored challenge",
           strangerRow === null,
           `a row exists for the token handed to the stranger: ${JSON.stringify(strangerRow && { email: strangerRow.email, otp_verified: strangerRow.otp_verified })}`);
+
+        // QA-2251 — AND A REQUEST FOR A DIFFERENT ADDRESS MUST STILL CARRY ONE. This is the other
+        // half, and it is the half the first fix broke: a person who mistypes their address, or
+        // who burns a challenge and asks for a new code exactly as the screen advises, must get a
+        // token that REPLACES the dead one. Its own client key, so the per-IP budget cannot make
+        // this pass for the wrong reason.
+        const retyped = await req("", "POST", "/api/public/forgot-password",
+          { action: "request", email: `typo.${stamp}@vidysea-test.local` }, { "x-forwarded-for": "198.51.100.9" });
+        ok("QA-2251 [precondition] the different-address request is answered, not rate-limited",
+          retyped.status === 200, `got ${retyped.status}`);
+        ok("QA-2251: a request for a DIFFERENT address returns a token, so the page replaces the dead one",
+          typeof retyped.data?.token === "string" && retyped.data.token.length >= 16,
+          `token=${JSON.stringify(retyped.data?.token)} - absent here means a mistyped address strands the person, which is QA-2201 rebuilt out of its own fix`);
 
         // The victim's own challenge must be untouched by the stranger's request - the fix must
         // not have closed the hole by destroying the thing it was protecting.

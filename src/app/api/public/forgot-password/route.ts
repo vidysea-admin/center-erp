@@ -133,11 +133,32 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // exactly the attacker — the two are indistinguishable at this door, which is why it must
       // not serve either.
       //
-      // THE REAL BUG IS STILL FIXED, in the right place: the page no longer discards a token it
-      // already holds (`src/app/forgot/page.tsx`). The person who asked keeps their own token
-      // and their own mailed code still works — no disclosure required. The fresh lander waits
-      // out the cooldown, which is a usability cost and not a takeover.
-      return okResponse;
+      // THE REAL BUG IS FIXED IN THE PAGE, not here: it no longer discards a token it already
+      // holds (`src/app/forgot/page.tsx`). The person who asked keeps their own token and their
+      // own mailed code still works — no disclosure required. The fresh lander waits out the
+      // cooldown, which is a usability cost and not a takeover.
+      //
+      // QA-2251 (checker, cycle 4, S2) — AND THE FIRST VERSION OF THAT PAGE FIX REBUILT QA-2201
+      // OUT OF QA-2201'S OWN FIX. It read `prev || d.token`, which never REPLACES: a person who
+      // mistyped their address once, or who burned a challenge and then asked for a new code
+      // exactly as the screen advises, kept sending the dead token forever. Proven twice in a
+      // real browser by the checker.
+      //
+      // So this branch now returns NO `token` KEY AT ALL, and the page keeps what it holds only
+      // when the key is ABSENT. That makes 'keep' and 'replace' decidable from the response
+      // instead of from a truthiness test on the page:
+      //   • token present  → a challenge was just minted for this address; REPLACE.
+      //   • token absent   → the cooldown refused; KEEP whatever the tab already had.
+      //
+      // It is not an enumeration tell. `emailChallengeGate` is keyed on the ADDRESS and fires
+      // identically whether or not an account exists, so the absent key says 'you asked about
+      // this address recently', which the caller already knows — it says nothing about whether
+      // the address belongs to anyone. Unlike the decoy, it also cannot be mistaken by the page
+      // for a usable handle.
+      return NextResponse.json({
+        ok: true,
+        message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
+      });
     }
 
     const doc = await User.findOne({ email }).select("_id name active dropped approval_status").lean<any>();
