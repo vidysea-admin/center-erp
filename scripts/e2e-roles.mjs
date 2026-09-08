@@ -4742,7 +4742,28 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       [200, 201].includes(toClosing.status) && String(toClosing.data?.item?.status ?? "") === "Closing",
                       `${toClosing.status} status=${String(toClosing.data?.item?.status ?? "")} ${String(toClosing.data?.error ?? "").slice(0, 120)}`);
                   }
+                  // Every status the guard's condition covers. The required set below is DERIVED
+                  // from this list (QA-2276), so the two can no longer drift apart.
                   const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
+                  // QA-2276: and a batch that STAYS at Ready. The QA-2271 fixture above proves a
+                  // clean Ready batch is one call away - it makes one and then drives it onward -
+                  // so "seed-dependent" was never true of this suite, only of the seed it happened
+                  // to be looking at. Same shape, same room-clash reason for a fresh room.
+                  const roomR = loc ? await req(admin, "POST", `/api/locations/${loc}/rooms`,
+                    { name: "QA-2276-" + Date.now(), type: "Classroom", capacity: 10 }) : { status: 0 };
+                  const mkR = (loc && prog && trn && roomR.data?.item?._id)
+                    ? await req(admin, "POST", "/api/batches", {
+                        location: loc, program: prog, trainer: trn, room: roomR.data.item._id,
+                        planned_start: new Date().toISOString().slice(0, 10), target_size: 0,
+                      })
+                    : { status: 0 };
+                  const RB = mkR.data?.item;
+                  if (RB?._id) {
+                    const rReady = await req(admin, "POST", `/api/batches/${RB._id}/transition`, { target: "Ready" });
+                    ok("QA-2276 fixture: a CLEAN Ready batch is built and LEFT at Ready - 'seed-dependent' was never true of this suite",
+                      [200, 201].includes(rReady.status) && String(rReady.data?.item?.status ?? "") === "Ready",
+                      `${rReady.status} status=${String(rReady.data?.item?.status ?? "")} ${String(rReady.data?.error ?? "").slice(0, 120)}`);
+                  }
                   const coveredStatuses = [];
                   let covered = 0;
                   for (const st of nonActive) {
@@ -4814,7 +4835,28 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // one, and the cycle-4 checker confirmed the product refuses correctly on Ready.
                   // Requiring a named set remains strictly stronger than a count: a seed that
                   // silently loses Cancelled fails, where "3 of 5" would have passed on any three.
-                  const mustCover = ["Planning", "Closing", "Completed", "Cancelled"];
+                  // QA-2276 (cycle 6, filed by the cycle-5 checker) — THE SIXTH, and the mechanism
+                  // behind it is the same one that produced QA-2271: TWO HAND-MAINTAINED LISTS that
+                  // are free to drift. `nonActive` said what the guard covers; `mustCover` said what
+                  // is required; and nothing tied them together, so a status could be dropped from
+                  // the second with a sentence and never be missed.
+                  //
+                  // It happened again immediately. Cycle 5 left `Ready` out, excused in a comment as
+                  // "genuinely seed-dependent" - while the QA-2271 fixture ABOVE builds a clean
+                  // Ready batch (`cReady`, 200) and throws it away four lines later. The checker's
+                  // M-READY then returned a wall byte-identical to the control with every assertion
+                  // green, while a clean Ready batch took exam_held and kept it: 409, exam_held=true,
+                  // one audit row - the original QA-2261 defect, fully restored, under a green wall.
+                  //
+                  // So the required set is DERIVED, and an exclusion has to be written down as an
+                  // exclusion rather than expressed by silently omitting a name. An empty list here
+                  // is the honest state: nothing is excluded, because nothing has been shown to be
+                  // unbuildable - both statuses that were once excused this way turned out to be
+                  // constructible by this very suite.
+                  const EXCLUDED_WITH_REASON = {
+                    // "<status>": "<the measurement that shows it cannot be built>"
+                  };
+                  const mustCover = nonActive.filter((s) => !(s in EXCLUDED_WITH_REASON));
                   const missing = mustCover.filter((s) => !coveredStatuses.includes(s));
                   // The label names the set from the VARIABLE, not from a sentence typed beside it.
                   // Cycle 5 added Closing to `mustCover` and left the label reading "Planning,
