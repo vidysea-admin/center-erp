@@ -115,16 +115,24 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // the system is left as the race left it. A cycle-2 checker attacked this with three-way and
   // mixed-door races and could not break it, but that is evidence, not a proof.
   //
-  // It stays for two reasons. The thing it guards is UNRECOVERABLE — the Admin role cannot be
-  // granted back from the rights screen; the locks that actually hold it are `users/[id]/route.ts:31`
-  // (this file's own PRIV_FIELDS self-edit refusal) and `users/route.ts:38`. QA-2000: this used to
-  // cite `permissions/route.ts:36`, which governs the role-permission MATRIX and not who may hold
-  // the Admin role at all — a wrong citation sends the next reader to the wrong file to check
-  // whether recovery is possible. And the lock that
-  // actually holds the floor today is a rule about SELF-EDITS: a different intention that happens to
-  // have this effect, which a future route, script, or relaxation would remove without anyone
-  // noticing what else it was doing. The pin records WHICH lock is load-bearing, so that change is
-  // visible rather than silent.
+  // It stays because the thing it guards is UNRECOVERABLE — the Admin role cannot be granted back
+  // from the rights screen. The locks that hold the floor are `users/[id]/route.ts:31` (this file's
+  // own PRIV_FIELDS self-edit refusal) and `users/route.ts:38`, plus `enforceAdminFloor` above.
+  // QA-2000: this used to cite `permissions/route.ts:36`, which governs the role-permission MATRIX
+  // and not who may hold the Admin role at all — a wrong citation sends the next reader to the
+  // wrong file to check whether recovery is possible.
+  //
+  // QA-2086 — this paragraph used to end: *"And the lock that actually holds the floor today is a
+  // rule about SELF-EDITS: a different intention that happens to have this effect."* That is the
+  // disproved story again, and it sat FOURTEEN LINES below "So the guard is NOT decoration" above,
+  // in the guard's own comment. It survived because the QA-2016 rewrite replaced the paragraph
+  // above and kept this one as a tail — the same shape as correcting the top of runbook Step 3
+  // (QA-2075) and never reading to its end. Sixth place, fifth check, same mistake.
+  //
+  // What is true: BOTH locks are load-bearing and either may answer. The self-edit rule refuses the
+  // ONE-request case with a 400; `enforceAdminFloor` refuses the TWO-request race with a 409. The
+  // pin in e2e-password.mjs records which one answered rather than demanding either — because
+  // demanding 400 is exactly what made that pin assert the guard did not work (QA-2051).
   //
   // THREE PATHS remove an Admin and each writes separately - `drop` returns early, `active: false`
   // and a `role` change both fall through to the field loop. One helper, called before any of them
