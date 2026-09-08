@@ -4466,11 +4466,18 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           {
             const full = (await req(admin, "GET", `/api/batches/${B._id}`)).data?.item ?? {};
             const idOf = (v) => (v && typeof v === "object" ? String(v._id ?? v.id ?? "") : String(v ?? ""));
-            const [loc, prog, trn, rm] = [full.location, full.program, full.trainer, full.room].map(idOf);
+            const [loc, prog, trn] = [full.location, full.program, full.trainer].map(idOf);
             // Stated rather than skipped: if the known-good batch stops carrying these, this arm has
             // no fixture and must say so loudly instead of passing on an empty set.
-            ok("QA-2007 fixture: the green batch supplies a centre, programme, trainer and room to reuse",
-              !!(loc && prog && trn && rm), JSON.stringify({ loc: !!loc, prog: !!prog, trn: !!trn, rm: !!rm }));
+            ok("QA-2007 fixture: the green batch supplies a centre, programme and trainer to reuse",
+              !!(loc && prog && trn), JSON.stringify({ loc: !!loc, prog: !!prog, trn: !!trn }));
+            // A NEW room, not B's. B is Active on its own room for the whole run - reusing it 409s
+            // with a room-double-booking refusal that has nothing to do with this arm.
+            const newRoom = loc ? await req(admin, "POST", `/api/locations/${loc}/rooms`,
+              { name: "QA-2007-" + Date.now(), type: "Classroom", capacity: 10 }) : { status: 0 };
+            ok("QA-2007 fixture: a fresh room is created for this arm, so it cannot clash with B",
+              newRoom.status === 201, `got ${newRoom.status}`);
+            const rm = newRoom.data?.item?._id;
             if (loc && prog && trn && rm) {
               const todayIso2 = new Date().toISOString().slice(0, 10);
               const mk = await req(admin, "POST", "/api/batches", {
