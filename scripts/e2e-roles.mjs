@@ -4846,6 +4846,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       ["certification Completed", () => req(admin, "PUT", `/api/batches/${DB_._id}/closure`,
                         { certification_status: "Completed", certificates_issued: 0 })],
                       ["reaches Completed", () => req(admin, "POST", `/api/batches/${DB_._id}/transition`, { target: "Completed" })],
+                      // Rule 35: the invoice does not exist until the batch is marked ready for
+                      // one. Named by the fixture's own step reporting: "invoice Raised -> 404
+                      // Invoice not found (mark batch ready for invoice first)" - which is the
+                      // third time in this cycle that per-step assertions have handed back the
+                      // exact missing call instead of a symptom further down.
+                      ["ready for invoice", () => req(admin, "PUT", `/api/batches/${DB_._id}/closure`, { ready_for_invoice: true })],
                       ["invoice Raised", () => req(admin, "PATCH", `/api/batches/${DB_._id}/invoice`,
                         { status: "Raised", invoice_no: "INV-2280-" + stampD, raised_on: todayD, amount: 100000 })],
                       ["invoice Paid", () => req(admin, "PATCH", `/api/batches/${DB_._id}/invoice`, { status: "Paid", paid_on: todayD })],
