@@ -748,7 +748,15 @@ await retireSubject();
   }
 }
 
-// ---- QA-2276 (checker, cycle 9) - THE PIN THAT ENDS THE CLASS, NOT THE INSTANCE ----
+// ---- QA-2277/QA-2278 (checker, cycle 9) - THE PIN THAT ENDS THE CLASS, NOT THE INSTANCE ----
+//
+// LABELLED FOR THE FINDINGS IT CLOSES, and that is a correction: this block first went in as
+// `QA-2276`, a number picked by hand out of a verdict's neighbourhood rather than reserved. It was
+// already taken - by the qa-2250 cycle-5 checker - so the wall printed two different units'
+// assertions under one id. `qa/tools/reserve-id.mjs --append` exists precisely to make that
+// impossible, and CLAUDE.md carries a paragraph about the day five of these happened. A new id was
+// not the right repair either: this block is not a finding, it is the FIX for QA-2277 and QA-2278,
+// so it carries their names.
 //
 // Cycles 6-9 each closed a real hole and each left the CLASS untouched. Every one of those pins is
 // a regex over source text, and a regex over source text can always be walked around: the checker
@@ -766,7 +774,7 @@ await retireSubject();
 {
   const uiDbUrl = process.env.MONGODB_URL, uiDbName = process.env.MONGODB_DB;
   if (!uiDbUrl || !uiDbName) {
-    ok("QA-2276 [precondition] MONGODB_URL/MONGODB_DB are set so the journey can be armed", false,
+    ok("QA-2277/QA-2278 [precondition] MONGODB_URL/MONGODB_DB are set so the journey can be armed", false,
       "not set - this block measured NOTHING, and says so in red rather than passing quietly");
   } else {
     let uiBrowser, uiClient;
@@ -787,7 +795,7 @@ await retireSubject();
         uiBrowser = await chromium.launch({ headless: true });
       } catch (e) {
         // Not a skip. A missing browser means this block verified NOTHING, and it says so in red.
-        ok("QA-2276 [precondition] chromium launches from the `playwright` devDependency", false,
+        ok("QA-2277/QA-2278 [precondition] chromium launches from the `playwright` devDependency", false,
           String(e.message).slice(0, 200) + " -- run `npx playwright install chromium`");
         throw e;
       }
@@ -815,7 +823,7 @@ await retireSubject();
       const uiCodeBox = uiPage.locator('input[inputmode="numeric"]').first();
       await uiCodeBox.waitFor({ timeout: 20000 }).catch(() => {});
       const reachedCode = (await uiCodeBox.count()) > 0;
-      ok("QA-2276: the page reaches the code step after asking for a code",
+      ok("QA-2277/QA-2278: the page reaches the code step after asking for a code",
         reachedCode, "url=" + uiPage.url() + " body=" + (await uiPage.locator("body").innerText()).slice(0, 160));
 
       // Arm the challenge the PAGE is holding with a code we know. The code is never in the
@@ -824,14 +832,14 @@ await retireSubject();
         { purpose: "password_reset", email: uiEmail, active: true },
         { $set: { otp_hash: uiSha(UI_CODE), otp_attempts: 0 } },
       );
-      ok("QA-2276 [precondition] the challenge the page is holding was armed with a known code",
+      ok("QA-2277/QA-2278 [precondition] the challenge the page is holding was armed with a known code",
         uiArmed.modifiedCount === 1,
         "modifiedCount=" + uiArmed.modifiedCount + " - nothing armed means every assertion below would be vacuous");
 
       const uiResend = uiPage.getByRole("button", { name: /send another code/i }).first();
       const resendCount = await uiResend.count();
       const resendEnabled = resendCount ? await uiResend.isEnabled() : false;
-      ok("QA-2276: the code step offers a resend control a person can actually press",
+      ok("QA-2277/QA-2278: the code step offers a resend control a person can actually press",
         resendCount > 0 && resendEnabled,
         "count=" + resendCount + " enabled=" + resendEnabled + " - absent, on another step, or permanently disabled all fail HERE, and all three passed the structural pins at some point in this unit's history");
 
@@ -844,14 +852,14 @@ await retireSubject();
         await uiPage.locator('button[type="submit"]').first().click();
         const uiPw = uiPage.locator('input[type="password"]').first();
         await uiPw.waitFor({ timeout: 20000 }).catch(() => {});
-        ok("QA-2276: after an in-cooldown resend, the code the person ALREADY HOLDS still works and the journey continues",
+        ok("QA-2277/QA-2278: after an in-cooldown resend, the code the person ALREADY HOLDS still works and the journey continues",
           (await uiPw.count()) > 0,
           "still on: " + (await uiPage.locator("body").innerText()).slice(0, 220) + " - the page threw away the token it was holding when the cooldown response carried none, which is QA-2251 by whichever route the source found this time");
       }
 
       await uiDb.collection("users").deleteOne({ email: uiEmail });
     } catch (e) {
-      ok("QA-2276: the browser journey ran without error", false, String((e && e.message) || e).slice(0, 300));
+      ok("QA-2277/QA-2278: the browser journey ran without error", false, String((e && e.message) || e).slice(0, 300));
     } finally {
       try { if (uiBrowser) await uiBrowser.close(); } catch {}
       try { if (uiClient) await uiClient.close(); } catch {}
