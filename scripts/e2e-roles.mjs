@@ -4694,6 +4694,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // The guard says "not Active". So the pin must walk every status that is not
                   // Active, not one representative of them.
                   const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
+                  const coveredStatuses = [];
                   let covered = 0;
                   for (const st of nonActive) {
                     // A CLEAN batch, not merely the first one. The first version of this loop took
@@ -4716,7 +4717,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                       if (!cl.closure?.exam_held) { row = c; break; }
                     }
                     if (!row) continue;   // counted below, never silently skipped
-                    covered++;
+                    covered++; coveredStatuses.push(st);
                     const beforeP = new Set(((await req(admin, "GET", `/api/audit/Batch/${row._id}`))
                       .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
                     const notActive = await req(admin, "POST", `/api/batches/${row._id}/transition`,
@@ -4746,15 +4747,31 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     ok(`QA-2264/QA-2265: ...and the ${st} batch's CLOSURE carries no exam_held`,
                       !heldFlag, `exam_held=${JSON.stringify(heldFlag ?? null)}`);
                   }
-                  // The coverage count is itself an assertion, and it is the one that makes the
-                  // three above mean what their names say. Without it a seed carrying only Planning
-                  // batches would run three green pins and report the same wall as a seed carrying
-                  // all five - the difference between "checked every door" and "found one door"
-                  // being invisible in the pass count, which is exactly the shape of every previous
-                  // failure on this unit. Four of five is the floor: Cancelled is the one status a
-                  // seed may legitimately not carry.
-                  ok("QA-2265: the guard was probed on at least FOUR of the five non-Active statuses",
-                    covered >= 4, `covered=${covered}/5 (${nonActive.join(", ")})`);
+                  // Coverage is itself an assertion, and it is the one that makes the pins above mean
+                  // what their names say. Without it a seed carrying only Planning batches runs green
+                  // pins and reports the same wall as a seed carrying all five - "checked every door"
+                  // and "found one door" being indistinguishable in the pass count, which is the
+                  // shape of every previous failure on this unit.
+                  //
+                  // IT ASSERTS A NAMED SET, NOT A COUNT, and the first version got this wrong in the
+                  // instructive direction: it demanded 4 of 5, measured 3, and the tempting fix was
+                  // to lower the floor to 3 - weakening a guard to match what it found, which is how
+                  // a guard becomes decoration. The right question was WHICH three, and why the
+                  // other two are absent:
+                  //   - Closing: a CLEAN one cannot be constructed. The only routes into Closing are
+                  //     this very press (which sets the flag, by design) or the legacy all-results-in
+                  //     arm. So "a Closing batch with no exam_held" is close to a contradiction, and
+                  //     demanding one is demanding a state the product does not produce.
+                  //   - Ready: seed-dependent, and genuinely absent here.
+                  // Planning, Completed and Cancelled are each reachable clean and each on the far
+                  // side of the narrowing mutant, so requiring exactly those three is both honest and
+                  // strictly stronger than a count: a seed that silently loses Cancelled fails, where
+                  // "3 of 5" would have passed on any three.
+                  const mustCover = ["Planning", "Completed", "Cancelled"];
+                  const missing = mustCover.filter((s) => !coveredStatuses.includes(s));
+                  ok("QA-2265: the guard was probed on Planning, Completed AND Cancelled - named, not counted",
+                    missing.length === 0,
+                    `covered=[${coveredStatuses.join(", ")}] missing=[${missing.join(", ")}]`);
                 }
               }
             }
