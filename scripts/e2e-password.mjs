@@ -513,13 +513,29 @@ await retireSubject();
       // that had nothing to do with the guard being tested.
       //
       // A FRESH ADDRESS PER STATE. Each account below has never requested anything, so the only
-      // thing that can stop its mail is the guard itself. Three states are covered rather than
-      // one, because `authorize()` refuses on three different grounds and a guard that covers
-      // some of them is this repo's most-repeated shape (QA-1997).
+      // thing that can stop its mail is the guard itself.
+      //
+      // QA-2200 (checker, cycle 2) — THE CLAIM THAT USED TO STAND HERE WAS FALSE, AND IT IS THE
+      // SAME DEFECT CLASS THIS BLOCK EXISTS TO HAVE FIXED, ONE LAYER IN. It said "three states
+      // are covered rather than one, because `authorize()` refuses on three different grounds".
+      // It covered ONE ground three times: `approval: "reject"` and `drop: true` BOTH also set
+      // `active = false`, so all three fixtures were disqualified by the `active` clause and the
+      // checker measured it — deleting `dropped`, `Pending` and `Rejected` from `canSignIn` left
+      // the suite at 70/0. Pending had no fixture at all.
+      //
+      // So two states below are driven by a DIRECT DATABASE WRITE rather than through PATCH,
+      // for one reason: the API routes cannot express the case. Every route that sets an
+      // approval outcome also deactivates the account, so an approval-only fixture is
+      // unreachable through them — and an approval-only fixture is exactly what makes the
+      // approval clause the ONLY thing that can refuse. That is the difference between an
+      // assertion that names a guard and one that can fail when the guard is broken.
       for (const [idx, [label, mutate]] of [
         ["deactivated", (id) => req(admin, "PATCH", `/api/users/${id}`, { active: false })],
         ["rejected", (id) => req(admin, "PATCH", `/api/users/${id}`, { approval: "reject" })],
         ["dropped", (id) => req(admin, "PATCH", `/api/users/${id}`, { drop: true })],
+        // active stays TRUE on both of these - the approval clause is the only disqualification
+        ["pending-only", (id, email) => db.collection("users").updateOne({ email }, { $set: { approval_status: "Pending" } })],
+        ["rejected-only", (id, email) => db.collection("users").updateOne({ email }, { $set: { approval_status: "Rejected" } })],
       ].entries()) {
         const stEmail = `fpst.${label}.${stamp}@vidysea-test.local`;
         const made2 = await req(admin, "POST", "/api/users", { name: `FPST ${label} ${stamp}`, email: stEmail, password: "StateFix@123", role: "Trainer" });
@@ -527,7 +543,18 @@ await retireSubject();
           ok(`QA-2099 [${label}] the fixture account was created`, false, `got ${made2.status} - this pin measured nothing`);
           continue;
         }
-        await mutate(made2.data.item._id);
+        await mutate(made2.data.item._id, stEmail);
+
+        // The approval-only fixtures are worth nothing if the write did not land the way they
+        // claim, so assert the SHAPE rather than trusting the update: active must still be true,
+        // or the pin has quietly become another copy of [deactivated].
+        if (label.endsWith("-only")) {
+          const row = await db.collection("users").findOne({ email: stEmail });
+          ok(`QA-2200 [${label}] the fixture is disqualified ONLY by its approval status`,
+            !!row && row.active === true && row.dropped !== true
+              && row.approval_status === (label === "pending-only" ? "Pending" : "Rejected"),
+            `active=${row?.active} dropped=${row?.dropped} approval_status=${JSON.stringify(row?.approval_status)} - if active is false this pin is a duplicate of [deactivated] and proves nothing about the approval clause`);
+        }
 
         // QA-2160 — MY OWN CYCLE-2 REWRITE FAILED FIVE WAYS ON THE FIRST HONEST WALL, AND BOTH
         // CAUSES WERE IN THIS FIXTURE, NOT IN THE DOOR. Worth writing down, because I introduced

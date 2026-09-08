@@ -50,7 +50,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     rateLimit("pwreset-req:" + clientKey(req), 5, 60 * 60_000);
     const email = String(body.email ?? "").trim().toLowerCase(); // QA-1628: same as auth.ts:43
 
-    // QA-2111 (checker, cycle 1, CRITICAL) — THE FEATURE WAS INOPERABLE THROUGH ITS OWN PAGE.
+    // QA-2097 (checker, cycle 1, S1, CRITICAL) — THE FEATURE WAS INOPERABLE THROUGH ITS OWN PAGE.
+    // (QA-2202: this comment cited **QA-2111** for weeks. QA-2111 is a different unit's row —
+    // `qa-1912a`, an S3 wrong-citation finding — so the id an auditor followed from here landed
+    // on somebody else's wrong citation, which is a small and complete irony. QA-2097 is the row
+    // whose title is this defect verbatim.)
     // This response carried no `token`, so `/forgot` set token = "" and every verify that followed
     // looked up the empty string and failed. Nobody could reset a password through the UI.
     //
@@ -75,7 +79,55 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // Per-SUBJECT, not per-caller: the mail lands in a real person's inbox and rotating IPs must not
     // buy more of them. Silent to the caller for the same anti-enumeration reason.
     const gate = emailChallengeGate(email);
-    if (!gate.ok) return okResponse;
+    if (!gate.ok) {
+      // QA-2201 (checker, cycle 2) — THE CYCLE-1 DEFECT WAS FIXED ON THE MAIN BRANCH AND LEFT
+      // ALIVE ON THIS ONE. Returning `okResponse` here hands back a DECOY token — 16 random
+      // bytes that were never stored — to a real person inside the 60-second per-address
+      // cooldown. `forgot/page.tsx` does `setToken(d.token ?? "")`, so it discards the good
+      // token it was holding, and the live challenge (whose mailed code is still perfectly
+      // valid) becomes unreachable from the page. The screen then shows two contradictory
+      // sentences at once — "a code is on its way" and "that code did not work… request a new
+      // one" — and the advice it gives is the exact action that reproduces the failure.
+      //
+      // The most ordinary thing a person does on this screen reproduces it: ask, not see the
+      // mail, retype the same address, ask again.
+      //
+      // FIX: hand back the token of the address's LIVE challenge. This leaks nothing, because
+      // a live row exists for BOTH branches — the QA-2100 fix above gives an unknown address a
+      // real row with an unmatchable `otp_hash` — so the presence of a token is uniform and is
+      // not the enumeration tell this file exists to avoid. It is a session handle, not the
+      // credential, which is already this file's stated position twelve lines up.
+      //
+      // Nineteen assertions and then seventy passed over the cycle-1 version of this bug for
+      // one reason, and it is the same reason here: the suite drives `verify` with a token it
+      // reads out of Mongo, so no test has ever used a token the PAGE was handed. The resend
+      // path is pinned in a real browser now (`scripts/e2e-password.mjs`), because that is the
+      // second time a defect has lived exactly where no test touches the page's state machine.
+      // WHAT THIS HANDS A STRANGER, stated because a peer session asked and the answer is not
+      // self-evident: a caller who asks for SOMEBODY ELSE'S address inside that person's 60s
+      // window now receives that person's live token, and can therefore burn `otp_attempts` on a
+      // challenge the victim is actively using.
+      //
+      // That capability is NOT introduced here, and it is strictly WEAKER than what the same
+      // caller already has one second later. Outside the cooldown, a request for the same address
+      // runs the `updateMany({ active: true }, { active: false })` above — it DESTROYS the
+      // victim's live challenge outright and mints a new one whose token it is handed anyway. So
+      // the pre-existing capability is "invalidate their code completely"; the one added here is
+      // "spend attempts on it". Closing the second while the first stands open would be theatre.
+      //
+      // The real answer to both is per-subject rate limiting, which is what `emailChallengeGate`
+      // is, and a distributed attacker defeats it because the buckets are per-process — Redis,
+      // still deferred, still the complete answer (`rate-limit.ts`).
+      const live = await PublicToken.findOne({
+        purpose: "password_reset", email, active: true, otp_expires_at: { $gt: new Date() },
+      }).select("token").lean<any>();
+      if (!live?.token) return okResponse;
+      return NextResponse.json({
+        ok: true,
+        token: live.token,
+        message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
+      });
+    }
 
     const doc = await User.findOne({ email }).select("_id name active dropped approval_status").lean<any>();
     // An account that cannot sign in must not be able to start a reset either - otherwise this door
