@@ -4596,15 +4596,30 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     heldRows.length === 1 && !!(heldRows[0]?.actor ?? heldRows[0]?.actor_id),
                     JSON.stringify({ n: heldRows.length, actor: heldRows[0]?.actor ?? heldRows[0]?.actor_id ?? null }));
 
-                  // RULE 43 MUST NOT HAVE MOVED, and this is the half that makes the fix a
-                  // RE-PLACEMENT rather than a removal: "every roster member has a final result" is
-                  // a real requirement sitting in the wrong place, and it belongs HERE, on becoming
-                  // Completed. Without this assertion, "moved the gate" and "deleted the gate" have
-                  // identical pass counts.
+                  // THE HALF THAT MAKES THIS A RE-PLACEMENT RATHER THAN A REMOVAL. Without these
+                  // two, "moved the gate" and "deleted the gate" have identical pass counts.
+                  //
+                  // THE FIRST VERSION OF THIS PIN WAS MISLABELLED AND A MUTANT CAUGHT IT. It read
+                  // "Rule 43 is UNMOVED" and asserted the refusal at Closing -> Completed. That
+                  // transition does NOT gate on Rule 43: rules.ts:1265 refuses on
+                  // certification_status, not on results. So the pin was true, useful, and named
+                  // the wrong rule - the label promising more than the assertion delivers, which is
+                  // this repo's most-repeated defect, produced here by me inside the unit that
+                  // claims to leave Rule 43 alone. Both halves are now pinned separately and each
+                  // is named for what it actually watches.
                   const tooEarly = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Completed" });
-                  ok("QA-2250: Rule 43 is UNMOVED - Result Awaited -> Completed still refuses",
+                  ok("QA-2250: a batch with NO results still cannot become Completed (certification gate)",
                     [400, 409].includes(tooEarly.status),
                     `${tooEarly.status} ${JSON.stringify(tooEarly.data?.error ?? "").slice(0, 140)}`);
+
+                  // RULE 43 ITSELF, tested where it actually lives - upsertClosureChecked, reached
+                  // through the closure PUT. THIS is the requirement QA-2250 moved OFF the
+                  // Active->Closing door, and the whole defensibility of that move rests on it still
+                  // refusing here. B has a real roster with results outstanding.
+                  const r43 = await req(admin, "PUT", `/api/batches/${B._id}/closure`, { assessment_status: "Completed" });
+                  ok("QA-2250: Rule 43 is UNMOVED - marking assessment Completed with results outstanding is still refused",
+                    r43.status === 409 && /Rule 43/.test(String(r43.data?.error ?? "")),
+                    `${r43.status} ${String(r43.data?.error ?? "").slice(0, 140)}`);
 
                   // The flag is a fact about THIS transition and nothing else - same shape and same
                   // refusal as enrollment_override (QA-1973). An override silently dropped is worse
