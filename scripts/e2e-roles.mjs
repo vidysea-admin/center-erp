@@ -4682,44 +4682,61 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // silently buying a free pass months later is exactly the drift Umesh rejected the
                   // inferred-date option to prevent - so the unit had reintroduced its own defect
                   // through a side door. Now refused up front.
-                  const planningRow = ((await req(admin, "GET", "/api/batches?status=Planning&limit=1")).data?.items ?? [])[0];
-                  if (planningRow) {
-                    const beforeP = new Set(((await req(admin, "GET", `/api/audit/Batch/${planningRow._id}`))
+                  // QA-2265 (cycle 4, granted by Umesh on the ship-or-fix gate; filed by the
+                  // cycle-3 checker). Cycles 2 and 3 probed exactly ONE status here - Planning - and
+                  // that made the whole guard net one-door-wide. The checker narrowed the guard by a
+                  // SINGLE TOKEN, `!== "Active"` to `=== "Planning"`, and ALL TWELVE PINS STAYED
+                  // GREEN while exam_held was stamped again on Ready, Closing, Completed and
+                  // Cancelled. That is the FOURTH time in this one unit a pin claimed resistance it
+                  // did not have, and every one was found by a checker rather than by me - which is
+                  // the reason the loop below exists rather than a fifth carefully-worded comment.
+                  //
+                  // The guard says "not Active". So the pin must walk every status that is not
+                  // Active, not one representative of them.
+                  const nonActive = ["Planning", "Ready", "Closing", "Completed", "Cancelled"];
+                  let covered = 0;
+                  for (const st of nonActive) {
+                    const row = ((await req(admin, "GET", `/api/batches?status=${st}&limit=1`)).data?.items ?? [])[0];
+                    if (!row) continue;   // counted below, never silently skipped
+                    covered++;
+                    const beforeP = new Set(((await req(admin, "GET", `/api/audit/Batch/${row._id}`))
                       .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
-                    const notActive = await req(admin, "POST", `/api/batches/${planningRow._id}/transition`,
+                    const notActive = await req(admin, "POST", `/api/batches/${row._id}/transition`,
                       { target: "Closing", exam_held: true });
-                    ok("QA-2261: exam_held on a batch that is NOT running is refused, naming that reason",
+                    ok(`QA-2261/QA-2265: exam_held on a ${st} batch is refused, naming that reason`,
                       notActive.status === 400 && /currently running, nothing else/i.test(String(notActive.data?.error ?? "")),
                       `${notActive.status} ${String(notActive.data?.error ?? "").slice(0, 160)}`);
-                    // The refusal is only half of it. What the checker measured was the STAMP
-                    // surviving a refusal, and a status code cannot see that. This asserts the thing
-                    // that actually mattered: nothing was written. It stays red if the guard is
-                    // moved anywhere after the Closure write, which a status-only pin would not.
-                    const afterP = ((await req(admin, "GET", `/api/audit/Batch/${planningRow._id}`)).data?.items ?? [])
+                    // The refusal is only half of it. What the cycle-1 checker measured was the STAMP
+                    // surviving a refusal, and a status code cannot see that.
+                    const afterP = ((await req(admin, "GET", `/api/audit/Batch/${row._id}`)).data?.items ?? [])
                       .filter((a) => !beforeP.has(String(a._id ?? a.id ?? JSON.stringify(a))))
                       .filter((a) => String(a.field) === "exam_held");
-                    ok("QA-2261: ...and NOTHING was stamped - the refused press leaves no exam_held record behind",
+                    ok(`QA-2261/QA-2265: ...and no exam_held audit row is left behind on a ${st} batch`,
                       afterP.length === 0, `rows=${afterP.length}`);
-                    // QA-2264 (cycle 3, filed by the cycle-2 checker): the pin above counts AUDIT
-                    // rows, and the audit row is written AFTER the Closure write. So it is killed by
-                    // DELETING the guard and not by MOVING it: the checker's M-D relocated the guard
-                    // to sit between the Closure write and audit(), and the entire wall came back
-                    // 796/4 byte-identical to the control with both pins above green - while
-                    // exam_held was in fact being stamped on all five non-Active statuses. The pin's
-                    // own comment claimed exactly the resistance it did not have, which is this
-                    // repo's most-filed defect appearing for the THIRD time inside this one unit,
-                    // each time in the pin written to close the previous one.
+                    // QA-2264 (cycle 3, filed by the cycle-2 checker): the audit-row pin above is
+                    // killed by DELETING the guard and not by MOVING it, because the audit row is
+                    // written AFTER the Closure write. The checker's M-D relocated the guard between
+                    // the two and the entire wall came back byte-identical to its control with every
+                    // pin green, while the flag was being set on all five statuses.
                     //
                     // THE FLAG ITSELF is the thing that must not exist, so assert the flag. The
-                    // closure GET already exposes it - which also corrects cycle 1's claim that no
-                    // response does.
-                    const clAfter = (await req(admin, "GET", `/api/batches/${planningRow._id}/closure`)).data ?? {};
-                    // The GET returns `{ closure, invoice, ... }` - closure is null when no document
-                    // exists at all, which is itself a pass: no document means nothing was stamped.
+                    // closure GET exposes it - which also corrects cycle 1's claim that no response
+                    // does. `closure` is null when no document exists at all, which is itself a
+                    // pass: no document means nothing was stamped.
+                    const clAfter = (await req(admin, "GET", `/api/batches/${row._id}/closure`)).data ?? {};
                     const heldFlag = clAfter.closure?.exam_held;
-                    ok("QA-2264: ...and the CLOSURE carries no exam_held - red if the guard is MOVED, not only if it is deleted",
+                    ok(`QA-2264/QA-2265: ...and the ${st} batch's CLOSURE carries no exam_held`,
                       !heldFlag, `exam_held=${JSON.stringify(heldFlag ?? null)}`);
                   }
+                  // The coverage count is itself an assertion, and it is the one that makes the
+                  // three above mean what their names say. Without it a seed carrying only Planning
+                  // batches would run three green pins and report the same wall as a seed carrying
+                  // all five - the difference between "checked every door" and "found one door"
+                  // being invisible in the pass count, which is exactly the shape of every previous
+                  // failure on this unit. Four of five is the floor: Cancelled is the one status a
+                  // seed may legitimately not carry.
+                  ok("QA-2265: the guard was probed on at least FOUR of the five non-Active statuses",
+                    covered >= 4, `covered=${covered}/5 (${nonActive.join(", ")})`);
                 }
               }
             }
