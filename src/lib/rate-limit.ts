@@ -23,7 +23,13 @@ export function clientKey(req: { headers: { get(name: string): string | null } }
   return req.headers.get("x-real-ip")?.trim() || "local";
 }
 
-type Bucket = { count: number; windowStart: number };
+// QA-2098 (checker, qa-1829b cycle 1) — A BUCKET MUST CARRY ITS OWN WINDOW.
+// The sweep below evicted every bucket older than the CALLING limiter's window. So one
+// unauthenticated GET with a 60-second window swept away this file's ONE-HOUR buckets, and the
+// password-reset gate's "5 per hour per address" silently became "5 per minute" — on the one door
+// in this app that mails a third party. `windowMs` is stored per bucket so eviction can ask each
+// one whether ITS own window has elapsed.
+type Bucket = { count: number; windowStart: number; windowMs: number };
 const buckets = new Map<string, Bucket>();
 let lastSweep = 0;
 
@@ -33,13 +39,15 @@ export function rateLimit(key: string, max: number, windowMs: number): void {
   // Opportunistic eviction: at most once a minute, drop every window that has fully elapsed, so
   // the Map cannot grow without bound. Cheap because it only runs on the minute boundary.
   if (now - lastSweep > 60_000) {
-    for (const [k, b] of buckets) if (now - b.windowStart > windowMs) buckets.delete(k);
+    // QA-2098: `b.windowMs`, not the caller's `windowMs`. Evicting a one-hour bucket because a
+    // one-minute limiter happened to run the sweep is how a rate limit quietly stops being one.
+    for (const [k, b] of buckets) if (now - b.windowStart > b.windowMs) buckets.delete(k);
     lastSweep = now;
   }
 
   const b = buckets.get(key);
   if (!b || now - b.windowStart > windowMs) {
-    buckets.set(key, { count: 1, windowStart: now });
+    buckets.set(key, { count: 1, windowStart: now, windowMs });
     return;
   }
   b.count++;
@@ -85,8 +93,8 @@ export function emailChallengeGate(email: string, opts: {
   if (e && now - e.windowStart <= perEmailWindowMs && e.count >= perEmailMax) {
     return { ok: false, reason: "per_email", retryAfterSec: Math.ceil((perEmailWindowMs - (now - e.windowStart)) / 1000) };
   }
-  if (!e || now - e.windowStart > perEmailWindowMs) buckets.set(key, { count: 1, windowStart: now }); else e.count++;
-  buckets.set("reset-last:" + email, { count: 1, windowStart: now });
+  if (!e || now - e.windowStart > perEmailWindowMs) buckets.set(key, { count: 1, windowStart: now, windowMs: perEmailWindowMs }); else e.count++;
+  buckets.set("reset-last:" + email, { count: 1, windowStart: now, windowMs: cooldownMs });
   return { ok: true };
 }
 
@@ -115,8 +123,8 @@ export function phoneChallengeGate(phone: string, opts: {
     return { ok: false, reason: "daily_cap" };
   }
   // all clear — count it
-  if (!p || now - p.windowStart > perPhoneWindowMs) buckets.set(key, { count: 1, windowStart: now }); else p.count++;
-  if (!g || now - g.windowStart > 24 * 3600_000) buckets.set("sms-daily", { count: 1, windowStart: now }); else g.count++;
-  buckets.set("sms-last:" + phone, { count: 1, windowStart: now });
+  if (!p || now - p.windowStart > perPhoneWindowMs) buckets.set(key, { count: 1, windowStart: now, windowMs: perPhoneWindowMs }); else p.count++;
+  if (!g || now - g.windowStart > 24 * 3600_000) buckets.set("sms-daily", { count: 1, windowStart: now, windowMs: 24 * 3600_000 }); else g.count++;
+  buckets.set("sms-last:" + phone, { count: 1, windowStart: now, windowMs: cooldownMs });
   return { ok: true };
 }

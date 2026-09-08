@@ -506,17 +506,37 @@ await retireSubject();
       // ---- A DEACTIVATED ACCOUNT MUST NOT BE ABLE TO START A RESET. Otherwise this door mails a
       // working code to somebody the system has switched off - the same population authorize()
       // refuses (auth.ts:53-54), and QA-2014 is the row for a check that was narrower than that one.
-      if (subjectId) {
-        await req(admin, "PATCH", `/api/users/${subjectId}`, { active: false });
-        const before = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === fpEmail).length;
-        const off = await post({ action: "request", email: fpEmail });
-        const after = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === fpEmail).length;
-        ok("QA-1829b: a deactivated account still gets the SAME answer (it does not leak that it is off)",
-          off.status === 200, `got ${off.status}`);
-        ok("QA-1829b: ...but NO code is mailed to it", after === before, `${before} -> ${after}`);
-        await req(admin, "PATCH", `/api/users/${subjectId}`, { active: true });
-        await req(admin, "PATCH", `/api/users/${subjectId}`, { drop: true });
+      // ---- QA-2099: THIS PIN COULD NOT FAIL, AND THE CHECKER MEASURED IT — deleting the
+      // account-state guard entirely left the suite at 56/0. The reason is the fixture, not the
+      // assertion: it reused an address that had just requested a code, so `emailChallengeGate`'s
+      // 60-second cooldown was already refusing the send. "No mail was sent" was true for a reason
+      // that had nothing to do with the guard being tested.
+      //
+      // A FRESH ADDRESS PER STATE. Each account below has never requested anything, so the only
+      // thing that can stop its mail is the guard itself. Three states are covered rather than
+      // one, because `authorize()` refuses on three different grounds and a guard that covers
+      // some of them is this repo's most-repeated shape (QA-1997).
+      for (const [label, mutate] of [
+        ["deactivated", (id) => req(admin, "PATCH", `/api/users/${id}`, { active: false })],
+        ["rejected", (id) => req(admin, "PATCH", `/api/users/${id}`, { approval: "reject" })],
+        ["dropped", (id) => req(admin, "PATCH", `/api/users/${id}`, { drop: true })],
+      ]) {
+        const stEmail = `fpst.${label}.${stamp}@vidysea-test.local`;
+        const made2 = await req(admin, "POST", "/api/users", { name: `FPST ${label} ${stamp}`, email: stEmail, password: "StateFix@123", role: "Trainer" });
+        if (made2.status !== 201 || !made2.data?.item?._id) {
+          ok(`QA-2099 [${label}] the fixture account was created`, false, `got ${made2.status} - this pin measured nothing`);
+          continue;
+        }
+        await mutate(made2.data.item._id);
+        const r = await post({ action: "request", email: stEmail });
+        const mailed = ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === stEmail).length;
+        ok(`QA-2099 [${label}] the answer is the SAME - the door does not leak the account's state`,
+          r.status === 200, `got ${r.status}`);
+        ok(`QA-2099 [${label}] ...and NO code is mailed, on an address that has never asked before`,
+          mailed === 0, `${mailed} mail row(s) for ${stEmail} - the cooldown cannot be the reason here`);
+        if (label !== "dropped") await req(admin, "PATCH", `/api/users/${made2.data.item._id}`, { drop: true });
       }
+      if (subjectId) await req(admin, "PATCH", `/api/users/${subjectId}`, { drop: true });
     } catch (e) {
       ok("QA-1829b: the block ran without error", false, String((e && e.message) || e));
     } finally {

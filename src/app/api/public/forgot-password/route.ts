@@ -84,17 +84,39 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // in fine, and QA-2014 is the row for what happens when a check is narrower than that one.
     const canSignIn = doc && doc.active === true && doc.dropped !== true
       && doc.approval_status !== "Pending" && doc.approval_status !== "Rejected";
-    if (!canSignIn) return okResponse;
 
+    // QA-2100 (checker, cycle 1) — A TIMING ORACLE SEPARATED THE TWO BRANCHES 9/9, WITH NO
+    // OVERLAP. Returning an identical message is not enough when the WORK differs: the real
+    // branch did two database writes before answering and the unknown branch returned
+    // immediately, so a stopwatch told a caller which addresses belong to accounts — the exact
+    // thing every `fail()` and every equal message in this file exists to prevent.
+    //
+    // So BOTH branches now do the same two writes. An address with no account gets a real row
+    // with an `otp_hash` of random bytes: nothing can ever match it, so it burns attempts and
+    // expires exactly like a real challenge and is indistinguishable from one. It costs a
+    // 10-minute inert row, which is the price of the property.
+    //
+    // The mail is the only asymmetric step left, and it is already off the response path
+    // (fire-and-forget, `.catch(() => {})`) — `sendMail` never throws by design.
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
     const token = crypto.randomBytes(16).toString("hex");
-    // One live challenge per address - requesting again burns the previous code rather than leaving
-    // two valid ones in two inboxes.
+    // One live challenge per address - requesting again burns the previous code rather than
+    // leaving two valid ones in two inboxes.
     await PublicToken.updateMany({ purpose: "password_reset", email, active: true }, { $set: { active: false } });
     await PublicToken.create({
       token, purpose: "password_reset", email,
-      otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
+      // A real account gets the hash of the code that is about to be mailed. Anything else gets
+      // 32 bytes nobody holds - a challenge that exists, ages and burns, and can never be met.
+      otp_hash: canSignIn ? sha(code) : crypto.randomBytes(32).toString("hex"),
+      otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
     });
+    if (!canSignIn) {
+      return NextResponse.json({
+        ok: true,
+        token,
+        message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
+      });
+    }
 
     const { html, text } = renderMail({
       title: "Your password reset code",
@@ -161,14 +183,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const doc = await User.findOne({ email: String(t.email ?? "").trim().toLowerCase() });
     if (!doc) throw fail();
 
-    doc.password_hash = await bcrypt.hash(next, 10);
-    await doc.save();
-
-    // SINGLE USE. Burned before anything else can go wrong, so a code cannot be replayed even if a
-    // later step throws.
+    // QA-2101 — THE COMMENT SAID "burned before anything else can go wrong" AND THE BURN RAN
+    // AFTER THE PASSWORD WRITE. If `doc.save()` threw, the caller saw a failure and the challenge
+    // was left verified and replayable. The sentence was true of the intention and false of the
+    // order, which is this unit's recurring fault in miniature.
+    //
+    // Burning FIRST fails closed: if the password write then throws, the person requests a new
+    // code — mildly annoying, and strictly better than a live single-use token surviving a failed
+    // reset.
     t.active = false;
     t.otp_verified = false;
     await t.save();
+
+    doc.password_hash = await bcrypt.hash(next, 10);
+    await doc.save();
 
     // QA-1967b is the unit that will kill OTHER live sessions on a password change and it does not
     // exist yet. This call is NOT that: it drops the identity cache so the next request re-reads the

@@ -26,6 +26,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (!body.name || !body.email || !body.password || !body.role) {
     throw new HttpError(400, "name, email, password, role are required");
   }
+  // QA-2102 (checker, qa-1829b cycle 1): qa-1829b added an 8-character floor to the Admin RESET
+  // path (users/[id] PATCH) and to the public reset door, and left CREATE without one - so the
+  // weakest password in the system was the one an account STARTS with, which is exactly the one
+  // handed over out-of-band. The asymmetry was undeclared, which is the half that makes it a
+  // finding rather than a choice.
+  if (String(body.password).length < 8) {
+    throw new HttpError(400, "A password must be at least 8 characters.");
+  }
   // Security review 2026-08-11: users.manage is grantable — creating an Admin (or a user
   // with pre-granted special rights) stays an Admin-only act.
   // 2026-08-12 audit (S1): the guard named only "Admin", so a users.manage holder could mint
