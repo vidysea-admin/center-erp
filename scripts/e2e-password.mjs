@@ -358,6 +358,52 @@ await retireSubject();
       ok("QA-1829b [precondition] a subject account exists", made.status === 201, `got ${made.status}`);
       const subjectId = made.data?.item?._id;
 
+      // ---- QA-2111: THE PATH A PERSON ACTUALLY TAKES, and the one every other pin here missed.
+      //
+      // Nineteen assertions passed over a feature that was INOPERABLE through its own page: the
+      // request response carried no `token`, so /forgot set token = "" and every verify after it
+      // looked up the empty string. They passed because the fixture below reads the token out of
+      // the DATABASE — so the suite exercised the API and never the path a user takes.
+      //
+      // This block takes the token ONLY from the response, the way the page does, and drives the
+      // whole flow with it. If the response ever stops carrying a usable token again, this fails
+      // and nothing else here will.
+      {
+        const email2 = `fp2.${stamp}@vidysea-test.local`;
+        const P1 = "PageFlow@111", P2 = "PageFlow@222";
+        const mk2 = await req(admin, "POST", "/api/users", { name: `FP2 ${stamp}`, email: email2, password: P1, role: "Trainer" });
+        ok("QA-2111 [precondition] a second subject account exists", mk2.status === 201, `got ${mk2.status}`);
+
+        const asked = await post({ action: "request", email: email2 });
+        ok("QA-2111: the request response CARRIES a token - the page has nothing else to use",
+          typeof asked.data?.token === "string" && asked.data.token.length >= 16,
+          `token=${JSON.stringify(asked.data?.token)} - /forgot does setToken(d.token ?? "") and then verifies with it`);
+
+        // An unknown address must ALSO get one, or the token's presence is the enumeration tell
+        // this endpoint refuses to give.
+        const decoy = await post({ action: "request", email: `nobody2.${stamp}@vidysea-test.local` });
+        ok("QA-2111: ...and an UNKNOWN address gets a token too, so its presence tells nothing",
+          typeof decoy.data?.token === "string" && decoy.data.token.length >= 16,
+          `token=${JSON.stringify(decoy.data?.token)}`);
+        ok("QA-2111: ...and the decoy token verifies to the SAME generic refusal, not a different one",
+          (await post({ action: "verify", token: decoy.data?.token, code: "123456" })).status === 400,
+          "an unknown address's token answered differently from a wrong code");
+
+        // Drive the real flow with ONLY what the response gave us. The code still has to come from
+        // the challenge - it is never in the response, and that is QA-142 working.
+        if (asked.data?.token) {
+          await db.collection("publictokens").updateOne({ token: asked.data.token }, { $set: { otp_hash: sha(CODE), otp_attempts: 0 } });
+          const v = await post({ action: "verify", token: asked.data.token, code: CODE });
+          ok("QA-2111: the response token VERIFIES - i.e. it is the real challenge, not a decoy",
+            v.status === 200, `got ${v.status} ${JSON.stringify(v.data?.error ?? "")}`);
+          const r = await post({ action: "reset", token: asked.data.token, password: P2 });
+          ok("QA-2111: ...and the reset completes on it", r.status === 200, `got ${r.status}`);
+          ok("QA-2111: ...and the account signs in with the password set through the PAGE's own path",
+            !!(await login(email2, P2)), "the end-to-end path a person takes does not work");
+        }
+        if (mk2.data?.item?._id) await req(admin, "PATCH", `/api/users/${mk2.data.item._id}`, { drop: true });
+      }
+
       // ---- ANTI-ENUMERATION. The two answers must be INDISTINGUISHABLE, because this door is
       // public and a difference between them is a free list of who works here.
       const known = await post({ action: "request", email: fpEmail });

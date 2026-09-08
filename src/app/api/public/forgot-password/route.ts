@@ -50,10 +50,24 @@ export const POST = apiHandler(async (req: NextRequest) => {
     rateLimit("pwreset-req:" + clientKey(req), 5, 60 * 60_000);
     const email = String(body.email ?? "").trim().toLowerCase(); // QA-1628: same as auth.ts:43
 
-    // The SAME answer whether or not the address is known, and whether or not the gate allowed a
-    // send. Everything below is done only when there is genuinely somebody to mail.
+    // QA-2111 (checker, cycle 1, CRITICAL) — THE FEATURE WAS INOPERABLE THROUGH ITS OWN PAGE.
+    // This response carried no `token`, so `/forgot` set token = "" and every verify that followed
+    // looked up the empty string and failed. Nobody could reset a password through the UI.
+    //
+    // Nineteen assertions passed over it because the FIXTURE read the token out of the database
+    // instead of out of the response — so the suite exercised the API and never the path a person
+    // takes. That is this project's own "a pin that cannot fail" shape, arriving through the
+    // fixture rather than through the assertion.
+    //
+    // THE TOKEN IS RETURNED IN BOTH CASES, and that is the anti-enumeration requirement rather
+    // than a hole in it: it is a session handle, not the credential. Possession of it proves
+    // nothing — the 6-digit code still has to arrive by mail. Returning it only for real accounts
+    // would make its presence the very tell this endpoint refuses to give. An unknown address gets
+    // a decoy: a random token that was never stored, so verify answers the same generic refusal a
+    // wrong code gets. Same shape as `enrol-otp`, which also hands back its token.
     const okResponse = NextResponse.json({
       ok: true,
+      token: crypto.randomBytes(16).toString("hex"), // replaced below when there is a real account
       message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
     });
     if (!email || !email.includes("@")) return okResponse;
@@ -101,7 +115,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
       html, text, entity: "PublicToken",
     }).catch(() => {});
 
-    return okResponse;
+    // The real token, in a response otherwise byte-identical to the decoy one above.
+    return NextResponse.json({
+      ok: true,
+      token,
+      message: "If that address belongs to an account, a 6-digit code is on its way. It works for 10 minutes.",
+    });
   }
 
   // ------------------------------------------------------------------ check the code
