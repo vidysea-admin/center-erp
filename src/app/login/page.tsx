@@ -45,8 +45,8 @@ function LoginForm() {
           accounts are created by an Admin. So the one thing this screen offered a person who could
           not get in was a flow that no longer exists.
 
-          The hrefs were also relative (`signup`, `p/me`). From `/erp/login` that resolves
-          correctly; from `/erp/login/` it resolves to `/erp/login/signup` and 404s. Rather than
+          The hrefs were also relative (signup, p/me). From the login path without a trailing
+          slash that resolves correctly; with one, it resolves a level deeper and 404s. Rather than
           reason about which form the URL takes, both now use BASE_PATH, which is right either way
           and is what `src/lib/base-path.ts` exists for. */}
       <p className="text-center text-xs text-gray-500">

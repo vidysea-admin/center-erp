@@ -5,10 +5,15 @@ import { BASE_PATH } from "@/lib/base-path";
 
 // QA-1829b — the screen for "I do not know my password".
 //
-// IT LIVES OUTSIDE THE `(app)` GROUP, deliberately, as a sibling of `login/`. There is no
-// middleware in this repo: a route is public simply by not calling `requireUser()`. Put inside
-// `(app)`, this page would render the signed-in shell chrome — nav, user menu, the lot — to a
-// logged-out stranger.
+// IT LIVES OUTSIDE THE `(app)` GROUP, deliberately, as a sibling of `login/`. Inside `(app)` it
+// would render the signed-in shell chrome — nav, user menu, the lot — to a logged-out stranger.
+//
+// AND BEING OUTSIDE `(app)` IS NOT ENOUGH. The first version of this comment said "there is no
+// middleware in this repo: a route is public simply by not calling requireUser()". That is FALSE.
+// Next 16 calls it `src/proxy.ts` and it is an explicit ALLOWLIST — this page answered 307 to the
+// login screen until it was added to it, which is a forgot-password page reachable only by people
+// who can already log in. The wall now asserts it opens with no session (e2e-password.mjs), because
+// what caught it was a one-off curl that would never have run again.
 //
 // ONE PAGE, THREE STEPS, rather than a page plus an emailed link. The mail carries a CODE, not a
 // URL, so there is no link to forward, leak into a browser history, or land in a corporate mail
@@ -112,7 +117,7 @@ export default function ForgotPasswordPage() {
             <Btn type="submit" disabled={busy || code.length !== 6}>{busy ? "Checking…" : "Continue"}</Btn>
             {/* A way back that does not require reloading and losing the tab's state. */}
             <button type="button" className="w-full text-center text-xs text-gray-500 hover:underline"
-              onClick={() => { setStep("email"); setCode(""); setError(""); }}>
+              onClick={() => { setStep("email"); setCode(""); setError(""); setNote(""); }}>
               Use a different email address
             </button>
           </form>
