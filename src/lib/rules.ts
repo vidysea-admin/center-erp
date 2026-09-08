@@ -1213,8 +1213,37 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       break;
     }
     case "Active->Closing": {
+      // QA-2250 (Umesh + Manish, live on -298, batch BHA-ITI-RPLHSL-SPIT-02). This used to be
+      // `assessment_status !== "Completed"` alone, and that single line made the product contradict
+      // its own vocabulary: the button says "Assessment done -> Result Awaited", `Closing` is
+      // LABELLED "Result Awaited" (components/ui.tsx), and assessment_status only reaches Completed
+      // when EVERY roster member has a final result (assessmentCompleteness walks the roster). So
+      // the one state that exists for "the exam happened, the results have not come back" could
+      // only be entered once the results had come back. Both doors were shut by the same condition -
+      // this one, and Rule 43 on the hand tick - which is why the centre had no way round it.
+      //
+      // Umesh settled the model himself before any options were put to him: "batch ka status
+      // complete toh result aane ke baad hoga na, abhi toh result awaiting hai hi... pehle result
+      // aayega phir uske baad hoga complete." The condition that belongs on the SECOND step had
+      // been placed on the first.
+      //
+      // So Rule 18 now means what every label already said: THE EXAM HAS BEEN SAT. He was offered
+      // an inferred signal (the assessment date has passed) and chose an explicit audited press, so
+      // a batch cannot drift into this state because somebody typed a date once.
+      //
+      // The assessment_status arm is KEPT, not replaced: a batch whose results are already all in
+      // has plainly had its exam, and every such batch keeps working exactly as it did today. This
+      // is additive - it opens a door that was shut, it closes none.
+      //
+      // RULE 43 IS DELIBERATELY UNTOUCHED. "Every roster member has a final result" is a real
+      // requirement in the wrong place, and it keeps gating Closing -> Completed, where being
+      // finished genuinely does mean the results are recorded.
       const closure = await Closure.findOne({ batch: batchId }).lean<any>();
-      if (closure?.assessment_status !== "Completed") fail("Rule 18: assessment must be Completed before Closing.");
+      if (!closure?.exam_held && closure?.assessment_status !== "Completed") {
+        fail("Rule 18: record that the assessment was HELD before moving to Result Awaited. "
+          + "Use the 'Assessment done' button on the batch - it is a deliberate, audited press, and "
+          + "it does NOT need the results: Result Awaited is where a batch waits for them.");
+      }
       break;
     }
     // -113 (Umesh, 18/08): the Admin gets a working "Mark Completed" button, so the Admin also gets

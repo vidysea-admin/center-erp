@@ -1063,6 +1063,18 @@ const ClosureSchema = new Schema({
   certification_date: Date, certificates_issued: Number, certificate_file: String,
   ready_for_invoice: { type: Boolean, default: false },
   marked_ready_by: oid("User"), marked_ready_at: Date,
+  // QA-2250 (Umesh + Manish, live call on -298, batch BHA-ITI-RPLHSL-SPIT-02): "the exam has been
+  // SAT" and "every result is recorded" are two different facts and the system only had the second.
+  // Rule 18 gated Active -> Result Awaited on assessment_status = Completed, which is only reachable
+  // once EVERY roster member has a final result - so the state whose whole purpose is "exam done,
+  // results awaited" could not be entered until the results had arrived, at which point nobody is
+  // awaiting them. Umesh settled it in his own words: "pehle result aayega phir uske baad hoga
+  // complete" - Completed comes AFTER the results; Result Awaited is where you WAIT for them.
+  // A boolean, not an inferred date: he was offered "the assessment date has passed" and chose an
+  // explicit press, so a batch can never drift into this state because somebody typed a date once.
+  // Same by/at shape as marked_ready_* above and dues_marked_* below, deliberately.
+  exam_held: { type: Boolean, default: false },
+  exam_held_by: oid("User"), exam_held_at: Date,
   // Rule 52 (CEO 13/08): Closed = the MONEY story is over — invoice paid AND every due
   // (trainer, centre, vendor) settled. This flag is the human attestation of the latter.
   dues_settled: { type: Boolean, default: false },

@@ -4542,6 +4542,72 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                 ok("QA-2007: ...and it carries NO enrolled-of-needed figure, because there is none to state",
                   !!rowE && !/\d+ enrolled of \d+ needed/.test(valE) && !/NaN/.test(valE),
                   valE.slice(0, 160));
+
+                // ================= QA-2250 =================
+                // Umesh + Manish, live call on -298, batch BHA-ITI-RPLHSL-SPIT-02: "Assessment done
+                // -> Result Awaited" refused with "Rule 18: assessment must be Completed before
+                // Closing", and NO screen anywhere could satisfy that condition - he asked
+                // "assessment hai kahan se?" and there was no answer. The state whose whole purpose
+                // is "the exam happened, the results have not come back" was gated on
+                // assessment_status = Completed, which needs EVERY roster member to have a final
+                // result. Umesh settled the model himself: "pehle result aayega phir uske baad hoga
+                // complete" - Completed comes AFTER results; Result Awaited is where you wait.
+                //
+                // Batch E costs this arm nothing extra and is the perfect fixture: Active, with a
+                // genuinely EMPTY roster, so it has no results at all - exactly the shape the old
+                // rule could never let through.
+                {
+                  const refused = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Closing" });
+                  ok("QA-2250: WITHOUT exam_held, Active -> Result Awaited is still REFUSED",
+                    refused.status === 400,
+                    `${refused.status} ${JSON.stringify(refused.data?.error ?? "").slice(0, 140)}`);
+                  // The MESSAGE, not just the status. A bare 400 is produced by a dozen unrelated
+                  // refusals in this route - QA-2006 is the row for exactly that mistake, filed
+                  // against this very block earlier today.
+                  ok("QA-2250: ...and the refusal names the NEW condition, not the old results one",
+                    /assessment was HELD/i.test(String(refused.data?.error ?? "")),
+                    String(refused.data?.error ?? "").slice(0, 200));
+
+                  const beforeX = new Set(((await req(admin, "GET", `/api/audit/Closure/${E._id}`))
+                    .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
+
+                  const held = await req(admin, "POST", `/api/batches/${E._id}/transition`,
+                    { target: "Closing", exam_held: true });
+                  // THE DEFECT ITSELF: a batch with ZERO results reaching Result Awaited. Under the
+                  // old rule this was impossible, which is why the centre was stuck on a live batch.
+                  ok("QA-2250: WITH exam_held, a batch with NO RESULTS AT ALL reaches Result Awaited",
+                    [200, 201].includes(held.status) && String(held.data?.item?.status ?? "") === "Closing",
+                    `${held.status} ${JSON.stringify(held.data?.error ?? "").slice(0, 140)}`);
+
+                  // Umesh chose an explicit press OVER an inferred date so that who said it, and
+                  // when, is on the record. If this row is not written, the whole reason the button
+                  // exists is gone even though the button appears to work.
+                  const closureRows = (await req(admin, "GET", `/api/audit/Closure/${E._id}`)).data?.items ?? [];
+                  const heldRows = closureRows.filter((a) => !beforeX.has(String(a._id ?? a.id ?? JSON.stringify(a))))
+                    .filter((a) => String(a.field) === "exam_held");
+                  ok("QA-2250: ...and it wrote EXACTLY ONE new exam_held audit row, naming an actor",
+                    heldRows.length === 1 && !!(heldRows[0]?.actor ?? heldRows[0]?.actor_id),
+                    JSON.stringify({ n: heldRows.length, actor: heldRows[0]?.actor ?? heldRows[0]?.actor_id ?? null }));
+
+                  // RULE 43 MUST NOT HAVE MOVED, and this is the half that makes the fix a
+                  // RE-PLACEMENT rather than a removal: "every roster member has a final result" is
+                  // a real requirement sitting in the wrong place, and it belongs HERE, on becoming
+                  // Completed. Without this assertion, "moved the gate" and "deleted the gate" have
+                  // identical pass counts.
+                  const tooEarly = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Completed" });
+                  ok("QA-2250: Rule 43 is UNMOVED - Result Awaited -> Completed still refuses",
+                    [400, 409].includes(tooEarly.status),
+                    `${tooEarly.status} ${JSON.stringify(tooEarly.data?.error ?? "").slice(0, 140)}`);
+
+                  // The flag is a fact about THIS transition and nothing else - same shape and same
+                  // refusal as enrollment_override (QA-1973). An override silently dropped is worse
+                  // than one refused, because the sender believes it applied.
+                  const wrongTarget = await req(admin, "POST", `/api/batches/${B._id}/transition`,
+                    { target: "Completed", exam_held: true });
+                  ok("QA-2250: exam_held sent at any OTHER target is refused, never silently ignored",
+                    wrongTarget.status === 400 && /Result Awaited, nothing else/i.test(String(wrongTarget.data?.error ?? "")),
+                    `${wrongTarget.status} ${String(wrongTarget.data?.error ?? "").slice(0, 140)}`);
+                }
               }
             }
           }

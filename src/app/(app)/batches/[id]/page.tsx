@@ -249,6 +249,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const r = data.readiness;
   const [reason, setReason] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // QA-2250 (Umesh, live on -298): recording that the assessment was HELD. Deliberately its own
+  // state and its own confirmation - the press is the evidence, so it must be a decision rather
+  // than a click that happens to land on a status button.
+  const [examHeldOpen, setExamHeldOpen] = useState(false);
+  const [examHeldBusy, setExamHeldBusy] = useState(false);
   // -113 (Umesh 18/08: "admin ke paas mark completed ka button aaye, aur wo press kar paye"). The
   // ordinary buttons refuse until the ROWS allow it — Rule 43 wants every student marked, Rule 46
   // every pass settled — and on a batch that finished months ago nobody can satisfy that by hand.
@@ -489,7 +494,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         </span>
       )}
       {/* -102: the client's words for these two steps. Targets stay the stored enum. */}
-      {b.status === "Active" && <Btn small onClick={() => transition("Closing")}>Assessment done → Result Awaited</Btn>}
+      {/* QA-2250: the words are unchanged - they were always right, and it was the GATE behind them
+          that contradicted them. It now opens a confirmation instead of firing on the press, per the
+          -207 ruling ("vo double confirmation pop up card khule properly"), because it records a
+          fact under the presser's name rather than just moving a status. */}
+      {b.status === "Active" && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → Result Awaited</Btn>}
       {/* -207 (Umesh, 23/08, with the screen open): "2 duplicate buttons fro similar functionlity
           ?? essaa kyu hai , worst user experiece. only ye blue wala Complete batch button rakho and
           put it in the same row of attendance and all. along with same ui and ye button mai vo
@@ -773,6 +782,39 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           <div className="flex flex-wrap items-center gap-2">
             <Btn onClick={restoreBatch} disabled={restoring || !restoreReason.trim() || !!restoreBlocked[restoreTarget]}>{restoring ? "Restoring…" : "Restore batch"}</Btn>
             <Btn kind="ghost" onClick={() => setRestoreOpen(false)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
+      {/* QA-2250. Umesh, live on -298 with batch BHA-ITI-RPLHSL-SPIT-02 open: the button refused
+          with "assessment must be Completed before Closing" and there was no screen anywhere that
+          could satisfy that condition - he asked "assessment hai kahan se?" and there was no answer.
+          This is that answer, and it says out loud that results are NOT needed, because the previous
+          behaviour taught everyone the opposite. */}
+      <Drawer open={examHeldOpen && b.status === "Active"} onClose={() => setExamHeldOpen(false)} title={`${b.code} — assessment done?`} error={error}>
+        <div className="text-sm">
+          <div className="font-semibold">You are recording that the assessment was HELD</div>
+          <p className="mt-1 text-slate-700">
+            The batch moves out of <b>Active</b> and into <b>Result Awaited</b>, where it waits for the
+            results. <b>The results are not needed for this</b> — that is what Result Awaited means.
+          </p>
+          <p className="mt-2 text-slate-700">
+            Marking results and issuing certificates happens afterwards, and the batch only becomes{" "}
+            <b>Completed</b> once every student on the roster has a final result.
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Recorded against your name and the current time, and kept on the batch history — this is a
+            statement that the exam happened, so it is signed rather than inferred from a date.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Btn
+              onClick={async () => {
+                setExamHeldBusy(true);
+                try { await transition("Closing", { exam_held: true }); setExamHeldOpen(false); }
+                finally { setExamHeldBusy(false); }
+              }}
+              disabled={examHeldBusy}
+            >{examHeldBusy ? "Recording…" : "Yes — the assessment was held"}</Btn>
+            <Btn kind="ghost" onClick={() => setExamHeldOpen(false)}>Cancel</Btn>
           </div>
         </div>
       </Drawer>
