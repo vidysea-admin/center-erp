@@ -163,11 +163,14 @@ export const RELEASE_NOTE_CURRENT =
   "or a stored record. The check that verifies the database is protected against duplicate "  +
   "records was itself building one of those protections in the wrong shape, which stopped that "  +
   "whole set of tests from running on a fresh database - so for some time the release checks "  +
-  "could only be run by working around it by hand. The protection is now built in the shape the "  +
+  "could not be run at all in one of the two ways a developer sets that database up locally. The "  +
   "system actually declares, and it was verified both that the tests run again and that genuine "  +
   "duplicates are still caught, which was the risk worth checking. Recorded publicly because "  +
   "this build exists and deserves a name of its own rather than being folded silently into "  +
-  "somebody else's release.";
+  "somebody else's release. Correcting one sentence of this note as first published: it said the "  +
+  "release checks could only be run by working around the fault by hand. That was true of one "  +
+  "local setup order and not of the automated checks that run on every change, which were never "  +
+  "affected. The claim was disproved from the build logs by the reviewer of this release.";
 const RELEASE_NOTE_ARCHIVE_297 =
   "-297 changes nothing about what this system does. It is a checking release, and this note "  +
   "says so plainly rather than dressing it up. Two decisions this system already follows had no "  +
