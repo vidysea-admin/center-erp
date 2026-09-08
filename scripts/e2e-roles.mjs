@@ -4558,8 +4558,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                 // rule could never let through.
                 {
                   const refused = await req(admin, "POST", `/api/batches/${E._id}/transition`, { target: "Closing" });
+                  // 409, not 400: transitionBatch's `fail()` is `throw new HttpError(409, msg)`
+                  // (rules.ts:1110). The first version of this pin asserted 400 and went red on a
+                  // product that was behaving correctly - my expectation, not its behaviour.
                   ok("QA-2250: WITHOUT exam_held, Active -> Result Awaited is still REFUSED",
-                    refused.status === 400,
+                    refused.status === 409,
                     `${refused.status} ${JSON.stringify(refused.data?.error ?? "").slice(0, 140)}`);
                   // The MESSAGE, not just the status. A bare 400 is produced by a dozen unrelated
                   // refusals in this route - QA-2006 is the row for exactly that mistake, filed
@@ -4568,7 +4571,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     /assessment was HELD/i.test(String(refused.data?.error ?? "")),
                     String(refused.data?.error ?? "").slice(0, 200));
 
-                  const beforeX = new Set(((await req(admin, "GET", `/api/audit/Closure/${E._id}`))
+                  // Snapshot the BATCH's trail, not the Closure's. This pin earned its keep by
+                  // failing: it read /api/audit/Closure/<batch id> and found zero, which exposed
+                  // that the route was filing the row against the Closure - correct-looking, and
+                  // INVISIBLE on the batch Activity tab, which is the one place a person looks.
+                  const beforeX = new Set(((await req(admin, "GET", `/api/audit/Batch/${E._id}`))
                     .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
 
                   const held = await req(admin, "POST", `/api/batches/${E._id}/transition`,
@@ -4582,10 +4589,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // Umesh chose an explicit press OVER an inferred date so that who said it, and
                   // when, is on the record. If this row is not written, the whole reason the button
                   // exists is gone even though the button appears to work.
-                  const closureRows = (await req(admin, "GET", `/api/audit/Closure/${E._id}`)).data?.items ?? [];
-                  const heldRows = closureRows.filter((a) => !beforeX.has(String(a._id ?? a.id ?? JSON.stringify(a))))
+                  const batchRows = (await req(admin, "GET", `/api/audit/Batch/${E._id}`)).data?.items ?? [];
+                  const heldRows = batchRows.filter((a) => !beforeX.has(String(a._id ?? a.id ?? JSON.stringify(a))))
                     .filter((a) => String(a.field) === "exam_held");
-                  ok("QA-2250: ...and it wrote EXACTLY ONE new exam_held audit row, naming an actor",
+                  ok("QA-2250: ...and the BATCH trail carries EXACTLY ONE new exam_held row, naming an actor",
                     heldRows.length === 1 && !!(heldRows[0]?.actor ?? heldRows[0]?.actor_id),
                     JSON.stringify({ n: heldRows.length, actor: heldRows[0]?.actor ?? heldRows[0]?.actor_id ?? null }));
 

@@ -76,13 +76,24 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // has to survive independently of whether the transition it accompanied succeeded.
   // upsert, because a batch can reach Active with no Closure document at all.
   if (exam_held === true) {
-    const c = await Closure.findOneAndUpdate(
+    await Closure.findOneAndUpdate(
       { batch: id },
       { $set: { exam_held: true, exam_held_by: user.id, exam_held_at: new Date() } },
-      { upsert: true, new: true },
+      { upsert: true },
     );
+    // Audited against the BATCH, not the Closure — and that correction came from running the pin
+    // rather than from reading. The first version used `entity: "Closure", entityId: closure._id`,
+    // which is where the closure PUT route puts its own rows; the pin found ZERO. The row was being
+    // written correctly and filed under an id nobody holds: the batch's Activity tab reads
+    // `/api/audit/Batch/<batch id>`, so an exam_held row keyed to a Closure is INVISIBLE exactly
+    // where a person would look for it. Umesh chose a press over an inferred date so that "who said
+    // the exam happened, and when" is on the record — a record nobody can find does not deliver
+    // that. `enrollment_override` (rules.ts, QA-1973) audits against Batch for the same reason, so
+    // this follows the convention rather than inventing a second one.
     await audit({
-      entity: "Closure", entityId: c._id, field: "exam_held", oldValue: "false", newValue: "true - the assessment was held; results are not required to reach Result Awaited (QA-2250)",
+      entity: "Batch", entityId: id, field: "exam_held",
+      oldValue: "false",
+      newValue: "true - the assessment was HELD; results are NOT required to reach Result Awaited (QA-2250)",
       actor: user.id, actorType: "USER",
     });
   }
