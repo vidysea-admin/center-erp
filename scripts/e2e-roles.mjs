@@ -4804,9 +4804,19 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // and trade one covered status for another.
                   const roomD = loc ? await req(admin, "POST", `/api/locations/${loc}/rooms`,
                     { name: "QA-2280-" + Date.now(), type: "Classroom", capacity: 10 }) : { status: 0 };
-                  const mkD = (loc && prog && trn && roomD.data?.item?._id)
+                  // Its OWN trainer. This arm now stands up four batches on the shared trainer (E,
+                  // C, the Ready one, this one) and the fourth was refused: "max concurrent = 4".
+                  // That refusal is the product working correctly - the fixture was the thing at
+                  // fault - and it was only visible because the create is asserted rather than
+                  // guarded away; the run before it simply reported "missing=[Closed]" with no
+                  // reason attached anywhere.
+                  const trD = loc && prog ? (await req(admin, "POST", "/api/trainers", {
+                    name: `QA-2280 Trainer ${Date.now()}`, phone: "9" + String(Date.now()).slice(-9),
+                    skills: ["QA2280"], nominated_for_location: loc, nominated_for_program: prog,
+                  })).data?.item?._id : null;
+                  const mkD = (loc && prog && trD && roomD.data?.item?._id)
                     ? await req(admin, "POST", "/api/batches", {
-                        location: loc, program: prog, trainer: trn, room: roomD.data.item._id,
+                        location: loc, program: prog, trainer: trD, room: roomD.data.item._id,
                         planned_start: new Date().toISOString().slice(0, 10), target_size: 0,
                       })
                     : { status: 0 };
@@ -4820,7 +4830,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   // quietly.
                   ok("QA-2280 fixture: the Closed-path batch and its room are created",
                     !!DB_?._id,
-                    `room=${roomD.status} batch=${mkD.status} ${String(mkD.data?.error ?? JSON.stringify(mkD.data ?? {})).slice(0, 180)}`);
+                    `room=${roomD.status} trainer=${trD ? "ok" : "MISSING"} batch=${mkD.status} ${String(mkD.data?.error ?? JSON.stringify(mkD.data ?? {})).slice(0, 180)}`);
                   if (DB_?._id) {
                     const stampD = Date.now();
                     const todayD = new Date().toISOString().slice(0, 10);
