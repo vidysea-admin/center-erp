@@ -314,11 +314,24 @@ const SUITES = [
 //     the previous one - "That qa1771 guard is already in use" - and TWENTY-ONE suites crash,
 //     each dying several lines later as `Cannot read properties of undefined (reading '_id')`,
 //     which names the symptom and never the guard.
-//   - Seed + seed:sample: seed-sample writes 8 locations with a null institution_id, the bare
-//     index cannot be built at all, and the banner below REFUSED THE WALL while telling the
-//     operator their data was corrupt. Eight nulls are exactly what a sparse index is for.
-//   - And the wall REQUIRES seed:sample (e2e-roles.mjs:65 says so in its own fixture line), so the
-//     two orders blocked each other and there was no order that worked.
+//   - CORRECTED BY THE CYCLE-1 CHECKER, QA-2073, and the correction matters more than the claim
+//     it replaces. The first version of this comment said the seed + seed:sample order ALSO
+//     failed - the bare index refusing to build over 8 null institution_ids - and concluded
+//     "there was no order that worked". THAT IS FALSE. seed-sample.mjs:66 POSTs its locations
+//     THROUGH THE SERVER, so mongoose builds its own `institution_id_1 {unique,sparse}` before
+//     `npm test` ever runs, the `already` check below short-circuits, and this guard never gets
+//     to install the bare one. The checker measured the real CI order and then ran the MUTANT
+//     against exactly that state: exit 0, no refusal, no index created.
+//     The maker's order-B "proof" preloaded those 8 locations with the RAW DRIVER, which skips
+//     mongoose entirely - so it measured a state the documented sequence never reaches. The
+//     seed-only order was genuinely broken; the documented order was not.
+//     The maker's OWN failing run was real, but its cause was different and is worth knowing:
+//     it dropped the database UNDER A LIVE SERVER, which is the QA-1771 trap at the top of this
+//     very comment - mongoose does not rebuild indexes for a collection it has already touched
+//     in that process's lifetime, so seed-sample's locations went in with no index at all and
+//     the bare one could then not be built. Start the server FRESH after a drop and it does not
+//     happen. Two different faults wearing one banner, and the maker fused them into a single
+//     wrong story.
 // Found by a maker running the wall before a push, four attempts in. The fix is the fourth element
 // of EXPECTED: carry each index's real schema options instead of assuming every one is bare.
 // Same family as QA-1813 above - that was this guard's options mismatch seen from the NAME side
