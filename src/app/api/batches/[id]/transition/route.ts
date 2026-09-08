@@ -69,6 +69,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // what?", and the Activity tab was the only place that could ever have known. Read before the write,
   // because transitionBatch saves the new status onto the same document.
   const before = await Batch.findById(id).select("status").lean<any>();
+  // QA-2261 (cycle 2, found by the checker): the `target !== "Closing"` refusal above constrains
+  // WHERE the caller is going and says nothing about where the batch IS. So `exam_held` could be
+  // stamped onto a batch in Planning by a request the product then refused outright - the flag
+  // persisting (see the comment below on why the write is deliberately independent of the
+  // transition) and granting a free Rule 18 pass later, with no press made during the batch's
+  // Active life. That is precisely the silent drift Umesh rejected the inferred-date option to
+  // prevent: "the exam was held" is a claim about a batch that is RUNNING. Refused rather than
+  // ignored, for the same reason as every other override on this route.
+  if (exam_held === true && before?.status !== "Active") {
+    throw new HttpError(400, "Recording that the assessment was held applies to a batch that is currently running, nothing else.");
+  }
   // QA-2250: recorded BEFORE the transition, because Rule 18 reads it off the Closure - written
   // after, the rule would refuse the very press that carries the fact. It is deliberately its own
   // audit row rather than a field on the status row: "who said the exam was held, and when" is the

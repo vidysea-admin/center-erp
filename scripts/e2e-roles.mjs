@@ -4629,6 +4629,39 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     r43.status === 409 && /before completing assessment/i.test(String(r43.data?.error ?? "")),
                     `${r43.status} ${String(r43.data?.error ?? "").slice(0, 160)}`);
 
+                  // QA-2262 (cycle 2, found by the checker with a mutant I had not written): the
+                  // pin above asserts "before completing assessment", and that phrase appears in the
+                  // LEGACY batch-level arm's message ONLY (rules.ts, the !perCandidate branch).
+                  // Rule 43 has TWO arms, and `batchUsesPerCandidateResults` picks between them by
+                  // whether any CandidateResult row exists at all - so B, with nothing marked, could
+                  // only ever reach the legacy one. The checker deleted the PER-CANDIDATE arm alone
+                  // and all seven pins stayed green. The per-candidate arm is the one the live
+                  // incident and the gate file are actually about: "every roster member has a final
+                  // result". Its comment claimed a roster with results outstanding; that was the
+                  // label promising more than the assertion delivers, one more time, inside the pin
+                  // written to prove this unit left Rule 43 alone.
+                  //
+                  // Marking ONE member flips the batch into per-candidate mode with the rest still
+                  // unmarked - the exact shape the arm exists for. Guarded on >= 2 members, because
+                  // marking the only member would make the batch COMPLETE and the pin would then be
+                  // asserting a refusal that should not happen.
+                  const grid = (await req(admin, "GET", `/api/batches/${B._id}/results`)).data?.items ?? [];
+                  if (grid.length >= 2) {
+                    const marked = await req(admin, "PUT", `/api/batches/${B._id}/results`,
+                      { rows: [{ member: String(grid[0].member), result: "Pass" }] });
+                    ok("QA-2250/QA-2262: fixture - one member marked, so Rule 43 is now in PER-CANDIDATE mode",
+                      [200, 201].includes(marked.status),
+                      `${marked.status} ${String(marked.data?.error ?? "").slice(0, 140)}`);
+                    const r43pc = await req(admin, "PUT", `/api/batches/${B._id}/closure`, { assessment_status: "Completed" });
+                    // The message a person actually receives: `plain()` strips the leading
+                    // "Rule 43: ", the rest survives. Asserting the per-candidate SENTENCE and not
+                    // just a 409 is the whole point - the legacy arm returns 409 too, and a status
+                    // check would be killed by neither mutant nor tell the two arms apart.
+                    ok("QA-2250: Rule 43's PER-CANDIDATE arm is UNMOVED - a roster member with no final result still refuses",
+                      r43pc.status === 409 && /still have no final result/i.test(String(r43pc.data?.error ?? "")),
+                      `${r43pc.status} ${String(r43pc.data?.error ?? "").slice(0, 180)}`);
+                  }
+
                   // The flag is a fact about THIS transition and nothing else - same shape and same
                   // refusal as enrollment_override (QA-1973). An override silently dropped is worse
                   // than one refused, because the sender believes it applied.
@@ -4637,6 +4670,37 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   ok("QA-2250: exam_held sent at any OTHER target is refused, never silently ignored",
                     wrongTarget.status === 400 && /Result Awaited, nothing else/i.test(String(wrongTarget.data?.error ?? "")),
                     `${wrongTarget.status} ${String(wrongTarget.data?.error ?? "").slice(0, 140)}`);
+
+                  // QA-2261 (cycle 2, found by the checker BY MEASURING, not by reading). The
+                  // refusal above constrains where the caller is GOING; nothing constrained where
+                  // the batch IS. The checker sent Planning -> Closing with exam_held: the
+                  // transition was refused 409 as categorically impossible, and the Closure document
+                  // was created anyway carrying exam_held:true - because the write is deliberately
+                  // independent of the transition succeeding. That batch, once Active, then reached
+                  // Result Awaited with 200 and NO exam_held in the request. Nothing clears the
+                  // flag, no response exposes it, no screen shows it. A press made in Planning
+                  // silently buying a free pass months later is exactly the drift Umesh rejected the
+                  // inferred-date option to prevent - so the unit had reintroduced its own defect
+                  // through a side door. Now refused up front.
+                  const planningRow = ((await req(admin, "GET", "/api/batches?status=Planning&limit=1")).data?.items ?? [])[0];
+                  if (planningRow) {
+                    const beforeP = new Set(((await req(admin, "GET", `/api/audit/Batch/${planningRow._id}`))
+                      .data?.items ?? []).map((a) => String(a._id ?? a.id ?? JSON.stringify(a))));
+                    const notActive = await req(admin, "POST", `/api/batches/${planningRow._id}/transition`,
+                      { target: "Closing", exam_held: true });
+                    ok("QA-2261: exam_held on a batch that is NOT running is refused, naming that reason",
+                      notActive.status === 400 && /currently running, nothing else/i.test(String(notActive.data?.error ?? "")),
+                      `${notActive.status} ${String(notActive.data?.error ?? "").slice(0, 160)}`);
+                    // The refusal is only half of it. What the checker measured was the STAMP
+                    // surviving a refusal, and a status code cannot see that. This asserts the thing
+                    // that actually mattered: nothing was written. It stays red if the guard is
+                    // moved anywhere after the Closure write, which a status-only pin would not.
+                    const afterP = ((await req(admin, "GET", `/api/audit/Batch/${planningRow._id}`)).data?.items ?? [])
+                      .filter((a) => !beforeP.has(String(a._id ?? a.id ?? JSON.stringify(a))))
+                      .filter((a) => String(a.field) === "exam_held");
+                    ok("QA-2261: ...and NOTHING was stamped - the refused press leaves no exam_held record behind",
+                      afterP.length === 0, `rows=${afterP.length}`);
+                  }
                 }
               }
             }
