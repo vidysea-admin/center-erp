@@ -377,7 +377,7 @@ await retireSubject();
         const asked = await post({ action: "request", email: email2 });
         ok("QA-2111: the request response CARRIES a token - the page has nothing else to use",
           typeof asked.data?.token === "string" && asked.data.token.length >= 16,
-          `token=${JSON.stringify(asked.data?.token)} - /forgot does setToken(d.token ?? "") and then verifies with it`);
+          `token=${JSON.stringify(asked.data?.token)} - /forgot does setToken((prev) => d.token ?? prev) and then verifies with it. (This string said `?? ""` until QA-2275; that stopped being true at cycle 5, when the page was changed to KEEP a held token rather than replace it, and a failure message that describes code which no longer exists sends its reader to the wrong place.)`);
 
         // ---- QA-2246 (S1) — THE COOLDOWN BRANCH MUST NEVER HAND BACK THE LIVE TOKEN ----
         // A cycle-3 fix returned the address's LIVE challenge token to whoever asked inside the

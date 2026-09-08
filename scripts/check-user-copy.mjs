@@ -1896,6 +1896,24 @@ for (const file of walk(root)) {
   if (resendKeepsToken) passed++;
   else { failed++; pushStructural("app/forgot/page.tsx: the resend control CLEARS the token - QA-2259/QA-2267. The button is on the screen and the keep-what-you-hold branch is still unreachable, which is the defect wearing the fix's clothes."); }
 
+  // QA-2272 (checker, cycle 8, S2) - the resend pins assert the BUTTON and nothing asserted the
+  // FUNCTION it calls. Change `setToken((prev) => d.token ?? prev)` to `setToken(d.token ?? "")` and
+  // QA-2251/QA-2259 come back verbatim with the ENTIRE WALL still green: no suite executes this
+  // client component at all. The functional updater is the whole fix - a plain setter cannot keep
+  // what it holds, because there is nothing to read `prev` from.
+  const keepsPrev = /setToken\(\s*\(\s*prev\s*\)\s*=>[^)]*\?\?\s*prev\s*\)/.test(forgotSrc);
+  if (keepsPrev) passed++;
+  else { failed++; pushStructural("app/forgot/page.tsx: the token setter is not a functional updater that falls back to `prev` - QA-2272. Without it there is nothing to keep, so a cooldown response that carries no token silently blanks the challenge the person is still holding, which is QA-2251 by its fifth route."); }
+
+  // QA-2273 (checker, cycle 8) - `disabled={busy}` changed to a bare `disabled` leaves both pins
+  // above green while the control can never be pressed. This commit's own words are that "a resend
+  // control rendered on the password step is not a resend control a stranded person can reach";
+  // an ALWAYS-disabled one is the same unreachability by a different means, and mutant D is red
+  // while that was not.
+  const resendPressable = /disabled=\{[^}]+\}/.test(resendBtn);
+  if (resendPressable) passed++;
+  else { failed++; pushStructural("app/forgot/page.tsx: the resend control is disabled unconditionally - QA-2273. A control nobody can press is as unreachable as one rendered on the wrong step."); }
+
   // QA-2268 (checker, cycle 6): `emailChallengeGate` refuses for TWO reasons - `cooldown` (60 s) and
   // `per_email` (5 an hour) - and one sentence was answering both. Spaced past the cooldown, the
   // sixth request returned retry_after_sec 3290 beside the words "in the last minute" and "shortly";
@@ -1914,7 +1932,10 @@ for (const file of walk(root)) {
   // over QA-2268. An assertion that cannot fail for the defect it names, in the fix for a defect of
   // exactly that shape. So: capture the two arms and judge them SEPARATELY, which is the only form
   // a swap cannot survive.
-  const ternary = fpSrc.match(/gate\.reason\s*===\s*"cooldown"\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"/);
+  // QA-2274 (checker, cycle 8): the capture was not anchored to the FIELD it feeds, so parking the
+  // ternary as dead code and hardcoding `message:` brought QA-2268 back with the pin still green.
+  // It now has to be the expression `message` is assigned.
+  const ternary = fpSrc.match(/message:[\s\S]{0,12}?gate\.reason\s*===\s*"cooldown"\s*\?\s*"([^"]*)"\s*:\s*"([^"]*)"/);
   const cooldownArm = ternary?.[1] ?? "", cappedArm = ternary?.[2] ?? "";
   const cooldownGuarded = !!ternary && /in the last minute/.test(cooldownArm) && !/in the last minute/.test(cappedArm);
   if (cooldownGuarded) passed++;
