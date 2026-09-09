@@ -514,7 +514,13 @@ await retireSubject();
             otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0, otp_verified: false,
             createdAt: new Date(), updatedAt: new Date(),
           });
-          const burnAsk = await req("", "POST", "/api/public/forgot-password", { action: "request", email: burnEmail });
+          // Its own x-forwarded-for, like every other request in this suite that could collide.
+          // The first version of these two pins omitted it and spent the per-IP budget (5/hour on
+          // `pwreset-req`), so THREE LATER ASSERTIONS in this same file went red with 429 - the
+          // "neighbourly damage" this file's own header warns about, caused by the pin added to
+          // stop a note being wrong about rate limits.
+          const burnAsk = await req("", "POST", "/api/public/forgot-password",
+            { action: "request", email: burnEmail }, { "x-forwarded-for": "198.51.100.21" });
           ok("QA-2290 [precondition] the request for a never-asked address was answered, not rate-limited",
             burnAsk.status === 200, `got ${burnAsk.status} - a 429 here would make the assertion below vacuous`);
           const burnedRow = await db.collection("publictokens").findOne({ token: burnToken });
@@ -540,7 +546,11 @@ await retireSubject();
           });
           let lastToken = null, refused = null;
           for (let i = 0; i < 7 && !refused; i++) {
-            const r = await req("", "POST", "/api/public/forgot-password", { action: "request", email: armEmail });
+            // A DIFFERENT IP each time, deliberately: it keeps the per-IP limiter out of the way so
+            // the refusal this pin captures is the PER-ADDRESS arm - the one both wrong sentences
+            // dropped - and not an accident of which budget ran out first.
+            const r = await req("", "POST", "/api/public/forgot-password",
+              { action: "request", email: armEmail }, { "x-forwarded-for": "198.51.100." + (30 + i) });
             if (r.data?.token) lastToken = r.data.token;
             // A refusal here is the branch under test: answered 200, carrying no token.
             if (r.status === 200 && !r.data?.token && i > 0) refused = r;
