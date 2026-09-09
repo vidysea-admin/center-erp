@@ -533,6 +533,36 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
           try { await actx.close(); } catch {}
         }
       }
+
+      // QA-2368 (checker, cycle 2): the empty-state fix was the smallest change in the commit and
+      // the only one with no assertion - revert `(mine.length > 0 || postOnly)` to `mine.length > 0`
+      // and the suite stayed byte-identical while a real browser took two assertions red. Precisely
+      // as deletable as the two renders this cycle was called in to pin.
+      {
+        const pctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const pEmail = `zzfin.postonly.${stamp2}@vidysea-test.local`;
+          const pm = await req(admin, "POST", "/api/users", { name: `ZZFIN POSTONLY ${stamp2}`, email: pEmail, password: PW, role: "Operations", can_edit: true, location_scope: [] });
+          ok("QA-2368 [precondition] a POST-ONLY raiser exists with nothing submitted", pm.status === 201, `got ${pm.status}`);
+          const pp = await pctx.newPage();
+          await pp.goto(BASE, { waitUntil: "networkidle" });
+          const pb = pp.locator('input[type="email"], input[name="email"]').first();
+          if (await pb.count()) {
+            await pb.fill(pEmail);
+            await pp.locator('input[type="password"]').first().fill(PW);
+            await pp.locator('button[type="submit"]').first().click();
+            await pp.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          await pp.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+          await pp.waitForFunction(() => /My submissions|Post a cost|Costs/i.test(document.body.innerText), undefined, { timeout: 45000 }).catch(() => {});
+          const pbody = await pp.locator("body").innerText();
+          ok("QA-2368: a post-only raiser with NO submissions still sees the section and its empty state",
+            /My submissions/i.test(pbody) && /Nothing submitted yet/i.test(pbody),
+            `the /costs page shows no My-submissions empty state - the section vanishes entirely, which reads as a broken page rather than an empty one. body starts: ${pbody.slice(0, 240)}`);
+        } finally {
+          try { await pctx.close(); } catch {}
+        }
+      }
     }
   } catch (e) {
     ok("QA-2295: the browser block ran without error", false, String((e && e.message) || e).slice(0, 300));
