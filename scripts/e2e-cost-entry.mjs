@@ -431,9 +431,19 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ).catch(() => {});
       const bodyText = await page2.locator("body").innerText();
 
+      // THE MUTANT CAUGHT THIS ASSERTION, NOT THE CODE (2026-09-09). It used to test
+      // `bodyText.includes(stamp2)`, and `stamp2` is in BOTH the rejection REASON and the cost's
+      // own note - so on the pre-fix build, where "My submissions" is not rendered at all, the
+      // stamp was still on the page via the entry itself and this pin passed over the exact defect
+      // it is named for. A pin that is green on the broken build and green on the fixed one has
+      // measured nothing. The reason string is the only text that exists SOLELY in
+      // `decision_note`, so that is what has to appear.
       ok("QA-2295: a raiser WITH finance.view can READ the rejection reason on their own screen",
-        bodyText.includes(stamp2),
-        `the /costs page does not contain "${stamp2}". This is the defect: the note is in the payload and on no screen the raiser can reach. body starts: ${bodyText.slice(0, 240)}`);
+        bodyText.includes(REASON),
+        `the /costs page does not contain the reason "${REASON}". This is the defect: the note is in the payload and on no screen the raiser can reach. body starts: ${bodyText.slice(0, 240)}`);
+      ok("QA-2295 [discrimination] the reason is not merely the cost's own note echoed back",
+        !bodyText.includes(`ZZPIN ${stamp2} awaiting a decision`) || bodyText.includes(REASON),
+        `the page shows the entry's note but not the approver's reason - that is the defect wearing the pin's clothes`);
       ok("QA-2295: ...and the entry is shown as Rejected beside it, so the reason has something to explain",
         /Rejected/i.test(bodyText),
         `no "Rejected" anywhere on the raiser's costs page`);
