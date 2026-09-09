@@ -963,6 +963,22 @@ await retireSubject();
         // the one it holds. This is the exact journey QA-2201/QA-2251/QA-2259 broke four times.
         await uiResend.click();
         await uiPage.waitForTimeout(1500);
+        // QA-2319: THE NOTE MAKES A CLAIM ABOUT THE SCREEN, AND UNTIL NOW NOTHING IN A BROWSER
+        // CHECKED IT. -300 tells a person that when the system refuses to send another code, "the
+        // screen tells you so in plain words". Every pin behind that sentence read a JSON body,
+        // which is not what the sentence is about - and that gap is exactly where QA-2313 was
+        // found. Umesh asked the question that surfaced it: "tho ye sab real browser mai bhi
+        // validate ho rha hai naa yaa nh". For this unit the honest answer was no.
+        //
+        // PLACED HERE, and the first attempt was not: it sat after the journey had already filled
+        // the code and advanced, so it read the PASSWORD step and reported the page silent about a
+        // refusal that screen has no reason to mention. A pin can be red for the right words on the
+        // wrong screen - which is the same defect class as a green pin on the wrong subject, and it
+        // cost one run to see because the failure text printed what was actually rendered.
+        const uiRefusalText = await uiPage.locator("body").innerText().catch(() => "");
+        ok("QA-2319: the SCREEN says the code you hold still works when a resend is refused - the sentence -300 publishes, checked in a browser",
+          /still works|already have|last code sent/i.test(uiRefusalText),
+          "rendered: " + uiRefusalText.replace(/\s+/g, " ").slice(0, 240) + " - if this is silent, -300's 'the screen tells you so' is describing something no reader sees");
         await uiCodeBox.fill(UI_CODE);
         await uiPage.locator('button[type="submit"]').first().click();
         const uiPw = uiPage.locator('input[type="password"]').first();
@@ -971,26 +987,6 @@ await retireSubject();
           (await uiPw.count()) > 0,
           "still on: " + (await uiPage.locator("body").innerText()).slice(0, 220) + " - the page threw away the token it was holding when the cooldown response carried none, which is QA-2251 by whichever route the source found this time");
       }
-
-      // QA-2319: THE NOTE MAKES A CLAIM ABOUT THE SCREEN, AND UNTIL NOW NOTHING IN A BROWSER
-      // CHECKED IT. -300 tells a person that when the system refuses to send another code, "the
-      // screen tells you so in plain words" for two of the three refusals. Every pin behind that
-      // sentence was API-level: they read a JSON body, which is not what the sentence is about.
-      //
-      // That gap is not hypothetical - it is exactly where QA-2313 was found. The per-IP arm
-      // returns a bare 429 that never mentions the code, and no pin noticed because no pin was
-      // looking at a rendered page. Umesh asked the question that surfaced it: "is all this being
-      // validated in a real browser or not?" For this unit the honest answer was no.
-      //
-      // So: press resend again, still inside the cooldown, and assert the RENDERED TEXT carries
-      // the reassurance the note promises. This is the one arm the note claims speaks plainly and
-      // that a browser can reach cheaply.
-      await uiResend.click().catch(() => {});
-      await uiPage.waitForTimeout(2000);
-      const uiRefusalText = await uiPage.locator("body").innerText().catch(() => "");
-      ok("QA-2319: the SCREEN says the code you hold still works when a resend is refused - the sentence -300 publishes, checked in a browser",
-        /still works|already have|last code sent/i.test(uiRefusalText),
-        "rendered: " + uiRefusalText.replace(/\s+/g, " ").slice(0, 240) + " - if this is silent, -300's 'the screen tells you so' is describing something no reader sees");
 
       await uiDb.collection("users").deleteOne({ email: uiEmail });
     } catch (e) {
