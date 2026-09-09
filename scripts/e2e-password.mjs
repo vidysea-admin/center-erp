@@ -544,8 +544,23 @@ await retireSubject();
             name: "FP Arm " + stamp, email: armEmail, role: "Operations", active: true,
             approval_status: "Approved", createdAt: new Date(), updatedAt: new Date(),
           });
+          // QA-2312 (cycle 3, checker): the first version of this loop NEVER REACHED the arm it
+          // named. Its seven requests went back-to-back, and emailChallengeGate stamps
+          // `reset-last:<email>` on every PASS, so request #2 was refused by the 60-SECOND
+          // COOLDOWN - the arm the five QA-2260 pins already hold. Proof it was not watching the
+          // per-address arm: the checker set perEmailMax to 1e9, so that arm could never fire, and
+          // the suite stayed 96/0 with every QA-2300 line green. A pin that is green on a build
+          // where the limit it names does not exist is not a pin.
+          //
+          // The per-address arm is 5/hour and the cooldown is 60 s, both in an in-memory Map that
+          // cannot be advanced from outside the process. So reaching it HONESTLY costs wall time:
+          // five accepted requests spaced past the cooldown, then a sixth that the address budget
+          // refuses. ~5 minutes added to this suite, once per wall. That is the price of the note
+          // claiming this arm at all - and the alternative, claiming it without measuring it, is
+          // exactly what cycles 1 and 2 were failed for.
           let lastToken = null, refused = null;
           for (let i = 0; i < 7 && !refused; i++) {
+            if (i > 0) await new Promise((r) => setTimeout(r, 63_000));
             // A DIFFERENT IP each time, deliberately: it keeps the per-IP limiter out of the way so
             // the refusal this pin captures is the PER-ADDRESS arm - the one both wrong sentences
             // dropped - and not an accident of which budget ran out first.
@@ -556,9 +571,13 @@ await retireSubject();
             if (r.status === 200 && !r.data?.token && i > 0) refused = r;
             else if (r.status !== 200) refused = r;
           }
-          ok("QA-2300 [precondition] the per-address arm refused a request without a token, so the assertion below is not vacuous",
-            !!refused && refused.status === 200 && !refused.data?.token && !!lastToken,
-            `refused=${JSON.stringify(refused && { s: refused.status, keys: Object.keys(refused.data ?? {}) })} lastToken=${!!lastToken}`);
+          // The refusal must be the PER-ADDRESS one, and the way to tell is retry_after_sec: the
+          // cooldown returns at most 60, the address budget returns most of an hour. Asserting the
+          // ARM and not merely "some refusal" is what cycle 2's version was missing.
+          const retryAfter = Number(refused?.data?.retry_after_sec ?? 0);
+          ok("QA-2300/QA-2312 [precondition] the refusal reached is the PER-ADDRESS arm, not the 60s cooldown",
+            !!refused && refused.status === 200 && !refused.data?.token && !!lastToken && retryAfter > 120,
+            `retry_after_sec=${retryAfter} (>120 means the hour-long address budget, <=60 is the cooldown) keys=${JSON.stringify(Object.keys(refused?.data ?? {}))} lastToken=${!!lastToken}`);
           if (refused && lastToken) {
             const survived = await db.collection("publictokens").findOne({ token: lastToken });
             ok("QA-2300: a REFUSED request leaves the held code working - the guarantee is about refusal, not about a minute",

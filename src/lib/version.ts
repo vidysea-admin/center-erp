@@ -158,24 +158,24 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-300 changes nothing about what this system does. It corrects one sentence -299 published "  +
-  "here about its own password-reset feature. -299 said that asking for a code again does not "  +
-  "cancel a code you are already holding. The honest rule is simpler than either the original "  +
-  "sentence or the first attempt at correcting it: YOUR CODE IS REPLACED ONLY WHEN THE SYSTEM "  +
-  "ACTUALLY SENDS YOU A NEW ONE. Whenever it refuses to send - because you asked less than a "  +
-  "minute ago, or five times already for that address in the past hour, or too many times from "  +
-  "your network - the code you are holding keeps working, and the screen says so. So: if a new "  +
-  "mail arrives, use the newest one; if no new mail arrives, the code you already have is still "  +
-  "the right one. The first correction said the guarantee held only for the first minute, which "  +
-  "was wrong in the same way as the sentence it was fixing - it named one of the three ways the "  +
-  "system can refuse and dropped the other two, and it told people to look for a newest mail in "  +
-  "cases where none had been sent. The reviewer measured it: a sixth request, made an hour into "  +
-  "the day and well outside any minute, was refused, sent nothing, and left the previous code "  +
-  "working. Nothing about the feature has changed in this build; only the description. This is "  +
-  "the sixth public note in the last seven to carry a clause that did not survive checking, and "  +
-  "the second in a row where the wrong sentence was the CORRECTION - recorded here rather than "  +
-  "quietly edited, because this text is the one place in the system where a wrong sentence is "  +
-  "published to anyone with no login and nothing downstream re-reads it.";
+  "-300 changes nothing about what this system does. It corrects one sentence -299 published here "  +
+  "about its own password-reset feature, and it took three attempts to get that correction right, "  +
+  "which is recorded below rather than tidied away. -299 said that asking for a code again does "  +
+  "not cancel a code you are already holding. THE RULE IS ABOUT WHETHER THE SYSTEM ACCEPTS YOUR "  +
+  "REQUEST, NOT ABOUT WHETHER A MAIL ARRIVES. When it accepts, the code you were holding stops "  +
+  "working at that moment. When it refuses - you asked less than a minute ago, or five times for "  +
+  "that address in the past hour, or too often from your network - the code you are holding keeps "  +
+  "working. In the first two of those the screen tells you so in plain words; in the third it says "  +
+  "only that there have been too many attempts, and does not mention your code, which is a rough "  +
+  "edge this note is not going to describe as a feature. The distinction between accepting and "  +
+  "sending is not academic: an account that can no longer sign in has its old code retired without "  +
+  "any new mail being sent, so a rule written around the mail would have been wrong there. Two "  +
+  "earlier attempts at this sentence were each wrong in the same way - the first named one of the "  +
+  "three refusals and dropped the other two, the second described the mail instead of the "  +
+  "decision - and both were caught by the reviewer, not by the author. This is the sixth public "  +
+  "note in the last seven to carry a clause that did not survive checking. It is recorded here "  +
+  "because this text is the one place in the system where a wrong sentence reaches anyone with no "  +
+  "login and nothing downstream re-reads it.";
 // QA-2301: this is the text production ACTUALLY SERVED as -299, restored from 5542651.
 // A peer commit (ed89b22) corrected the resend clause IN PLACE while RELEASE was still
 // -299, and the -300 commit then archived the EDITED text - so this constant claimed -299
