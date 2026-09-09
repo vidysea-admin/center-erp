@@ -162,8 +162,9 @@ export const RELEASE_NOTE_CURRENT =
   "-298. FIRST: anyone with an account can now set their own password without anybody sharing "  +
   "one. The login screen carries a link; you give your email address, the system mails you a "  +
   "code, and the code lets you choose a new password. The code is never shown on the screen or "  +
-  "returned by the server - it only ever arrives in the mail - and asking again does not cancel a "  +
-  "code you are already holding. SECOND: a batch can now be moved to Result Awaited before its "  +
+  "returned by the server - it only ever arrives in the mail. Asking again WITHIN A MINUTE does "  +
+  "not cancel the code you are holding; asking again after that replaces it with a new one, and "  +
+  "the older code stops working. SECOND: a batch can now be moved to Result Awaited before its "  +
   "results exist. That state means the assessment has been held and the results have not come "  +
   "back yet, and until this build it could not be entered until every candidate already had a "  +
   "final result, which is the opposite requirement and left at least one live batch with nowhere "  +
