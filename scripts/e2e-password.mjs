@@ -972,6 +972,26 @@ await retireSubject();
           "still on: " + (await uiPage.locator("body").innerText()).slice(0, 220) + " - the page threw away the token it was holding when the cooldown response carried none, which is QA-2251 by whichever route the source found this time");
       }
 
+      // QA-2319: THE NOTE MAKES A CLAIM ABOUT THE SCREEN, AND UNTIL NOW NOTHING IN A BROWSER
+      // CHECKED IT. -300 tells a person that when the system refuses to send another code, "the
+      // screen tells you so in plain words" for two of the three refusals. Every pin behind that
+      // sentence was API-level: they read a JSON body, which is not what the sentence is about.
+      //
+      // That gap is not hypothetical - it is exactly where QA-2313 was found. The per-IP arm
+      // returns a bare 429 that never mentions the code, and no pin noticed because no pin was
+      // looking at a rendered page. Umesh asked the question that surfaced it: "is all this being
+      // validated in a real browser or not?" For this unit the honest answer was no.
+      //
+      // So: press resend again, still inside the cooldown, and assert the RENDERED TEXT carries
+      // the reassurance the note promises. This is the one arm the note claims speaks plainly and
+      // that a browser can reach cheaply.
+      await uiResend.click().catch(() => {});
+      await uiPage.waitForTimeout(2000);
+      const uiRefusalText = await uiPage.locator("body").innerText().catch(() => "");
+      ok("QA-2319: the SCREEN says the code you hold still works when a resend is refused - the sentence -300 publishes, checked in a browser",
+        /still works|already have|last code sent/i.test(uiRefusalText),
+        "rendered: " + uiRefusalText.replace(/\s+/g, " ").slice(0, 240) + " - if this is silent, -300's 'the screen tells you so' is describing something no reader sees");
+
       await uiDb.collection("users").deleteOne({ email: uiEmail });
     } catch (e) {
       ok("QA-2277/QA-2278: the browser journey ran without error", false, String((e && e.message) || e).slice(0, 300));
