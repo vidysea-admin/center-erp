@@ -982,8 +982,22 @@ function Approvals({ error, setError }: any) {
                     <div className="text-sm font-medium">{r.summary}</div>
                     <div className="text-xs text-gray-500">
                       {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
-                      {r.decided_by?.name ? ` · decided by ${r.decided_by.name}` : ""}
+                      {/* QA-2296: this said "decided by X" beside the REQUEST's timestamp. The
+                          decision time is stored (`decided_at`) and was rendered nowhere, so the one
+                          line an auditor reads carried the wrong clock. */}
+                      {r.decided_by?.name ? ` · decided by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
                     </div>
+                    {/* QA-2295 (live checker, -299): the rejection REASON was stored and readable on
+                        no screen the raiser could reach. It is rendered here for any decided request,
+                        which is the row the approver and the Admin already have open - and, with the
+                        costs page fix, on the raiser's own submissions list too. A rejection nobody
+                        can read is a cost that quietly never gets reposted. */}
+                    {r.status !== "Pending" && r.decision_note ? (
+                      <div className="mt-1 text-xs text-gray-700">
+                        <span className="text-gray-500">{r.status === "Rejected" ? "Reason: " : "Note: "}</span>
+                        {r.decision_note}
+                      </div>
+                    ) : null}
                   </div>
                   <Chip value={r.status} />
                 </div>

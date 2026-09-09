@@ -328,6 +328,124 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   }
 }
 
+// ---------------- QA-2295 / QA-2296 — THE REJECTION REASON, ON A SCREEN ----------------
+//
+// Found by the live browser checker on -299, and it could not have been found any other way. The
+// field was ALWAYS in the payload: `/api/approvals?mine=1` returned `decision_note` correctly, so
+// every API assertion in this file would have passed over the defect. The only thing that never
+// showed it was the screen.
+//
+// The mechanism is a permission irony. `costs/page.tsx` rendered "My submissions" - the one table
+// carrying an "Admin's note" column - only when `postOnly` was true, and `postOnly` means
+// `!can("finance.view")`. So the CEO, who HOLDS finance.view, got the whole ledger instead and
+// never saw his own rejected entry. The grant that let him see more took away the reason his own
+// cost was refused. On a system built for "koi bhi cheez system se chhutegi nahi", a rejection
+// nobody can read is a cost that quietly never gets reposted.
+//
+// So this block drives a real browser. A structural pin would only prove the JSX exists somewhere;
+// this proves a person holding finance.view can READ the reason.
+{
+  const stamp2 = Date.now().toString(36);
+  const REASON = `ZZPIN-${stamp2} rejected because the voucher number is missing`;
+  let browser2, ctx2;
+  try {
+    const { chromium } = await import("playwright");
+
+    // The raiser must hold finance.view - that is the CONDITION of the defect, not incidental to
+    // it. A post-only raiser was always fine; this pin would be vacuous without the grant.
+    const email2 = `zzfin.reason.${stamp2}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", {
+      name: `ZZFIN REASON ${stamp2}`, email: email2, password: PW,
+      role: "Admin", can_edit: true, location_scope: [],
+    });
+    ok("QA-2295 [precondition] a raiser account was created", made.status === 201 && !!made.data?.item?._id,
+      `got ${made.status} ${JSON.stringify(made.data ?? {}).slice(0, 160)}`);
+    const raiserId = made.data?.item?._id;
+    if (raiserId) {
+      await req(admin, "PATCH", `/api/users/${raiserId}`, { extra_permissions: ["finance.view"] });
+      const back = ((await req(admin, "GET", "/api/users")).data?.items ?? []).find((u) => String(u._id) === String(raiserId));
+      ok("QA-2295 [precondition] the raiser HOLDS finance.view - the condition of the defect",
+        (back?.extra_permissions ?? []).includes("finance.view"),
+        `extra=[${(back?.extra_permissions ?? []).join(", ")}] - without this grant the old code already showed the note and this pin proves nothing`);
+    }
+
+    // The rule must be ON, or the cost lands in the ledger and there is no decision to read.
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const raiser = await login(email2, PW);
+    ok("QA-2295 [precondition] the raiser can sign in", !!raiser, "no session");
+
+    const cat2 = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])[0];
+    const posted = await req(raiser, "POST", "/api/costs", baseEntry({ category: cat2?._id, note: `ZZPIN ${stamp2} awaiting a decision` }));
+    ok("QA-2295 [precondition] the raiser's cost PARKS rather than landing in the ledger",
+      posted.status === 202 && posted.data?.queued === true,
+      `got ${posted.status} ${JSON.stringify(posted.data ?? {}).slice(0, 160)}`);
+
+    const pending = ((await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [])
+      .find((r) => String(r.summary ?? "").includes(stamp2) || String(r.payload?.note ?? "").includes(stamp2));
+    ok("QA-2295 [precondition] the request reached the approver's queue", !!pending, "not found");
+
+    if (pending) {
+      const rej = await req(admin, "POST", `/api/approvals/${pending._id}`, { decision: "Rejected", note: REASON });
+      ok("QA-2295 [precondition] the approver rejects it WITH a reason", rej.status === 200, `got ${rej.status}`);
+
+      // The API half, kept because it is the thing that was already true and hid the defect.
+      const minePayload = ((await req(raiser, "GET", "/api/approvals?mine=1")).data?.items ?? [])
+        .find((r) => String(r._id) === String(pending._id));
+      ok("QA-2295: the reason is in the raiser's own PAYLOAD - it always was, which is why no API pin caught this",
+        String(minePayload?.decision_note ?? "").includes(stamp2),
+        `decision_note=${JSON.stringify(minePayload?.decision_note ?? null)}`);
+      ok("QA-2296: the decision TIME is stored, not only the request time",
+        !!minePayload?.decided_at && String(minePayload.decided_at) !== String(minePayload.createdAt),
+        `decided_at=${JSON.stringify(minePayload?.decided_at ?? null)} createdAt=${JSON.stringify(minePayload?.createdAt ?? null)}`);
+
+      // ---- and now the half that only a browser can answer ----
+      try {
+        browser2 = await chromium.launch({ headless: true });
+      } catch (e) {
+        // Not a skip. A missing browser means this block verified NOTHING, and it says so in red.
+        ok("QA-2295 [precondition] chromium launches from the `playwright` devDependency", false,
+          String(e.message).slice(0, 200) + " -- run `npx playwright install chromium`");
+        throw e;
+      }
+      ctx2 = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+      const page2 = await ctx2.newPage();
+
+      await page2.goto(BASE, { waitUntil: "networkidle" });
+      const box2 = page2.locator('input[type="email"], input[name="email"]').first();
+      if (await box2.count()) {
+        await box2.fill(email2);
+        await page2.locator('input[type="password"]').first().fill(PW);
+        await page2.locator('button[type="submit"]').first().click();
+        await page2.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+      }
+      ok("QA-2295 [precondition] the raiser's BROWSER is signed in, not sitting on the login screen",
+        !/login/i.test(page2.url()), page2.url());
+
+      await page2.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+      // The page fetches client-side; wait for its own content rather than a stopwatch. A fixed
+      // sleep on a slow runner produces the defect's exact signature and gets a real pin dismissed
+      // as flaky.
+      await page2.waitForFunction(
+        (s) => /My submissions|All cost entries|Costs/i.test(document.body.innerText),
+        undefined, { timeout: 45000 },
+      ).catch(() => {});
+      const bodyText = await page2.locator("body").innerText();
+
+      ok("QA-2295: a raiser WITH finance.view can READ the rejection reason on their own screen",
+        bodyText.includes(stamp2),
+        `the /costs page does not contain "${stamp2}". This is the defect: the note is in the payload and on no screen the raiser can reach. body starts: ${bodyText.slice(0, 240)}`);
+      ok("QA-2295: ...and the entry is shown as Rejected beside it, so the reason has something to explain",
+        /Rejected/i.test(bodyText),
+        `no "Rejected" anywhere on the raiser's costs page`);
+    }
+  } catch (e) {
+    ok("QA-2295: the browser block ran without error", false, String((e && e.message) || e).slice(0, 300));
+  } finally {
+    try { if (ctx2) await ctx2.close(); } catch {}
+    try { if (browser2) await browser2.close(); } catch {}
+  }
+}
+
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });

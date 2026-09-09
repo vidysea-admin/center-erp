@@ -35,9 +35,15 @@ function CostsInner() {
   // QA-153 (-83): a post-only user must not even ASK for the ledger or the invoice book — the 403
   // banner that used to sit over a half-empty form was the product saying "no" and handing over
   // the form anyway.
+  // QA-2295 (live checker, -299): `mine` used to be fetched ONLY on the post-only path, so a person
+  // holding finance.view never had their own submissions at all - and the Admin's rejection note
+  // renders nowhere else. The grant that let them see the whole ledger was the grant that took away
+  // the reason their own entry was refused. `/api/approvals?mine=1` is every user's own row and
+  // costs nothing extra; both paths fetch it now, and the ledger fetch is unchanged.
   const load = (asPostOnly: boolean) => Promise.all([
+    api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post"))),
     asPostOnly
-      ? api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post")))
+      ? Promise.resolve()
       : api("/api/costs").then((d) => setCosts(d.items)),
     asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
@@ -174,7 +180,12 @@ function CostsInner() {
                 : "Pick at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
             </p>
           </Section>
-          {postOnly ? (
+          {/* QA-2295: this used to be the post-only ARM of a ternary, so a finance.view holder saw
+              the ledger INSTEAD of their own submissions and never read why one was rejected.
+              It is now unconditional - gated on having submitted anything, not on lacking a right -
+              and the ledger below is no longer its alternative. */}
+          {mine.length > 0 && (
+
             <Section title="My submissions">
               <DataTable rows={mine} loading={loading}
                 cardTitle={(r: any) => r.summary}
@@ -188,7 +199,9 @@ function CostsInner() {
                 ]} empty="Nothing submitted yet — post your first entry above." />
               <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost.</p>
             </Section>
-          ) : (
+          )}
+          {!postOnly && (
+
           <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
             <DataTable rows={costs} loading={loading}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
