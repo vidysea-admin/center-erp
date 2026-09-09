@@ -501,9 +501,17 @@ await retireSubject();
             name: "FP Burn " + stamp, email: burnEmail, role: "Operations", active: true,
             approval_status: "Approved", createdAt: new Date(), updatedAt: new Date(),
           });
+          // QA-2299 (cycle 2, checker): the fixture must be SHAPED LIKE A CHALLENGE THIS PRODUCT
+          // MAKES, not merely like one this assertion can read. The first version omitted
+          // `otp_expires_at`, which `PublicToken.create` ALWAYS sets - so a single added clause on
+          // the burn filter (`otp_expires_at: { $exists: false }`) left the suite 94/0 with both
+          // QA-2290 lines green while no API-minted code was ever burned: two live codes in two
+          // mails, the exact thing the note says cannot happen. The pin caught REMOVAL and not
+          // NARROWING, which is this repo's most-filed defect wearing a fixture as its disguise.
           await db.collection("publictokens").insertOne({
             token: burnToken, purpose: "password_reset", email: burnEmail, active: true,
-            otp_hash: crypto.createHash("sha256").update(CODE).digest("hex"), otp_attempts: 0, otp_verified: false,
+            otp_hash: crypto.createHash("sha256").update(CODE).digest("hex"),
+            otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0, otp_verified: false,
             createdAt: new Date(), updatedAt: new Date(),
           });
           const burnAsk = await req("", "POST", "/api/public/forgot-password", { action: "request", email: burnEmail });
@@ -513,6 +521,41 @@ await retireSubject();
           ok("QA-2290: a fresh request REPLACES any live code for that address - the public note must say where that starts",
             burnedRow?.active === false,
             `pre-existing challenge active=${JSON.stringify(burnedRow?.active)} - if this stays true the product no longer burns the old code and -300's note is the wrong one`);
+          // QA-2300 (cycle 2, checker): the CORRECTION had the same defect as the sentence it was
+          // correcting. It said the guarantee "is true only for the first minute", naming ONE of
+          // the three arms that refuse before the burn - the 60s cooldown - and dropping the
+          // per-address 5/hour arm and the per-IP limiter. The checker measured a sixth request
+          // made well outside any minute: refused with retry_after_sec ~3208, no token, and the
+          // previous code STILL ACTIVE. The real rule is not about a minute at all: the held code
+          // survives whenever the request is REFUSED, and is replaced only when a new one is SENT.
+          //
+          // Pinned on the per-address arm specifically, because that is the one both wrong
+          // sentences dropped. The gate is 5/hour per address and lives in an in-memory Map, so
+          // drive it with requests rather than clock tricks - and use the SAME address, which is
+          // what makes the sixth request hit `per_email` instead of a fresh bucket.
+          const armEmail = "fp-arm." + stamp + "@vidysea-test.local";
+          await db.collection("users").insertOne({
+            name: "FP Arm " + stamp, email: armEmail, role: "Operations", active: true,
+            approval_status: "Approved", createdAt: new Date(), updatedAt: new Date(),
+          });
+          let lastToken = null, refused = null;
+          for (let i = 0; i < 7 && !refused; i++) {
+            const r = await req("", "POST", "/api/public/forgot-password", { action: "request", email: armEmail });
+            if (r.data?.token) lastToken = r.data.token;
+            // A refusal here is the branch under test: answered 200, carrying no token.
+            if (r.status === 200 && !r.data?.token && i > 0) refused = r;
+            else if (r.status !== 200) refused = r;
+          }
+          ok("QA-2300 [precondition] the per-address arm refused a request without a token, so the assertion below is not vacuous",
+            !!refused && refused.status === 200 && !refused.data?.token && !!lastToken,
+            `refused=${JSON.stringify(refused && { s: refused.status, keys: Object.keys(refused.data ?? {}) })} lastToken=${!!lastToken}`);
+          if (refused && lastToken) {
+            const survived = await db.collection("publictokens").findOne({ token: lastToken });
+            ok("QA-2300: a REFUSED request leaves the held code working - the guarantee is about refusal, not about a minute",
+              survived?.active === true,
+              `held challenge active=${JSON.stringify(survived?.active)} - if a refusal burns the code, both -299's sentence and -300's correction are wrong again`);
+          }
+          await db.collection("users").deleteOne({ email: armEmail });
           await db.collection("users").deleteOne({ email: burnEmail });
         }
 

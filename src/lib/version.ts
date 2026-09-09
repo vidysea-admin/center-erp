@@ -159,26 +159,35 @@ const RELEASE_NOTE_ARCHIVE_283 =
 
 export const RELEASE_NOTE_CURRENT =
   "-300 changes nothing about what this system does. It corrects one sentence -299 published "  +
-  "here about its own password-reset feature, and states the boundary that sentence left out. "  +
-  "-299 said that asking for a code again does not cancel a code you are already holding. That "  +
-  "is true only for the first minute. Inside that minute the system deliberately keeps the "  +
-  "challenge you already have and tells you to wait; after it, asking again REPLACES the code, "  +
-  "and the older one stops working. That is on purpose - one live code per address, rather than "  +
-  "two valid codes sitting in two mails - but the note described only the case that had been "  +
-  "measured and dropped the boundary, which made it wrong about the ordinary case: ask, do not "  +
-  "see the mail, wait, ask again. If that happens to you, use the NEWEST mail. Nothing about the "  +
-  "feature itself has changed in this build; only the description. This is the fifth public note "  +
-  "in the last seven to carry a clause that did not survive checking, and it is recorded here "  +
-  "rather than quietly edited because this text is the one place in the system where a wrong "  +
-  "sentence is published to anyone with no login and nothing downstream re-reads it.";
+  "here about its own password-reset feature. -299 said that asking for a code again does not "  +
+  "cancel a code you are already holding. The honest rule is simpler than either the original "  +
+  "sentence or the first attempt at correcting it: YOUR CODE IS REPLACED ONLY WHEN THE SYSTEM "  +
+  "ACTUALLY SENDS YOU A NEW ONE. Whenever it refuses to send - because you asked less than a "  +
+  "minute ago, or five times already for that address in the past hour, or too many times from "  +
+  "your network - the code you are holding keeps working, and the screen says so. So: if a new "  +
+  "mail arrives, use the newest one; if no new mail arrives, the code you already have is still "  +
+  "the right one. The first correction said the guarantee held only for the first minute, which "  +
+  "was wrong in the same way as the sentence it was fixing - it named one of the three ways the "  +
+  "system can refuse and dropped the other two, and it told people to look for a newest mail in "  +
+  "cases where none had been sent. The reviewer measured it: a sixth request, made an hour into "  +
+  "the day and well outside any minute, was refused, sent nothing, and left the previous code "  +
+  "working. Nothing about the feature has changed in this build; only the description. This is "  +
+  "the sixth public note in the last seven to carry a clause that did not survive checking, and "  +
+  "the second in a row where the wrong sentence was the CORRECTION - recorded here rather than "  +
+  "quietly edited, because this text is the one place in the system where a wrong sentence is "  +
+  "published to anyone with no login and nothing downstream re-reads it.";
+// QA-2301: this is the text production ACTUALLY SERVED as -299, restored from 5542651.
+// A peer commit (ed89b22) corrected the resend clause IN PLACE while RELEASE was still
+// -299, and the -300 commit then archived the EDITED text - so this constant claimed -299
+// had said something no reader ever received, inside the one file whose job is to say what
+// each build published. An archive that improves on history is not an archive.
 const RELEASE_NOTE_ARCHIVE_299 =
   "-299 adds two things people asked for and corrects a sentence this endpoint published about "  +
   "-298. FIRST: anyone with an account can now set their own password without anybody sharing "  +
   "one. The login screen carries a link; you give your email address, the system mails you a "  +
   "code, and the code lets you choose a new password. The code is never shown on the screen or "  +
-  "returned by the server - it only ever arrives in the mail. Asking again WITHIN A MINUTE does "  +
-  "not cancel the code you are holding; asking again after that replaces it with a new one, and "  +
-  "the older code stops working. SECOND: a batch can now be moved to Result Awaited before its "  +
+  "returned by the server - it only ever arrives in the mail - and asking again does not cancel a "  +
+  "code you are already holding. SECOND: a batch can now be moved to Result Awaited before its "  +
   "results exist. That state means the assessment has been held and the results have not come "  +
   "back yet, and until this build it could not be entered until every candidate already had a "  +
   "final result, which is the opposite requirement and left at least one live batch with nowhere "  +
