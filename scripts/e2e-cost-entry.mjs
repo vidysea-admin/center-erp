@@ -403,7 +403,10 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         const mk = await req(admin, "POST", "/api/users", { name: `ZZFIN BLIND ${stamp2}`, email: blindEmail, password: PW, role: "Admin", can_edit: true, location_scope: [] });
         ok("QA-2356 [precondition] a reader WITHOUT finance.view exists", mk.status === 201, `got ${mk.status}`);
         const blind = await login(blindEmail, PW);
-        const seen = ((await req(blind, "GET", "/api/approvals")).data?.items ?? [])
+        // The list defaults to status=Pending and this row is Rejected, so a bare GET can never
+        // contain it - the first version of this pin reported `null` three times and would have
+        // been read as "no leak". Ask for the status the row actually has.
+        const seen = ((await req(blind, "GET", "/api/approvals?status=Rejected")).data?.items ?? [])
           .find((r) => String(r._id) === String(pending._id));
         ok("QA-2356 [precondition] that reader really is blind to the money - the payload amount is stripped",
           !!seen && seen.payload?.amount === undefined,
@@ -488,19 +491,44 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
           await ap.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
           // Find the status filter by its OPTIONS, never by position - a new <select> above it
           // would silently make this pin drive the wrong control.
-          const sels = ap.locator("select");
-          for (let n = 0; n < (await sels.count()); n++) {
-            const opts = (await sels.nth(n).locator("option").allTextContents()).join("|");
-            if (/Rejected/i.test(opts)) { await sels.nth(n).selectOption({ label: /Rejected/i.test(opts) ? "Rejected" : undefined }).catch(() => {}); break; }
+          // FLAKY ONCE, FIXED HERE: the first version passed one run and failed the next on the
+          // IDENTICAL build. It selected before the option list had rendered and swallowed the
+          // error, so the page stayed on its default filter and the row was simply absent. A pin
+          // that fails intermittently is worse than one that fails always - it gets dismissed as
+          // noise, which is how a real defect gets waved through. It now waits for the control,
+          // asserts the selection took, and re-tries once through the 'all' option.
+          const pickStatus = async (want) => {
+            const sels = ap.locator("select");
+            await ap.waitForFunction(() => document.querySelectorAll("select option").length > 0, undefined, { timeout: 30000 }).catch(() => {});
+            for (let n = 0; n < (await sels.count()); n++) {
+              const opts = await sels.nth(n).locator("option").allTextContents();
+              const hit = opts.find((o) => o.trim().toLowerCase() === want.toLowerCase());
+              if (!hit) continue;
+              await sels.nth(n).selectOption({ label: hit });
+              return true;
+            }
+            return false;
+          };
+          const picked = await pickStatus("Rejected");
+          ok("QA-2295 [precondition] the approvals screen has a status filter offering Rejected",
+            picked, "no <select> on /admin?tab=Approvals carries a 'Rejected' option - the pin below cannot reach the row it judges");
+          let seenIt = await ap.waitForFunction((s) => document.body.innerText.includes(s), REASON, { timeout: 30000 }).then(() => true).catch(() => false);
+          if (!seenIt) {
+            await pickStatus("All").catch(() => false);
+            seenIt = await ap.waitForFunction((s) => document.body.innerText.includes(s), REASON, { timeout: 20000 }).then(() => true).catch(() => false);
           }
-          await ap.waitForFunction((s) => document.body.innerText.includes(s), REASON, { timeout: 30000 }).catch(() => {});
           const abody = await ap.locator("body").innerText();
           ok("QA-2295: the approver's own screen shows the reason that was typed",
             abody.includes(REASON),
             `/admin?tab=Approvals does not contain "${REASON}" - the render is unpinned and could be deleted unnoticed. body starts: ${abody.slice(0, 240)}`);
+          // ANCHORED TO OUR OWN ROW, and that is the whole fix. The first version took
+          // `indexOf("decided by")` - the FIRST decided row anywhere on the screen, which with 13
+          // requests in the queue is usually somebody else's, seeded without a decision time. So
+          // the pin passed or failed depending on what else happened to be in the list, which is
+          // exactly the flakiness that gets a real red dismissed as noise.
           ok("QA-2296: the DECISION time is on that screen, not only the request time",
-            (() => { const k = abody.indexOf("decided by"); return k >= 0 && /\d/.test(abody.slice(k, k + 80)) && abody.slice(k, k + 80).includes("·"); })(),
-            `no 'decided by X · <time>' on the approvals screen - QA-2296 renders decided_at and nothing asserted it. body starts: ${abody.slice(0, 240)}`);
+            (() => { const z = abody.indexOf(`ZZPIN-${stamp2}`); const anchor = z >= 0 ? z : abody.indexOf(`ZZPIN ${stamp2}`); if (anchor < 0) return false; const row = abody.slice(Math.max(0, anchor - 400), anchor + 200); const k = row.indexOf("decided by"); return k >= 0 && /·[^·]*\d/.test(row.slice(k, k + 200)); })(),
+            `no 'decided by X · <time>' on OUR OWN row (${stamp2}) on the approvals screen - QA-2296 renders decided_at and nothing asserted it. body starts: ${abody.slice(0, 240)}`);
         } finally {
           try { await actx.close(); } catch {}
         }
