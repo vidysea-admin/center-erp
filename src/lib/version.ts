@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-300";
+export const RELEASE = "2026.08.14-301";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,16 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-301 makes a rejected cost answerable from the screen where it was submitted. A person who "  +
+  "could view the full cost ledger used to lose the My submissions section entirely, so the "  +
+  "server could record an approver's reason correctly while the person who needed to correct and "  +
+  "resubmit the cost had no screen that showed it. My submissions now appears whenever that person "  +
+  "has submitted rows, including for someone who can also see the full ledger, and a rejected row "  +
+  "shows the recorded reason. The Admin approval history now shows that same decision note and when "  +
+  "the decision was made. Existing permission and money-masking rules still apply; this release "  +
+  "changes where an already-recorded decision is visible, not who may decide or view protected "  +
+  "amounts.";
+const RELEASE_NOTE_ARCHIVE_300 =
   "-300 changes nothing about what this system does. It corrects one sentence -299 published here "  +
   "about its own password-reset feature, and it took three attempts to get that correction right, "  +
   "which is recorded below rather than tidied away. -299 said that asking for a code again does "  +
@@ -1472,6 +1482,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_300 + " " +
   RELEASE_NOTE_ARCHIVE_299 + " " +
   RELEASE_NOTE_ARCHIVE_298 + " " +
   RELEASE_NOTE_ARCHIVE_297 + " " +
