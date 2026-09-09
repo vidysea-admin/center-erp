@@ -1467,6 +1467,13 @@ const RELEASE_NOTE_ARCHIVE =
   // -296: ARCHIVE_295 wired in here in the SAME bump that declared it, same discipline.
   // -297: ARCHIVE_296 wired in here in the SAME bump that declared it, same discipline.
   // -298: ARCHIVE_297 wired in here in the SAME bump that declared it, same discipline.
+  // -299 and -298 were DECLARED and never wired in - the SAME defect this block's own comment
+  // warns about at -247, twice more, two releases running. QA-2336, found by the -300 live
+  // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
+  // reads. A comment warning about a defect does not prevent it; only an assertion does, so
+  // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_299 + " " +
+  RELEASE_NOTE_ARCHIVE_298 + " " +
   RELEASE_NOTE_ARCHIVE_297 + " " +
   RELEASE_NOTE_ARCHIVE_296 + " " +
   RELEASE_NOTE_ARCHIVE_295 + " " +

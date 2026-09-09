@@ -346,7 +346,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 // this proves a person holding finance.view can READ the reason.
 {
   const stamp2 = Date.now().toString(36);
-  const REASON = `ZZPIN-${stamp2} rejected because the voucher number is missing`;
+  const REASON = `ZZPIN-${stamp2} rejected because the voucher for ₹500 is missing`;
   let browser2, ctx2;
   try {
     const { chromium } = await import("playwright");
@@ -394,6 +394,27 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ok("QA-2295: the reason is in the raiser's own PAYLOAD - it always was, which is why no API pin caught this",
         String(minePayload?.decision_note ?? "").includes(stamp2),
         `decision_note=${JSON.stringify(minePayload?.decision_note ?? null)}`);
+      // QA-2356 (checker, cycle 1): rendering `decision_note` handed the approver's typed figure to
+      // a reader the SAME route blinds one line earlier - it stripped the amount from the payload
+      // and then published it inside the reason. The mask named `summary` and only `summary`, so
+      // the moment a second free-text field appeared on the row the money walked back out.
+      {
+        const blindEmail = `zzfin.blind.${stamp2}@vidysea-test.local`;
+        const mk = await req(admin, "POST", "/api/users", { name: `ZZFIN BLIND ${stamp2}`, email: blindEmail, password: PW, role: "Admin", can_edit: true, location_scope: [] });
+        ok("QA-2356 [precondition] a reader WITHOUT finance.view exists", mk.status === 201, `got ${mk.status}`);
+        const blind = await login(blindEmail, PW);
+        const seen = ((await req(blind, "GET", "/api/approvals")).data?.items ?? [])
+          .find((r) => String(r._id) === String(pending._id));
+        ok("QA-2356 [precondition] that reader really is blind to the money - the payload amount is stripped",
+          !!seen && seen.payload?.amount === undefined,
+          `payload.amount=${JSON.stringify(seen?.payload?.amount ?? null)} - if this is visible the pin below proves nothing`);
+        ok("QA-2356: the rejection REASON does not leak the figure the same response just stripped",
+          !!seen && !/₹\s?5/.test(String(seen.decision_note ?? "")),
+          `decision_note=${JSON.stringify(seen?.decision_note ?? null)} - the amount is redacted from the payload and published in the reason`);
+        ok("QA-2356 [discrimination] ...while the rest of the reason survives, so this is redaction and not deletion",
+          !!seen && String(seen.decision_note ?? "").includes(`ZZPIN-${stamp2}`),
+          `decision_note=${JSON.stringify(seen?.decision_note ?? null)} - over-redaction hides the reason as effectively as the leak did`);
+      }
       ok("QA-2296: the decision TIME is stored, not only the request time",
         !!minePayload?.decided_at && String(minePayload.decided_at) !== String(minePayload.createdAt),
         `decided_at=${JSON.stringify(minePayload?.decided_at ?? null)} createdAt=${JSON.stringify(minePayload?.createdAt ?? null)}`);
@@ -447,6 +468,43 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ok("QA-2295: ...and the entry is shown as Rejected beside it, so the reason has something to explain",
         /Rejected/i.test(bodyText),
         `no "Rejected" anywhere on the raiser's costs page`);
+
+      // QA-2357 (checker, cycle 1): the admin/page.tsx half of this unit was pinned by NOTHING -
+      // delete either render and the suite stayed 50/0, which makes QA-2296's fix indistinguishable
+      // from its absence. The one QA-2296 assertion tested STORAGE, which nothing disputed. So the
+      // approver's own screen is driven too, in the same browser run.
+      {
+        const actx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const ap = await actx.newPage();
+          await ap.goto(BASE, { waitUntil: "networkidle" });
+          const ab = ap.locator('input[type="email"], input[name="email"]').first();
+          if (await ab.count()) {
+            await ab.fill("admin@vidysea.com");
+            await ap.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+            await ap.locator('button[type="submit"]').first().click();
+            await ap.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          await ap.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
+          // Find the status filter by its OPTIONS, never by position - a new <select> above it
+          // would silently make this pin drive the wrong control.
+          const sels = ap.locator("select");
+          for (let n = 0; n < (await sels.count()); n++) {
+            const opts = (await sels.nth(n).locator("option").allTextContents()).join("|");
+            if (/Rejected/i.test(opts)) { await sels.nth(n).selectOption({ label: /Rejected/i.test(opts) ? "Rejected" : undefined }).catch(() => {}); break; }
+          }
+          await ap.waitForFunction((s) => document.body.innerText.includes(s), REASON, { timeout: 30000 }).catch(() => {});
+          const abody = await ap.locator("body").innerText();
+          ok("QA-2295: the approver's own screen shows the reason that was typed",
+            abody.includes(REASON),
+            `/admin?tab=Approvals does not contain "${REASON}" - the render is unpinned and could be deleted unnoticed. body starts: ${abody.slice(0, 240)}`);
+          ok("QA-2296: the DECISION time is on that screen, not only the request time",
+            (() => { const k = abody.indexOf("decided by"); return k >= 0 && /\d/.test(abody.slice(k, k + 80)) && abody.slice(k, k + 80).includes("·"); })(),
+            `no 'decided by X · <time>' on the approvals screen - QA-2296 renders decided_at and nothing asserted it. body starts: ${abody.slice(0, 240)}`);
+        } finally {
+          try { await actx.close(); } catch {}
+        }
+      }
     }
   } catch (e) {
     ok("QA-2295: the browser block ran without error", false, String((e && e.message) || e).slice(0, 300));

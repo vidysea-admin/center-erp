@@ -637,8 +637,16 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     out.payload = stripMoneyKeys(payload as Record<string, unknown>);
   }
-  // Redact the sentence using the ORIGINAL payload — the stripped one no longer knows the values.
-  if (typeof out.summary === "string") out.summary = redactMoneyInText(out.summary, payload);
+  // QA-2356 (checker, qa-2295 cycle 1): this used to redact `summary` and nothing else, so the
+  // moment a second free-text field appeared on the row the money walked straight back out. That
+  // field is `decision_note` - the approver types the reason a cost was refused, and a refusal
+  // reason names the figure almost by definition ("₹12,500 without a voucher"). One line above,
+  // this same function was stripping that very amount out of the payload for the same reader.
+  // Naming ONE field is the defect; QA-1865's rule is every string, decided once, here.
+  // Redact using the ORIGINAL payload - the stripped one no longer knows the values.
+  for (const k of Object.keys(out)) {
+    if (typeof out[k] === "string") out[k] = redactMoneyInText(out[k], payload);
+  }
   return out as T;
 }
 

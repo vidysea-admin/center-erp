@@ -184,7 +184,10 @@ function CostsInner() {
               the ledger INSTEAD of their own submissions and never read why one was rejected.
               It is now unconditional - gated on having submitted anything, not on lacking a right -
               and the ledger below is no longer its alternative. */}
-          {mine.length > 0 && (
+          {/* QA-2358: gating on rows alone made "Nothing submitted yet" unreachable - a post-only
+              raiser with no submissions got no section at all, which reads as a broken page rather
+              than an empty one. A holder of finance.view still sees it only when it has rows. */}
+          {(mine.length > 0 || postOnly) && (
 
             <Section title="My submissions">
               <DataTable rows={mine} loading={loading}

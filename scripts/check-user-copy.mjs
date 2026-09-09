@@ -321,6 +321,20 @@ for (const file of walk(root)) {
   if (rel && curNote.includes(tag)) passed++;
   else { failed++; pushStructural(`lib/version.ts: the published note does not mention ${tag} — RELEASE was bumped without writing what changed`); }
 
+  // QA-2336: an archive constant DECLARED and never wired into the chain is published nowhere.
+  // The chain's own comment has warned about this since -247, and it happened twice more anyway,
+  // on -298 and -299 - the -300 live checker found QA-2301's byte-perfect restoration of the -299
+  // text sitting in a constant no reader can reach. A warning comment is not a guard; this is.
+  {
+    const chain = (src.split(/const RELEASE_NOTE_ARCHIVE\s*=/)[1] ?? "");
+    const declared = [...src.matchAll(/const RELEASE_NOTE_ARCHIVE_(\d+)\s*=/g)].map((m) => m[1]);
+    const orphans = declared.filter((n) => !new RegExp(`RELEASE_NOTE_ARCHIVE_${n}\\b`).test(chain));
+    if (declared.length && !orphans.length) passed++;
+    else {
+      failed++;
+      pushStructural(`lib/version.ts: release note(s) ${orphans.join(", ") || "(none declared)"} are stored but published nowhere - add them to the archive chain, which is the second half of every bump`);
+    }
+  }
   // -251 (QA-289, S1): the Locations LIST must never carry a live portal credential - for ANYONE,
   // the Admin included. The old gate was `maskLocationSecrets(items, user.role === "Admin")`, which
   // answered WHO may see it and never WHETHER it belongs on an unasked screen; for an Admin the
