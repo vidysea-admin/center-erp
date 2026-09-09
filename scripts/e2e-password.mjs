@@ -450,7 +450,7 @@ await retireSubject();
           // Arm it with a code this file knows - the mailed code is unrecoverable by design
           // (QA-142: the logged subject is masked), which is the same reason `arm()` exists below.
           await db.collection("publictokens").updateOne({ _id: heldRow._id },
-            { $set: { otp_hash: sha(CODE), otp_attempts: 0, otp_verified: false, otp_expires_at: new Date(Date.now() + 10 * 60_000) } });
+            { $set: { otp_hash: crypto.createHash("sha256").update(CODE).digest("hex"), otp_attempts: 0, otp_verified: false, otp_expires_at: new Date(Date.now() + 10 * 60_000) } });
 
           const again = await req("", "POST", "/api/public/forgot-password",
             { action: "request", email: email2 }, { "x-forwarded-for": "198.51.100.11" });
@@ -471,6 +471,49 @@ await retireSubject();
           ok("QA-2260: the token the person HELD still verifies after an in-cooldown resend",
             heldVerify.status === 200,
             `got ${heldVerify.status} - the held token stopped working after asking again, which is QA-2201 by its fourth route`);
+
+          // QA-2290: THE OTHER SIDE OF THE SAME MINUTE, and the reason this pin exists is a note
+          // rather than a bug. -299's public note said "asking again does not cancel a code you
+          // are already holding" - true INSIDE the cooldown, which is the only case anyone had
+          // measured, and false outside it: the request path runs
+          // `updateMany({active:true},{active:false})` before minting, deliberately, so that one
+          // address never has two live codes in two mails. The sentence was written from the
+          // measured case with its boundary deleted, which is QA-2088's shape exactly and the
+          // fifth such clause in seven notes.
+          //
+          // THE FIRST VERSION OF THIS PIN COULD NOT HAVE PASSED, and it was caught by reading the
+          // mechanism before running it. It aged the challenge's `createdAt` to escape the
+          // cooldown - but `emailChallengeGate` (rate-limit.ts:88) reads an IN-MEMORY buckets Map,
+          // not the document, so the second request would have been refused as in-cooldown and the
+          // old challenge would still be active: red on a product behaving exactly as described.
+          // That is the mirror of this repo's most-filed defect, produced here inside the pin
+          // written to close a note that had the same shape.
+          //
+          // So pin the MECHANISM the note describes, without waiting 60 s for a wall-time cooldown
+          // that cannot be advanced from outside the process: mint a live challenge for a FRESH
+          // address directly (the suite already does this), then make ONE ordinary request for that
+          // address. No cooldown bucket exists for it, so the request proceeds - and if the
+          // "one live code per address" rule holds, the minted challenge is dead afterwards.
+          // DISCLOSED LIMIT: this exercises the burn, not two API requests a minute apart.
+          const burnEmail = "fp-burn." + stamp + "@vidysea-test.local";
+          const burnToken = crypto.randomBytes(16).toString("hex");
+          await db.collection("users").insertOne({
+            name: "FP Burn " + stamp, email: burnEmail, role: "Operations", active: true,
+            approval_status: "Approved", createdAt: new Date(), updatedAt: new Date(),
+          });
+          await db.collection("publictokens").insertOne({
+            token: burnToken, purpose: "password_reset", email: burnEmail, active: true,
+            otp_hash: crypto.createHash("sha256").update(CODE).digest("hex"), otp_attempts: 0, otp_verified: false,
+            createdAt: new Date(), updatedAt: new Date(),
+          });
+          const burnAsk = await req("", "POST", "/api/public/forgot-password", { action: "request", email: burnEmail });
+          ok("QA-2290 [precondition] the request for a never-asked address was answered, not rate-limited",
+            burnAsk.status === 200, `got ${burnAsk.status} - a 429 here would make the assertion below vacuous`);
+          const burnedRow = await db.collection("publictokens").findOne({ token: burnToken });
+          ok("QA-2290: a fresh request REPLACES any live code for that address - the public note must say where that starts",
+            burnedRow?.active === false,
+            `pre-existing challenge active=${JSON.stringify(burnedRow?.active)} - if this stays true the product no longer burns the old code and -300's note is the wrong one`);
+          await db.collection("users").deleteOne({ email: burnEmail });
         }
 
         // The victim's own challenge must be untouched by the stranger's request - the fix must
@@ -538,7 +581,7 @@ await retireSubject();
         const token = crypto.randomBytes(16).toString("hex");
         await db.collection("publictokens").insertOne({
           token, purpose: "password_reset", email: fpEmail, active: true,
-          otp_hash: sha(CODE), otp_attempts: 0, otp_verified: false,
+          otp_hash: crypto.createHash("sha256").update(CODE).digest("hex"), otp_attempts: 0, otp_verified: false,
           otp_expires_at: new Date(Date.now() + 10 * 60_000),
           createdAt: new Date(), updatedAt: new Date(),
         });

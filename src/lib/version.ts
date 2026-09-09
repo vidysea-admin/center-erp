@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-299";
+export const RELEASE = "2026.08.14-300";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,20 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-300 changes nothing about what this system does. It corrects one sentence -299 published "  +
+  "here about its own password-reset feature, and states the boundary that sentence left out. "  +
+  "-299 said that asking for a code again does not cancel a code you are already holding. That "  +
+  "is true only for the first minute. Inside that minute the system deliberately keeps the "  +
+  "challenge you already have and tells you to wait; after it, asking again REPLACES the code, "  +
+  "and the older one stops working. That is on purpose - one live code per address, rather than "  +
+  "two valid codes sitting in two mails - but the note described only the case that had been "  +
+  "measured and dropped the boundary, which made it wrong about the ordinary case: ask, do not "  +
+  "see the mail, wait, ask again. If that happens to you, use the NEWEST mail. Nothing about the "  +
+  "feature itself has changed in this build; only the description. This is the fifth public note "  +
+  "in the last seven to carry a clause that did not survive checking, and it is recorded here "  +
+  "rather than quietly edited because this text is the one place in the system where a wrong "  +
+  "sentence is published to anyone with no login and nothing downstream re-reads it.";
+const RELEASE_NOTE_ARCHIVE_299 =
   "-299 adds two things people asked for and corrects a sentence this endpoint published about "  +
   "-298. FIRST: anyone with an account can now set their own password without anybody sharing "  +
   "one. The login screen carries a link; you give your email address, the system mails you a "  +
