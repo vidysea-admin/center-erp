@@ -4,8 +4,8 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } f
 import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
-import { audit, auditDiff } from "@/lib/audit";
-import { costFinanceAuditOutboxIsSettled, settleFinanceAuditEvents } from "@/lib/approvals";
+import { auditDiff } from "@/lib/audit";
+import { costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, settleFinanceAuditEvents } from "@/lib/approvals";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -85,7 +85,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   return NextResponse.json({ item: doc });
 });
 
-export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   await requireFinance(user, "approve");
@@ -97,12 +97,21 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     throw new HttpError(409, "A pre-approved cost cannot be deleted after its commitment has been applied.");
   }
-  // Creation is a durable owner-backed event. Deleting its owner before the event is acknowledged
-  // would erase the only recovery path, so drain first and fail closed while a poison/foreign
-  // deterministic occupant or temporary audit outage keeps the event unconfirmed.
-  await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
+  // Both creation and deletion are durable owner-backed events. Stage the deletion event before
+  // the irreversible remove, then fail closed until every event is confirmed in AuditLog. A crash
+  // or outage can therefore resume from this CostEntry instead of losing the deletion history.
+  await ensureCostDeletionAuditEvent({
+    costId: doc._id,
+    actor: user.id,
+    oldValue: { amount: doc.amount, note: doc.note },
+  });
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const injectedFailure = isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "before"
+    ? "before" as const
+    : isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "after" ? "after" as const : undefined;
+  await settleFinanceAuditEvents({ costIds: [doc._id], failure: injectedFailure }).catch(() => {});
   if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
-    throw new HttpError(409, "This cost's creation history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
+    throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
   }
   const removed = await CostEntry.collection.deleteOne({
     _id: doc._id,
@@ -123,6 +132,5 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   if (removed.deletedCount !== 1) {
     throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
   }
-  await audit({ entity: "CostEntry", entityId: doc._id, field: "deleted", oldValue: { amount: doc.amount, note: doc.note }, actor: user.id });
   return NextResponse.json({ ok: true });
 });

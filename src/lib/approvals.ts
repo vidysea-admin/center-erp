@@ -54,6 +54,16 @@ function sameAuditValue(a: unknown, b: unknown) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+// Existing production costs pre-date reservation_state and are visible liabilities by model
+// contract. Their deletion audit must be recoverable exactly like a newer Applied row, while
+// Pending/Cancelled fencing rows remain ineligible.
+const COST_AUDIT_OWNER_ELIGIBLE = {
+  $or: [
+    { reservation_state: "Applied" },
+    { reservation_state: { $exists: false } },
+  ],
+};
+
 async function deliverOwnerEvents(
   collection: any,
   ownerId: Types.ObjectId,
@@ -64,7 +74,12 @@ async function deliverOwnerEvents(
   if (!owner) return;
   const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
   for (const event of owner._audit_events ?? []) {
-    if (!event?.event_id || delivered.has(String(event.event_id))) continue;
+    if (!event?.event_id) {
+      // A malformed owner is still undelivered. Returning success here would let it consume the
+      // drain budget forever while the query keeps selecting it on every later read.
+      throw new Error(`Audit owner ${ownerId} contains an event without an event_id.`);
+    }
+    if (delivered.has(String(event.event_id))) continue;
     const eventId = new Types.ObjectId(String(event.event_id));
     const durable = {
       _id: eventId,
@@ -112,6 +127,44 @@ async function deliverOwnerEvents(
   }
 }
 
+// The deletion row must be recoverable before the CostEntry owner can disappear. Claim one
+// deterministic owner-backed event first; concurrent or later authorized deleters reuse the
+// original claimant's event rather than appending a second audit identity.
+export async function ensureCostDeletionAuditEvent(input: {
+  costId: unknown;
+  actor: unknown;
+  oldValue: { amount: unknown; note: unknown };
+}) {
+  const costId = new Types.ObjectId(String(input.costId));
+  const event = financeAuditEvent(`cost:${costId}:deleted`, {
+    entity: "CostEntry",
+    entity_id: costId,
+    field: "deleted",
+    old_value: input.oldValue,
+    actor: new Types.ObjectId(String(input.actor)),
+  });
+  await CostEntry.collection.updateOne(
+    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, "_audit_events.event_id": { $ne: event.event_id } },
+    { $push: { _audit_events: event } },
+  );
+  const owner: any = await CostEntry.collection.findOne(
+    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE },
+    { projection: { _audit_events: 1 } },
+  );
+  const stored = (owner?._audit_events ?? []).find((candidate: any) =>
+    String(candidate?.event_id ?? "") === event.event_id);
+  if (!stored
+      || stored.entity !== "CostEntry"
+      || !sameAuditValue(stored.entity_id, costId)
+      || stored.field !== "deleted"
+      || !sameAuditValue(stored.old_value, event.old_value)
+      || stored.actor_type !== "USER"
+      || !stored.actor) {
+    throw new Error(`Cost ${costId} has a foreign deletion-audit claim.`);
+  }
+  return event.event_id;
+}
+
 export async function settleFinanceAuditEvents(input: {
   costIds?: unknown[];
   approvalIds?: unknown[];
@@ -119,7 +172,7 @@ export async function settleFinanceAuditEvents(input: {
 }) {
   let failure = input.failure;
   for (const id of input.costIds ?? []) {
-    await deliverOwnerEvents(CostEntry.collection, new Types.ObjectId(String(id)), { reservation_state: "Applied" }, failure);
+    await deliverOwnerEvents(CostEntry.collection, new Types.ObjectId(String(id)), COST_AUDIT_OWNER_ELIGIBLE, failure);
     failure = undefined;
   }
   for (const id of input.approvalIds ?? []) {
@@ -128,8 +181,8 @@ export async function settleFinanceAuditEvents(input: {
   }
 }
 
-export async function costFinanceAuditOutboxIsSettled(id: unknown) {
-  const owner: any = await CostEntry.collection.findOne(
+async function ownerFinanceAuditOutboxIsSettled(collection: any, id: unknown) {
+  const owner: any = await collection.findOne(
     { _id: new Types.ObjectId(String(id)) },
     { projection: { _audit_events: 1, _audit_delivered_event_ids: 1 } },
   );
@@ -137,6 +190,10 @@ export async function costFinanceAuditOutboxIsSettled(id: unknown) {
   const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
   return (owner._audit_events ?? []).every((event: any) =>
     !!event?.event_id && delivered.has(String(event.event_id)));
+}
+
+export async function costFinanceAuditOutboxIsSettled(id: unknown) {
+  return ownerFinanceAuditOutboxIsSettled(CostEntry.collection, id);
 }
 
 // Recovery does not depend on another write. Every normal finance ledger/approval list read calls
@@ -175,6 +232,9 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
         try {
           if (kind === "cost") await settleFinanceAuditEvents({ costIds: [owner._id] });
           else await settleFinanceAuditEvents({ approvalIds: [owner._id] });
+          if (!(await ownerFinanceAuditOutboxIsSettled(collection, owner._id))) {
+            throw new Error(`Audit owner ${owner._id} remains unsettled after delivery.`);
+          }
           deliveredOwners++;
           if (deliveredOwners >= limit) break;
         } catch {
@@ -186,7 +246,7 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
     }
   }
 
-  await drainOwners(CostEntry.collection, { reservation_state: "Applied" }, "cost");
+  await drainOwners(CostEntry.collection, COST_AUDIT_OWNER_ELIGIBLE, "cost");
   await drainOwners(ApprovalRequest.collection, { status: { $in: ["Approved", "Rejected"] } }, "approval");
 }
 

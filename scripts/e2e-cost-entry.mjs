@@ -278,7 +278,8 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 }
 
 // One poison page must not monopolise every future drain. The valid owner is deliberately the
-// 101st id, after one full page of malformed events that each throw before delivery.
+// 101st id, after one full page of missing/empty ids: the exact silent-success branch that used
+// to consume all 100 delivery-budget slots without settling any owner.
 {
   const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
     .find((c) => !c.pre_approved && c.active !== false);
@@ -293,10 +294,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     _audit_events: [event], createdAt: new Date(), updatedAt: new Date(),
   });
   if (cat?._id && actor?._id) {
-    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, {
-      event_id: `poison-${i}`, entity: "CostEntry", entity_id: id, field: null,
-      old_value: null, new_value: "poison", actor: actor._id, actor_type: "USER",
-    })));
+    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, i % 2 === 0 ? {} : { event_id: "" })));
     await rawCosts.insertOne(ownerBase(validOwnerId, {
       event_id: validEventId.toHexString(), entity: "CostEntry", entity_id: validOwnerId, field: null,
       old_value: null, new_value: "valid after poison page", actor: actor._id, actor_type: "USER",
@@ -304,7 +302,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     const drained = await req(admin, "GET", "/api/costs");
     const validAudit = await rawAudits.findOne({ _id: validEventId });
     const validOwner = await rawCosts.findOne({ _id: validOwnerId });
-    ok("audit drain pagination: 100 poison owners cannot starve the later valid owner",
+    ok("audit drain pagination: 100 missing/empty-id owners cannot consume the budget or starve the later valid owner",
       drained.status === 200 && validAudit?.new_value === "valid after poison page"
         && (validOwner?._audit_delivered_event_ids ?? []).includes(validEventId.toHexString()),
       JSON.stringify({ status: drained.status, validAudit: validAudit?.new_value, delivered: validOwner?._audit_delivered_event_ids }));
@@ -312,6 +310,47 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     await rawAudits.deleteOne({ _id: validEventId });
   } else {
     ok("audit drain pagination [precondition]: category and actor exist", false, JSON.stringify({ category: cat?._id, actor: actor?._id }));
+  }
+}
+
+// The deletion audit itself must be durable before hard delete. This failure is injected after the
+// creation event is already acknowledged, so a surviving owner cannot be mistaken for the older
+// creation-outbox guard. An ordinary read recovers the deletion event exactly once; only then may a
+// retry remove the owner.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, amount: 614, note: `delete-audit-failure-${stamp}`,
+  }));
+  const costId = made.data?.item?._id;
+  if (costId) {
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`);
+    const ownerAfterRefusal = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionEvent = (ownerAfterRefusal?._audit_events ?? []).find((event) => event?.field === "deleted");
+    const deletionEventId = deletionEvent?.event_id ? new ObjectId(String(deletionEvent.event_id)) : null;
+    const auditBeforeRecovery = deletionEventId ? await rawAudits.countDocuments({ _id: deletionEventId }) : -1;
+    ok("deletion audit recovery: an audit outage refuses hard delete and preserves an unacknowledged owner-backed deletion event",
+      refused.status === 409 && !!ownerAfterRefusal && !!deletionEventId && auditBeforeRecovery === 0
+        && !(ownerAfterRefusal?._audit_delivered_event_ids ?? []).includes(String(deletionEvent?.event_id)),
+      JSON.stringify({ status: refused.status, owner: !!ownerAfterRefusal, event: deletionEvent?.event_id, auditBeforeRecovery, delivered: ownerAfterRefusal?._audit_delivered_event_ids }));
+
+    const drain = await req(admin, "GET", "/api/costs");
+    const ownerAfterDrain = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionAudit = deletionEventId ? await rawAudits.findOne({ _id: deletionEventId }) : null;
+    ok("deletion audit recovery: an ordinary read delivers and acknowledges the deletion event exactly once while the owner remains",
+      drain.status === 200 && !!ownerAfterDrain && deletionAudit?.field === "deleted"
+        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1
+        && (ownerAfterDrain?._audit_delivered_event_ids ?? []).filter((x) => String(x) === String(deletionEvent?.event_id)).length === 1,
+      JSON.stringify({ drain: drain.status, owner: !!ownerAfterDrain, audit: deletionAudit?.field, delivered: ownerAfterDrain?._audit_delivered_event_ids }));
+
+    const removed = await req(admin, "DELETE", `/api/costs/${costId}`);
+    ok("deletion audit recovery: only after durable acknowledgement does retry delete once without duplicating its audit",
+      removed.status === 200 && !(await rawCosts.findOne({ _id: new ObjectId(String(costId)) }))
+        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1,
+      `status=${removed.status} auditCount=${await rawAudits.countDocuments({ _id: deletionEventId })}`);
+  } else {
+    ok("deletion audit recovery [precondition]: an ordinary cost exists", false, `status=${made.status}`);
   }
 }
 
@@ -992,6 +1031,23 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       const rawHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
       const rawCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
       const rawRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      const decisionSnapshot = (row) => JSON.stringify({
+        approved_amount: { present: Object.prototype.hasOwnProperty.call(row ?? {}, "approved_amount"), value: row?.approved_amount },
+        decision_note: { present: Object.prototype.hasOwnProperty.call(row ?? {}, "decision_note"), value: row?.decision_note },
+        decision_map_to_category: {
+          present: Object.prototype.hasOwnProperty.call(row ?? {}, "decision_map_to_category"),
+          value: row?.decision_map_to_category === undefined ? undefined : String(row.decision_map_to_category),
+        },
+      });
+      const immutableDecision = decisionSnapshot(rawRequest);
+      const snapshotMutants = [
+        { ...rawRequest, approved_amount: 1 },
+        { ...rawRequest, decision_note: "changed note" },
+        { ...rawRequest, decision_map_to_category: new ObjectId() },
+      ].map(decisionSnapshot);
+      ok("Applying saga immutability [instrument]: the raw snapshot distinguishes amount, note and category-map mutations independently",
+        snapshotMutants.every((mutant) => mutant !== immutableDecision) && new Set(snapshotMutants).size === 3,
+        JSON.stringify({ immutableDecision, snapshotMutants }));
       const opsUser = await rawUsers.findOne({ email: "ops@vidysea.com" });
       const fillerIds = Array.from({ length: 101 }, () => new ObjectId());
       if (opsUser?._id) {
@@ -1043,23 +1099,28 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       const changedAmount = await req(admin, "POST", `/api/approvals/${requestId}`, {
         decision: "Approved", approved_amount: 1, note: "publish interruption",
       });
+      const afterAmountAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
       ok("Applying saga: retry cannot change the already-claimed sanctioned amount",
-        changedAmount.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
-        `got ${changedAmount.status}`);
+        changedAmount.status === 409 && afterAmountAttack?.status === "Applying"
+          && decisionSnapshot(afterAmountAttack) === immutableDecision,
+        `got ${changedAmount.status} before=${immutableDecision} after=${decisionSnapshot(afterAmountAttack)}`);
       const changedNote = await req(admin, "POST", `/api/approvals/${requestId}`, {
         decision: "Approved", note: "changed note",
       });
+      const afterNoteAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
       ok("Applying saga: retry cannot change the already-claimed decision note",
-        changedNote.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
-        `got ${changedNote.status}`);
+        changedNote.status === 409 && afterNoteAttack?.status === "Applying"
+          && decisionSnapshot(afterNoteAttack) === immutableDecision,
+        `got ${changedNote.status} before=${immutableDecision} after=${decisionSnapshot(afterNoteAttack)}`);
       const mapTarget = (await catList()).find((c) => c.active !== false && String(c._id) !== String(requestId));
       const changedMap = await req(admin, "POST", `/api/approvals/${requestId}`, {
         decision: "Approved", map_to_category: mapTarget?._id,
       });
+      const afterMapAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
       ok("Applying saga: retry cannot change the already-claimed category mapping",
         !!mapTarget && changedMap.status === 409
-          && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
-        `target=${mapTarget?._id} got ${changedMap.status}`);
+          && afterMapAttack?.status === "Applying" && decisionSnapshot(afterMapAttack) === immutableDecision,
+        `target=${mapTarget?._id} got ${changedMap.status} before=${immutableDecision} after=${decisionSnapshot(afterMapAttack)}`);
       await rawApprovals.updateOne(
         { _id: new ObjectId(String(requestId)), status: "Applying" },
         { $unset: { "payload._test_fail_after_publish_before_cost_apply": "" } },
