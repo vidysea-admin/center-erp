@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
-import { assertCostEntryValid } from "@/lib/rules";
+import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { audit, auditDiff } from "@/lib/audit";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
@@ -77,6 +77,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const before = doc.toObject();
   assertCostEntryValid({ ...before, ...patch }); // Rule 37 on the merged entry
+  if (patch.category !== undefined) await assertActiveCostCategory(patch.category);
   Object.assign(doc, patch);
   await doc.save({ validateModifiedOnly: true });
   await auditDiff("CostEntry", doc._id, before, patch, user.id);

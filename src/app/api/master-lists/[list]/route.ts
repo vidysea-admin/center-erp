@@ -4,6 +4,7 @@ import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib
 import { hasPermission, FINANCE_VIEW, maskCostCategoryMoneyList, requireFinance, COST_CATEGORY_MONEY_FIELDS, COST_CATEGORY_PREAPPROVAL_FIELDS } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { CostCategory, DropReason, FailureReason, JobRole, Scheme, SCHEME } from "@/models";
+import { Types } from "mongoose";
 
 const LISTS: Record<string, any> = {
   "cost-categories": CostCategory, "drop-reasons": DropReason, "failure-reasons": FailureReason,
@@ -71,7 +72,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // F-B17 (2026-08-14): "Trainer Fee" and "Trainer fee" both existed in production and
   // the trainer-fee auto-suggest matched neither reliably. Names are unique per list,
   // case-insensitively — the refusal names the existing entry so the fix is obvious.
-  const dupe = await Model.findOne({ name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" } }).lean();
+  const nameFilter = { name: { $regex: `^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" } };
+  const dupe = list === "cost-categories"
+    ? await CostCategory.collection.findOne(nameFilter)
+    : await Model.findOne(nameFilter).lean();
   if (dupe) throw new HttpError(409, `"${dupe.name}" already exists in this list — names are unique (case-insensitive).`);
   await assertMayWriteCategoryMoney(user, list, body);
   const extras = await coerceExtras(list, body);
@@ -124,8 +128,16 @@ export async function coerceExtras(list: string, body: Record<string, any>): Pro
   // subhead is a taxonomy nobody asked for and a report nobody can read; a category that is its own
   // parent is a cycle that hangs any walk of the tree.
   if (list === "cost-categories" && extras.parent) {
-    const parent = await CostCategory.findById(String(extras.parent)).select("parent name").lean<any>();
+    // Raw read distinguishes an internal staged head from a genuinely missing one. Neither staged
+    // nor deactivated taxonomy may accept children through the normal Admin master-list door.
+    const parent = await CostCategory.collection.findOne(
+      { _id: new Types.ObjectId(String(extras.parent)) },
+      { projection: { parent: 1, name: 1, active: 1, staged_by_approval: 1 } },
+    );
     if (!parent) throw new HttpError(400, "That head does not exist.");
+    if (parent.active === false || parent.staged_by_approval) {
+      throw new HttpError(409, `"${parent.name}" is inactive or still being approved, so it cannot receive a subhead.`);
+    }
     if (parent.parent) {
       throw new HttpError(400, `"${parent.name}" is itself a subhead — cost heads are two levels deep (head → subhead), so a subhead cannot have children.`);
     }

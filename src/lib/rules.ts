@@ -2620,9 +2620,8 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
 // lines and would have shipped the CEO's 29-vs-30 example backwards: the one case he named as
 // needing approval is exactly the one it would have skipped.
 export type PreApprovalReservation = {
-  category_id: unknown;
-  lease_field: string;
-  token: string;
+  cost_entry_id: Types.ObjectId;
+  state: "Pending" | "Applied" | "Cancelled";
 };
 export type PreApproval = {
   applied: boolean;
@@ -2631,10 +2630,135 @@ export type PreApproval = {
   reservation?: PreApprovalReservation;
 };
 
+type CostEntryDraft = Record<string, any> & { _id: Types.ObjectId };
+const COST_ENTRY_IMMUTABLE_FIELDS = [
+  "_id", "entry_date", "location", "batch", "trainer", "category", "amount",
+  "requested_amount", "approval_request", "payment_status", "note", "vendor_payee",
+  "voucher_no", "payment_mode", "pre_approved_applied", "pre_approved_basis",
+  "pre_approved_unit", "reservation_state", "reservation_expires_at", "reservation_kind",
+  "entered_by",
+] as const;
+
+function stableCostValue(value: unknown): string {
+  if (value === undefined) return "<missing>";
+  if (value === null) return "<null>";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object" && value && "toHexString" in value) return String(value);
+  return JSON.stringify(value);
+}
+
+function assertSameCostEntry(existing: Record<string, any>, expected: CostEntryDraft) {
+  const mismatched = COST_ENTRY_IMMUTABLE_FIELDS.filter(
+    (field) => stableCostValue(existing[field]) !== stableCostValue(expected[field]),
+  );
+  if (mismatched.length) {
+    throw new HttpError(409, `A cost entry with this id already exists with different immutable details (${mismatched.join(", ")}). Nothing was retried.`);
+  }
+}
+
+async function readBackCostEntry(expected: CostEntryDraft) {
+  const existing = await CostEntry.collection.findOne({ _id: expected._id });
+  if (!existing) return null;
+  assertSameCostEntry(existing as any, expected);
+  return (CostEntry as any).hydrate(existing);
+}
+
+// One checked-create for every route that materialises a liability. The id is allocated by the
+// caller before the write. If Mongo reports an error after an ambiguous acknowledgement, the exact
+// row is accepted only when its FULL immutable business payload and actor match; an id collision
+// with different money/context fails closed.
+export async function createCostEntryIdempotently(
+  entry: CostEntryDraft,
+  options: { simulateAmbiguousAfterCreate?: boolean } = {},
+) {
+  try {
+    const created = await CostEntry.create(entry);
+    if (options.simulateAmbiguousAfterCreate) {
+      throw new Error("test-only ambiguous CostEntry acknowledgement");
+    }
+    return created;
+  } catch (error) {
+    const existing = await readBackCostEntry(entry);
+    if (existing) return existing;
+    throw error;
+  }
+}
+
+export async function assertActiveCostCategory(categoryId: unknown) {
+  if (!categoryId) throw new HttpError(400, "A cost head is required.");
+  // Raw read is intentional: a staged head is hidden by schema middleware, but the write guard
+  // must distinguish it from a missing row and refuse it explicitly.
+  const category = await CostCategory.collection.findOne(
+    { _id: new Types.ObjectId(String(categoryId)) },
+    { projection: { _id: 1, name: 1, active: 1, staged_by_approval: 1 } },
+  );
+  if (!category) throw new HttpError(400, "That cost head does not exist.");
+  if (category.active === false || category.staged_by_approval) {
+    throw new HttpError(409, `"${category.name}" is inactive or still being approved, so new costs cannot be filed under it.`);
+  }
+  return category;
+}
+
+async function persistFormulaReservation(
+  entry: CostEntryDraft,
+  options: { simulateAmbiguousAfterCreate?: boolean } = {},
+) {
+  // Raw insertion is required so schema read middleware cannot hide the row from its own writer,
+  // but raw must not mean unvalidated: reject enum/cast/required failures before any reservation
+  // becomes durable.
+  // Canonicalize absent optional values before crossing the native-driver boundary. The driver
+  // may otherwise persist `undefined` as null while Mongoose omits it, making an ambiguous-write
+  // read-back reject the writer's own otherwise-identical payload.
+  const durableEntry = Object.fromEntries(
+    Object.entries(entry).filter(([, value]) => value !== undefined),
+  ) as CostEntryDraft;
+  const validationError = new CostEntry(durableEntry).validateSync();
+  if (validationError) throw validationError;
+  const now = new Date();
+  try {
+    await CostEntry.collection.insertOne({ ...durableEntry, createdAt: now, updatedAt: now });
+    if (options.simulateAmbiguousAfterCreate) {
+      throw new Error("test-only ambiguous formula-reservation acknowledgement");
+    }
+  } catch (error) {
+    const existing = await readBackCostEntry(durableEntry);
+    if (!existing) throw error;
+  }
+}
+
+async function cancelFormulaReservation(reservation: PreApprovalReservation, reason: string) {
+  const collection: any = CostEntry.collection;
+  const cancelled = await collection.updateOne(
+    { _id: reservation.cost_entry_id, reservation_state: "Pending" },
+    {
+      $set: { reservation_state: "Cancelled", reservation_cancel_reason: reason, updatedAt: new Date() },
+      $unset: { reservation_expires_at: "" },
+    },
+  );
+  if (cancelled.modifiedCount === 1) {
+    reservation.state = "Cancelled";
+    return;
+  }
+  const current = await collection.findOne({ _id: reservation.cost_entry_id }, { projection: { reservation_state: 1 } });
+  if (current?.reservation_state === "Cancelled") {
+    reservation.state = "Cancelled";
+    return;
+  }
+  throw new HttpError(409, "The pre-approval reservation changed while it was being cancelled. It was not posted or queued; retry after refreshing.");
+}
+
 export async function evaluatePreApproval(
   categoryId: unknown,
   amount: number,
-  context: { batch?: unknown; reserve?: boolean } = {},
+  context: {
+    batch?: unknown;
+    reservation?: {
+      entry: CostEntryDraft;
+      expiresInMs?: number;
+      pauseAfterPersistMs?: number;
+      simulateAmbiguousAfterCreate?: boolean;
+    };
+  } = {},
 ): Promise<PreApproval> {
   const cat = categoryId
     ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis pre_approved_unit pre_approved_min_billable").lean<any>()
@@ -2680,96 +2804,123 @@ export async function evaluatePreApproval(
     };
   }
   if (unit === "Per billable passed") {
-    if (!context.batch) {
-      return {
-        applied: false, basis,
-        reason: `pre-approved on "${src.name}" at ${cap} per billable passed, but this entry has no batch whose result can be checked`,
+    let reservation: PreApprovalReservation | undefined;
+    if (context.reservation) {
+      const expiresAt = new Date(Date.now() + Math.max(50, context.reservation.expiresInMs ?? 60_000));
+      const pendingEntry: CostEntryDraft = {
+        ...context.reservation.entry,
+        pre_approved_applied: false,
+        pre_approved_basis: basis ?? undefined,
+        pre_approved_unit: "Per billable passed",
+        reservation_state: "Pending",
+        reservation_kind: "Formula",
+        reservation_expires_at: expiresAt,
       };
+      await persistFormulaReservation(pendingEntry, {
+        simulateAmbiguousAfterCreate: context.reservation.simulateAmbiguousAfterCreate,
+      });
+      reservation = { cost_entry_id: pendingEntry._id, state: "Pending" };
+      if (context.reservation.pauseAfterPersistMs) {
+        await new Promise((resolve) => setTimeout(resolve, context.reservation!.pauseAfterPersistMs));
+      }
+    }
+
+    const cancelled = async (reason: string): Promise<PreApproval> => {
+      if (reservation) await cancelFormulaReservation(reservation, reason);
+      return { applied: false, basis, reason, ...(reservation ? { reservation } : {}) };
+    };
+
+    if (!context.batch) {
+      return cancelled(`pre-approved on "${src.name}" at ${cap} per billable passed, but this entry has no batch whose result can be checked`);
     }
     const closure = await Closure.findOne({ batch: context.batch }).select("billable_passed passed").lean<any>();
     const billable = typeof closure?.billable_passed === "number"
       ? closure.billable_passed
       : typeof closure?.passed === "number" ? closure.passed : null;
     if (billable === null) {
-      return {
-        applied: false, basis,
-        reason: `pre-approved on "${src.name}" at ${cap} per billable passed, but the batch has no recorded closure result yet`,
-      };
+      return cancelled(`pre-approved on "${src.name}" at ${cap} per billable passed, but the batch has no recorded closure result yet`);
     }
     const minimum = typeof src.pre_approved_min_billable === "number" ? src.pre_approved_min_billable : 0;
     if (billable < minimum) {
-      return {
-        applied: false, basis,
-        reason: `the batch has ${billable} billable passed; this commitment starts at ${minimum}`,
-      };
+      return cancelled(`the batch has ${billable} billable passed; this commitment starts at ${minimum}`);
     }
     const totalCap = cap * billable;
-    let reservation: PreApprovalReservation | undefined;
+    const collection: any = CostEntry.collection;
+    const now = new Date();
+    // Recovery is a compare-and-swap on Pending. Once an expired zombie is Cancelled, its later
+    // Pending->Applied CAS cannot succeed. No owner may resurrect a stale row.
+    await collection.updateMany(
+      {
+        category: src._id,
+        batch: new Types.ObjectId(String(context.batch)),
+        reservation_kind: "Formula",
+        reservation_state: "Pending",
+        reservation_expires_at: { $lte: now },
+      },
+      {
+        $set: { reservation_state: "Cancelled", reservation_cancel_reason: "expired", updatedAt: now },
+        $unset: { reservation_expires_at: "" },
+      },
+    );
 
-    // A read-then-create cap is not a cap under concurrency: two requests can both read the same
-    // remainder and both post. The former implementation solved that with a durable raw usage
-    // COUNTER incremented before CostEntry.create. A killed process or an ambiguous Mongo write
-    // could therefore consume capacity forever even though the ledger contained no liability.
-    //
-    // The hidden field is now only an expiring OWNERSHIP LEASE. It serialises one category+batch
-    // calculation while the durable CostEntry rows remain the sole usage truth. A crashed owner is
-    // recoverable after expiry; a normal owner removes its exact token after confirming the insert.
-    // No rollback arithmetic exists, so retries cannot manufacture or strand capacity. Raw access
-    // is deliberate: the lease is concurrency machinery, not editable master data.
-    if (context.reserve) {
-      const usageKey = String(context.batch);
-      const leaseField = `_pre_approved_leases.${usageKey}`;
-      const collection: any = CostCategory.collection;
-      const token = crypto.randomUUID();
-      const waitUntil = Date.now() + 5_000;
-      do {
-        const now = new Date();
-        const acquired = await collection.updateOne(
-          {
-            _id: src._id,
-            $or: [
-              { [leaseField]: { $exists: false } },
-              { [`${leaseField}.expires_at`]: { $lte: now } },
-            ],
-          },
-          {
-            $set: { [leaseField]: { token, expires_at: new Date(now.getTime() + 60_000) } },
-            // Clean the obsolete counter for this partition as it is encountered. It is never
-            // read again; durable CostEntry rows below are the only committed-usage source.
-            $unset: { [`_pre_approved_usage.${usageKey}`]: "" },
-          },
-        );
-        if (acquired.modifiedCount === 1) {
-          reservation = { category_id: src._id, lease_field: leaseField, token };
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      } while (Date.now() < waitUntil);
-      if (!reservation) {
-        throw new HttpError(503, "This pre-approved cost head is being posted by someone else. Retry in a moment; no capacity was consumed.");
-      }
-    }
-
-    // Use find(), not aggregate(): auth scopes and request bodies carry string ids and Mongoose
-    // casts them for find queries but not inside aggregation pipelines (ARCHITECTURE §3.3). This
-    // recount runs only after the lease is owned, so every competing writer sees the first one's
-    // durable row rather than a speculative counter.
-    const prior = await CostEntry.find({ batch: context.batch, category: src._id, pre_approved_applied: true })
-      .select("amount").lean<any[]>();
-    const committed = prior.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    // Deterministic ObjectId ordering is the fence: every writer counts all Applied liabilities
+    // plus earlier Pending reservations. A later writer may finish first, but the earlier writer
+    // will then count that Applied row; both cannot spend the same remainder.
+    const prior = await collection.find({
+      batch: new Types.ObjectId(String(context.batch)),
+      category: src._id,
+      $or: [
+        {
+          pre_approved_applied: true,
+          $or: [
+            { reservation_state: "Applied" },
+            { reservation_state: { $exists: false } },
+          ],
+        },
+        ...(reservation ? [{
+          reservation_kind: "Formula",
+          reservation_state: "Pending",
+          _id: { $lt: reservation.cost_entry_id },
+        }] : []),
+      ],
+    }, { projection: { amount: 1 } }).toArray();
+    const committed = prior.reduce((sum: number, row: any) => sum + (Number(row.amount) || 0), 0);
     const available = Math.max(0, totalCap - committed);
     if (Number(amount) <= available) {
+      if (reservation) {
+        let applied;
+        try {
+          applied = await collection.updateOne(
+            {
+              _id: reservation.cost_entry_id,
+              reservation_state: "Pending",
+              reservation_expires_at: { $gt: new Date() },
+            },
+            {
+              $set: { reservation_state: "Applied", pre_approved_applied: true, updatedAt: new Date() },
+              $unset: { reservation_expires_at: "" },
+            },
+          );
+        } catch (error) {
+          const current = await collection.findOne({ _id: reservation.cost_entry_id }, { projection: { reservation_state: 1 } });
+          if (current?.reservation_state !== "Applied") throw error;
+          applied = { modifiedCount: 1 };
+        }
+        if (applied.modifiedCount !== 1) {
+          const current = await collection.findOne({ _id: reservation.cost_entry_id }, { projection: { reservation_state: 1 } });
+          if (current?.reservation_state !== "Applied") {
+            throw new HttpError(409, "This pre-approval reservation expired before it could be applied. Its hidden row was cancelled; retry the submission.");
+          }
+        }
+        reservation.state = "Applied";
+      }
       return {
         applied: true, basis,
         reason: `within ${cap} × ${billable} billable passed = ${totalCap} on "${src.name}" (${committed} already used)`,
         ...(reservation ? { reservation } : {}),
       };
     }
-    await releasePreApprovalReservation(reservation);
-    return {
-      applied: false, basis,
-      reason: `above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${committed} already used) on "${src.name}"`,
-    };
+    return cancelled(`above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${committed} already used) on "${src.name}"`);
   }
   if (Number(amount) <= cap) {
     return { applied: true, basis, reason: `within the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}` };
@@ -2778,19 +2929,6 @@ export async function evaluatePreApproval(
     applied: false, basis,
     reason: `above the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}`,
   };
-}
-
-export async function releasePreApprovalReservation(reservation?: PreApprovalReservation): Promise<boolean> {
-  if (!reservation) return true;
-  const collection: any = CostCategory.collection;
-  const released = await collection.updateOne(
-    {
-      _id: reservation.category_id,
-      [`${reservation.lease_field}.token`]: reservation.token,
-    },
-    { $unset: { [reservation.lease_field]: "" } },
-  );
-  return released.modifiedCount === 1;
 }
 
 
@@ -3634,6 +3772,7 @@ export async function transitionTrainer(
           { $setOnInsert: { name: "Trainer eligibility fee", active: true } },
           { upsert: true, new: true },
         );
+        await assertActiveCostCategory(cat._id);
         const already = await CostEntry.findOne({ trainer: t._id, category: cat._id }).lean();
         if (!already) {
           await CostEntry.create({

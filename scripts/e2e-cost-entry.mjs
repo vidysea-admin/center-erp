@@ -12,6 +12,8 @@
 // Its own file rather than e2e-roles.mjs: a concurrent session holds that file. One working tree,
 // two sessions — see the QA-1942/QA-609 family.
 import { requireLocalBase } from "./db-guard.mjs";
+import { MongoClient, ObjectId } from "mongodb";
+import * as XLSX from "xlsx";
 // QA-1966: never write through a BASE_URL nobody checked. This suite creates cost heads, posts
 // money and decides approvals; run against a non-local address it would do all three on production.
 const BASE = requireLocalBase("e2e-cost-entry", process.env.BASE_URL || "http://localhost:3000/erp");
@@ -34,6 +36,17 @@ async function req(cookie, method, p, body) {
   const res = await fetch(BASE + p, { method, headers: { "Content-Type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
+async function reqBuffer(cookie, p) {
+  const res = await fetch(BASE + p, { headers: { cookie } });
+  return { status: res.status, data: Buffer.from(await res.arrayBuffer()) };
+}
+
+const rawClient = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017", { serverSelectionTimeoutMS: 8000 });
+await rawClient.connect();
+const rawDb = rawClient.db((process.env.MONGODB_DB || "center_erp_ci").trim());
+const rawCosts = rawDb.collection("costentries");
+const rawCategories = rawDb.collection("costcategories");
+const rawApprovals = rawDb.collection("approvalrequests");
 
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
@@ -202,6 +215,17 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         `delete=${removedFixed.status} remains=${!!fixedAfterDelete}`);
     }
 
+    const fixedAmbiguousNote = `fixed ambiguous ${stamp}`;
+    const fixedAmbiguous = await req(ops, "POST", "/api/costs", baseEntry({
+      category: capId, amount: 400, note: fixedAmbiguousNote, _test_ambiguous_after_create: true,
+    }));
+    const fixedAmbiguousRows = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+      .filter((c) => c.note === fixedAmbiguousNote);
+    ok("fixed pre-approval ambiguity: an error after create is confirmed by deterministic id and full payload",
+      fixedAmbiguous.status === 201 && fixedAmbiguousRows.length === 1
+        && String(fixedAmbiguousRows[0]._id) === String(fixedAmbiguous.data?.item?._id),
+      JSON.stringify({ status: fixedAmbiguous.status, rows: fixedAmbiguousRows.map((c) => c._id) }));
+
     // ABOVE the cap: this is the CEO's own counter-example - *"अब अगर उसके 29 रह गए… तो वो एक बार
     // अप्रूव होनी चाहिए।"* A flag-shaped implementation waves this through, which is precisely the
     // case he named as needing approval.
@@ -324,14 +348,33 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     ok("formula recovery [precondition]: a fresh per-pass commitment exists", recoveryFormula.status === 201 && !!recoveryId, `got ${recoveryFormula.status}`);
     if (recoveryId) {
       const totalCap = 50 * billable;
+      const zombieNote = `expired zombie ${stamp}`;
+      const winnerNote = `barrier winner ${stamp}`;
+      const zombiePromise = req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
+        amount: totalCap, note: zombieNote,
+        _test_formula_ttl_ms: 100, _test_formula_pause_after_reserve_ms: 350,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 160));
       const recovered = await req(ops, "POST", "/api/costs", {
         entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
-        amount: totalCap, note: "stale lease recovery pin",
-        _test_stale_formula_lease: true, _test_ambiguous_after_create: true,
+        amount: totalCap, note: winnerNote, _test_ambiguous_after_create: true,
       });
-      ok("formula recovery: an expired crashed-owner lease is reclaimed and an ambiguously acknowledged insert returns its one durable row",
-        recovered.status === 201 && !!recovered.data?.item?._id,
-        `got ${recovered.status} ${JSON.stringify(recovered.data ?? {}).slice(0, 180)}`);
+      const zombie = await zombiePromise;
+      ok("formula fencing: an expired Pending owner is CAS-cancelled, and its resumed zombie cannot bypass the normal approval queue",
+        recovered.status === 201 && zombie.status === 202 && zombie.data?.queued === true,
+        JSON.stringify({ winner: recovered.status, winnerBody: recovered.data, zombie: zombie.status, zombieBody: zombie.data }));
+
+      const rawReservationRows = await rawCosts.find({
+        category: new ObjectId(String(recoveryId)), batch: new ObjectId(String(closedBatch._id)),
+        note: { $in: [zombieNote, winnerNote] },
+      }).toArray();
+      ok("formula fencing: the durable states prove one Applied winner and one Cancelled zombie",
+        rawReservationRows.length === 2
+          && rawReservationRows.filter((r) => r.reservation_state === "Applied").length === 1
+          && rawReservationRows.filter((r) => r.reservation_state === "Cancelled").length === 1,
+        JSON.stringify(rawReservationRows.map((r) => ({ note: r.note, state: r.reservation_state }))));
+
       const recoveryRows = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${recoveryId}`)).data?.items ?? [])
         .filter((c) => String(c.category?._id ?? c.category) === String(recoveryId) && c.pre_approved_applied === true);
       const retryAboveCap = await req(ops, "POST", "/api/costs", {
@@ -341,6 +384,20 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ok("formula recovery: ambiguous confirmation produces exactly one deterministic-id liability and does not free its spent cap",
         recoveryRows.length === 1 && Number(recoveryRows[0].amount) === totalCap && retryAboveCap.status === 202,
         JSON.stringify({ rows: recoveryRows.map((c) => ({ id: c._id, amount: c.amount })), retry: retryAboveCap.status }));
+
+      const report = await req(admin, "GET", `/api/reports/costs?batch=${closedBatch._id}&category=${recoveryId}`);
+      const reportText = JSON.stringify(report.data ?? {});
+      const exported = await reqBuffer(admin, `/api/reports/costs/export?batch=${closedBatch._id}&category=${recoveryId}`);
+      let exportText = "";
+      if (exported.status === 200) {
+        const wb = XLSX.read(exported.data, { type: "buffer" });
+        exportText = JSON.stringify(Object.fromEntries(wb.SheetNames.map((n) => [n, XLSX.utils.sheet_to_json(wb.Sheets[n])])))
+      }
+      ok("hidden formula rows: Pending/Cancelled notes are absent from ledger GET, report aggregates/register and XLSX export",
+        !JSON.stringify(recoveryRows).includes(zombieNote)
+          && report.status === 200 && !reportText.includes(zombieNote)
+          && exported.status === 200 && !exportText.includes(zombieNote),
+        JSON.stringify({ report: report.status, export: exported.status, ledgerLeak: JSON.stringify(recoveryRows).includes(zombieNote), reportLeak: reportText.includes(zombieNote), exportLeak: exportText.includes(zombieNote) }));
     }
 
     const rollbackFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
@@ -685,17 +742,99 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         .find((r) => String(r._id) === String(parked.data.item._id));
       const headsNow = await catList();
       const ledgerNow = (await req(admin, "GET", "/api/costs?limit=200")).data?.items ?? [];
+      const rawHeadNow = await rawCategories.findOne({ name: nm });
+      const rawCostNow = await rawCosts.findOne({ approval_request: new ObjectId(String(parked.data.item._id)) });
       ok("new-head compensation [precondition]: the injected post-head failure reached the replay catch",
         applied.status === 500, `got ${applied.status}`);
       ok("new-head compensation: the newly created still-unreferenced head is removed before replay can reopen",
-        !headsNow.some((c) => c.name === nm) && !ledgerNow.some((c) => Number(c.amount) === 778),
-        JSON.stringify({ head: headsNow.some((c) => c.name === nm), entry: ledgerNow.some((c) => Number(c.amount) === 778) }));
+        !rawHeadNow && !rawCostNow && !headsNow.some((c) => c.name === nm) && !ledgerNow.some((c) => Number(c.amount) === 778),
+        JSON.stringify({ rawHead: !!rawHeadNow, rawCost: rawCostNow && rawCostNow.reservation_state, visibleHead: headsNow.some((c) => c.name === nm), visibleEntry: ledgerNow.some((c) => Number(c.amount) === 778) }));
       ok("new-head compensation: only after compensation is proven does the request return to Pending",
         requestNow?.status === "Pending" && headsNow.length === before,
         JSON.stringify({ status: requestNow?.status, heads: `${before}->${headsNow.length}` }));
     } else {
       ok("new-head compensation [precondition]: a valid request parked for the fault simulation", false,
         `nothing parked (status ${parked.status})`);
+    }
+  }
+
+  {
+    const nm = `ZZ Cost Compensate ${stamp}`;
+    const note = `staged cost compensate ${stamp}`;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      amount: 778.5, note, new_subhead: nm, payment_mode: "Cash", _test_fail_after_cost_before_publish: true,
+    }));
+    if (parked.data?.item?._id) {
+      const requestId = parked.data.item._id;
+      const applied = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "cost compensation pin" });
+      const rawHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+      const rawCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
+      const requestNow = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+        .find((r) => String(r._id) === String(requestId));
+      const ledgerText = JSON.stringify((await req(admin, "GET", "/api/costs")).data ?? {});
+      const reportText = JSON.stringify((await req(admin, "GET", "/api/reports/costs")).data ?? {});
+      ok("staged cost compensation: failure before publish removes only its proven-cancelled deterministic cost and its own inactive head",
+        applied.status === 500 && !rawHead && !rawCost,
+        JSON.stringify({ status: applied.status, head: rawHead && { active: rawHead.active, owner: rawHead.staged_by_approval }, cost: rawCost && { state: rawCost.reservation_state, approval: rawCost.approval_request } }));
+      ok("staged cost compensation: no internal cost leaks into ledger/report and only then request reopens",
+        !ledgerText.includes(note) && !reportText.includes(note) && requestNow?.status === "Pending",
+        JSON.stringify({ ledgerLeak: ledgerText.includes(note), reportLeak: reportText.includes(note), request: requestNow?.status }));
+
+      // Remove the test-only fault from the parked payload and prove compensation did not poison
+      // the request's deterministic category/cost id: the same request must now complete once.
+      await rawApprovals.updateOne(
+        { _id: new ObjectId(String(requestId)), status: "Pending" },
+        { $unset: { "payload._test_fail_after_cost_before_publish": "" } },
+      );
+      const retried = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "compensated retry pin" });
+      const retriedHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+      const retriedCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
+      ok("staged cost compensation: after proven cleanup the same approval can retry its deterministic ids exactly once",
+        retried.status === 200 && retriedHead?.active === true && !retriedHead?.staged_by_approval
+          && retriedCost?.reservation_state === "Applied" && String(retriedCost?.approval_request) === String(requestId),
+        JSON.stringify({ status: retried.status, head: retriedHead && { active: retriedHead.active, owner: retriedHead.staged_by_approval }, cost: retriedCost && { state: retriedCost.reservation_state, approval: retriedCost.approval_request } }));
+    } else {
+      ok("staged cost compensation [precondition]: a valid unknown-head request parked", false, `got ${parked.status}`);
+    }
+  }
+
+  // The proposed head exists durably while approval replay is paused, but it is inactive and
+  // owned by that request. During this exact window no ordinary cost/head door may observe or use
+  // it; after replay it is published once with its one deterministic associated cost.
+  {
+    const nm = `ZZ Staged Race ${stamp}`;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      amount: 779, new_subhead: nm, payment_mode: "Cash", _test_pause_after_head_ms: 450,
+    }));
+    const requestId = parked.data?.item?._id;
+    if (requestId) {
+      const approvalPromise = req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "staged race pin" });
+      let stagedRaw = null;
+      for (let i = 0; i < 20 && !stagedRaw; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        stagedRaw = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+      }
+      ok("staged head [precondition]: replay persisted its own inactive head before the associated cost",
+        stagedRaw?.active === false && String(stagedRaw?.staged_by_approval) === String(requestId),
+        JSON.stringify(stagedRaw && { active: stagedRaw.active, owner: stagedRaw.staged_by_approval }));
+
+      const visibleWhileStaged = (await catList()).some((c) => String(c._id) === String(requestId));
+      const directCost = await req(admin, "POST", "/api/costs", baseEntry({ category: requestId, amount: 11, note: `must not use staged ${stamp}` }));
+      const child = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ Child Race ${stamp}`, parent: requestId });
+      const sameName = await req(admin, "POST", "/api/costs", baseEntry({ new_subhead: nm, amount: 12, note: `must not reuse staged ${stamp}` }));
+      ok("staged head race: the unpublished head is hidden and every normal cost/child/same-name write rejects it",
+        !visibleWhileStaged && directCost.status === 409 && child.status === 409 && sameName.status === 409,
+        JSON.stringify({ visibleWhileStaged, directCost: directCost.status, child: child.status, sameName: sameName.status }));
+
+      const approved = await approvalPromise;
+      const afterHead = (await catList()).find((c) => String(c._id) === String(requestId));
+      const afterCosts = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+        .filter((c) => String(c.approval_request) === String(requestId));
+      ok("staged head publish: approval publishes exactly its own head and one associated cost",
+        approved.status === 200 && afterHead?.active !== false && afterCosts.length === 1 && afterCosts[0].amount === 779,
+        JSON.stringify({ approval: approved.status, head: afterHead && { id: afterHead._id, active: afterHead.active }, costs: afterCosts.map((c) => ({ id: c._id, amount: c.amount })) }));
+    } else {
+      ok("staged head [precondition]: a valid unknown-head request parked", false, `got ${parked.status}`);
     }
   }
 
@@ -1034,6 +1173,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
+await rawClient.close();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

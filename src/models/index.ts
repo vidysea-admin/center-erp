@@ -1222,12 +1222,41 @@ const CostEntrySchema = new Schema({
   // Snapshot the machine-checkable policy shape too. Formula rows consume a cumulative
   // batch/category reservation and therefore have stricter correction semantics than a fixed cap.
   pre_approved_unit: { type: String, enum: COST_PRE_APPROVAL_UNIT },
+  // Internal two-phase rows are durable before a formula-cap decision is made. Only Applied is a
+  // ledger liability; Pending and Cancelled are fencing records and must never reach ordinary
+  // reads, counts, reports or exports. Existing production rows pre-date this field and are treated
+  // as Applied by the middleware below.
+  reservation_state: { type: String, enum: ["Pending", "Applied", "Cancelled"], default: "Applied" },
+  reservation_expires_at: Date,
+  reservation_kind: { type: String, enum: ["Formula", "ApprovalHead"] },
   entered_by: oid("User", true),
 }, { timestamps: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
 // request can create at most one ledger row. Sparse preserves direct/pre-approved costs, which have
 // no approval_request at all.
 CostEntrySchema.index({ approval_request: 1 }, { unique: true, sparse: true });
+CostEntrySchema.index({ category: 1, batch: 1, reservation_state: 1, _id: 1 });
+CostEntrySchema.index({ reservation_state: 1, reservation_expires_at: 1 });
+
+// The fencing rows live in the SAME collection so their ordering and the liability they protect
+// cannot drift into two stores. That makes invisibility a schema concern, not a promise every new
+// report author has to remember. Internal recovery deliberately uses `CostEntry.collection`, which
+// bypasses this middleware and can see Pending/Cancelled rows.
+const VISIBLE_COST_ENTRY = {
+  $or: [
+    { reservation_state: "Applied" },
+    { reservation_state: { $exists: false } },
+  ],
+};
+for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {
+  CostEntrySchema.pre(op as any, function (this: any) {
+    const current = this.getFilter();
+    this.setQuery(Object.keys(current).length ? { $and: [current, VISIBLE_COST_ENTRY] } : VISIBLE_COST_ENTRY);
+  });
+}
+CostEntrySchema.pre("aggregate", function (this: any) {
+  this.pipeline().unshift({ $match: VISIBLE_COST_ENTRY });
+});
 
 // ---------- SyncSource ----------
 // mode "mapped": the original Location-field sync (Rules 1–9).
@@ -1828,7 +1857,18 @@ const CostCategorySchema = new Schema({
   // Free text on purpose: the CEO's examples are rules, not numbers — *"₹50 per child"*, *"per batch
   // at 30+ pass-outs"*. A number alone cannot say what it is per.
   pre_approved_basis: String,
+  // A proposed head is created inactive and owned by the approval request while its associated
+  // cost is prepared. Ordinary category reads and writes must not reuse it; only the replay's raw
+  // collection operations can publish or compensate this exact staged row.
+  staged_by_approval: oid("ApprovalRequest"),
 }, { timestamps: true });
+const NOT_STAGED_COST_CATEGORY = { staged_by_approval: { $exists: false } };
+for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {
+  CostCategorySchema.pre(op as any, function (this: any) {
+    const current = this.getFilter();
+    this.setQuery(Object.keys(current).length ? { $and: [current, NOT_STAGED_COST_CATEGORY] } : NOT_STAGED_COST_CATEGORY);
+  });
+}
 export const CostCategory = models.CostCategory || model("CostCategory", CostCategorySchema);
 export const DropReason = models.DropReason || model("DropReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);
 export const FailureReason = models.FailureReason || model("FailureReason", (NamedActiveSchema as any).clone?.() ?? NamedActiveSchema);

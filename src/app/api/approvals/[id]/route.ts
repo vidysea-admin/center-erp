@@ -3,9 +3,10 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval, finalizeApprovalDecision, rollbackApprovalDecision } from "@/lib/approvals";
-import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
+import { assertActiveCostCategory, assertCostEntryValid, createCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
+import { Types } from "mongoose";
 
 // POST { decision: "Approved" | "Rejected", note? }
 // On approval the parked action is replayed here, so approval and execution stay in one
@@ -114,12 +115,16 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const seeMoney = await hasPermission(user, FINANCE_VIEW);
     return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, seeMoney), applied: false });
   }
+  if (decision === "Approved" && pending.action === "cost.post") {
+    await assertActiveCostCategory((pending.payload as any)?.category);
+  }
 
   const p = (request.payload ?? {}) as any;
   let effectApplied = false;
-  // Only populated when THIS replay created a brand-new head. If a later write fails, the catch
-  // must compensate this exact head before it gives the approval claim back to the queue.
-  let newlyCreatedCategory: { id: string; name: string } | null = null;
+  // Only populated when THIS request owns an inactive staged head. A replay failure may reopen the
+  // request only after its own deterministic cost has been cancelled and this exact unpublished
+  // head has been conditionally removed.
+  let stagedCategory: { id: Types.ObjectId; name: string; costId: Types.ObjectId } | null = null;
   try {
     switch (request.action) {
     case "location.close":
@@ -180,46 +185,110 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // order that makes the second possible.
       let categoryId = map_to_category ? String(map_to_category) : "";
       if (categoryId) {
-        const target = await CostCategory.findById(categoryId).select("_id active").lean<any>();
-        if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
-        // QA-1980: `active` was selected and never read - the field was there, the check was not.
-        if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it.");
+        await assertActiveCostCategory(categoryId);
       } else {
         const name = String(p.new_subhead ?? "").trim();
         if (!name) throw new HttpError(400, "This request names no new head, and no existing head was chosen to file it under.");
-        // Deactivate-never-delete is the master-list rule, so a name that already exists is REUSED
-        // rather than duplicated — two heads with one name is how a report starts disagreeing with
-        // itself, and the uniqueness index would refuse the write anyway.
-        const existing = await CostCategory.findOne({ name }).select("_id").lean<any>();
-        if (existing) categoryId = String(existing._id);
-        else {
-          const parent = p.new_head_parent ? String(p.new_head_parent) : undefined;
-          const made = await CostCategory.create({ name, active: true, ...(parent ? { parent } : {}) });
-          categoryId = String(made._id);
-          newlyCreatedCategory = { id: categoryId, name };
-          await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
-          // Test-only fault, unreachable on the fixed production database name. This exercises the
-          // exact dangerous window: the new head and its audit landed, the ledger row did not.
-          if (p._test_fail_after_head === true && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
-            throw new Error("test-only failure after cost head creation");
+        const requestId = new Types.ObjectId(String(request._id));
+        const parent = p.new_head_parent ? new Types.ObjectId(String(p.new_head_parent)) : undefined;
+        const expectedHead = {
+          _id: requestId, name, active: false,
+          staged_by_approval: requestId,
+          ...(parent ? { parent } : {}),
+        };
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const sameName = { name: { $regex: `^${escaped}$`, $options: "i" } };
+        let existing: any = await CostCategory.collection.findOne(sameName);
+        if (!existing) {
+          try {
+            const now = new Date();
+            await CostCategory.collection.insertOne({ ...expectedHead, createdAt: now, updatedAt: now });
+            existing = expectedHead;
+          } catch (createError) {
+            // Either our insert was acknowledged ambiguously or a same-name writer won. Only our
+            // exact inactive row is resumable; an independently published head may be reused.
+            existing = await CostCategory.collection.findOne(sameName);
+            if (!existing) throw createError;
+          }
+        }
+        if (String(existing._id) === String(requestId)
+            && existing.active === false
+            && String(existing.staged_by_approval) === String(requestId)
+            && String(existing.parent ?? "") === String(parent ?? "")) {
+          categoryId = String(requestId);
+          stagedCategory = { id: requestId, name, costId: requestId };
+        } else if (existing.active !== false && !existing.staged_by_approval) {
+          categoryId = String(existing._id);
+        } else {
+          throw new HttpError(409, `"${name}" is inactive or currently staged by another approval. This request remains claimed for reconciliation.`);
+        }
+        if (stagedCategory && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+          if (Number(p._test_pause_after_head_ms) > 0) {
+            await new Promise((resolve) => setTimeout(resolve, Number(p._test_pause_after_head_ms)));
+          }
+          if (p._test_fail_after_head === true) {
+            throw new Error("test-only failure after staged cost head creation");
           }
         }
       }
       const approvedAmount = Number(request.approved_amount ?? p.amount);
       await assertCostEntryValid({ ...p, amount: approvedAmount, category: categoryId });
-      const entry = await CostEntry.create({
-        entry_date: p.entry_date ?? request.createdAt,
-        location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
-        category: categoryId, amount: approvedAmount, requested_amount: p.amount,
-        approval_request: request._id, payment_status: "Payment Pending", note: p.note,
+      const costId = new Types.ObjectId(String(request._id));
+      const entryDraft = {
+        _id: costId,
+        entry_date: new Date(p.entry_date ?? request.createdAt),
+        location: p.location ? new Types.ObjectId(String(p.location)) : undefined,
+        batch: p.batch ? new Types.ObjectId(String(p.batch)) : undefined,
+        trainer: p.trainer ? new Types.ObjectId(String(p.trainer)) : undefined,
+        category: new Types.ObjectId(categoryId), amount: approvedAmount, requested_amount: Number(p.amount),
+        approval_request: new Types.ObjectId(String(request._id)), payment_status: "Payment Pending", note: p.note,
         vendor_payee: p.vendor_payee || undefined,
         voucher_no: p.voucher_no || undefined,
         payment_mode: p.payment_mode || undefined,
-        // Decided by a person just now, so not pre-approved by a rule.
         pre_approved_applied: false,
-        entered_by: request.initiator,
+        reservation_state: stagedCategory ? "Pending" : "Applied",
+        ...(stagedCategory ? { reservation_kind: "ApprovalHead" } : {}),
+        entered_by: new Types.ObjectId(String(request.initiator)),
+      };
+      const entry = await createCostEntryIdempotently(entryDraft, {
+        simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
+          && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
       });
+      if (stagedCategory) {
+        if (p._test_fail_after_cost_before_publish === true
+            && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+          throw new Error("test-only failure after staged cost creation before head publish");
+        }
+        const published = await CostCategory.collection.updateOne(
+          { _id: stagedCategory.id, active: false, staged_by_approval: request._id },
+          { $set: { active: true, updatedAt: new Date() }, $unset: { staged_by_approval: "" } },
+        );
+        if (published.modifiedCount !== 1) {
+          const current = await CostCategory.collection.findOne({ _id: stagedCategory.id }, { projection: { active: 1, staged_by_approval: 1 } });
+          if (current?.active !== true || current?.staged_by_approval) {
+            throw new Error("The staged cost head could not be published by its owning approval.");
+          }
+        }
+        const applied = await CostEntry.collection.updateOne(
+          {
+            _id: costId,
+            approval_request: request._id,
+            reservation_kind: "ApprovalHead",
+            reservation_state: "Pending",
+          },
+          { $set: { reservation_state: "Applied", updatedAt: new Date() } },
+        );
+        if (applied.modifiedCount !== 1) {
+          const current = await CostEntry.collection.findOne({ _id: costId }, { projection: { reservation_state: 1 } });
+          if (current?.reservation_state !== "Applied") {
+            throw new Error("The staged head was published but its associated cost could not be made visible.");
+          }
+        }
+      }
       effectApplied = true;
+      if (stagedCategory) {
+        await audit({ entity: "CostCategory", entityId: stagedCategory.id, field: "created", newValue: `"${stagedCategory.name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
+      }
       await audit({ entity: "CostEntry", entityId: entry._id, newValue: map_to_category ? "created (filed under an existing head by the approver)" : "created (new head approved)", actor: user.id });
       break;
     }
@@ -228,12 +297,16 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // person who posted it (entered_by = initiator), with the approval trail alongside.
       const approvedAmount = Number(request.approved_amount ?? p.amount);
       await assertCostEntryValid({ ...p, amount: approvedAmount });
-      const cost = await CostEntry.create({
-        entry_date: p.entry_date ?? request.createdAt,
-        location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
-        category: p.category, amount: approvedAmount, requested_amount: p.amount,
-        approval_request: request._id, payment_status: "Payment Pending", note: p.note,
-        entered_by: request.initiator,
+      await assertActiveCostCategory(p.category);
+      const cost = await createCostEntryIdempotently({
+        _id: new Types.ObjectId(String(request._id)),
+        entry_date: new Date(p.entry_date ?? request.createdAt),
+        location: p.location ? new Types.ObjectId(String(p.location)) : undefined,
+        batch: p.batch ? new Types.ObjectId(String(p.batch)) : undefined,
+        trainer: p.trainer ? new Types.ObjectId(String(p.trainer)) : undefined,
+        category: new Types.ObjectId(String(p.category)), amount: approvedAmount, requested_amount: Number(p.amount),
+        approval_request: new Types.ObjectId(String(request._id)), payment_status: "Payment Pending", note: p.note,
+        entered_by: new Types.ObjectId(String(request.initiator)),
               // QA-1828b: the SECOND place a CostEntry is built. The inbound payload was never filtered
         // (`payload: body` in costs/route.ts), so a new form field reaches the queue for free and is
         // then dropped HERE unless it is named — which would make an entry's contents depend on
@@ -245,7 +318,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         // is still recorded, because it is what they decided against.
         pre_approved_applied: false,
         pre_approved_basis: p._pre_approved_basis || undefined,
-});
+        reservation_state: "Applied",
+      }, {
+        simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
+          && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
+      });
       effectApplied = true;
       await audit({ entity: "CostEntry", entityId: cost._id, newValue: `created via approval ${request._id}`, actor: user.id });
       break;
@@ -259,20 +336,51 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // finalization keeps the queue and notification consistent even when a following audit fails.
       await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount }).catch(() => {});
     } else {
-      if (newlyCreatedCategory) {
-        // Compensation precedes approval rollback. Reopening first would let a retry create or
-        // reuse a second taxonomy row while the first half-write was still present.
-        const [entryRef, childRef] = await Promise.all([
-          CostEntry.exists({ category: newlyCreatedCategory.id }),
-          CostCategory.exists({ parent: newlyCreatedCategory.id }),
-        ]);
-        if (entryRef || childRef) {
-          throw new HttpError(500, `Approval apply failed after creating "${newlyCreatedCategory.name}", but that head is now referenced. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
+      if (stagedCategory) {
+        // Compensate the deterministic associated cost first. Only our own Pending row may become
+        // Cancelled; Applied or foreign data means the effect may be visible, so fail closed. Once
+        // cancellation is proven, remove that exact hidden row so reopening the request can reuse
+        // its deterministic id instead of being permanently poisoned by its own tombstone.
+        const cost = await CostEntry.collection.findOne({ _id: stagedCategory.costId });
+        if (cost) {
+          const cancelled = await CostEntry.collection.updateOne(
+            {
+              _id: stagedCategory.costId,
+              approval_request: request._id,
+              category: stagedCategory.id,
+              reservation_kind: "ApprovalHead",
+              reservation_state: "Pending",
+            },
+            { $set: { reservation_state: "Cancelled", reservation_cancel_reason: "approval replay failed", updatedAt: new Date() } },
+          );
+          const after = await CostEntry.collection.findOne({ _id: stagedCategory.costId }, { projection: { reservation_state: 1 } });
+          if (cancelled.modifiedCount !== 1 && after?.reservation_state !== "Cancelled") {
+            throw new HttpError(500, `Approval apply failed after staging "${stagedCategory.name}", but its associated cost could not be safely cancelled. The request remains claimed for manual reconciliation.`);
+          }
+          const removedCost = await CostEntry.collection.deleteOne({
+            _id: stagedCategory.costId,
+            approval_request: request._id,
+            category: stagedCategory.id,
+            reservation_kind: "ApprovalHead",
+            reservation_state: "Cancelled",
+          });
+          const costStillThere = await CostEntry.collection.findOne(
+            { _id: stagedCategory.costId },
+            { projection: { reservation_state: 1 } },
+          );
+          if (removedCost.deletedCount !== 1 || costStillThere) {
+            throw new HttpError(500, `Approval apply failed after staging "${stagedCategory.name}", but removal of its cancelled associated cost could not be proven. The request remains claimed for manual reconciliation.`);
+          }
         }
-        const removed = await CostCategory.deleteOne({ _id: newlyCreatedCategory.id, name: newlyCreatedCategory.name });
-        const stillThere = await CostCategory.exists({ _id: newlyCreatedCategory.id });
+        const removed = await CostCategory.collection.deleteOne({
+          _id: stagedCategory.id,
+          name: stagedCategory.name,
+          active: false,
+          staged_by_approval: request._id,
+        });
+        const stillThere = await CostCategory.collection.findOne({ _id: stagedCategory.id }, { projection: { active: 1, staged_by_approval: 1 } });
         if (removed.deletedCount !== 1 || stillThere) {
-          throw new HttpError(500, `Approval apply failed after creating "${newlyCreatedCategory.name}" and safe compensation could not be proven. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
+          throw new HttpError(500, `Approval apply failed after staging "${stagedCategory.name}" and safe compensation could not be proven. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
         }
       }
       try {

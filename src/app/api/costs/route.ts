@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory } from "@/models";
-import { assertBatchInScope, assertCostEntryValid, assertTrainerInScope, evaluatePreApproval, releasePreApprovalReservation } from "@/lib/rules";
+import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
@@ -82,7 +82,17 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // So an Admin naming a head here just creates it; everybody else proposes and an Admin decides.
   // That is the same split the master list already draws, applied at the place the need is felt.
   if (proposed && user.role === "Admin") {
-    const existing = await CostCategory.findOne({ name: proposed }).select("_id").lean<any>();
+    // A staged head is hidden from ordinary Mongoose reads. Inspect the raw row here so an Admin
+    // posting the same name cannot race the approval replay into a duplicate-key 500 or attach a
+    // cost to an unpublished taxonomy row.
+    const escaped = proposed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const existing = await CostCategory.collection.findOne(
+      { name: { $regex: `^${escaped}$`, $options: "i" } },
+      { projection: { _id: 1, active: 1, staged_by_approval: 1 } },
+    );
+    if (existing?.staged_by_approval || existing?.active === false) {
+      throw new HttpError(409, `"${proposed}" is inactive or currently being approved. Wait for that review or choose another active head.`);
+    }
     if (existing) body.category = String(existing._id);
     else {
       const made = await CostCategory.create({ name: proposed, active: true });
@@ -102,20 +112,35 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ queued: true, item: queued.request, awaiting: "a new cost head" }, { status: 202 });
   }
 
-  // Allocate the ledger id BEFORE taking a formula lease. If Mongo acknowledges ambiguously, the
-  // exact id lets us read back the durable outcome instead of either rolling back a successful
-  // insert (overspend) or retrying it under a new id (duplicate liability).
+  await assertActiveCostCategory(body.category);
+
+  // Allocate the id before any write. Formula submissions persist under this id as hidden Pending
+  // rows before the cap decision; fixed/non-approved submissions use it for ambiguity-safe create.
   const costEntryId = new Types.ObjectId();
-  if (body._test_stale_formula_lease === true
-      && body.batch && body.category
-      && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
-    // Test-only stale-owner fixture. Production's fixed database name can never enter this arm.
-    await CostCategory.collection.updateOne(
-      { _id: new Types.ObjectId(String(body.category)) },
-      { $set: { [`_pre_approved_leases.${String(body.batch)}`]: { token: "expired-test-owner", expires_at: new Date(0) } } },
-    );
-  }
-  const pre = await evaluatePreApproval(body.category, Number(body.amount), { batch: body.batch, reserve: true });
+  const baseEntry = {
+    _id: costEntryId,
+    entry_date: body.entry_date ? new Date(body.entry_date) : new Date(),
+    location: body.location ? new Types.ObjectId(String(body.location)) : undefined,
+    batch: body.batch ? new Types.ObjectId(String(body.batch)) : undefined,
+    trainer: body.trainer ? new Types.ObjectId(String(body.trainer)) : undefined,
+    category: new Types.ObjectId(String(body.category)),
+    amount: Number(body.amount), requested_amount: Number(body.amount),
+    payment_status: "Payment Pending", note: body.note,
+    vendor_payee: body.vendor_payee || undefined,
+    voucher_no: body.voucher_no || undefined,
+    payment_mode: body.payment_mode || undefined,
+    entered_by: new Types.ObjectId(String(user.id)),
+  };
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const pre = await evaluatePreApproval(body.category, Number(body.amount), {
+    batch: body.batch,
+    reservation: {
+      entry: baseEntry,
+      ...(isTestDb && Number(body._test_formula_ttl_ms) > 0 ? { expiresInMs: Number(body._test_formula_ttl_ms) } : {}),
+      ...(isTestDb && Number(body._test_formula_pause_after_reserve_ms) > 0 ? { pauseAfterPersistMs: Number(body._test_formula_pause_after_reserve_ms) } : {}),
+      simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
+    },
+  });
 
   const parked = pre.applied ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
@@ -124,48 +149,30 @@ export const POST = apiHandler(async (req: NextRequest) => {
     location: body.location || undefined,
   });
   if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
+  if (pre.applied && pre.reservation?.state === "Applied") {
+    const applied = await CostEntry.findById(pre.reservation.cost_entry_id);
+    if (!applied) throw new HttpError(500, "The pre-approved reservation was applied but its ledger row could not be confirmed.");
+    await audit({ entity: "CostEntry", entityId: applied._id, newValue: "created", actor: user.id });
+    return NextResponse.json({ item: applied }, { status: 201 });
+  }
+
+  // When approval is disabled an above-formula submission keeps its Cancelled fencing row and
+  // proceeds as an ordinary liability under a fresh id. Reusing the cancelled id would let a
+  // delayed zombie and a direct write contend for one record.
+  const ledgerEntryId = pre.reservation ? new Types.ObjectId() : costEntryId;
   const entry = {
-    _id: costEntryId,
-    entry_date: body.entry_date ?? new Date(),
-    location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
-    category: body.category, amount: body.amount, requested_amount: body.amount,
-    payment_status: "Payment Pending", note: body.note,
-    vendor_payee: body.vendor_payee || undefined,
-    voucher_no: body.voucher_no || undefined,
-    payment_mode: body.payment_mode || undefined,
+    ...baseEntry,
+    _id: ledgerEntryId,
     // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
     // head must never rewrite what was approved today.
     pre_approved_applied: pre.applied,
     pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
-    // A lease exists only for the cumulative per-billable-pass formula path. Persist that
-    // distinction so later corrections do not have to consult a cost head whose policy may change.
-    pre_approved_unit: pre.applied ? (pre.reservation ? "Per billable passed" : "Fixed amount") : undefined,
-    entered_by: user.id,
+    pre_approved_unit: pre.applied ? "Fixed amount" : undefined,
+    reservation_state: "Applied",
   };
-  let doc;
-  try {
-    doc = await CostEntry.create(entry);
-    // Test-only fault, unreachable on the fixed production database name: model a driver/network
-    // error AFTER Mongo durably inserted but BEFORE the caller received the acknowledgement.
-    if (body._test_ambiguous_after_create === true && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
-      throw new Error("test-only ambiguous CostEntry acknowledgement");
-    }
-  } catch (error) {
-    const existing = pre.reservation ? await CostEntry.findById(costEntryId) : null;
-    if (existing
-        && String(existing.category) === String(entry.category)
-        && String(existing.batch ?? "") === String(entry.batch ?? "")
-        && Number(existing.amount) === Number(entry.amount)
-        && existing.pre_approved_applied === true) {
-      // Ambiguous create confirmed: the durable liability is the outcome. Do not retry or report a
-      // failure that invites the client to submit a duplicate.
-      doc = existing;
-    } else {
-      await releasePreApprovalReservation(pre.reservation).catch(() => false);
-      throw error;
-    }
-  }
-  await releasePreApprovalReservation(pre.reservation).catch(() => false);
+  const doc = await createCostEntryIdempotently(entry, {
+    simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
+  });
   await audit({ entity: "CostEntry", entityId: doc._id, newValue: "created", actor: user.id });
   return NextResponse.json({ item: doc }, { status: 201 });
 });
