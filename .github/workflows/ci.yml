@@ -64,6 +64,9 @@ jobs:
       # as belt-and-braces. SMS_DAILY_CAP=6 lets the roles suite exercise the daily-cap trip.
       SMS_DISABLED: "1"
       SMS_DAILY_CAP: "6"
+      # The suites invoke sync/alerts explicitly. A background tick can race those fixtures
+      # and contact their workbook URLs independently of the assertion that created them.
+      SCHEDULER_DISABLED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -5,6 +5,13 @@
 // double-fires them. The lock uses the same `counters` collection pattern as batch codes.
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  // Validation servers use isolated databases but may deliberately create fixtures that
+  // contain real-looking workbook URLs. Keep background jobs out of those runs: the suites
+  // invoke the sync and alert doors explicitly, while production leaves this flag unset.
+  if (process.env.SCHEDULER_DISABLED === "1") {
+    console.log("[scheduler] disabled by SCHEDULER_DISABLED=1");
+    return;
+  }
   const { dbConnect } = await import("@/lib/db");
   const { SyncSource, mongoose } = await import("@/models");
   const { runSync } = await import("@/lib/sync");

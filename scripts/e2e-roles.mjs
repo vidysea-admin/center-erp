@@ -2157,8 +2157,9 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const em1211 = `q1211.${s1211}@vidysea-test.local`;
   const pw1211 = "Q1211pass!xyz";
 
-  // Enrollment holds `candidates.manage` by role and does NOT hold `costs.manage`.
-  // So this one create both GRANTS a right the role lacks and REVOKES one the role has.
+  // Enrollment now holds both candidates.manage and costs.manage by role. This create grants
+  // finance visibility, persists an explicit costs view grant, removes candidates.manage, and
+  // strips only the edit level from costs.manage so its effective level is still measurable.
   const mk = await req(admin, "POST", "/api/users", {
     name: "Q1211 Rights", email: em1211, password: pw1211, role: "Enrollment",
     location_scope: [jpr1211._id], can_edit: true,
@@ -2166,7 +2167,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // list because the pins below assert both halves — the grant works, and its :view level
     // survived the create (so the WRITE is still refused).
     extra_permissions: ["costs.manage:view", "finance.view:view"],
-    revoked_permissions: ["candidates.manage"],
+    // Every operational role now holds costs.manage at edit level for scoped expense
+    // submission. Strip only that edit level so this fixture can still prove the
+    // explicit :view grant survives creation without denying the right entirely.
+    revoked_permissions: ["candidates.manage", "costs.manage:edit"],
   });
   ok("QA-1211: the create itself succeeds (it always did - that is what made this invisible)",
     mk.status === 201, `got ${mk.status}`);
@@ -2176,7 +2180,8 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     (mk.data.item?.extra_permissions ?? []).includes("costs.manage:view"),
     JSON.stringify({ extra: mk.data.item?.extra_permissions ?? null }));
   ok("QA-1211: ...and the revoked list too - the other half of the same dropped pair",
-    (mk.data.item?.revoked_permissions ?? []).includes("candidates.manage"),
+    (mk.data.item?.revoked_permissions ?? []).includes("candidates.manage")
+      && (mk.data.item?.revoked_permissions ?? []).includes("costs.manage:edit"),
     JSON.stringify({ revoked: mk.data.item?.revoked_permissions ?? null }));
 
   // and it is really on the record, not just echoed back out of the request body.
@@ -2186,13 +2191,21 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     .find((u) => String(u._id) === String(uid1211));
   ok("QA-1211: ...and a fresh READ of the user still has both - the 201 was not just echoing my own payload",
     (listed?.extra_permissions ?? []).includes("costs.manage:view")
-      && (listed?.revoked_permissions ?? []).includes("candidates.manage"),
+      && (listed?.revoked_permissions ?? []).includes("candidates.manage")
+      && (listed?.revoked_permissions ?? []).includes("costs.manage:edit"),
     JSON.stringify({ found: !!listed, extra: listed?.extra_permissions ?? null, revoked: listed?.revoked_permissions ?? null }));
 
   // THE POINT: rights granted at creation must actually WORK, and revoked ones must actually BITE.
   const u1211 = await login(em1211, pw1211);
   ok("QA-1211: the new user signs in", !!u1211);
   if (u1211) {
+    const me1211 = await req(u1211, "GET", "/api/permissions/me");
+    ok("QA-1211: create-time grant/revocations produce the intended effective levels",
+      me1211.status === 200
+        && me1211.data.levels?.["finance.view"] === "view"
+        && me1211.data.levels?.["costs.manage"] === "view"
+        && !me1211.data.levels?.["candidates.manage"],
+      JSON.stringify(me1211.data?.levels ?? null));
     ok("QA-1211: the right GRANTED at creation opens the door it names (costs ledger reads)",
       (await req(u1211, "GET", "/api/costs")).status === 200);
     ok("QA-1211: ...and it is a :view grant, so it still cannot WRITE - the level survived the create too",
@@ -2840,7 +2853,14 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // A partial sanction is stored at top level (`approved_amount`), not in payload. The initiator
     // may read their own decision but still has no finance.view, so both the field and any prose
     // echo of the sanctioned figure must be removed from that response.
-    const partialTarget = pendingNow[1];
+    // Identify this fixture by its durable business value, not by queue position.
+    // New legitimate pending requests can be added before this block and must not
+    // silently make the masking assertion inspect a different request.
+    const partialId = parked2.data?.item?._id;
+    const partialTarget = pendingNow.find((i) => String(i._id) === String(partialId));
+    ok("partial approval masking [precondition]: the exact second fixture is pending",
+      !!partialId && !!partialTarget && Number(partialTarget.payload?.amount) === 876543,
+      JSON.stringify({ partialId, found: partialTarget?._id ?? null }));
     if (partialTarget) {
       const approvedAmount = 765432;
       const decided = await req(admin, "POST", `/api/approvals/${partialTarget._id}`, {
@@ -4801,10 +4821,16 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     !!enumLine, enumLine ? "parsed" : "BATCH_STATUS not found in src/models/index.ts");
                   const allStatuses = (enumLine?.[1] ?? "").split(",")
                     .map((x) => x.trim().replace(/^["']|["']$/g, "")).filter(Boolean);
-                  const nonActive = allStatuses.filter((s) => s !== "Active");
-                  ok("QA-2280: ...and it carries every non-Active status the guard covers, six of them",
-                    nonActive.length === allStatuses.length - 1 && allStatuses.includes("Active") && nonActive.length >= 6,
-                    `all=[${allStatuses.join(", ")}] nonActive=[${nonActive.join(", ")}]`);
+                  // exam_held is valid in both running and explicitly waiting-for-assessment
+                  // states. The negative guard covers every other model status.
+                  const disallowedExamHeldStatuses = allStatuses.filter(
+                    (s) => !["Active", "Assessment Awaited"].includes(s),
+                  );
+                  ok("QA-2280: ...and it carries every status where exam_held is forbidden",
+                    disallowedExamHeldStatuses.length === allStatuses.length - 2
+                      && allStatuses.includes("Active") && allStatuses.includes("Assessment Awaited")
+                      && disallowedExamHeldStatuses.length >= 6,
+                    `all=[${allStatuses.join(", ")}] forbidden=[${disallowedExamHeldStatuses.join(", ")}]`);
                   // QA-2276: and a batch that STAYS at Ready. The QA-2271 fixture above proves a
                   // clean Ready batch is one call away - it makes one and then drives it onward -
                   // so "seed-dependent" was never true of this suite, only of the seed it happened
@@ -4903,7 +4929,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   }
                   const coveredStatuses = [];
                   let covered = 0;
-                  for (const st of nonActive) {
+                  for (const st of disallowedExamHeldStatuses) {
                     // A CLEAN batch, not merely the first one. The first version of this loop took
                     // `limit=1` and went red on Closing - and the finding was the PIN's, not the
                     // product's: batch E is transitioned to Result Awaited WITH exam_held a few
@@ -4930,7 +4956,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                     const notActive = await req(admin, "POST", `/api/batches/${row._id}/transition`,
                       { target: "Closing", exam_held: true });
                     ok(`QA-2261/QA-2265: exam_held on a ${st} batch is refused, naming that reason`,
-                      notActive.status === 400 && /currently running, nothing else/i.test(String(notActive.data?.error ?? "")),
+                      notActive.status === 400
+                        && /running batch or one waiting for its assessment, nothing else/i.test(
+                          String(notActive.data?.error ?? ""),
+                        ),
                       `${notActive.status} ${String(notActive.data?.error ?? "").slice(0, 160)}`);
                     // The refusal is only half of it. What the cycle-1 checker measured was the STAMP
                     // surviving a refusal, and a status code cannot see that.
@@ -4993,7 +5022,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
                   const EXCLUDED_WITH_REASON = {
                     // "<status>": "<the measurement that shows it cannot be built>"
                   };
-                  const mustCover = nonActive.filter((s) => !(s in EXCLUDED_WITH_REASON));
+                  const mustCover = disallowedExamHeldStatuses.filter((s) => !(s in EXCLUDED_WITH_REASON));
                   const missing = mustCover.filter((s) => !coveredStatuses.includes(s));
                   // The label names the set from the VARIABLE, not from a sentence typed beside it.
                   // Cycle 5 added Closing to `mustCover` and left the label reading "Planning,
