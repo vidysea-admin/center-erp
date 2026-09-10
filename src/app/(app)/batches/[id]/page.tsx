@@ -60,7 +60,28 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   const dismiss = (key: string) => { try { sessionStorage.setItem(key, "1"); } catch {} setDismissTick((t) => t + 1); };
   const undismiss = (key: string) => { try { sessionStorage.removeItem(key); } catch {} setDismissTick((t) => t + 1); };
 
-  const load = () => api(`/api/batches/${id}`).then(setData).catch((e) => setError(e.message));
+  // QA-2420 cycle 2: child tabs await this after their own write. The old catch swallowed the
+  // failure into a fulfilled Promise<void>, so Closure announced "saved" even when the header and
+  // lifecycle state had not refreshed. Return an explicit result, and bind late responses to the
+  // batch that started them so A can never repaint B during client-side navigation.
+  const activeBatchId = useRef(id);
+  activeBatchId.current = id;
+  const latestBatchLoad = useRef(0);
+  const load = async (): Promise<boolean> => {
+    const requestedBatchId = id;
+    const request = ++latestBatchLoad.current;
+    try {
+      // A post-write refresh must read the current lifecycle state, never a browser-cached Active
+      // response from the tab's first paint. `true` means this exact request reached fresh data.
+      const next = await api(`/api/batches/${requestedBatchId}?refresh=${request}`, { cache: "no-store" });
+      if (activeBatchId.current !== requestedBatchId || request !== latestBatchLoad.current) return false;
+      setData(next);
+      return true;
+    } catch (e: any) {
+      if (activeBatchId.current === requestedBatchId && request === latestBatchLoad.current) setError(e.message);
+      return false;
+    }
+  };
   // -88 (Umesh): a Planning/Ready batch that already has attendance evidence is running —
   // ask the server to let the status catch up (idempotent), then show the truth.
   const [reconciled, setReconciled] = useState(false);
@@ -74,7 +95,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       api(`/api/batches/${id}/reconcile-status`, { method: "POST", json: {} }).then((r) => { if (r?.activated) load(); }).catch(() => {});
     }).catch(() => {});
   }, [data?.item?._id, data?.item?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+    setData(null);
+    setError("");
+    void load();
+  }, [id]);
 
   if (!data) return <div className="p-8 text-center text-gray-400">{error || "Loading…"}</div>;
   const b = data.item;
@@ -3437,10 +3462,17 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // older full-form patch cannot arrive after a newer click and win. The ref closes the same-tick
   // double-click window before React has rendered the disabled state; the state is the operator's
   // visible feedback and disables every closure editor while that snapshot is being persisted.
-  const closureSaveInFlight = useRef(false);
+  const closureSaveInFlight = useRef<{ token: number; batchId: string; operation: string } | null>(null);
+  const closureSaveSequence = useRef(0);
+  const activeClosureBatchId = useRef(batchId);
+  activeClosureBatchId.current = batchId;
   const [closureSaving, setClosureSaving] = useState<string | null>(null);
   const [closureSaveNotice, setClosureSaveNotice] = useState("");
   const [closureSaveError, setClosureSaveError] = useState("");
+  // The parent detail fetch is awaited before success is announced, but React may commit that new
+  // prop one paint later. Keep the confirmed completion result locally so the form cannot offer
+  // frozen lifecycle controls in that gap. The two post-completion dates keep their own gate.
+  const [completedInThisClosure, setCompletedInThisClosure] = useState(false);
   // Background refreshes (candidate marking, portal-id edits, parent reloads) must refresh the
   // stored closure/status without erasing dates the operator has typed but not saved yet.
   const closureFormDirty = useRef(false);
@@ -3468,7 +3500,6 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // -157 (QA-462): names of enrolled students with no portal Candidate ID. Certification cannot
   // complete - by either door - while this is non-empty.
   const [noCan, setNoCan] = useState<Array<{ name: string; phone: string | null }>>([]);
-  const [adminBusy, setAdminBusy] = useState(false);
   const isAdmin = role === "Admin";
   // QA-785's real mechanism, and it is the opposite of what it looks like: loadBlockers hits
   // GET /complete, which requires `batches.manage`. Without it the call 403s, the failure is
@@ -3478,11 +3509,55 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // disables.
   const [blockersFailed, setBlockersFailed] = useState(false);
   // QA-179 (2026-09-02): the trainer-triggered "tell the candidates" send this row asked for.
-  const [notifying, setNotifying] = useState(false);
-  const loadBlockers = () => api(`/api/batches/${batchId}/complete`)
-    .then((b) => { setBlockers(b); setBlockersFailed(false); })
-    .catch(() => { setBlockers(null); setBlockersFailed(true); });
-  useEffect(() => { loadBlockers(); }, [batchId, batch?.status]);
+  const loadBlockers = async (requestedBatchId = batchId): Promise<boolean> => {
+    try {
+      const next = await api(`/api/batches/${requestedBatchId}/complete`);
+      if (activeClosureBatchId.current !== requestedBatchId) return false;
+      setBlockers(next);
+      setBlockersFailed(false);
+      return true;
+    } catch {
+      if (activeClosureBatchId.current === requestedBatchId) {
+        setBlockers(null);
+        setBlockersFailed(true);
+      }
+      return false;
+    }
+  };
+  useEffect(() => { void loadBlockers(); }, [batchId, batch?.status]);
+
+  const closureBusy = !!closureSaving;
+  const adminBusy = closureSaving === "admin-complete";
+  const reopening = closureSaving === "assessment-reopen";
+  const notifying = closureSaving === "assessment-notify";
+  const beginClosureOperation = (operation: string) => {
+    const current = closureSaveInFlight.current;
+    if (current) {
+      setClosureSaveNotice("A closure change is already in progress — wait for it to finish before trying another action.");
+      return null;
+    }
+    const started = { token: ++closureSaveSequence.current, batchId, operation };
+    closureSaveInFlight.current = started;
+    setClosureSaving(operation);
+    setClosureSaveNotice("Saving closure information…");
+    setClosureSaveError("");
+    setError("");
+    return started;
+  };
+  const closureOperationIsCurrent = (started: { token: number; batchId: string }) =>
+    closureSaveInFlight.current?.token === started.token
+      && activeClosureBatchId.current === started.batchId;
+  const finishClosureOperation = (started: { token: number }) => {
+    if (closureSaveInFlight.current?.token !== started.token) return;
+    closureSaveInFlight.current = null;
+    setClosureSaving(null);
+  };
+  const showClosureFailure = (started: { token: number; batchId: string }, message: string) => {
+    if (!closureOperationIsCurrent(started)) return;
+    setClosureSaveNotice("");
+    setClosureSaveError(message);
+    setError(message);
+  };
   // QA-712 (-209, checker on qa-207): this button was DEAD from the moment -206 shipped. It renders
   // only when blockers exist, and -206 made a press without `force` refuse 409 whenever blockers
   // exist - the same condition that shows it. Every press returned "Nothing has been changed".
@@ -3491,6 +3566,8 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // changed that to Fail on Umesh's ruling. Two lines above it the banner already said "Fail". A
   // screen that describes a write in two ways is worse than one that describes it in none.
   async function completeAsAdmin() {
+    const started = beginClosureOperation("admin-complete");
+    if (!started) return;
     // QA-1403 (checker on qa-211, cycle 3 follow-up): same class as QA-737 - no_portal_id alone
     // answers "is anyone missing an id", not "does that stop certification". Gated on
     // no_portal_id_blocks now, matching the Overview drawer's completeAsAdmin (line ~249).
@@ -3500,13 +3577,21 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       + `${(blockers?.unsettled?.length ?? 0)} passed candidate(s) with no certificate will be recorded NOT ISSUED.\n`
       + (noId ? `${noId} student(s) have no portal Candidate ID — certification will be signed by you, not derived.\n` : "")
       + "\nEvery row is audited with your reason and the time in IST. Completing freezes the results and figures (an Admin can reopen it).\n\nReason:");
-    if (!why || !why.trim()) return;
-    setAdminBusy(true);
+    if (!why || !why.trim()) { finishClosureOperation(started); return; }
     try {
-      await api(`/api/batches/${batchId}/complete`, { method: "POST", json: { reason: why.trim(), force: true } });
-      load(); onChanged(); loadBlockers();
-    } catch (e: any) { setError(e.message); }
-    finally { setAdminBusy(false); }
+      await api(`/api/batches/${started.batchId}/complete`, { method: "POST", json: { reason: why.trim(), force: true } });
+      if (!closureOperationIsCurrent(started)) return;
+      const refreshed = await load(true, started.batchId);
+      if (refreshed === "failed") throw new Error("Completed, but the refreshed closure values could not be loaded. Reload this tab before editing again.");
+      if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
+      const parentRefreshed = await Promise.resolve(onChanged());
+      if (!closureOperationIsCurrent(started)) return;
+      if (parentRefreshed === false) throw new Error("Completed and refreshed the closure, but the batch summary could not be refreshed. Reload before continuing.");
+      setCompletedInThisClosure(true);
+      await loadBlockers(started.batchId);
+      if (closureOperationIsCurrent(started)) setClosureSaveNotice("Batch completed and refreshed.");
+    } catch (e: any) { showClosureFailure(started, e?.message || "The batch could not be completed."); }
+    finally { finishClosureOperation(started); }
   }
   const updateClosureForm = (patch: Record<string, unknown>) => {
     closureFormDirty.current = true;
@@ -3514,12 +3599,12 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setClosureSaveError("");
     setForm((current: any) => ({ ...current, ...patch }));
   };
-  const load = async (forceForm = false): Promise<boolean> => {
+  const load = async (forceForm = false, requestedBatchId = batchId): Promise<"loaded" | "stale" | "failed"> => {
     const request = ++latestClosureLoad.current;
     try {
-      const d = await api(`/api/batches/${batchId}/closure`);
+      const d = await api(`/api/batches/${requestedBatchId}/closure`);
       // A GET begun before a newer refresh may finish last. Only the newest response may paint.
-      if (request !== latestClosureLoad.current) return true;
+      if (activeClosureBatchId.current !== requestedBatchId || request !== latestClosureLoad.current) return "stale";
       setClosure(d.closure); setInvoice(d.invoice); setInvProposal(d.invoice_proposal ?? null);
       if (forceForm || !closureFormDirty.current) {
         setForm(d.closure ?? {});
@@ -3534,17 +3619,38 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       // do explains itself on that screen.
       setNoCan(Array.isArray(d.certification_blocked_no_can) ? d.certification_blocked_no_can : []);
       if (d.legacy === false) setPerCandidate(true);
-      return true;
+      return "loaded";
     } catch (e: any) {
-      if (request === latestClosureLoad.current) setError(e.message);
-      return false;
+      if (activeClosureBatchId.current !== requestedBatchId || request !== latestClosureLoad.current) return "stale";
+      setError(e.message);
+      return "failed";
     }
   };
   useEffect(() => {
+    // Invalidate both pending reads and pending writes from the previous batch. Their server request
+    // may finish, but it cannot paint, announce success, call the old parent's reload, or clear a
+    // newer operation started on this batch.
+    latestClosureLoad.current += 1;
+    closureSaveSequence.current += 1;
+    closureSaveInFlight.current = null;
+    setClosureSaving(null);
     closureFormDirty.current = false;
     setClosureSaveNotice("");
     setClosureSaveError("");
-    void load(true);
+    setCompletedInThisClosure(false);
+    setClosure(null);
+    setInvoice(null);
+    setInvProposal(null);
+    setForm({});
+    setInvForm({});
+    setLegacy(true);
+    setSummary(null);
+    setPerCandidate(false);
+    setShowLegacyEntry(false);
+    setNoCan([]);
+    setBlockers(null);
+    setBlockersFailed(false);
+    void load(true, batchId);
   }, [batchId]);
 
   // ---- -223: the four dates nobody ever sent ----
@@ -3571,30 +3677,35 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     return out;
   };
 
-  async function saveClosure(patch: any, operation = "closure", success = "Closure information saved.") {
+  async function saveClosure(
+    patch: any,
+    operation = "closure",
+    success = "Closure information saved.",
+    existingOperation?: { token: number; batchId: string; operation: string },
+  ): Promise<boolean> {
     // React's disabled prop is not synchronous. The ref makes a double-click a single write even
     // before the first state update paints, while disabled editors ensure the saved snapshot cannot
     // change underneath the request.
-    if (closureSaveInFlight.current) return;
-    closureSaveInFlight.current = true;
-    setClosureSaving(operation);
-    setClosureSaveNotice("");
-    setClosureSaveError("");
-    setError("");
+    const started = existingOperation ?? beginClosureOperation(operation);
+    if (!started) return false;
     try {
-      await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch });
+      await api(`/api/batches/${started.batchId}/closure`, { method: "PUT", json: patch });
+      if (!closureOperationIsCurrent(started)) return false;
+      const refreshed = await load(true, started.batchId);
+      if (refreshed === "failed") throw new Error("Saved, but the refreshed values could not be loaded. Reload this tab before editing again.");
+      if (refreshed === "stale" || !closureOperationIsCurrent(started)) return false;
       closureFormDirty.current = false;
-      const refreshed = await load(true);
-      if (!refreshed) throw new Error("Saved, but the refreshed values could not be loaded. Reload this tab before editing again.");
-      await Promise.resolve(onChanged());
+      const parentRefreshed = await Promise.resolve(onChanged());
+      if (!closureOperationIsCurrent(started)) return false;
+      if (parentRefreshed === false) throw new Error("Saved and refreshed the closure, but the batch summary could not be refreshed. Reload before continuing.");
       setClosureSaveNotice(success);
+      return true;
     } catch (e: any) {
       const message = e?.message || "The closure information could not be saved.";
-      setClosureSaveError(message);
-      setError(message);
+      showClosureFailure(started, message);
+      return false;
     } finally {
-      closureSaveInFlight.current = false;
-      setClosureSaving(null);
+      finishClosureOperation(started);
     }
   }
 
@@ -3603,18 +3714,21 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // it confirms first; the actual recipient count and per-person outcome come back from the send
   // itself (the API is the only source that can name who was skipped and why).
   async function notifyAssessment() {
+    const started = beginClosureOperation("assessment-notify");
+    if (!started) return;
     if (!window.confirm(
       `Email every candidate currently enrolled on this batch their assessment date`
       + (form.assessment_date ? ` (${fmtDate(form.assessment_date)})` : "")
       + `, with a link to their own attendance/eligibility page?\n\nThis is audited and cannot be recalled once sent.`
-    )) return;
-    setNotifying(true);
+    )) { finishClosureOperation(started); return; }
     try {
-      const res = await api(`/api/batches/${batchId}/closure/notify-assessment`, { method: "POST" });
+      const res = await api(`/api/batches/${started.batchId}/closure/notify-assessment`, { method: "POST" });
+      if (!closureOperationIsCurrent(started)) return;
       const skippedNote = res.skipped?.length ? ` — ${res.skipped.length} skipped (${res.skipped.map((s: any) => `${s.label}: ${s.reason}`).join("; ")})` : "";
       window.alert(`Notified ${res.sent} of ${res.total} candidate(s).${skippedNote}`);
-    } catch (e: any) { setError(e.message); }
-    finally { setNotifying(false); }
+      setClosureSaveNotice(`Notified ${res.sent} of ${res.total} candidate(s).`);
+    } catch (e: any) { showClosureFailure(started, e?.message || "Candidates could not be notified."); }
+    finally { finishClosureOperation(started); }
   }
 
   // -224 (Umesh 24/08, measured on live BHA-ITI-RPLHSL-SPIT-01): "Start per-candidate marking"
@@ -3633,8 +3747,9 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // for. `assessment_status` is already in the closure PUT allow-list and updateClosure guards only
   // SETTING Completed - reverting to Pending was always permitted by the server, never offered by
   // the client.
-  const [reopening, setReopening] = useState(false);
   async function reopenAssessment(then?: () => void) {
+    const started = beginClosureOperation("assessment-reopen");
+    if (!started) return;
     // -224 cycle 3 (QA-878): this sentence used to ASSERT the provenance - "recorded by hand rather
     // than from the roster" - on every batch it was offered for. On a derived sign-off that was
     // simply false, and it was false in the one place a person is being asked to consent. Read the
@@ -3649,20 +3764,35 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         ? `It was completed with batch-level figures${figures}, entered against the batch rather than derived from the roster.\n\n`
           + `Marking candidates individually REBUILDS those totals from the per-candidate rows, so those numbers will be replaced by whatever the rows actually say. The batch itself is not reopened and nothing else changes.\n\n`
         : `Its figures${figures} were derived from the per-candidate rows, not entered by hand, so reopening changes no number here. The batch itself is not reopened and nothing else changes.\n\n`)
-      + `This is audited.`)) return;
-    setReopening(true);
+      + `This is audited.`)) { finishClosureOperation(started); return; }
     try {
       // Same door and same payload shape as saveClosure - written out here only so the grid opens
       // AFTER the reopen lands, and stays shut if it does not.
-      await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: { assessment_status: "Pending" } });
-      await load(); onChanged();
+      await api(`/api/batches/${started.batchId}/closure`, { method: "PUT", json: { assessment_status: "Pending" } });
+      if (!closureOperationIsCurrent(started)) return;
+      const refreshed = await load(true, started.batchId);
+      if (refreshed === "failed") throw new Error("Reopened, but the refreshed closure values could not be loaded. Reload this tab before editing again.");
+      if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
+      const parentRefreshed = await Promise.resolve(onChanged());
+      if (!closureOperationIsCurrent(started)) return;
+      if (parentRefreshed === false) throw new Error("Reopened and refreshed the closure, but the batch summary could not be refreshed. Reload before continuing.");
       then?.();
-    } catch (e: any) { setError(e.message); }
-    finally { setReopening(false); }
+      setClosureSaveNotice("Assessment reopened and refreshed.");
+    } catch (e: any) { showClosureFailure(started, e?.message || "The assessment could not be reopened."); }
+    finally { finishClosureOperation(started); }
   }
   async function saveInvoice(patch: any) {
-    try { await api(`/api/batches/${batchId}/invoice`, { method: "PATCH", json: patch }); load(); }
-    catch (e: any) { setError(e.message); }
+    const started = beginClosureOperation("invoice");
+    if (!started) return;
+    try {
+      await api(`/api/batches/${started.batchId}/invoice`, { method: "PATCH", json: patch });
+      if (!closureOperationIsCurrent(started)) return;
+      const refreshed = await load(true, started.batchId);
+      if (refreshed === "failed") throw new Error("Invoice saved, but the refreshed values could not be loaded. Reload before continuing.");
+      if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
+      setClosureSaveNotice("Invoice information saved.");
+    } catch (e: any) { showClosureFailure(started, e?.message || "The invoice could not be saved."); }
+    finally { finishClosureOperation(started); }
   }
   // -86 (checker, QA-157 bypass #1): the result/certificate files are the contractual
   // artifacts and used to skip the one upload path (no compression, no retry, no folder,
@@ -3671,16 +3801,22 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+    const started = beginClosureOperation(field === "result_file" ? "result-upload" : "certificate-upload");
+    if (!started) return;
     try {
       const url = await uploadWithRetry(file, "closure", {
         folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: field === "result_file" ? "results" : "certificates",
-        entity: "Batch", entity_id: batchId,
+        entity: "Batch", entity_id: started.batchId,
       });
       await saveClosure(
         { [field]: url },
         field === "result_file" ? "result-upload" : "certificate-upload",
-        field === "result_file" ? "Result sheet saved." : "Certificate bundle saved.");
-    } catch (err: any) { setError(err.message); }
+        field === "result_file" ? "Result sheet saved." : "Certificate bundle saved.",
+        started);
+    } catch (err: any) {
+      showClosureFailure(started, err?.message || "The closure file could not be uploaded.");
+      finishClosureOperation(started);
+    }
   }
 
   // QA-785 (-217): -216 put `mayMark` on the CHILD component and left this one, 250 lines above it,
@@ -3704,14 +3840,26 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // so nothing was revoked - the only thing that changed was this expression. FIVE live users do
   // this work without `closure.manage` (3 Trainer, 2 Enrollment), and no manifest of mine asked
   // that question before tightening the gate. That is the process failure, not the line.
-  const statusClosedTab = ["Completed", "Cancelled"].includes(batch?.status);
+  const statusClosedTab = completedInThisClosure || ["Completed", "Cancelled"].includes(batch?.status);
   const closed = statusClosedTab || !mayMarkTab;
 
   // QA-044: legacy batch with per-candidate rows but NO closure record — the cards below
   // would read 0 while the rows hold real passes/certificates. One click derives.
   async function derive() {
-    try { await api(`/api/batches/${batchId}/closure/recompute`, { method: "POST" }); load(); onChanged(); }
-    catch (e: any) { setError(e.message); }
+    const started = beginClosureOperation("derive");
+    if (!started) return;
+    try {
+      await api(`/api/batches/${started.batchId}/closure/recompute`, { method: "POST" });
+      if (!closureOperationIsCurrent(started)) return;
+      const refreshed = await load(true, started.batchId);
+      if (refreshed === "failed") throw new Error("Figures derived, but the refreshed values could not be loaded. Reload before continuing.");
+      if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
+      const parentRefreshed = await Promise.resolve(onChanged());
+      if (!closureOperationIsCurrent(started)) return;
+      if (parentRefreshed === false) throw new Error("Figures derived, but the batch summary could not be refreshed. Reload before continuing.");
+      setClosureSaveNotice("Closure figures derived and refreshed.");
+    } catch (e: any) { showClosureFailure(started, e?.message || "Closure figures could not be derived."); }
+    finally { finishClosureOperation(started); }
   }
 
   return (
@@ -3719,7 +3867,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       {!closure && (summary?.total ?? 0) > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <span>{summary.passed} passed and {summary.certificates_issued} certificate(s) exist on per-candidate rows, but this batch has no closure record — the figures below read 0.</span>
-          <Btn small onClick={derive}>Derive figures from rows</Btn>
+          <Btn small onClick={derive} disabled={closureBusy}>Derive figures from rows</Btn>
         </div>
       )}
       {/* -102, Manish 17/08 ([08:53] "main isko close na karke isko main complete kar pau, kyunki
@@ -3734,7 +3882,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       </div>
       {(closureSaving || closureSaveNotice) && (
         <div role="status" aria-live="polite" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-          {closureSaving ? "Saving closure information…" : closureSaveNotice}
+          {closureSaveNotice}
         </div>
       )}
       {closureSaveError && (
@@ -3742,6 +3890,12 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           {closureSaveError}
         </div>
       )}
+      {/* QA-2420 cycle 2: one shared busy surface covers every mutation on this tab, including
+          child grids and invoice/dues controls. `disabled` reaches native form controls; `inert`
+          also stops links and custom interactive descendants; the opacity makes the lock visible.
+          The status/alert above stays outside so the reason remains readable. */}
+      <fieldset data-closure-busy-surface disabled={closureBusy} inert={closureBusy ? true : undefined}
+        aria-busy={closureBusy} className={closureBusy ? "contents opacity-60" : "contents"}>
       {/* -116: the door Umesh asked for, ON THIS TAB. It is only offered when the ordinary buttons
           CANNOT fire — when they can, the honest path is to press them. */}
       {/* -206 (QA-678): this hid the Admin door exactly when everything the flag knows about was
@@ -3767,7 +3921,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             {(blockers.unsettled?.length ?? 0) > 0 && <>{blockers.unsettled.length} passed candidate(s) have no certificate</>}
             . As Admin you can finish it anyway — the missing rows are recorded Fail / Not Issued, audited with your reason.
           </span>
-          <Btn small onClick={completeAsAdmin} disabled={adminBusy}>{adminBusy ? "Completing…" : "Mark Completed (Admin)"}</Btn>
+          <Btn small onClick={completeAsAdmin} disabled={closureBusy}>{adminBusy ? "Completing…" : "Mark Completed (Admin)"}</Btn>
         </div>
       )}
       {/* QA-715 (-208 checker, cycle 1 FAIL): this used to live only inside CandidateResults, so on
@@ -3795,18 +3949,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 the assessment opens a room where every control 409s. Reopen first, with the figures
                 that are about to be rebuilt stated out loud. Someone who may NOT mark is never
                 offered the reopen - they get the read-only view, which is what they came for. */}
-            <Btn small disabled={reopening}
+            <Btn small disabled={closureBusy}
               onClick={() => {
                 if (mayMarkTab && closure?.assessment_status === "Completed") { reopenAssessment(() => setPerCandidate(true)); return; }
                 setPerCandidate(true);
               }}>
               {reopening ? "Reopening…" : mayMarkTab ? "Start per-candidate marking" : "View per-candidate results"}
             </Btn>
-            {mayMarkTab && !showLegacyEntry && <Btn small kind="ghost" onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
+            {mayMarkTab && !showLegacyEntry && <Btn small kind="ghost" disabled={closureBusy} onClick={() => setShowLegacyEntry(true)}>Batch-level figures (legacy)…</Btn>}
           </span>
         ) : undefined}
       >
-        <fieldset disabled={!!closureSaving} className="grid grid-cols-2 gap-3">
+        <fieldset disabled={closureBusy} className="grid grid-cols-2 gap-3">
           {/* -232 (QA-833): all six of these were typeable by a login whose Save is disabled - the
               operator could fill a date, press a dead Save and lose it, with nothing saying why.
               Same dead-control class as QA-712/723/754/775/785/791 on this very tab, in its
@@ -3814,10 +3968,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               `closed` is the one that already gates Save, so the box and its Save now agree. */}
           <Field label="Assessment date">
             <div className="flex items-center gap-2">
-              <input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => updateClosureForm({ assessment_date: e.target.value })} />
+              <input type="date" disabled={closed || closureBusy} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => updateClosureForm({ assessment_date: e.target.value })} />
               {/* QA-179: refuses server-side when there is no saved date yet — save it first. */}
               <span title={!closure?.assessment_date ? "Save the assessment date first" : "Email every enrolled candidate this date"}>
-                <Btn small kind="ghost" disabled={notifying || !closure?.assessment_date} onClick={notifyAssessment}>
+                <Btn small kind="ghost" disabled={closureBusy || !closure?.assessment_date} onClick={notifyAssessment}>
                   {notifying ? "Sending…" : "Notify candidates"}
                 </Btn>
               </span>
@@ -3829,13 +3983,13 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               mock-test STATUS wording is still owed, so no status is invented here — only the facts he
               named. What already existed is not rebuilt: the assessment date above, pass/fail counts,
               the fail reason (Rule 44), the certificate number (Rule 46), the file, and the invoice. */}
-          <Field label="Mock test date"><input type="date" disabled={closed || !!closureSaving} className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => updateClosureForm({ mock_test_date: e.target.value })} /></Field>
-          <Field label="Result expected (tentative)"><input type="date" disabled={closed || !!closureSaving} className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => updateClosureForm({ result_expected_date: e.target.value })} /></Field>
+          <Field label="Mock test date"><input type="date" disabled={closed || closureBusy} className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => updateClosureForm({ mock_test_date: e.target.value })} /></Field>
+          <Field label="Result expected (tentative)"><input type="date" disabled={closed || closureBusy} className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => updateClosureForm({ result_expected_date: e.target.value })} /></Field>
           <div />
           {legacy && !perCandidate && showLegacyEntry ? (
             <>
-              <Field label="Appeared (legacy batch-level)"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.appeared ?? ""} onChange={(e) => updateClosureForm({ appeared: +e.target.value })} /></Field>
-              <Field label="Passed (legacy batch-level)"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.passed ?? ""} onChange={(e) => updateClosureForm({ passed: +e.target.value })} /></Field>
+              <Field label="Appeared (legacy batch-level)"><input type="number" disabled={closed || closureBusy} className={inputCls} value={form.appeared ?? ""} onChange={(e) => updateClosureForm({ appeared: +e.target.value })} /></Field>
+              <Field label="Passed (legacy batch-level)"><input type="number" disabled={closed || closureBusy} className={inputCls} value={form.passed ?? ""} onChange={(e) => updateClosureForm({ passed: +e.target.value })} /></Field>
             </>
           ) : !legacy || perCandidate ? (
             <>
@@ -3861,7 +4015,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             not a sign-off, which the screen never said. */}
         <div className="mt-3 flex items-start gap-2">
           <span className="inline-flex flex-col gap-0.5">
-            <Btn small kind="ghost" disabled={closed || !!closureSaving}
+            <Btn small kind="ghost" disabled={closed || closureBusy}
               onClick={() => saveClosure(
                 { ...closureDatePatch(form), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) },
                 "assessment", "Assessment information saved.")}>Save</Btn>
@@ -3872,7 +4026,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               onClick={() => saveClosure(
                 { ...closureDatePatch(form), assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) },
                 "assessment-complete", "Assessment marked completed.")}
-              disabled={closed || !!closureSaving || blockersFailed || closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
+              disabled={closed || closureBusy || blockersFailed || closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
             {closure?.assessment_status !== "Completed" && (blockers?.unmarked?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unmarked)}>
@@ -3903,7 +4057,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 whose whole release is about dead buttons. `legacy` is the client's name for "no
                 per-candidate rows exist", so it is the same question, asked in the client's words. */}
             {legacy && closure?.assessment_status === "Completed" && !statusClosedTab && mayMarkTab && (
-              <button onClick={() => reopenAssessment()} disabled={reopening}
+              <button onClick={() => reopenAssessment()} disabled={closureBusy}
                 title="Marking candidates individually is refused while a batch-level sign-off stands, because rebuilding the totals from the roster would overwrite the figures that were entered against this batch. Reopening derives them from the rows instead."
                 className="w-fit rounded-lg border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50">
                 {reopening ? "Reopening…" : "Reopen assessment"}
@@ -3921,11 +4075,11 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
           </span>
         </div>
-        <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed || !!closureSaving} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
+        <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed || closureBusy} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
       </Section>
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
-        <fieldset disabled={!!closureSaving} className="grid grid-cols-2 gap-3">
-          <Field label="Certification date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => updateClosureForm({ certification_date: e.target.value })} /></Field>
+        <fieldset disabled={closureBusy} className="grid grid-cols-2 gap-3">
+          <Field label="Certification date"><input type="date" disabled={closed || closureBusy} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => updateClosureForm({ certification_date: e.target.value })} /></Field>
           {/* -120 (M4-14): the two dates after certification that his chain ends on.
               QA-1265 (client call 25/08, Umesh decided the same day): these two are gated on the
               RIGHT alone, never on completion. `closed` conflates two questions — "is this batch
@@ -3943,10 +4097,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               first, because a certificate is distributed AFTER the batch completes and the SIDH
               upload happens after that. There is a pin on this in check-user-copy.mjs now, because
               a comment alone did not survive one afternoon. */}
-          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => updateClosureForm({ certificate_distribution_date: e.target.value })} /></Field>
-          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => updateClosureForm({ sidh_uploaded_on: e.target.value })} /></Field>
+          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab || closureBusy} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => updateClosureForm({ certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab || closureBusy} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => updateClosureForm({ sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
-            ? <Field label="Certificates issued"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => updateClosureForm({ certificates_issued: +e.target.value })} /></Field>
+            ? <Field label="Certificates issued"><input type="number" disabled={closed || closureBusy} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => updateClosureForm({ certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
         </fieldset>
         {!legacy && summary && summary.passed > summary.certificates_issued && (
@@ -3969,7 +4123,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 it — otherwise the boxes above accept a value that has no way to reach the server.
                 The permission half still refuses. Unchanged frozen dates ride along at their stored
                 values and the server treats them as the no-ops they are (sameStoredValue). */}
-            <Btn small kind="ghost" disabled={!mayMarkTab || !!closureSaving}
+            <Btn small kind="ghost" disabled={!mayMarkTab || closureBusy}
               onClick={() => saveClosure(
                 { ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) },
                 "certification", "Certification information saved.")}>Save</Btn>
@@ -3980,7 +4134,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               onClick={() => saveClosure(
                 { ...closureDatePatch(form), certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) },
                 "certification-complete", "Certification marked completed.")}
-              disabled={closed || !!closureSaving || blockersFailed || closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
+              disabled={closed || closureBusy || blockersFailed || closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unsettled)}>
@@ -4024,7 +4178,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
           </span>
         </div>
-        <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed || !!closureSaving} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
+        <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed || closureBusy} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
       </Section>
       {/* QA-038 (checker): a Location/SPOC login saw the whole Invoice section with buttons the
           server refuses — money surfaces render only for the roles that hold them. */}
@@ -4035,7 +4189,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               closure.ready_for_invoice through /closure (closure.manage), which is Operations'
               own job. It deliberately stays outside the finance gate below. */}
           {!closure?.ready_for_invoice && (
-            <Btn onClick={() => saveClosure({ ready_for_invoice: true })} disabled={closure?.certification_status !== "Completed"}>
+            <Btn onClick={() => saveClosure({ ready_for_invoice: true }, "invoice-ready", "Invoice marked ready.")} disabled={closureBusy || closure?.certification_status !== "Completed"}>
               Mark Ready for Invoice {closure?.certification_status !== "Completed" && "(needs certification)"}
             </Btn>
           )}
@@ -4065,24 +4219,24 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                     Suggested amount <span className="font-semibold">₹{Number(invProposal.amount).toLocaleString("en-IN")}</span>
                     <span className="text-gray-500"> — {invProposal.basis}</span>
                   </span>
-                  <Btn small kind="ghost" onClick={() => setInvForm({ ...invForm, amount: invProposal.amount })}>Use this</Btn>
+                  <Btn small kind="ghost" disabled={closureBusy} onClick={() => setInvForm({ ...invForm, amount: invProposal.amount })}>Use this</Btn>
                 </div>
               )}
             </div>
           )}
           {invoice && canMoveInvoice && (
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Amount (₹)"><input type="number" className={inputCls} value={invForm.amount ?? ""} onChange={(e) => setInvForm({ ...invForm, amount: +e.target.value })} /></Field>
-              <Field label="Invoice no"><input className={inputCls} value={invForm.invoice_no ?? ""} onChange={(e) => setInvForm({ ...invForm, invoice_no: e.target.value })} /></Field>
-              <Field label="Raised on"><input type="date" className={inputCls} value={toInputDate(invForm.raised_on)} onChange={(e) => setInvForm({ ...invForm, raised_on: e.target.value })} /></Field>
-              <Field label="Paid on"><input type="date" className={inputCls} value={toInputDate(invForm.paid_on)} onChange={(e) => setInvForm({ ...invForm, paid_on: e.target.value })} /></Field>
+              <Field label="Amount (₹)"><input type="number" disabled={closureBusy} className={inputCls} value={invForm.amount ?? ""} onChange={(e) => setInvForm({ ...invForm, amount: +e.target.value })} /></Field>
+              <Field label="Invoice no"><input disabled={closureBusy} className={inputCls} value={invForm.invoice_no ?? ""} onChange={(e) => setInvForm({ ...invForm, invoice_no: e.target.value })} /></Field>
+              <Field label="Raised on"><input type="date" disabled={closureBusy} className={inputCls} value={toInputDate(invForm.raised_on)} onChange={(e) => setInvForm({ ...invForm, raised_on: e.target.value })} /></Field>
+              <Field label="Paid on"><input type="date" disabled={closureBusy} className={inputCls} value={toInputDate(invForm.paid_on)} onChange={(e) => setInvForm({ ...invForm, paid_on: e.target.value })} /></Field>
               {/* QA-1831: "Paid" answered whether money came and never how much, so a part payment
                   or a deduction at source left no trace — which is the CEO's own complaint,
                   *"advance diye the, TOT ka payment kiya tha, to trace nahi ho raha."* This is
                   allowed to be less than the amount above; the P&L counts the difference rather
                   than hiding it. */}
-              <Field label="Amount received (₹)"><input type="number" className={inputCls} value={invForm.received_amount ?? ""} onChange={(e) => setInvForm({ ...invForm, received_amount: e.target.value === "" ? undefined : +e.target.value })} /></Field>
-              <Field label="Receipt reference"><input className={inputCls} value={invForm.receipt_ref ?? ""} onChange={(e) => setInvForm({ ...invForm, receipt_ref: e.target.value })} /></Field>
+              <Field label="Amount received (₹)"><input type="number" disabled={closureBusy} className={inputCls} value={invForm.received_amount ?? ""} onChange={(e) => setInvForm({ ...invForm, received_amount: e.target.value === "" ? undefined : +e.target.value })} /></Field>
+              <Field label="Receipt reference"><input disabled={closureBusy} className={inputCls} value={invForm.receipt_ref ?? ""} onChange={(e) => setInvForm({ ...invForm, receipt_ref: e.target.value })} /></Field>
             </div>
           )}
           {invoice && canMoveInvoice && invForm.received_amount != null && invForm.amount != null && Number(invForm.received_amount) < Number(invForm.amount) && (
@@ -4092,10 +4246,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           )}
           {invoice && canMoveInvoice && (
             <div className="flex gap-2">
-              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Raised" })} disabled={invoice.status !== "Ready"}>Mark Raised</Btn>
-              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={invoice.status !== "Raised"}>Mark Paid</Btn>
+              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Raised" })} disabled={closureBusy || invoice.status !== "Ready"}>Mark Raised</Btn>
+              <Btn small onClick={() => saveInvoice({ ...invForm, status: "Paid" })} disabled={closureBusy || invoice.status !== "Raised"}>Mark Paid</Btn>
               {invoice.status === "Paid" && (
-                <Btn small kind="ghost" onClick={() => saveInvoice({ ...invForm, status: "Paid" })}>Record a further receipt</Btn>
+                <Btn small kind="ghost" disabled={closureBusy} onClick={() => saveInvoice({ ...invForm, status: "Paid" })}>Record a further receipt</Btn>
               )}
             </div>
           )}
@@ -4103,15 +4257,19 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               "main khali payment lene mein interested nahi hoon; no dues, tab close". */}
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" disabled={!mayMarkTab} checked={!!closure?.dues_settled}
-                onChange={(e) => saveClosure({ dues_settled: e.target.checked })} />
+              <input type="checkbox" disabled={!mayMarkTab || closureBusy} checked={!!closure?.dues_settled}
+                onChange={(e) => saveClosure({ dues_settled: e.target.checked }, "dues-settled", "Dues attestation saved.")} />
               <span className="font-medium">All dues settled — trainer, centre, vendor: NO dues pending</span>
             </label>
             {closure?.dues_settled && closure?.dues_marked_at && (
               <p className="mt-1 text-xs text-gray-500">Attested {fmtDate(closure.dues_marked_at)}</p>
             )}
-            <input className={inputCls + " mt-2"} disabled={!mayMarkTab} placeholder="Dues note (optional — what was settled, references)"
-              value={closure?.dues_note ?? ""} onChange={(e) => saveClosure({ dues_note: e.target.value })} />
+            <div className="mt-2 flex items-start gap-2">
+              <input className={inputCls} disabled={!mayMarkTab || closureBusy} placeholder="Dues note (optional — what was settled, references)"
+                value={form.dues_note ?? ""} onChange={(e) => updateClosureForm({ dues_note: e.target.value })} />
+              <Btn small kind="ghost" disabled={!mayMarkTab || closureBusy}
+                onClick={() => saveClosure({ dues_note: form.dues_note ?? "" }, "dues-note", "Dues note saved.")}>Save note</Btn>
+            </div>
             <p className="mt-2 text-xs text-gray-500">
               Batch closes from the Overview tab once certification is Completed, the invoice is
               PAID, and this attestation is ticked.
@@ -4135,6 +4293,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       </Section>
       )}
       </div>
+      </fieldset>
     </div>
   );
 }

@@ -63,6 +63,14 @@ const mem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { can
 await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
+// QA-2420 needs a second real batch for the browser's A -> B navigation attack. It shares the
+// fixture's approved location/program/trainer/room but owns no member or closure state.
+const switchStart = new Date();
+switchStart.setDate(switchStart.getDate() + 45);
+const closureSwitchBatch = (await req(admin, "POST", "/api/batches", {
+  location: loc._id, program: prog._id, trainer: trainer._id, room: room._id,
+  planned_start: switchStart.toISOString().slice(0, 10), target_size: 1,
+}, 201)).data.item;
 
 let browser;
 try {
@@ -74,7 +82,7 @@ try {
   finish();
 }
 const ctx = await browser.newContext({ viewport: { width: 1536, height: 900 } });
-const page = await ctx.newPage();
+let page = await ctx.newPage();
 
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
 await page.waitForTimeout(1200);
@@ -86,6 +94,215 @@ if (await emailBox.count()) {
   await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
 }
 ok("[precondition] the browser is logged in (not sitting on the login screen)", !/login/i.test(page.url()), page.url());
+
+// ---------------------------------------------------------------------------------------------
+// QA-2420 — Closure Save is an EDIT, not a lifecycle transition. These are browser assertions
+// because the bug was what an operator could press/observe while React and the network raced; an
+// API-only test cannot prove any of the disabled state, local error, or stale-navigation contract.
+{
+  const batchPath = (id) => `${BASE}/batches/${id}`;
+  const closurePath = (id) => `/api/batches/${id}/closure`;
+  const parentPath = (id) => `/api/batches/${id}`;
+  const isPath = (id, suffix) => (url) => {
+    const p = new URL(url).pathname;
+    return p.endsWith(`/erp${suffix(id)}`) || p.endsWith(suffix(id));
+  };
+  const openClosure = async (id) => {
+    await page.goto(batchPath(id), { waitUntil: "domcontentloaded" });
+    const closureTab = page.getByRole("button", { name: "Closure", exact: true });
+    await closureTab.waitFor({ timeout: 30000 });
+    await closureTab.click();
+    await page.getByLabel("Mock test date").waitFor({ timeout: 30000 });
+  };
+  const assessmentSave = () => page.getByRole("button", { name: "Save", exact: true }).first();
+  const certificationSave = () => page.getByRole("button", { name: "Save", exact: true }).nth(1);
+  // `onChanged()` resolves after it schedules the parent batch update; wait for React to commit
+  // that new prop rather than sampling the still-mounted Closure form in that same paint.
+  // This remains a bounded assertion: a permanently writable frozen date returns false.
+  const eventuallyDisabled = async (locator) => {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (await locator.isDisabled()) return true;
+      await page.waitForTimeout(100);
+    }
+    return false;
+  };
+  const eventuallyHasValue = async (locator, expected) => {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (await locator.inputValue() === expected) return true;
+      await page.waitForTimeout(100);
+    }
+    return false;
+  };
+  const putA = isPath(batch._id, closurePath);
+
+  await openClosure(batch._id);
+  const markButtons = page.getByRole("button", { name: "Mark Completed", exact: true });
+  // Blockers are fetched independently of the closure form. Waiting for its actual refusal text
+  // proves this fixture has reached the deliberate lifecycle gate before testing that Save stays
+  // independent of it; without this, a quick browser can score a pre-fetch enabled button green.
+  await page.getByText(/student\(s\) have no result yet/i).waitFor({ timeout: 30000 }).catch(() => {});
+  ok("QA-2420 [precondition]: this fixture has an enabled Assessment Save and a separately blocked Mark Completed",
+    await assessmentSave().isEnabled() && await markButtons.first().isDisabled(),
+    JSON.stringify({ saveEnabled: await assessmentSave().isEnabled(), markDisabled: await markButtons.first().isDisabled() }));
+
+  // Two DOM clicks in the SAME JS turn, while the PUT is deliberately held: this specifically
+  // exercises the ref mutex rather than relying on Playwright's actionability retry after disabled
+  // has painted. The control surface must visibly freeze before the request is released.
+  let heldPutCount = 0;
+  let releaseHeldPut;
+  const heldPut = new Promise((resolve) => { releaseHeldPut = resolve; });
+  await page.route(putA, async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    heldPutCount++;
+    await heldPut;
+    await route.continue().catch(() => {});
+  });
+  await page.getByLabel("Mock test date").fill("2026-09-18");
+  await assessmentSave().evaluate((el) => { el.click(); el.click(); });
+  await page.waitForFunction(() => /Saving closure information/i.test(document.body.innerText), undefined, { timeout: 15000 }).catch(() => {});
+  const busyState = {
+    count: heldPutCount,
+    assessmentInput: await page.getByLabel("Mock test date").isDisabled(),
+    certificationInput: await page.getByLabel("Certificate distribution date").isDisabled(),
+    save: await assessmentSave().isDisabled(),
+    busySurface: await page.locator("[data-closure-busy-surface]").getAttribute("aria-busy"),
+  };
+  ok("QA-2420: same-tick double click makes one PUT and freezes Assessment + Certification editors while it is pending",
+    busyState.count === 1 && busyState.assessmentInput && busyState.certificationInput && busyState.save && busyState.busySurface === "true",
+    JSON.stringify(busyState));
+  releaseHeldPut();
+  await page.getByRole("status").filter({ hasText: "Assessment information saved." }).waitFor({ timeout: 30000 }).catch(() => {});
+  ok("QA-2420: the delayed Assessment Save reports success only after its write/read-back/parent refresh chain",
+    /Assessment information saved\./i.test(await page.locator("body").innerText()), await page.locator("body").innerText().then((t) => t.slice(0, 300)));
+  await page.unroute(putA);
+
+  // A failed write must leave the typed value available for retry and must never announce success.
+  await page.route(putA, async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated PUT failure" }) });
+  });
+  await page.getByLabel("Mock test date").fill("2026-09-19");
+  await assessmentSave().click();
+  await page.getByRole("alert").filter({ hasText: "simulated PUT failure" }).waitFor({ timeout: 15000 }).catch(() => {});
+  const putFailureText = await page.locator("body").innerText();
+  ok("QA-2420: a failed PUT gives a local error, retains the value, and does not claim saved",
+    /simulated PUT failure/i.test(putFailureText)
+      && await page.getByLabel("Mock test date").inputValue() === "2026-09-19"
+      && !/Assessment information saved\./i.test(putFailureText),
+    putFailureText.slice(0, 500));
+  await page.unroute(putA);
+
+  // A successful PUT whose forced closure GET fails is not a successful save from the operator's
+  // perspective. The date remains in the editor for an explicit reload/retry decision.
+  let failReadback = true;
+  await page.route(putA, async (route) => {
+    if (route.request().method() === "GET" && failReadback) {
+      failReadback = false;
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated read-back failure" }) });
+    }
+    return route.continue();
+  });
+  await assessmentSave().click();
+  await page.getByRole("alert").filter({ hasText: "refreshed values could not be loaded" }).waitFor({ timeout: 15000 }).catch(() => {});
+  const readbackFailureText = await page.locator("body").innerText();
+  ok("QA-2420: a failed forced GET turns a successful PUT into local retryable failure, not success",
+    /Saved, but the refreshed values could not be loaded/i.test(readbackFailureText)
+      && await page.getByLabel("Mock test date").inputValue() === "2026-09-19"
+      && !/Assessment information saved\./i.test(readbackFailureText),
+    readbackFailureText.slice(0, 500));
+  await page.unroute(putA);
+
+  // The child must observe a failed parent load too. This route is installed only after the page
+  // settled, so it cannot be satisfied by the initial detail GET.
+  const putParentFailureDate = "2026-09-20";
+  await page.getByLabel("Mock test date").fill(putParentFailureDate);
+  await page.route(isPath(batch._id, parentPath), async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated parent refresh failure" }) });
+    }
+    return route.continue();
+  });
+  await assessmentSave().click();
+  await page.getByRole("alert").filter({ hasText: "batch summary could not be refreshed" }).waitFor({ timeout: 15000 }).catch(() => {});
+  const parentFailureText = await page.locator("body").innerText();
+  ok("QA-2420: parent-refresh failure is observable and suppresses the Assessment saved notice",
+    /batch summary could not be refreshed/i.test(parentFailureText) && !/Assessment information saved\./i.test(parentFailureText),
+    parentFailureText.slice(0, 500));
+  await page.unroute(isPath(batch._id, parentPath));
+
+  // Certification's ordinary Save is independently usable too; it is not the neighbouring
+  // certification completion transition and carries the same read-back contract.
+  await page.getByLabel("Certificate distribution date").fill("2026-09-21");
+  await certificationSave().click();
+  await page.getByRole("status").filter({ hasText: "Certification information saved." }).waitFor({ timeout: 30000 }).catch(() => {});
+  const afterCertification = await req(admin, "GET", closurePath(batch._id));
+  ok("QA-2420: Certification Save persists its date while certification Mark Completed stays separately gated",
+    !!afterCertification.data?.closure?.certificate_distribution_date
+      && await markButtons.nth(1).isDisabled(),
+    JSON.stringify({ date: afterCertification.data?.closure?.certificate_distribution_date, certificationMarkDisabled: await markButtons.nth(1).isDisabled() }));
+
+  // Complete through the Closure tab's own Admin force control. Apart from exercising the same
+  // shared busy operation, this preserves this browser context; an out-of-band API completion
+  // would make the next full navigation a test of the auth harness rather than of Closure dates.
+  await page.evaluate(() => { window.prompt = () => "QA-2420 completed-date browser fixture"; });
+  const adminComplete = page.getByRole("button", { name: "Mark Completed (Admin)", exact: true });
+  await adminComplete.click();
+  await page.getByRole("status").filter({ hasText: "Batch completed and refreshed." }).waitFor({ timeout: 30000 }).catch(() => {});
+  const forced = await req(admin, "GET", `/api/batches/${batch._id}`);
+  // Open the persisted completed record, rather than sampling the parent prop in the same React
+  // paint as the transition. A new page shares this authenticated context but does not inherit
+  // the transition page's pending client navigation state.
+  page = await ctx.newPage();
+  await openClosure(batch._id);
+  const hydratedCompletedForm = await eventuallyHasValue(page.getByLabel("Certificate distribution date"), "2026-09-21");
+  const completedDates = {
+    certificationFrozen: await eventuallyDisabled(page.getByLabel("Certification date")),
+    distributionWritable: await page.getByLabel("Certificate distribution date").isEnabled(),
+    sidhWritable: await page.getByLabel("Uploaded to SIDH portal on").isEnabled(),
+  };
+  ok("QA-2420 [precondition]: the fixture is Completed and only its post-completion Closure dates remain writable",
+    forced.data?.item?.status === "Completed" && hydratedCompletedForm && completedDates.certificationFrozen && completedDates.distributionWritable && completedDates.sidhWritable,
+    JSON.stringify({ status: forced.data?.item?.status, hydratedCompletedForm, ...completedDates }));
+  await page.getByLabel("Uploaded to SIDH portal on").fill("2026-09-22");
+  // The React controlled input's change handler must commit before this separate click consumes
+  // `form`; otherwise a synthetic same-tick test can submit the pre-fill snapshot.
+  await page.waitForTimeout(100);
+  await certificationSave().click();
+  await page.getByRole("status").filter({ hasText: "Certification information saved." }).waitFor({ timeout: 30000 });
+  const completedClosure = await req(admin, "GET", closurePath(batch._id));
+  ok("QA-2420: Completed batches persist certificate-distribution/SIDH dates through Certification Save",
+    !!completedClosure.data?.closure?.certificate_distribution_date && !!completedClosure.data?.closure?.sidh_uploaded_on,
+    JSON.stringify({ distribution: completedClosure.data?.closure?.certificate_distribution_date, sidh: completedClosure.data?.closure?.sidh_uploaded_on }));
+
+  // Start a delayed PUT on A, navigate to B, then release it. A's late response must not paint B,
+  // announce A success, or call A's parent reload after the route switch.
+  let heldOldPut;
+  const oldPut = new Promise((resolve) => { heldOldPut = resolve; });
+  let oldParentLoads = 0;
+  await page.route(putA, async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    await oldPut;
+    await route.continue().catch(() => {});
+  });
+  await page.route(isPath(batch._id, parentPath), async (route) => {
+    if (route.request().method() === "GET") oldParentLoads++;
+    return route.continue();
+  });
+  await page.getByLabel("Certificate distribution date").fill("2026-09-23");
+  await certificationSave().evaluate((el) => el.click());
+  await page.waitForFunction(() => /Saving closure information/i.test(document.body.innerText), undefined, { timeout: 15000 }).catch(() => {});
+  await openClosure(closureSwitchBatch._id);
+  heldOldPut();
+  await page.waitForTimeout(600);
+  const switchedText = await page.locator("body").innerText();
+  ok("QA-2420: a delayed A write released after navigation cannot paint, announce, or refresh A over B",
+    page.url().includes(String(closureSwitchBatch._id))
+      && !/Certification information saved\./i.test(switchedText)
+      && oldParentLoads === 0,
+    JSON.stringify({ url: page.url(), oldParentLoads, text: switchedText.slice(0, 350) }));
+  await page.unroute(putA);
+  await page.unroute(isPath(batch._id, parentPath));
+}
 
 // QA-1248: wait for the list to have SETTLED, not for a stopwatch. The page fetches limit=2000
 // client-side; a fixed sleep on a slow runner produces "announced>0, rows=0" - which is the live

@@ -1135,11 +1135,11 @@ for (const file of walk(root)) {
   // file has over-claimed before: it proves an explanation EXISTS, not that its wording is good,
   // and it finds the two sections by their headings.
   {
-    const SECTIONS = [["Assessment", "assessment_status"], ["Certification", "certification_status"]];
+    const SECTIONS = [["Assessment", "assessment_status", "closed || closureBusy"], ["Certification", "certification_status", "!mayMarkTab || closureBusy"]];
     const code = stripComments(bp);
     const NLC = String.fromCharCode(10);
     const faults = [];
-    for (const [name, field] of SECTIONS) {
+    for (const [name, field, expectedSaveGate] of SECTIONS) {
       const after = code.split("title={`" + name)[1];
       const sec = after ? after.split("</Section>")[0] : "";
       if (!sec) { faults.push(name + ": section not found - this check has lost its subject rather than passed"); continue; }
@@ -1147,12 +1147,14 @@ for (const file of walk(root)) {
       const markLine = lines.find((l) => l.includes("Mark Completed</Btn>")) ?? "";
       const disablesOnDone = markLine.includes('closure?.' + field + ' === "Completed"');
       const explainsDone = sec.includes('closure?.' + field + ' === "Completed" &&');
-      const saveIdx = sec.indexOf(">Save</Btn>");
-      const saveGated = saveIdx < 0 || sec.slice(0, saveIdx).includes("disabled={closed}");
+      const saveLine = lines.find((l) => l.includes(">Save</Btn>")) ?? "";
+      const saveOpen = saveLine ? sec.slice(Math.max(0, sec.indexOf(saveLine) - 500), sec.indexOf(saveLine) + saveLine.length) : "";
+      const saveGated = saveLine && saveOpen.includes(`disabled={${expectedSaveGate}}`);
       if (!markLine) faults.push(name + ": no Mark Completed button found");
       else if (!disablesOnDone) faults.push(name + ": the button no longer disables on its own completed status");
       if (!explainsDone) faults.push(name + ": the button disables when the batch is finished and NOTHING on screen says so - the condition that kills it also hides its reason");
-      if (!saveGated) faults.push(name + ": Save is live on a frozen batch, so it posts a value the server refuses and the 409 lands in the banner at the top of the page");
+      if (!saveLine) faults.push(name + ": no Save button found");
+      else if (!saveGated) faults.push(name + `: Save lost its exact ${expectedSaveGate} gate`);
     }
     if (!faults.length) passed++;
     else { failed++; for (const f of faults) pushCopy("app/(app)/batches/[id]/page.tsx: " + f + " (QA-394)"); }
@@ -3758,7 +3760,7 @@ for (const file of walk(root)) {
     const line = src.split("\n").find((l) => l.includes("form." + f) && l.includes("<input"));
     if (!line) { bad.push(`${f}: no input line found at all`); continue; }
     if (/disabled=\{closed\}/.test(line)) bad.push(`${f} is gated on \`closed\`, which includes completion`);
-    else if (!/disabled=\{!mayMarkTab\}/.test(line)) bad.push(`${f} is not gated on \`!mayMarkTab\``);
+    else if (!/disabled=\{!mayMarkTab \|\| closureBusy\}/.test(line)) bad.push(`${f} is not gated on permission + the shared Closure busy state`);
   }
   if (!bad.length) passed++;
   else {
@@ -4201,32 +4203,85 @@ for (const file of walk(root)) {
   const raw = fs.readFileSync(path.join(root, rel), "utf-8");
   const src = stripComments(raw);
   const tab = src.slice(src.indexOf("function ClosureTab("), src.indexOf("function CandidateResults("));
+  const parent = src.slice(src.indexOf("export default function BatchDetail("), src.indexOf("function Overview("));
+  const begin = tab.slice(tab.indexOf("const beginClosureOperation"), tab.indexOf("const closureOperationIsCurrent"));
   const save = tab.slice(tab.indexOf("async function saveClosure("), tab.indexOf("async function notifyAssessment("));
   const load = tab.slice(tab.indexOf("const load = async"), tab.indexOf("useEffect(() =>", tab.indexOf("const load = async")));
+  const busyStart = tab.indexOf("<fieldset data-closure-busy-surface");
+  const busySurface = busyStart >= 0 ? tab.slice(busyStart, tab.lastIndexOf("</fieldset>") + "</fieldset>".length) : "";
 
-  const mutexBeforeWrite = save.indexOf("if (closureSaveInFlight.current) return;") >= 0
-    && save.indexOf("if (closureSaveInFlight.current) return;") < save.indexOf("await api(")
-    && save.includes("closureSaveInFlight.current = true;")
-    && save.includes("closureSaveInFlight.current = false;");
-  const awaitedReadback = save.includes("const refreshed = await load(true);")
+  const mutexBeforeWrite = begin.includes("const current = closureSaveInFlight.current;")
+    && begin.indexOf("if (current)") < begin.indexOf("closureSaveInFlight.current = started;")
+    && begin.includes("A closure change is already in progress")
+    && save.includes("const started = existingOperation ?? beginClosureOperation(operation);");
+  const awaitedReadback = save.includes("const refreshed = await load(true, started.batchId);")
     && save.includes("await Promise.resolve(onChanged());")
+    && save.includes("parentRefreshed === false")
     && save.includes("setClosureSaveNotice(success);");
   const dirtyProtected = load.includes("request !== latestClosureLoad.current")
+    && load.includes("activeClosureBatchId.current !== requestedBatchId")
     && load.includes("forceForm || !closureFormDirty.current")
     && tab.includes("closureFormDirty.current = true;")
     && !tab.includes("onChange={(e) => setForm(");
-  const editorsFreeze = (tab.match(/disabled=\{[^}\n]*!!closureSaving[^}\n]*\}/g) ?? []).length >= 11;
+  const parentRefreshSignals = parent.includes("const load = async (): Promise<boolean>")
+    && parent.includes("return true;") && parent.includes("return false;")
+    && parent.includes("activeBatchId.current !== requestedBatchId")
+    && parent.includes('api(`/api/batches/${requestedBatchId}?refresh=${request}`, { cache: "no-store" })');
+  const batchBound = save.includes("/api/batches/${started.batchId}/closure")
+    && save.includes("closureOperationIsCurrent(started)")
+    && tab.includes("closureSaveSequence.current += 1;")
+    && tab.includes("closureSaveInFlight.current = null;")
+    && tab.includes("setClosure(null);")
+    && tab.includes("setCompletedInThisClosure(false);");
+  const completionGatePaintsImmediately = tab.includes("setCompletedInThisClosure(true);")
+    && tab.includes('const statusClosedTab = completedInThisClosure || ["Completed", "Cancelled"].includes(batch?.status);');
+  const sharedBusySurface = busySurface.includes("disabled={closureBusy}")
+    && busySurface.includes("inert={closureBusy ? true : undefined}")
+    && busySurface.includes("aria-busy={closureBusy}");
+  const requiredInsideBusySurface = [
+    "completeAsAdmin", "derive", "<PortalIdGaps", "<CandidateResults", "reopenAssessment",
+    'label="Result sheet"', 'label="Certificate bundle"', "ready_for_invoice", "saveInvoice(",
+    "dues_settled", "dues_note", 'href="/candidates"',
+  ];
+  const missingFromBusySurface = requiredInsideBusySurface.filter((identity) => !busySurface.includes(identity));
+  // Exact controls, not a count: deleting any one gate names the exact action that escaped the lock.
+  const exactBusyControls = {
+    "Admin force-complete": tab.includes("onClick={completeAsAdmin} disabled={closureBusy}"),
+    "derive figures": tab.includes("onClick={derive} disabled={closureBusy}"),
+    "per-candidate opener": tab.includes("<Btn small disabled={closureBusy}") && tab.includes("setPerCandidate(true)"),
+    "legacy figures opener": tab.includes('kind="ghost" disabled={closureBusy} onClick={() => setShowLegacyEntry(true)}'),
+    "assessment notification": tab.includes('disabled={closureBusy || !closure?.assessment_date} onClick={notifyAssessment}'),
+    "Assessment Save": tab.includes('kind="ghost" disabled={closed || closureBusy}') && tab.includes('"assessment", "Assessment information saved."'),
+    "Assessment Mark Completed": tab.includes('disabled={closed || closureBusy || blockersFailed || closure?.assessment_status'),
+    "assessment reopen": tab.includes("onClick={() => reopenAssessment()} disabled={closureBusy}"),
+    "result upload": tab.includes('label="Result sheet" value={closure?.result_file} disabled={closed || closureBusy}'),
+    "Certification Save": tab.includes('kind="ghost" disabled={!mayMarkTab || closureBusy}') && tab.includes('"certification", "Certification information saved."'),
+    "Certification Mark Completed": tab.includes('disabled={closed || closureBusy || blockersFailed || closure?.certification_status'),
+    "certificate upload": tab.includes('label="Certificate bundle" value={closure?.certificate_file} disabled={closed || closureBusy}'),
+    "post-completion distribution date": tab.includes('form.certificate_distribution_date)} onChange') && tab.includes('disabled={!mayMarkTab || closureBusy}'),
+    "post-completion SIDH date": tab.includes('form.sidh_uploaded_on)} onChange') && tab.includes('disabled={!mayMarkTab || closureBusy}'),
+    "Mark Ready for Invoice": tab.includes('disabled={closureBusy || closure?.certification_status !== "Completed"}'),
+    "dues checkbox": tab.includes('type="checkbox" disabled={!mayMarkTab || closureBusy}') && tab.includes('"dues-settled"'),
+    "dues note editor": tab.includes('placeholder="Dues note (optional — what was settled, references)"') && tab.includes('value={form.dues_note ?? ""}'),
+    "dues note Save": tab.includes('disabled={!mayMarkTab || closureBusy}') && tab.includes('>Save note</Btn>'),
+    "invoice Raise": tab.includes('disabled={closureBusy || invoice.status !== "Ready"}>Mark Raised'),
+    "invoice Paid": tab.includes('disabled={closureBusy || invoice.status !== "Raised"}>Mark Paid'),
+    "further receipt": tab.includes('kind="ghost" disabled={closureBusy}') && tab.includes('>Record a further receipt</Btn>'),
+  };
+  const escapedBusyControls = Object.entries(exactBusyControls).filter(([, guarded]) => !guarded).map(([name]) => name);
   const localFeedback = tab.includes('role="status" aria-live="polite"')
     && tab.includes('role="alert"')
-    && tab.includes('Saving…')
+    && tab.includes('Saving closure information…')
+    && tab.includes('Saved and refreshed the closure, but the batch summary could not be refreshed.')
     && tab.includes('Assessment information saved.')
     && tab.includes('Certification information saved.');
   // The two plain Save controls carry only status/permission + in-flight gates. Result/certificate
   // prerequisites belong exclusively to their neighbouring Mark Completed buttons.
-  const saveIndependent = tab.includes('kind="ghost" disabled={closed || !!closureSaving}')
-    && tab.includes('kind="ghost" disabled={!mayMarkTab || !!closureSaving}');
+  const saveIndependent = tab.includes('kind="ghost" disabled={closed || closureBusy}')
+    && tab.includes('kind="ghost" disabled={!mayMarkTab || closureBusy}');
 
-  const ok = mutexBeforeWrite && awaitedReadback && dirtyProtected && editorsFreeze
+  const ok = mutexBeforeWrite && awaitedReadback && dirtyProtected && parentRefreshSignals && batchBound && completionGatePaintsImmediately
+    && sharedBusySurface && !missingFromBusySurface.length && !escapedBusyControls.length
     && localFeedback && saveIndependent;
   if (ok) passed++;
   else {
@@ -4235,7 +4290,11 @@ for (const file of walk(root)) {
       + " (same-tick mutex before PUT=" + mutexBeforeWrite
       + ", forced readback + parent refresh awaited=" + awaitedReadback
       + ", dirty form/newest GET protected=" + dirtyProtected
-      + ", editors frozen while saving=" + editorsFreeze
+      + ", parent refresh returns success/failure=" + parentRefreshSignals
+      + ", batch switch bound=" + batchBound
+      + ", shared busy surface=" + sharedBusySurface
+      + ", controls outside busy surface=" + JSON.stringify(missingFromBusySurface)
+      + ", controls without exact busy gate=" + JSON.stringify(escapedBusyControls)
       + ", local saving/saved/error feedback=" + localFeedback
       + ", Save independent of sign-off prerequisites=" + saveIndependent + ")"
       + " - a double-click can race two full-form date patches, or a background GET can erase"
