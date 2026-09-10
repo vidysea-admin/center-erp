@@ -145,7 +145,9 @@ export async function ensureCostDeletionAuditEvent(input: {
   });
   await CostEntry.collection.updateOne(
     { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, "_audit_events.event_id": { $ne: event.event_id } },
-    { $push: { _audit_events: event } },
+    // `_audit_events` is deliberately Mixed and hidden from the public model; the native driver
+    // accepts this shape, while Mongoose's generic collection type cannot express the field.
+    { $push: { _audit_events: event } } as any,
   );
   const owner: any = await CostEntry.collection.findOne(
     { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE },
