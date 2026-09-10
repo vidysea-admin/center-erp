@@ -188,6 +188,18 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     ok("QA-1828b: ...and it records THAT it was pre-approved, and on what basis",
       !!insideBack && insideBack.pre_approved_applied === true && String(insideBack.pre_approved_basis ?? "").length > 3,
       JSON.stringify(insideBack ? { a: insideBack.pre_approved_applied, b: insideBack.pre_approved_basis } : null));
+    if (insideId) {
+      const correctedFixed = await req(admin, "PATCH", `/api/costs/${insideId}`, { amount: 800, note: "fixed-cap correction remains editable" });
+      const removedFixed = await req(admin, "DELETE", `/api/costs/${insideId}`);
+      const fixedAfterDelete = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+        .find((c) => String(c._id) === String(insideId));
+      ok("fixed pre-approval: a non-cumulative row remains correctable",
+        correctedFixed.status === 200 && correctedFixed.data?.item?.amount === 800,
+        `got ${correctedFixed.status}`);
+      ok("fixed pre-approval: a non-cumulative row remains deletable",
+        removedFixed.status === 200 && !fixedAfterDelete,
+        `delete=${removedFixed.status} remains=${!!fixedAfterDelete}`);
+    }
 
     // ABOVE the cap: this is the CEO's own counter-example - *"अब अगर उसके 29 रह गए… तो वो एक बार
     // अप्रूव होनी चाहिए।"* A flag-shaped implementation waves this through, which is precisely the
@@ -242,7 +254,8 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         amount: 50 * billable, note: "structured formula pin",
       });
       ok("finance policy: Rs 50 x billable pass-outs is calculated and posts without re-approval",
-        within.status === 201, `got ${within.status} ${JSON.stringify(within.data).slice(0, 140)}`);
+        within.status === 201 && within.data?.item?.pre_approved_unit === "Per billable passed",
+        `got ${within.status} unit=${within.data?.item?.pre_approved_unit} ${JSON.stringify(within.data).slice(0, 140)}`);
       const withinId = within.data?.item?._id;
       if (withinId) {
         const otherBatch = allBatches.find((b) => String(b._id) !== String(closedBatch._id));

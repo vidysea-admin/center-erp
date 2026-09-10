@@ -66,7 +66,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // amount when the row is created. Moving or resizing the row later without atomically moving that
   // reservation would make the ledger and the cap disagree, so fail closed on those three fields.
   // Descriptive and payment fields remain editable through their normal paths.
-  if (doc.pre_approved_applied) {
+  if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     const changesReservation =
       (body.amount !== undefined && Number(body.amount) !== Number(doc.amount))
       || (body.batch !== undefined && String(body.batch || "") !== String(doc.batch || ""))
@@ -92,7 +92,7 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   const doc = await loadInScope(user, id);
   // Deleting an applied row would free the visible ledger amount without returning the atomic
   // reservation, allowing the same commitment to be spent again. Preserve the original record.
-  if (doc.pre_approved_applied) {
+  if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     throw new HttpError(409, "A pre-approved cost cannot be deleted after its commitment has been applied.");
   }
   await doc.deleteOne();

@@ -1219,6 +1219,9 @@ const CostEntrySchema = new Schema({
   // is recorded is the decision AND the sentence it was made against.
   pre_approved_applied: { type: Boolean, default: false },
   pre_approved_basis: String,
+  // Snapshot the machine-checkable policy shape too. Formula rows consume a cumulative
+  // batch/category reservation and therefore have stricter correction semantics than a fixed cap.
+  pre_approved_unit: { type: String, enum: COST_PRE_APPROVAL_UNIT },
   entered_by: oid("User", true),
 }, { timestamps: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval

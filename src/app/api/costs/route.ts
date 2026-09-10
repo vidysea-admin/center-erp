@@ -124,6 +124,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // head must never rewrite what was approved today.
       pre_approved_applied: pre.applied,
       pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
+      // A reservation exists only for the cumulative per-billable-pass formula path. Persist that
+      // distinction so later corrections do not have to consult a cost head whose policy may change.
+      pre_approved_unit: pre.applied ? (pre.reservation ? "Per billable passed" : "Fixed amount") : undefined,
       entered_by: user.id,
     });
   } catch (error) {
