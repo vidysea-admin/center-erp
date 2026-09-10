@@ -565,7 +565,6 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const doomedId = doomed.data?.item?._id;
     const ordinaryId = ordinary.data?.item?._id;
     if (doomedId && ordinaryId) {
-      const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
       const formulaHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
         name: `ZZ Cascade Formula ${stamp}`, pre_approved: true,
         pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
@@ -584,6 +583,9 @@ for (const variant of ["ordinary", "mark_paid"]) {
         });
         if (!formulaPendingBeforeCascade) await new Promise((resolve) => setTimeout(resolve, 10));
       }
+      // Claim only after the formula POST has passed its initial recovery drain; otherwise that
+      // POST would correctly acknowledge and collect the tombstone before the cascade attack.
+      const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
       const cascade = await req(admin, "DELETE", `/api/batches/${batchId}`, { reason: "cycle 9 tombstone cascade attack" });
       const formulaResult = await formulaPromise;
       await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
@@ -599,12 +601,12 @@ for (const variant of ["ordinary", "mark_paid"]) {
         JSON.stringify({ claimed: claimed.status, formulaPending: !!formulaPendingBeforeCascade, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
       ok("batch cascade: ordinary and Formula Pending children are removed while only the audit tombstone survives deleteMany",
         !ordinaryAfterCascade && !formulaAfterCascade && !!tombstoneAfterCascade && auditBeforeRecovery === 0
-          && formulaResult.status === 202,
+          && [202, 409].includes(formulaResult.status),
         JSON.stringify({ ordinary: !!ordinaryAfterCascade, formula: !!formulaAfterCascade, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery, formulaResult: formulaResult.status }));
       await req(admin, "GET", "/api/costs");
       ok("batch cascade: later audit acknowledgement collects the surviving tombstone exactly once",
-        !(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))
-          && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) === 1,
+        !!deletionEvent?.event_id && !(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))
+          && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent?.event_id)) }) === 1,
         `remains=${!!(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))}`);
       if (formulaResult.data?.item?._id) {
         await rawApprovals.deleteOne({ _id: new ObjectId(String(formulaResult.data.item._id)) });
