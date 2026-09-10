@@ -402,6 +402,36 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         { _id: replayBatchId, deletion_state: { $exists: false } }, { projection: { _id: 1 } },
       );
       if (!liveBatch) {
+        // A batch cascade owns the associated CostEntry and ApprovalRequest, but it cannot know
+        // that this in-flight replay also owns an unpublished taxonomy row.  Compensate only the
+        // exact inactive head before claiming the no-orphan outcome.  A published, foreign, or
+        // changed row is deliberately fail-closed: deleting the request in that state would hide
+        // a taxonomy effect that may already be visible.
+        if (request.action === "costcategory.create") {
+          const expectedName = String(p.new_subhead ?? "").trim();
+          const expectedParent = p.new_head_parent ? String(p.new_head_parent) : null;
+          const rawHead: any = await CostCategory.collection.findOne({ _id: request._id });
+          if (rawHead) {
+            const ownsInactiveHead = rawHead.active === false
+              && String(rawHead.staged_by_approval) === String(request._id)
+              && rawHead.name === expectedName
+              && (expectedParent === null ? rawHead.parent === undefined : String(rawHead.parent) === expectedParent);
+            if (!ownsInactiveHead) {
+              throw new HttpError(409, "This batch was deleted while its approval replay held a cost head that is no longer safely compensable. The surviving row needs reconciliation.");
+            }
+            const removedHead = await CostCategory.collection.deleteOne({
+              _id: request._id,
+              active: false,
+              staged_by_approval: request._id,
+              name: rawHead.name,
+              ...(rawHead.parent !== undefined ? { parent: rawHead.parent } : { parent: { $exists: false } }),
+            });
+            const headStillThere = await CostCategory.collection.findOne({ _id: request._id }, { projection: { _id: 1 } });
+            if (removedHead.deletedCount !== 1 || headStillThere) {
+              throw new HttpError(409, "This batch was deleted while its approval replay held a cost head that could not be proven compensated. The surviving row needs reconciliation.");
+            }
+          }
+        }
         await ApprovalRequest.collection.deleteOne({ _id: request._id, batch: replayBatchId });
         if (error instanceof HttpError) throw error;
         throw new HttpError(409, "This batch began deletion while its approval was being applied. Nothing was left pending.");

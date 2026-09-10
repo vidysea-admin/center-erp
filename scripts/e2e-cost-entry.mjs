@@ -14,6 +14,7 @@
 import { requireLocalBase } from "./db-guard.mjs";
 import { MongoClient, ObjectId } from "mongodb";
 import * as XLSX from "xlsx";
+import { readFileSync } from "node:fs";
 // QA-1966: never write through a BASE_URL nobody checked. This suite creates cost heads, posts
 // money and decides approvals; run against a non-local address it would do all three on production.
 const BASE = requireLocalBase("e2e-cost-entry", process.env.BASE_URL || "http://localhost:3000/erp");
@@ -50,6 +51,11 @@ const rawApprovals = rawDb.collection("approvalrequests");
 const rawAudits = rawDb.collection("auditlogs");
 const rawUsers = rawDb.collection("users");
 const rawBatches = rawDb.collection("batches");
+
+const batchDeletionFields = [
+  "deletion_state", "deletion_started_at", "deletion_actor", "deletion_reason",
+  "deletion_recorded_work", "deletion_requires_finance", "deletion_audit_event_id",
+];
 
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
@@ -713,6 +719,45 @@ for (const variant of ["ordinary", "mark_paid"]) {
       replayResult.status === 409 && !(await rawApprovals.findOne({ _id: replayId }))
         && !(await rawCosts.findOne({ _id: replayId })),
       JSON.stringify({ replay: replayResult.status, request: !!(await rawApprovals.findOne({ _id: replayId })), cost: !!(await rawCosts.findOne({ _id: replayId })) }));
+
+    // The staged head belongs to the Applying replay, not to the Batch cascade. Observe it first,
+    // then its deterministic newborn CostEntry, before deleting the Batch. This forces the replay
+    // through the final batch fence rather than merely proving a request was removed before it ran.
+    const headReplayBatch = await makeBatch("HEAD-REPLAY");
+    const headReplayId = new ObjectId();
+    const headReplayName = `ZZ C13 Deleted Batch Head ${stamp}`;
+    await rawApprovals.insertOne({
+      _id: headReplayId, action: "costcategory.create", entity: "CostCategory", entity_id: headReplayId,
+      summary: `c13 staged-head applying replay ${stamp}`,
+      payload: {
+        entry_date: "2026-09-07", location: template.location, batch: headReplayBatch,
+        amount: 703, new_subhead: headReplayName, note: `c13-head-replay-${stamp}`,
+        _test_pause_after_cost_create_ms: 2500,
+      },
+      location: template.location, batch: headReplayBatch, initiator: opsUser?._id ?? new ObjectId(),
+      approver_role: "Admin", approver_users: [], status: "Pending", createdAt: new Date(), updatedAt: new Date(),
+    });
+    const headReplayPromise = req(admin, "POST", `/api/approvals/${headReplayId}`, { decision: "Approved", note: "cycle 13 staged-head replay race" });
+    const stagedHead = await waitFor(() => rawCategories.findOne({
+      _id: headReplayId, active: false, staged_by_approval: headReplayId, name: headReplayName,
+    }));
+    const stagedHeadCost = await waitFor(() => rawCosts.findOne({
+      _id: headReplayId, batch: headReplayBatch, category: headReplayId,
+      approval_request: headReplayId, reservation_kind: "ApprovalHead", reservation_state: "Pending",
+    }));
+    const headReplayDelete = await req(admin, "DELETE", `/api/batches/${headReplayBatch}`, { reason: "cycle 13 staged head applying replay race" });
+    const headReplayResult = await headReplayPromise;
+    const [headReplayRequestAfter, headReplayCostAfter, headReplayCategoryAfter] = await Promise.all([
+      rawApprovals.findOne({ _id: headReplayId }),
+      rawCosts.findOne({ _id: headReplayId }),
+      rawCategories.findOne({ _id: headReplayId }),
+    ]);
+    ok("batch materialization [precondition]: staged cost head and its Pending deterministic cost both existed before the cascade",
+      !!stagedHead && !!stagedHeadCost && headReplayDelete.status === 200,
+      JSON.stringify({ stagedHead: !!stagedHead, stagedCost: !!stagedHeadCost, cascade: headReplayDelete.status }));
+    ok("batch materialization: deleted-batch staged-head replay returns 409 and compensates only its inactive head before removing request/cost",
+      headReplayResult.status === 409 && !headReplayRequestAfter && !headReplayCostAfter && !headReplayCategoryAfter,
+      JSON.stringify({ replay: headReplayResult.status, request: !!headReplayRequestAfter, cost: !!headReplayCostAfter, category: !!headReplayCategoryAfter }));
     await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 
     for (const [label, crashParam] of [["before", "_test_crash_after_deletion_claim=1"], ["during", "_test_crash_during_deletion_cascade=1"]]) {
@@ -739,6 +784,41 @@ for (const variant of ["ordinary", "mark_paid"]) {
   } else {
     ok("batch materialization [precondition]: batch/category fixture exists", false,
       JSON.stringify({ template: !!template, category: cat?._id }));
+  }
+}
+
+// Cycle 13: force-delete recovery is Batch-owned, and its seven durable fields must never become
+// accidental Candidate attributes or leak from an ordinary Batch list while a crash claim is live.
+{
+  const source = readFileSync(new URL("../src/models/index.ts", import.meta.url), "utf8");
+  const candidateSchema = source.slice(source.indexOf("const CandidateSchema"), source.indexOf("// ---------- Batch ----------"));
+  const batchSchema = source.slice(source.indexOf("const BatchSchema"), source.indexOf("// ---------- BatchMember"));
+  ok("batch deletion schema ownership: all seven durable recovery fields belong only to BatchSchema and are select:false",
+    batchDeletionFields.every((field) => new RegExp(`${field}:\\s*\\{[^}]*select:\\s*false`).test(batchSchema))
+      && batchDeletionFields.every((field) => !candidateSchema.includes(field)),
+    JSON.stringify({ candidateHas: batchDeletionFields.filter((field) => candidateSchema.includes(field)), batchHas: batchDeletionFields.filter((field) => batchSchema.includes(field)) }));
+
+  const template = await rawBatches.findOne({});
+  const crashActor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  if (template?.location && template?.program && crashActor?._id) {
+    const crashBatch = new ObjectId();
+    await rawBatches.insertOne({
+      _id: crashBatch, code: `ZZ-C13-PRIVATE-${stamp}`, status: "Planning", location: template.location,
+      program: template.program, target_size: 1, planned_start: new Date("2026-09-01"),
+      createdAt: new Date(), updatedAt: new Date(), deletion_state: "Deleting", deletion_started_at: new Date(),
+      deletion_actor: crashActor._id, deletion_reason: `c13 privacy ${stamp}`,
+      deletion_recorded_work: "0 members, 0 finance rows", deletion_requires_finance: false,
+      deletion_audit_event_id: new ObjectId().toHexString(),
+    });
+    const ordinaryList = (await req(admin, "GET", "/api/batches?limit=2000")).data?.items ?? [];
+    const stranded = ordinaryList.find((batch) => String(batch._id) === String(crashBatch));
+    ok("batch deletion list privacy: an ordinary GET keeps a crash-stranded Batch listable without its seven private recovery fields",
+      !!stranded && batchDeletionFields.every((field) => !(field in stranded)),
+      JSON.stringify({ found: !!stranded, leaked: batchDeletionFields.filter((field) => field in (stranded ?? {})) }));
+    await rawBatches.deleteOne({ _id: crashBatch });
+  } else {
+    ok("batch deletion list privacy [precondition]: Batch and Admin fixture exist", false,
+      JSON.stringify({ batch: !!template, admin: !!crashActor }));
   }
 }
 
