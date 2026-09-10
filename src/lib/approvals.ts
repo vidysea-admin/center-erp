@@ -143,28 +143,41 @@ export async function ensureCostDeletionAuditEvent(input: {
     old_value: input.oldValue,
     actor: new Types.ObjectId(String(input.actor)),
   });
-  await CostEntry.collection.updateOne(
-    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, "_audit_events.event_id": { $ne: event.event_id } },
+  const claim = await CostEntry.collection.updateOne(
+    {
+      _id: costId,
+      ...COST_AUDIT_OWNER_ELIGIBLE,
+      deletion_state: { $exists: false },
+      amount: input.oldValue.amount,
+      note: input.oldValue.note,
+      "_audit_events.event_id": { $ne: event.event_id },
+    },
     // `_audit_events` is deliberately Mixed and hidden from the public model; the native driver
     // accepts this shape, while Mongoose's generic collection type cannot express the field.
-    { $push: { _audit_events: event } } as any,
+    {
+      $set: { deletion_state: "Pending", deletion_audit_event_id: event.event_id },
+      $push: { _audit_events: event },
+    } as any,
   );
   const owner: any = await CostEntry.collection.findOne(
-    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE },
-    { projection: { _audit_events: 1 } },
+    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, deletion_state: "Pending" },
+    { projection: { _audit_events: 1, deletion_audit_event_id: 1 } },
   );
+  const committedEventId = String(owner?.deletion_audit_event_id ?? "");
   const stored = (owner?._audit_events ?? []).find((candidate: any) =>
-    String(candidate?.event_id ?? "") === event.event_id);
+    String(candidate?.event_id ?? "") === committedEventId);
   if (!stored
+      || !committedEventId
       || stored.entity !== "CostEntry"
       || !sameAuditValue(stored.entity_id, costId)
       || stored.field !== "deleted"
       || !sameAuditValue(stored.old_value, event.old_value)
       || stored.actor_type !== "USER"
-      || !stored.actor) {
+      || !stored.actor
+      || (claim.modifiedCount === 1 && committedEventId !== event.event_id)) {
     throw new Error(`Cost ${costId} has a foreign deletion-audit claim.`);
   }
-  return event.event_id;
+  return { eventId: committedEventId, actor: String(stored.actor), claimed: claim.modifiedCount === 1 };
 }
 
 export async function settleFinanceAuditEvents(input: {
@@ -198,6 +211,44 @@ export async function costFinanceAuditOutboxIsSettled(id: unknown) {
   return ownerFinanceAuditOutboxIsSettled(CostEntry.collection, id);
 }
 
+// Physical removal is garbage collection, not the business decision. The decision committed when
+// the hidden tombstone and immutable event were claimed atomically; this CAS only removes an owner
+// whose complete outbox, including that deletion event, is already acknowledged.
+export async function garbageCollectSettledCostDeletion(id: unknown) {
+  const ownerId = new Types.ObjectId(String(id));
+  const owner: any = await CostEntry.collection.findOne(
+    { _id: ownerId, deletion_state: "Pending" },
+    { projection: { deletion_audit_event_id: 1, _audit_delivered_event_ids: 1 } },
+  );
+  const eventId = String(owner?.deletion_audit_event_id ?? "");
+  if (!eventId || !(owner?._audit_delivered_event_ids ?? []).map(String).includes(eventId)) return false;
+  const removed = await CostEntry.collection.deleteOne({
+    _id: ownerId,
+    deletion_state: "Pending",
+    deletion_audit_event_id: eventId,
+    _audit_delivered_event_ids: eventId,
+    $expr: {
+      $eq: [
+        {
+          $size: {
+            $setDifference: [
+              { $map: { input: { $ifNull: ["$_audit_events", []] }, as: "event", in: "$$event.event_id" } },
+              { $ifNull: ["$_audit_delivered_event_ids", []] },
+            ],
+          },
+        },
+        0,
+      ],
+    },
+  });
+  return removed.deletedCount === 1;
+}
+
+const drainGlobal = globalThis as typeof globalThis & {
+  __financeAuditDrainCursor?: { cost?: string; approval?: string };
+};
+const financeAuditDrainCursor = drainGlobal.__financeAuditDrainCursor ??= {};
+
 // Recovery does not depend on another write. Every normal finance ledger/approval list read calls
 // this bounded drain; deterministic AuditLog ids make retries after either acknowledgement window
 // exactly-once from the user's perspective.
@@ -218,33 +269,49 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
     },
   };
   async function drainOwners(collection: any, eligible: Record<string, unknown>, kind: "cost" | "approval") {
-    let after: Types.ObjectId | undefined;
+    const remembered = financeAuditDrainCursor[kind];
+    let after = remembered && Types.ObjectId.isValid(remembered) ? new Types.ObjectId(remembered) : undefined;
     let deliveredOwners = 0;
-    // Failures do not consume the delivery budget. Keep paging by _id so a poison owner in the
-    // first page cannot make every later, valid owner permanently unreachable on each read.
-    while (deliveredOwners < limit) {
+    let attemptedOwners = 0;
+    const maxAttempts = Math.max(limit * 2, 100);
+    // Success and attempt budgets are separate. A poison owner consumes an attempt but not a
+    // delivery slot; the remembered cursor makes the next bounded read continue after it instead
+    // of rescanning the same first pages forever. Costs and approvals rotate independently.
+    while (deliveredOwners < limit && attemptedOwners < maxAttempts) {
+      const take = Math.min(limit, maxAttempts - attemptedOwners);
       const page = await collection.find({
-        ...eligible,
-        "_audit_events.0": { $exists: true },
-        ...hasUndeliveredEvent,
-        ...(after ? { _id: { $gt: after } } : {}),
-      }, { projection: { _id: 1 } }).sort({ _id: 1 }).limit(limit).toArray();
-      if (!page.length) break;
+        $and: [
+          eligible,
+          { "_audit_events.0": { $exists: true } },
+          kind === "cost" ? { $or: [hasUndeliveredEvent, { deletion_state: "Pending" }] } : hasUndeliveredEvent,
+          ...(after ? [{ _id: { $gt: after } }] : []),
+        ],
+      }, { projection: { _id: 1 } }).sort({ _id: 1 }).limit(take).toArray();
+      if (!page.length) {
+        delete financeAuditDrainCursor[kind];
+        break;
+      }
       for (const owner of page) {
+        attemptedOwners++;
+        after = owner._id;
+        financeAuditDrainCursor[kind] = String(owner._id);
         try {
           if (kind === "cost") await settleFinanceAuditEvents({ costIds: [owner._id] });
           else await settleFinanceAuditEvents({ approvalIds: [owner._id] });
           if (!(await ownerFinanceAuditOutboxIsSettled(collection, owner._id))) {
             throw new Error(`Audit owner ${owner._id} remains unsettled after delivery.`);
           }
+          if (kind === "cost") await garbageCollectSettledCostDeletion(owner._id);
           deliveredOwners++;
           if (deliveredOwners >= limit) break;
         } catch {
           // This owner stays durable for reconciliation; continue to later ids in the same read.
         }
       }
-      after = page[page.length - 1]._id;
-      if (page.length < limit) break;
+      if (page.length < take) {
+        delete financeAuditDrainCursor[kind];
+        break;
+      }
     }
   }
 

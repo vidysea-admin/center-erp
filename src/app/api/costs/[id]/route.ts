@@ -5,7 +5,8 @@ import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
-import { costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, settleFinanceAuditEvents } from "@/lib/approvals";
+import { costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, settleFinanceAuditEvents } from "@/lib/approvals";
+import { Types } from "mongoose";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -28,12 +29,25 @@ async function loadInScope(user: Awaited<ReturnType<typeof requireUser>>, id: st
   return doc;
 }
 
+async function loadDeletionTombstoneInScope(user: Awaited<ReturnType<typeof requireUser>>, id: string) {
+  if (!Types.ObjectId.isValid(id)) return null;
+  const doc: any = await CostEntry.collection.findOne({ _id: new Types.ObjectId(id), deletion_state: "Pending" });
+  if (!doc) return null;
+  if (isScoped(user) && (!doc.location || !user.location_scope.map(String).includes(String(doc.location)))) {
+    throw new HttpError(403, "Out of scope");
+  }
+  return doc;
+}
+
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
+  if (await loadDeletionTombstoneInScope(user, id)) {
+    throw new HttpError(409, "This cost has already been deleted and its audit history is being finalized.");
+  }
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
   if (body.mark_paid === true) {
@@ -91,7 +105,8 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
-  const doc = await loadInScope(user, id);
+  const tombstone = await loadDeletionTombstoneInScope(user, id);
+  const doc = tombstone ?? await loadInScope(user, id);
   // Deleting an applied row would free the visible ledger amount without returning the atomic
   // reservation, allowing the same commitment to be spent again. Preserve the original record.
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
@@ -100,11 +115,14 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   // Both creation and deletion are durable owner-backed events. Stage the deletion event before
   // the irreversible remove, then fail closed until every event is confirmed in AuditLog. A crash
   // or outage can therefore resume from this CostEntry instead of losing the deletion history.
-  await ensureCostDeletionAuditEvent({
+  const claim = await ensureCostDeletionAuditEvent({
     costId: doc._id,
     actor: user.id,
     oldValue: { amount: doc.amount, note: doc.note },
   });
+  if (!claim.claimed && claim.actor !== String(user.id)) {
+    throw new HttpError(409, "Another authorized user already committed this deletion. Its audit history is being finalized.");
+  }
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   const injectedFailure = isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "before"
     ? "before" as const
@@ -113,23 +131,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
     throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
   }
-  const removed = await CostEntry.collection.deleteOne({
-    _id: doc._id,
-    $expr: {
-      $eq: [
-        {
-          $size: {
-            $setDifference: [
-              { $map: { input: { $ifNull: ["$_audit_events", []] }, as: "event", in: "$$event.event_id" } },
-              { $ifNull: ["$_audit_delivered_event_ids", []] },
-            ],
-          },
-        },
-        0,
-      ],
-    },
-  });
-  if (removed.deletedCount !== 1) {
+  if (!(await garbageCollectSettledCostDeletion(doc._id))) {
     throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
   }
   return NextResponse.json({ ok: true });

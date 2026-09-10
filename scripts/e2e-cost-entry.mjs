@@ -228,8 +228,9 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 }
 
 // Deleting the business owner before its creation event is confirmed would erase recovery. A
-// foreign deterministic AuditLog occupant must therefore preserve the cost, then a later clean
-// drain must deliver once before the same delete succeeds and records its own deletion event.
+// foreign deterministic AuditLog occupant must preserve the now-hidden tombstone. Once the
+// occupant clears, an ordinary read must deliver both immutable owner events exactly once and
+// garbage-collect the tombstone without ever returning a live row beside a final deleted audit.
 {
   const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
     .find((c) => !c.pre_approved && c.active !== false);
@@ -251,27 +252,28 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     await rawAudits.insertOne(foreign);
     const refused = await req(admin, "DELETE", `/api/costs/${costId}`);
     const preserved = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionEvent = (preserved?._audit_events ?? []).find((event) => event?.field === "deleted");
     const occupant = await rawAudits.findOne({ _id: eventObjectId });
-    ok("audit-owner delete: a foreign deterministic event occupant refuses deletion and preserves both records",
-      refused.status === 409 && !!preserved && occupant?.entity === foreign.entity
+    const hidden = (await req(admin, "GET", "/api/costs")).data?.items ?? [];
+    ok("audit-owner delete: a foreign deterministic occupant preserves a hidden tombstone with both owner events",
+      refused.status === 409 && preserved?.deletion_state === "Pending" && !!deletionEvent
+        && occupant?.entity === foreign.entity && !hidden.some((c) => String(c._id) === String(costId))
         && !(preserved?._audit_delivered_event_ids ?? []).includes(String(eventId)),
-      JSON.stringify({ status: refused.status, owner: !!preserved, occupant: occupant?.entity, delivered: preserved?._audit_delivered_event_ids }));
+      JSON.stringify({ status: refused.status, state: preserved?.deletion_state, deletionEvent: deletionEvent?.event_id, occupant: occupant?.entity, visible: hidden.some((c) => String(c._id) === String(costId)), delivered: preserved?._audit_delivered_event_ids }));
 
     await rawAudits.deleteOne({ _id: eventObjectId, entity: foreign.entity });
     const drain = await req(admin, "GET", "/api/costs");
-    const delivered = await rawAudits.findOne({ _id: eventObjectId });
+    const deliveredCreation = await rawAudits.findOne({ _id: eventObjectId });
+    const deliveredDeletion = deletionEvent?.event_id
+      ? await rawAudits.findOne({ _id: new ObjectId(String(deletionEvent.event_id)) }) : null;
     const ownerAfterDrain = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
-    ok("audit-owner delete: a later ordinary read delivers and acknowledges the original creation exactly once",
-      drain.status === 200 && delivered?.entity === "CostEntry"
+    const visibleAfterDrain = (drain.data?.items ?? []).some((c) => String(c._id) === String(costId));
+    ok("audit-owner delete: a later ordinary read delivers creation plus deletion exactly once and collects the tombstone",
+      drain.status === 200 && deliveredCreation?.entity === "CostEntry" && deliveredDeletion?.field === "deleted"
         && await rawAudits.countDocuments({ _id: eventObjectId }) === 1
-        && (ownerAfterDrain?._audit_delivered_event_ids ?? []).filter((x) => String(x) === String(eventId)).length === 1,
-      JSON.stringify({ drain: drain.status, event: delivered?.entity, deliveredIds: ownerAfterDrain?._audit_delivered_event_ids }));
-
-    const removed = await req(admin, "DELETE", `/api/costs/${costId}`);
-    const deletionAudit = await rawAudits.findOne({ entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted" });
-    ok("audit-owner delete: only after acknowledgement the cost deletes and its deletion is audited",
-      removed.status === 200 && !(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })) && !!deletionAudit,
-      JSON.stringify({ status: removed.status, remains: !!(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })), deletionAudit: !!deletionAudit }));
+        && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) === 1
+        && !ownerAfterDrain && !visibleAfterDrain,
+      JSON.stringify({ drain: drain.status, creation: deliveredCreation?.entity, deletion: deliveredDeletion?.field, owner: !!ownerAfterDrain, visible: visibleAfterDrain }));
   } else {
     ok("audit-owner delete [precondition]: pending creation owner exists", false, JSON.stringify({ status: made.status, costId, eventId }));
   }
@@ -313,44 +315,110 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   }
 }
 
-// The deletion audit itself must be durable before hard delete. This failure is injected after the
-// creation event is already acknowledged, so a surviving owner cannot be mistaken for the older
-// creation-outbox guard. An ordinary read recovers the deletion event exactly once; only then may a
-// retry remove the owner.
+// A request may contain more poison than one hard attempt budget. The first read must stop at the
+// bound instead of synchronously walking the whole collection, but it must still drain approvals
+// independently. The rotating cursor lets the next read reach the valid cost instead of rescanning.
 {
   const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
     .find((c) => !c.pre_approved && c.active !== false);
-  const made = await req(admin, "POST", "/api/costs", baseEntry({
-    category: cat?._id, amount: 614, note: `delete-audit-failure-${stamp}`,
-  }));
-  const costId = made.data?.item?._id;
-  if (costId) {
-    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`);
+  const actor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  const poisonIds = Array.from({ length: 250 }, () => new ObjectId());
+  const validOwnerId = new ObjectId();
+  const validEventId = new ObjectId();
+  const approvalId = new ObjectId();
+  const approvalEventId = new ObjectId();
+  const ownerBase = (id, event) => ({
+    _id: id, entry_date: new Date("2026-09-07"), location: new ObjectId(String(anyLoc)),
+    category: new ObjectId(String(cat?._id)), amount: 1, note: `bounded-drain-${stamp}`,
+    reservation_state: "Applied", entered_by: actor?._id,
+    _audit_events: [event], createdAt: new Date(), updatedAt: new Date(),
+  });
+  if (cat?._id && actor?._id) {
+    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, i % 2 === 0 ? {} : { event_id: "" })));
+    await rawCosts.insertOne(ownerBase(validOwnerId, {
+      event_id: validEventId.toHexString(), entity: "CostEntry", entity_id: validOwnerId, field: null,
+      old_value: null, new_value: "valid beyond hard poison bound", actor: actor._id, actor_type: "USER",
+    }));
+    await rawApprovals.insertOne({
+      _id: approvalId, action: "cost.post", summary: `approval drain independent ${stamp}`,
+      payload: {}, initiator: actor._id, approver_role: "Admin", status: "Approved",
+      _audit_events: [{
+        event_id: approvalEventId.toHexString(), entity: "ApprovalRequest", entity_id: approvalId,
+        field: "status", old_value: "Applying", new_value: "Approved", actor: actor._id, actor_type: "USER",
+      }], createdAt: new Date(), updatedAt: new Date(),
+    });
+    const first = await req(admin, "GET", "/api/costs");
+    const validAfterFirst = await rawAudits.countDocuments({ _id: validEventId });
+    const approvalAfterFirst = await rawAudits.countDocuments({ _id: approvalEventId });
+    ok("bounded audit drain: a read stops before a valid owner beyond 200 poison attempts",
+      first.status === 200 && validAfterFirst === 0,
+      JSON.stringify({ status: first.status, validAfterFirst }));
+    ok("bounded audit drain: poisoned costs do not starve the independently bounded approval owner",
+      approvalAfterFirst === 1,
+      `approval audit rows after first read=${approvalAfterFirst}`);
+
+    const second = await req(admin, "GET", "/api/costs");
+    const validOwner = await rawCosts.findOne({ _id: validOwnerId });
+    ok("bounded audit drain: the next read resumes after poison and delivers the later valid cost exactly once",
+      second.status === 200 && await rawAudits.countDocuments({ _id: validEventId }) === 1
+        && (validOwner?._audit_delivered_event_ids ?? []).includes(validEventId.toHexString()),
+      JSON.stringify({ status: second.status, delivered: validOwner?._audit_delivered_event_ids }));
+    await rawCosts.deleteMany({ _id: { $in: [...poisonIds, validOwnerId] } });
+    await rawAudits.deleteMany({ _id: { $in: [validEventId, approvalEventId] } });
+    await rawApprovals.deleteOne({ _id: approvalId });
+  } else {
+    ok("bounded audit drain [precondition]: category and actor exist", false, JSON.stringify({ category: cat?._id, actor: actor?._id }));
+  }
+}
+
+// The logical deletion claim and immutable event are atomic. Both delivery failure windows must
+// hide and freeze the row, retain the owner until acknowledgement, then recover exactly once and
+// garbage-collect without requiring a second DELETE.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  for (const window of ["before", "after"]) {
+    const original = { amount: window === "before" ? 614 : 615, note: `delete-audit-${window}-${stamp}` };
+    const made = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, ...original }));
+    const costId = made.data?.item?._id;
+    if (!costId) {
+      ok(`deletion audit ${window} [precondition]: an ordinary cost exists`, false, `status=${made.status}`);
+      continue;
+    }
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=${window}`);
     const ownerAfterRefusal = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     const deletionEvent = (ownerAfterRefusal?._audit_events ?? []).find((event) => event?.field === "deleted");
     const deletionEventId = deletionEvent?.event_id ? new ObjectId(String(deletionEvent.event_id)) : null;
     const auditBeforeRecovery = deletionEventId ? await rawAudits.countDocuments({ _id: deletionEventId }) : -1;
-    ok("deletion audit recovery: an audit outage refuses hard delete and preserves an unacknowledged owner-backed deletion event",
-      refused.status === 409 && !!ownerAfterRefusal && !!deletionEventId && auditBeforeRecovery === 0
-        && !(ownerAfterRefusal?._audit_delivered_event_ids ?? []).includes(String(deletionEvent?.event_id)),
-      JSON.stringify({ status: refused.status, owner: !!ownerAfterRefusal, event: deletionEvent?.event_id, auditBeforeRecovery, delivered: ownerAfterRefusal?._audit_delivered_event_ids }));
+    ok(`deletion audit ${window}: failure preserves a hidden tombstone and immutable deletion snapshot`,
+      refused.status === 409 && ownerAfterRefusal?.deletion_state === "Pending" && !!deletionEventId
+        && deletionEvent?.old_value?.amount === original.amount && deletionEvent?.old_value?.note === original.note
+        && auditBeforeRecovery === (window === "after" ? 1 : 0),
+      JSON.stringify({ status: refused.status, state: ownerAfterRefusal?.deletion_state, event: deletionEvent, auditBeforeRecovery }));
+
+    const patched = await req(admin, "PATCH", `/api/costs/${costId}`, {
+      amount: original.amount + 1000, note: `must-not-change-${window}-${stamp}`,
+    });
+    const ownerAfterPatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    ok(`deletion audit ${window}: PATCH after the logical delete claim is refused and cannot mutate the snapshot`,
+      patched.status === 409 && ownerAfterPatch?.amount === original.amount && ownerAfterPatch?.note === original.note
+        && (ownerAfterPatch?._audit_events ?? []).filter((event) => event?.field === "deleted").length === 1,
+      JSON.stringify({ status: patched.status, amount: ownerAfterPatch?.amount, note: ownerAfterPatch?.note }));
 
     const drain = await req(admin, "GET", "/api/costs");
-    const ownerAfterDrain = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     const deletionAudit = deletionEventId ? await rawAudits.findOne({ _id: deletionEventId }) : null;
-    ok("deletion audit recovery: an ordinary read delivers and acknowledges the deletion event exactly once while the owner remains",
-      drain.status === 200 && !!ownerAfterDrain && deletionAudit?.field === "deleted"
-        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1
-        && (ownerAfterDrain?._audit_delivered_event_ids ?? []).filter((x) => String(x) === String(deletionEvent?.event_id)).length === 1,
-      JSON.stringify({ drain: drain.status, owner: !!ownerAfterDrain, audit: deletionAudit?.field, delivered: ownerAfterDrain?._audit_delivered_event_ids }));
-
-    const removed = await req(admin, "DELETE", `/api/costs/${costId}`);
-    ok("deletion audit recovery: only after durable acknowledgement does retry delete once without duplicating its audit",
-      removed.status === 200 && !(await rawCosts.findOne({ _id: new ObjectId(String(costId)) }))
-        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1,
-      `status=${removed.status} auditCount=${await rawAudits.countDocuments({ _id: deletionEventId })}`);
-  } else {
-    ok("deletion audit recovery [precondition]: an ordinary cost exists", false, `status=${made.status}`);
+    const remains = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const visible = (drain.data?.items ?? []).some((c) => String(c._id) === String(costId));
+    ok(`deletion audit ${window}: ordinary read publishes once, never returns the deleted row, and garbage-collects only after ack`,
+      drain.status === 200 && deletionAudit?.field === "deleted"
+        && deletionAudit?.old_value?.amount === original.amount && deletionAudit?.old_value?.note === original.note
+        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1 && !remains && !visible,
+      JSON.stringify({ drain: drain.status, audit: deletionAudit, remains: !!remains, visible }));
+    await req(admin, "GET", "/api/costs");
+    const repeatDelete = await req(admin, "DELETE", `/api/costs/${costId}`);
+    ok(`deletion audit ${window}: repeated recovery/delete cannot duplicate or resurrect the committed deletion`,
+      repeatDelete.status === 404 && await rawAudits.countDocuments({ _id: deletionEventId }) === 1,
+      `delete=${repeatDelete.status} auditCount=${await rawAudits.countDocuments({ _id: deletionEventId })}`);
   }
 }
 
@@ -857,6 +925,38 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       .filter((c) => String(c.approval_request) === String(requestId));
     ok("approval race: exactly one CostEntry exists for the approval request",
       rows.length === 1, JSON.stringify(rows.map((c) => c._id)));
+
+    // Deletion has a separate race: the logical tombstone claim fixes both actor and snapshot.
+    // Exactly one caller may own it; the other cannot republish a different actor even if both
+    // loaded the visible row before either request reached the compare-and-swap.
+    const ruleOff = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    const deleteRace = normal ? await req(admin, "POST", "/api/costs", baseEntry({
+      category: normal._id, amount: 655, note: `delete race ${stamp}`,
+    })) : { status: 0, data: {} };
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const deleteCostId = deleteRace.data?.item?._id;
+    if (ruleOff.status === 200 && deleteRace.status === 201 && deleteCostId) {
+      const deleters = [
+        { cookie: admin, actor: String((await rawUsers.findOne({ email: "admin@vidysea.com" }))?._id) },
+        { cookie: peer, actor: String(made.data.item._id) },
+      ];
+      const deletions = await Promise.all(deleters.map((entry) => req(entry.cookie, "DELETE", `/api/costs/${deleteCostId}`)));
+      const winner = deletions.findIndex((result) => result.status === 200);
+      const loser = winner === 0 ? 1 : 0;
+      const deletionAudits = await rawAudits.find({
+        entity: "CostEntry", entity_id: new ObjectId(String(deleteCostId)), field: "deleted",
+      }).toArray();
+      ok("deletion race: exactly one authorized caller commits and the other cannot replace its claim",
+        winner >= 0 && [404, 409].includes(deletions[loser]?.status) && deletionAudits.length === 1,
+        JSON.stringify({ statuses: deletions.map((r) => r.status), audits: deletionAudits.length }));
+      ok("deletion race: the durable audit actor is the caller whose logical deletion won",
+        winner >= 0 && String(deletionAudits[0]?.actor) === deleters[winner].actor
+          && !(await rawCosts.findOne({ _id: new ObjectId(String(deleteCostId)) })),
+        JSON.stringify({ winner, expectedActor: winner >= 0 ? deleters[winner].actor : null, actualActor: deletionAudits[0]?.actor, remains: !!(await rawCosts.findOne({ _id: new ObjectId(String(deleteCostId)) })) }));
+    } else {
+      ok("deletion race [precondition]: a direct cost exists for two authorized deleters", false,
+        JSON.stringify({ ruleOff: ruleOff.status, made: deleteRace.status, costId: deleteCostId }));
+    }
   }
 }
 

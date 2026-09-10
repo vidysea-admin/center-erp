@@ -1234,6 +1234,10 @@ const CostEntrySchema = new Schema({
   // the confirmed cost and an ordinary later finance read drains this marker idempotently.
   _audit_events: { type: [Schema.Types.Mixed], default: undefined, select: false },
   _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
+  // A delete commits logically before its audit is published. The hidden tombstone keeps the
+  // outbox owner recoverable until acknowledgement; only then may raw garbage collection remove it.
+  deletion_state: { type: String, enum: ["Pending"], default: undefined, select: false },
+  deletion_audit_event_id: { type: String, default: undefined, select: false },
   entered_by: oid("User", true),
 }, { timestamps: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
@@ -1248,6 +1252,7 @@ CostEntrySchema.index({ reservation_state: 1, reservation_expires_at: 1 });
 // report author has to remember. Internal recovery deliberately uses `CostEntry.collection`, which
 // bypasses this middleware and can see Pending/Cancelled rows.
 const VISIBLE_COST_ENTRY = {
+  deletion_state: { $exists: false },
   $or: [
     { reservation_state: "Applied" },
     { reservation_state: { $exists: false } },
