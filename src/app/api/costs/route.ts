@@ -6,6 +6,7 @@ import { CostEntry, CostCategory } from "@/models";
 import { assertBatchInScope, assertCostEntryValid, assertTrainerInScope, evaluatePreApproval, releasePreApprovalReservation } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
+import { Types } from "mongoose";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -101,6 +102,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ queued: true, item: queued.request, awaiting: "a new cost head" }, { status: 202 });
   }
 
+  // Allocate the ledger id BEFORE taking a formula lease. If Mongo acknowledges ambiguously, the
+  // exact id lets us read back the durable outcome instead of either rolling back a successful
+  // insert (overspend) or retrying it under a new id (duplicate liability).
+  const costEntryId = new Types.ObjectId();
+  if (body._test_stale_formula_lease === true
+      && body.batch && body.category
+      && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+    // Test-only stale-owner fixture. Production's fixed database name can never enter this arm.
+    await CostCategory.collection.updateOne(
+      { _id: new Types.ObjectId(String(body.category)) },
+      { $set: { [`_pre_approved_leases.${String(body.batch)}`]: { token: "expired-test-owner", expires_at: new Date(0) } } },
+    );
+  }
   const pre = await evaluatePreApproval(body.category, Number(body.amount), { batch: body.batch, reserve: true });
 
   const parked = pre.applied ? null : await requireApproval("cost.post", user, {
@@ -110,31 +124,48 @@ export const POST = apiHandler(async (req: NextRequest) => {
     location: body.location || undefined,
   });
   if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
+  const entry = {
+    _id: costEntryId,
+    entry_date: body.entry_date ?? new Date(),
+    location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
+    category: body.category, amount: body.amount, requested_amount: body.amount,
+    payment_status: "Payment Pending", note: body.note,
+    vendor_payee: body.vendor_payee || undefined,
+    voucher_no: body.voucher_no || undefined,
+    payment_mode: body.payment_mode || undefined,
+    // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
+    // head must never rewrite what was approved today.
+    pre_approved_applied: pre.applied,
+    pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
+    // A lease exists only for the cumulative per-billable-pass formula path. Persist that
+    // distinction so later corrections do not have to consult a cost head whose policy may change.
+    pre_approved_unit: pre.applied ? (pre.reservation ? "Per billable passed" : "Fixed amount") : undefined,
+    entered_by: user.id,
+  };
   let doc;
   try {
-    doc = await CostEntry.create({
-      entry_date: body.entry_date ?? new Date(),
-      location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
-      category: body.category, amount: body.amount, requested_amount: body.amount,
-      payment_status: "Payment Pending", note: body.note,
-      vendor_payee: body.vendor_payee || undefined,
-      voucher_no: body.voucher_no || undefined,
-      payment_mode: body.payment_mode || undefined,
-      // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
-      // head must never rewrite what was approved today.
-      pre_approved_applied: pre.applied,
-      pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
-      // A reservation exists only for the cumulative per-billable-pass formula path. Persist that
-      // distinction so later corrections do not have to consult a cost head whose policy may change.
-      pre_approved_unit: pre.applied ? (pre.reservation ? "Per billable passed" : "Fixed amount") : undefined,
-      entered_by: user.id,
-    });
+    doc = await CostEntry.create(entry);
+    // Test-only fault, unreachable on the fixed production database name: model a driver/network
+    // error AFTER Mongo durably inserted but BEFORE the caller received the acknowledgement.
+    if (body._test_ambiguous_after_create === true && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+      throw new Error("test-only ambiguous CostEntry acknowledgement");
+    }
   } catch (error) {
-    // A formula reservation is taken before create so concurrent requests cannot both spend the
-    // same remainder. Validation/write failure means no liability exists, so return that capacity.
-    await releasePreApprovalReservation(pre.reservation);
-    throw error;
+    const existing = pre.reservation ? await CostEntry.findById(costEntryId) : null;
+    if (existing
+        && String(existing.category) === String(entry.category)
+        && String(existing.batch ?? "") === String(entry.batch ?? "")
+        && Number(existing.amount) === Number(entry.amount)
+        && existing.pre_approved_applied === true) {
+      // Ambiguous create confirmed: the durable liability is the outcome. Do not retry or report a
+      // failure that invites the client to submit a duplicate.
+      doc = existing;
+    } else {
+      await releasePreApprovalReservation(pre.reservation).catch(() => false);
+      throw error;
+    }
   }
+  await releasePreApprovalReservation(pre.reservation).catch(() => false);
   await audit({ entity: "CostEntry", entityId: doc._id, newValue: "created", actor: user.id });
   return NextResponse.json({ item: doc }, { status: 201 });
 });

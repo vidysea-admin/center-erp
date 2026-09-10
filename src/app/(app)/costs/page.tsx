@@ -19,6 +19,7 @@ function CostsInner() {
   // not yet sure this person may see) and matches what the old code did while the session loaded.
   const { can, role, loaded: permsLoaded } = usePerms();
   const postOnly = !permsLoaded || !can("finance.view");
+  const canApproveCosts = permsLoaded && can("finance.approve", "edit");
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
   const [mine, setMine] = useState<any[]>([]);
@@ -42,7 +43,7 @@ function CostsInner() {
   // the reason their own entry was refused. `/api/approvals?mine=1` is every user's own row and
   // costs nothing extra; both paths fetch it now, and the ledger fetch is unchanged.
   const load = (asPostOnly: boolean) => Promise.all([
-    api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => i.action === "cost.post"))),
+    api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => ["cost.post", "costcategory.create"].includes(i.action)))),
     asPostOnly
       ? Promise.resolve()
       : api("/api/costs").then((d) => setCosts(d.items)),
@@ -74,6 +75,7 @@ function CostsInner() {
   // loads the entry into the form for correction or removal (finance.approve holders only; the API
   // 403s everyone else).
   function openEdit(r: any) {
+    if (!canApproveCosts) return;
     setEditId(r._id);
     setForm({
       entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
@@ -173,9 +175,9 @@ function CostsInner() {
               )}
               <div className="flex items-end gap-2">
                 <Btn onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
-                {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
-                {editId && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
-                {editId && form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
+                {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
+                {editId && canApproveCosts && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
+                {editId && canApproveCosts && form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
               </div>
             </div>
             {/* The description was rendered ONLY when editing, so the person posting the cost - the
@@ -242,7 +244,7 @@ function CostsInner() {
           <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
             <DataTable rows={costs} loading={loading}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
-              onRowClick={openEdit}
+              onRowClick={canApproveCosts ? openEdit : undefined}
               defaultSort={{ key: "entry_date", dir: "desc" }}
               columns={[
                 { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => r.entry_date ? new Date(r.entry_date).getTime() : null, render: (r: any) => fmtDate(r.entry_date) },

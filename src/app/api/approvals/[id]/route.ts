@@ -117,6 +117,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   const p = (request.payload ?? {}) as any;
   let effectApplied = false;
+  // Only populated when THIS replay created a brand-new head. If a later write fails, the catch
+  // must compensate this exact head before it gives the approval claim back to the queue.
+  let newlyCreatedCategory: { id: string; name: string } | null = null;
   try {
     switch (request.action) {
     case "location.close":
@@ -193,7 +196,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           const parent = p.new_head_parent ? String(p.new_head_parent) : undefined;
           const made = await CostCategory.create({ name, active: true, ...(parent ? { parent } : {}) });
           categoryId = String(made._id);
+          newlyCreatedCategory = { id: categoryId, name };
           await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
+          // Test-only fault, unreachable on the fixed production database name. This exercises the
+          // exact dangerous window: the new head and its audit landed, the ledger row did not.
+          if (p._test_fail_after_head === true && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+            throw new Error("test-only failure after cost head creation");
+          }
         }
       }
       const approvedAmount = Number(request.approved_amount ?? p.amount);
@@ -250,6 +259,22 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // finalization keeps the queue and notification consistent even when a following audit fails.
       await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount }).catch(() => {});
     } else {
+      if (newlyCreatedCategory) {
+        // Compensation precedes approval rollback. Reopening first would let a retry create or
+        // reuse a second taxonomy row while the first half-write was still present.
+        const [entryRef, childRef] = await Promise.all([
+          CostEntry.exists({ category: newlyCreatedCategory.id }),
+          CostCategory.exists({ parent: newlyCreatedCategory.id }),
+        ]);
+        if (entryRef || childRef) {
+          throw new HttpError(500, `Approval apply failed after creating "${newlyCreatedCategory.name}", but that head is now referenced. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
+        }
+        const removed = await CostCategory.deleteOne({ _id: newlyCreatedCategory.id, name: newlyCreatedCategory.name });
+        const stillThere = await CostCategory.exists({ _id: newlyCreatedCategory.id });
+        if (removed.deletedCount !== 1 || stillThere) {
+          throw new HttpError(500, `Approval apply failed after creating "${newlyCreatedCategory.name}" and safe compensation could not be proven. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
+        }
+      }
       try {
         await rollbackApprovalDecision(request);
       } catch (rollbackError) {

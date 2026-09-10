@@ -46,6 +46,7 @@ ok("[precondition] cost-entry personas can sign in", !!admin && !!ops && !!spoc 
   `admin=${!!admin} ops=${!!ops} spoc=${!!spoc} trainer=${!!trainerUser} enroll=${!!enroll} viewer=${!!viewer}`);
 
 const stamp = Date.now().toString(36);
+const proposedHeadForMine = `ZZ Proposed ${stamp}`;
 const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
 ok("[precondition] a location exists to hang entries on", !!anyLoc, "none");
 
@@ -314,6 +315,34 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         JSON.stringify(raceRows.map((c) => c.amount)));
     }
 
+    const recoveryFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ PerPass Recovery ${stamp}`, pre_approved: true,
+      pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+      pre_approved_min_billable: billable, pre_approved_basis: "crash and ambiguous-write recovery pin",
+    });
+    const recoveryId = recoveryFormula.data?.item?._id;
+    ok("formula recovery [precondition]: a fresh per-pass commitment exists", recoveryFormula.status === 201 && !!recoveryId, `got ${recoveryFormula.status}`);
+    if (recoveryId) {
+      const totalCap = 50 * billable;
+      const recovered = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
+        amount: totalCap, note: "stale lease recovery pin",
+        _test_stale_formula_lease: true, _test_ambiguous_after_create: true,
+      });
+      ok("formula recovery: an expired crashed-owner lease is reclaimed and an ambiguously acknowledged insert returns its one durable row",
+        recovered.status === 201 && !!recovered.data?.item?._id,
+        `got ${recovered.status} ${JSON.stringify(recovered.data ?? {}).slice(0, 180)}`);
+      const recoveryRows = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${recoveryId}`)).data?.items ?? [])
+        .filter((c) => String(c.category?._id ?? c.category) === String(recoveryId) && c.pre_approved_applied === true);
+      const retryAboveCap = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
+        amount: 1, note: "ambiguous insert must not duplicate or free capacity",
+      });
+      ok("formula recovery: ambiguous confirmation produces exactly one deterministic-id liability and does not free its spent cap",
+        recoveryRows.length === 1 && Number(recoveryRows[0].amount) === totalCap && retryAboveCap.status === 202,
+        JSON.stringify({ rows: recoveryRows.map((c) => ({ id: c._id, amount: c.amount })), retry: retryAboveCap.status }));
+    }
+
     const rollbackFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
       name: `ZZ PerPass Rollback ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
@@ -454,7 +483,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
 
 // ------------------------------------------------ item 7: a missing head is a queue
 {
-  const proposed = `ZZ Proposed ${stamp}`;
+  const proposed = proposedHeadForMine;
   const catsBefore = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
   const costsBefore = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
 
@@ -467,6 +496,11 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const q = await req(ops, "POST", "/api/costs", { ...baseEntry(), new_subhead: proposed });
   ok("QA-1828c: naming a head that does not exist parks the entry instead of refusing it",
     q.status === 202, `got ${q.status} ${JSON.stringify(q.data).slice(0, 120)}`);
+  const ownUnknownHead = ((await req(ops, "GET", "/api/approvals?mine=1")).data?.items ?? [])
+    .find((r) => String(r._id) === String(q.data?.item?._id));
+  ok("My submissions: an unknown-head proposal is returned beside ordinary cost.post requests",
+    ownUnknownHead?.action === "costcategory.create" && String(ownUnknownHead.summary ?? "").includes(proposed),
+    JSON.stringify(ownUnknownHead ? { action: ownUnknownHead.action, summary: ownUnknownHead.summary } : null));
 
   // NOTHING may have been written yet - not the head, not the entry. "The whole entry parks" is
   // the claim (Umesh, D8), and a queue that half-writes is worse than no queue.
@@ -634,6 +668,34 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     } else {
       ok("QA-1975: the invalid-payload entry parked so there is a replay to refuse", false,
         `nothing parked (status ${parked.status}) - this pin measured nothing`);
+    }
+  }
+
+  // A failure AFTER a new head exists exercises the compensation path rather than the earlier
+  // payload-validation guard. The head must disappear BEFORE the request is reopened.
+  {
+    const nm = `ZZ Compensate ${stamp}`;
+    const before = (await catList()).length;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      amount: 778, new_subhead: nm, payment_mode: "Cash", _test_fail_after_head: true,
+    }));
+    if (parked.data?.item?._id) {
+      const applied = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", note: "fault pin" });
+      const requestNow = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+        .find((r) => String(r._id) === String(parked.data.item._id));
+      const headsNow = await catList();
+      const ledgerNow = (await req(admin, "GET", "/api/costs?limit=200")).data?.items ?? [];
+      ok("new-head compensation [precondition]: the injected post-head failure reached the replay catch",
+        applied.status === 500, `got ${applied.status}`);
+      ok("new-head compensation: the newly created still-unreferenced head is removed before replay can reopen",
+        !headsNow.some((c) => c.name === nm) && !ledgerNow.some((c) => Number(c.amount) === 778),
+        JSON.stringify({ head: headsNow.some((c) => c.name === nm), entry: ledgerNow.some((c) => Number(c.amount) === 778) }));
+      ok("new-head compensation: only after compensation is proven does the request return to Pending",
+        requestNow?.status === "Pending" && headsNow.length === before,
+        JSON.stringify({ status: requestNow?.status, heads: `${before}->${headsNow.length}` }));
+    } else {
+      ok("new-head compensation [precondition]: a valid request parked for the fault simulation", false,
+        `nothing parked (status ${parked.status})`);
     }
   }
 
@@ -807,6 +869,22 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ).catch(() => {});
       const bodyText = await page2.locator("body").innerText();
 
+      const ownRights = await req(raiser, "GET", "/api/permissions/me");
+      ok("finance read-only UI [precondition]: this browser persona has finance.view but not finance.approve edit",
+        ownRights.data?.levels?.["finance.view"] === "edit" && !ownRights.data?.levels?.["finance.approve"],
+        JSON.stringify(ownRights.data?.levels ?? {}));
+      const ledgerRows = page2.locator("tbody tr");
+      ok("finance read-only UI [precondition]: the finance.view browser has a ledger row to try to open",
+        await ledgerRows.count() > 0, `rows=${await ledgerRows.count()}`);
+      if (await ledgerRows.count()) await ledgerRows.last().click();
+      await page2.waitForTimeout(100);
+      const afterReadOnlyClick = await page2.locator("body").innerText();
+      ok("finance read-only UI: row click cannot open edit and delete/payment controls are absent without finance.approve:edit",
+        !/Edit cost entry/i.test(afterReadOnlyClick)
+          && !/Mark payment done/i.test(afterReadOnlyClick)
+          && !/^Delete$/m.test(afterReadOnlyClick),
+        afterReadOnlyClick.slice(0, 300));
+
       // THE MUTANT CAUGHT THIS ASSERTION, NOT THE CODE (2026-09-09). It used to test
       // `bodyText.includes(stamp2)`, and `stamp2` is in BOTH the rejection REASON and the cost's
       // own note - so on the pre-fix build, where "My submissions" is not rendered at all, the
@@ -913,6 +991,35 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
             `the /costs page shows no My-submissions empty state - the section vanishes entirely, which reads as a broken page rather than an empty one. body starts: ${pbody.slice(0, 240)}`);
         } finally {
           try { await pctx.close(); } catch {}
+        }
+      }
+
+      // The new-head request uses a different action name (`costcategory.create`) from an
+      // ordinary parked cost (`cost.post`). Drive the actual Operations screen so a filter that
+      // accidentally keeps only the old action cannot pass on API evidence alone.
+      {
+        const uctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const up = await uctx.newPage();
+          await up.goto(BASE, { waitUntil: "networkidle" });
+          const ub = up.locator('input[type="email"], input[name="email"]').first();
+          if (await ub.count()) {
+            await ub.fill("ops@vidysea.com");
+            await up.locator('input[type="password"]').first().fill(PW);
+            await up.locator('button[type="submit"]').first().click();
+            await up.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          await up.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+          const shown = await up.waitForFunction(
+            (name) => document.body.innerText.includes(String(name)), proposedHeadForMine,
+            { timeout: 45000 },
+          ).then(() => true).catch(() => false);
+          const ubody = await up.locator("body").innerText();
+          ok("My submissions UI: the unknown-head request is visible to its raiser alongside ordinary cost requests",
+            shown && /My submissions/i.test(ubody),
+            `unknown head ${proposedHeadForMine} is absent from the Operations /costs screen. body starts: ${ubody.slice(0, 260)}`);
+        } finally {
+          try { await uctx.close(); } catch {}
         }
       }
     }

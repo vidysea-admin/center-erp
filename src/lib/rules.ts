@@ -2621,8 +2621,8 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
 // needing approval is exactly the one it would have skipped.
 export type PreApprovalReservation = {
   category_id: unknown;
-  usage_field: string;
-  amount: number;
+  lease_field: string;
+  token: string;
 };
 export type PreApproval = {
   applied: boolean;
@@ -2703,65 +2703,69 @@ export async function evaluatePreApproval(
         reason: `the batch has ${billable} billable passed; this commitment starts at ${minimum}`,
       };
     }
+    const totalCap = cap * billable;
+    let reservation: PreApprovalReservation | undefined;
+
+    // A read-then-create cap is not a cap under concurrency: two requests can both read the same
+    // remainder and both post. The former implementation solved that with a durable raw usage
+    // COUNTER incremented before CostEntry.create. A killed process or an ambiguous Mongo write
+    // could therefore consume capacity forever even though the ledger contained no liability.
+    //
+    // The hidden field is now only an expiring OWNERSHIP LEASE. It serialises one category+batch
+    // calculation while the durable CostEntry rows remain the sole usage truth. A crashed owner is
+    // recoverable after expiry; a normal owner removes its exact token after confirming the insert.
+    // No rollback arithmetic exists, so retries cannot manufacture or strand capacity. Raw access
+    // is deliberate: the lease is concurrency machinery, not editable master data.
+    if (context.reserve) {
+      const usageKey = String(context.batch);
+      const leaseField = `_pre_approved_leases.${usageKey}`;
+      const collection: any = CostCategory.collection;
+      const token = crypto.randomUUID();
+      const waitUntil = Date.now() + 5_000;
+      do {
+        const now = new Date();
+        const acquired = await collection.updateOne(
+          {
+            _id: src._id,
+            $or: [
+              { [leaseField]: { $exists: false } },
+              { [`${leaseField}.expires_at`]: { $lte: now } },
+            ],
+          },
+          {
+            $set: { [leaseField]: { token, expires_at: new Date(now.getTime() + 60_000) } },
+            // Clean the obsolete counter for this partition as it is encountered. It is never
+            // read again; durable CostEntry rows below are the only committed-usage source.
+            $unset: { [`_pre_approved_usage.${usageKey}`]: "" },
+          },
+        );
+        if (acquired.modifiedCount === 1) {
+          reservation = { category_id: src._id, lease_field: leaseField, token };
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < waitUntil);
+      if (!reservation) {
+        throw new HttpError(503, "This pre-approved cost head is being posted by someone else. Retry in a moment; no capacity was consumed.");
+      }
+    }
+
     // Use find(), not aggregate(): auth scopes and request bodies carry string ids and Mongoose
-    // casts them for find queries but not inside aggregation pipelines (ARCHITECTURE §3.3).
+    // casts them for find queries but not inside aggregation pipelines (ARCHITECTURE §3.3). This
+    // recount runs only after the lease is owned, so every competing writer sees the first one's
+    // durable row rather than a speculative counter.
     const prior = await CostEntry.find({ batch: context.batch, category: src._id, pre_approved_applied: true })
       .select("amount").lean<any[]>();
     const committed = prior.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-    const totalCap = cap * billable;
-
-    // A read-then-create cap is not a cap under concurrency: two requests can both read the same
-    // remainder and both post. The hidden usage counter lives on the category because Mongo can
-    // condition and increment ONE document atomically. It is partitioned by batch, bootstrapped
-    // (and only ever raised) from durable ledger rows, then reserved before CostEntry.create.
-    // The route releases the reservation if creation fails; after creation the reservation IS the
-    // committed cumulative usage. Raw collection access is deliberate: this is concurrency
-    // bookkeeping, not user-facing master data, and adding it to the schema would expose a second
-    // writable finance surface.
-    if (context.reserve) {
-      const usageKey = String(context.batch);
-      const usageField = `_pre_approved_usage.${usageKey}`;
-      const collection: any = CostCategory.collection;
-      await collection.updateOne(
-        { _id: src._id },
-        { $max: { [usageField]: committed } },
-      );
-      const reserved = await collection.updateOne(
-        { _id: src._id, [usageField]: { $lte: totalCap - Number(amount) } },
-        { $inc: { [usageField]: Number(amount) } },
-      );
-      if (reserved.modifiedCount === 1) {
-        const after = await collection.findOne(
-          { _id: src._id },
-          { projection: { [usageField]: 1 } },
-        );
-        const usedAfter = Number(after?._pre_approved_usage?.[usageKey] ?? committed + Number(amount));
-        return {
-          applied: true,
-          basis,
-          reason: `within ${cap} × ${billable} billable passed = ${totalCap} on "${src.name}" (${Math.max(0, usedAfter - Number(amount))} already used)`,
-          reservation: { category_id: src._id, usage_field: usageField, amount: Number(amount) },
-        };
-      }
-      const after = await collection.findOne(
-        { _id: src._id },
-        { projection: { [usageField]: 1 } },
-      );
-      const used = Number(after?._pre_approved_usage?.[usageKey] ?? committed);
-      const available = Math.max(0, totalCap - used);
-      return {
-        applied: false,
-        basis,
-        reason: `above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${used} already used) on "${src.name}"`,
-      };
-    }
     const available = Math.max(0, totalCap - committed);
     if (Number(amount) <= available) {
       return {
         applied: true, basis,
         reason: `within ${cap} × ${billable} billable passed = ${totalCap} on "${src.name}" (${committed} already used)`,
+        ...(reservation ? { reservation } : {}),
       };
     }
+    await releasePreApprovalReservation(reservation);
     return {
       applied: false, basis,
       reason: `above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${committed} already used) on "${src.name}"`,
@@ -2776,16 +2780,17 @@ export async function evaluatePreApproval(
   };
 }
 
-export async function releasePreApprovalReservation(reservation?: PreApprovalReservation): Promise<void> {
-  if (!reservation) return;
+export async function releasePreApprovalReservation(reservation?: PreApprovalReservation): Promise<boolean> {
+  if (!reservation) return true;
   const collection: any = CostCategory.collection;
-  await collection.updateOne(
+  const released = await collection.updateOne(
     {
       _id: reservation.category_id,
-      [reservation.usage_field]: { $gte: reservation.amount },
+      [`${reservation.lease_field}.token`]: reservation.token,
     },
-    { $inc: { [reservation.usage_field]: -reservation.amount } },
+    { $unset: { [reservation.lease_field]: "" } },
   );
+  return released.modifiedCount === 1;
 }
 
 
