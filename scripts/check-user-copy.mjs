@@ -3786,8 +3786,8 @@ for (const file of walk(root)) {
   // QA-785 on this very tab, where -216 gated the card component and left its parent open.
   // Literal splits, no regex - the first attempt at this line lost its backslashes on the way to
   // disk and became an alternation, counting 0 and reddening correct code.
-  const RO_RESULT_BUTTONS = "const readOnly = closed " + "|| hasLeft(i)";
-  const RO_CARD = "const readOnly = closed " + "|| !!leftOn";
+  const RO_RESULT_BUTTONS = "const readOnly = closed " + "|| operationBusy || hasLeft(i)";
+  const RO_CARD = "const readOnly = closed " + "|| operationBusy || !!leftOn";
   const readOnlyDerivesFromLeft = body.split(RO_RESULT_BUTTONS).length - 1 === 1
     && body.split(RO_CARD).length - 1 === 1;
   const oneShownPopulation = /const shown = visible\.filter\(/.test(body)
@@ -4214,14 +4214,15 @@ for (const file of walk(root)) {
     && begin.indexOf("if (current)") < begin.indexOf("closureSaveInFlight.current = started;")
     && begin.includes("A closure change is already in progress")
     && save.includes("const started = existingOperation ?? beginClosureOperation(operation);");
-  const awaitedReadback = save.includes("const refreshed = await load(true, started.batchId);")
+  const awaitedReadback = save.includes("const refreshed = await load(Object.keys(patch), started.batchId);")
     && save.includes("await Promise.resolve(onChanged());")
     && save.includes("parentRefreshed === false")
     && save.includes("setClosureSaveNotice(success);");
   const dirtyProtected = load.includes("request !== latestClosureLoad.current")
     && load.includes("activeClosureBatchId.current !== requestedBatchId")
-    && load.includes("forceForm || !closureFormDirty.current")
-    && tab.includes("closureFormDirty.current = true;")
+    && load.includes("closureFormDirtyKeys.current.delete(key)")
+    && load.includes("for (const key of closureFormDirtyKeys.current) next[key] = current?.[key]")
+    && tab.includes("closureFormDirtyKeys.current.add(key)")
     && !tab.includes("onChange={(e) => setForm(");
   const parentRefreshSignals = parent.includes("const load = async (): Promise<boolean>")
     && parent.includes("return true;") && parent.includes("return false;")
@@ -4233,7 +4234,7 @@ for (const file of walk(root)) {
     && tab.includes("closureSaveInFlight.current = null;")
     && tab.includes("setClosure(null);")
     && tab.includes("setCompletedInThisClosure(false);");
-  const completionGatePaintsImmediately = tab.includes("setCompletedInThisClosure(true);")
+  const completionGatePaintsImmediately = save.includes('if (operation === "certification-complete") setCompletedInThisClosure(true);')
     && tab.includes('const statusClosedTab = completedInThisClosure || ["Completed", "Cancelled"].includes(batch?.status);');
   const sharedBusySurface = busySurface.includes("disabled={closureBusy}")
     && busySurface.includes("inert={closureBusy ? true : undefined}")
@@ -4279,10 +4280,21 @@ for (const file of walk(root)) {
   // prerequisites belong exclusively to their neighbouring Mark Completed buttons.
   const saveIndependent = tab.includes('kind="ghost" disabled={closed || closureBusy}')
     && tab.includes('kind="ghost" disabled={!mayMarkTab || closureBusy}');
+  const candidate = src.slice(src.indexOf("function CandidateResults("), src.indexOf("function FeedbackTab("));
+  const portal = src.slice(src.indexOf("function PortalIdGaps("), src.indexOf("function AttendanceTab("));
+  const portalCoordinatorPass = (tab.match(/<PortalIdGaps\b[\s\S]{0,160}?operationCoordinator=\{closureOperationCoordinator\}/g) ?? []).length === 1;
+  const candidateCoordinatorPass = (tab.match(/<CandidateResults\b[\s\S]{0,160}?operationCoordinator=\{closureOperationCoordinator\}/g) ?? []).length === 1;
+  const childWritesCoordinated = portalCoordinatorPass && candidateCoordinatorPass
+    && candidate.includes('beginOperation("candidate-result")')
+    && candidate.includes("await refreshAfterOperation(started);")
+    && candidate.includes("const operationBusy = !!operationCoordinator?.busy;")
+    && portal.includes('beginOperation("portal-id-save")')
+    && portal.includes('beginOperation("portal-id-recovery")')
+    && portal.includes("await Promise.resolve(onChanged?.(started));");
 
   const ok = mutexBeforeWrite && awaitedReadback && dirtyProtected && parentRefreshSignals && batchBound && completionGatePaintsImmediately
     && sharedBusySurface && !missingFromBusySurface.length && !escapedBusyControls.length
-    && localFeedback && saveIndependent;
+    && localFeedback && saveIndependent && childWritesCoordinated;
   if (ok) passed++;
   else {
     failed++;
@@ -4295,6 +4307,7 @@ for (const file of walk(root)) {
       + ", shared busy surface=" + sharedBusySurface
       + ", controls outside busy surface=" + JSON.stringify(missingFromBusySurface)
       + ", controls without exact busy gate=" + JSON.stringify(escapedBusyControls)
+      + ", CandidateResults/PortalIdGaps use the same coordinator=" + childWritesCoordinated
       + ", local saving/saved/error feedback=" + localFeedback
       + ", Save independent of sign-off prerequisites=" + saveIndependent + ")"
       + " - a double-click can race two full-form date patches, or a background GET can erase"

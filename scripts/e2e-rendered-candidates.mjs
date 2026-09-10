@@ -176,6 +176,36 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     /Assessment information saved\./i.test(await page.locator("body").innerText()), await page.locator("body").innerText().then((t) => t.slice(0, 300)));
   await page.unroute(putA);
 
+  // A child result write starts first. It must acquire the SAME ref as Closure Save, so the Save
+  // cannot begin a competing forced closure GET or strand the child's operation mid-refresh.
+  await page.getByRole("button", { name: "Start per-candidate marking", exact: true }).click();
+  const failResult = page.getByRole("button", { name: "Fail", exact: true }).first();
+  await failResult.waitFor({ timeout: 30000 });
+  const resultPath = (id) => `/api/batches/${id}/results`;
+  let heldResultPutCount = 0;
+  let releaseHeldResultPut;
+  const heldResultPut = new Promise((resolve) => { releaseHeldResultPut = resolve; });
+  await page.route(isPath(batch._id, resultPath), async (route) => {
+    if (route.request().method() !== "PUT") return route.continue();
+    heldResultPutCount++;
+    await heldResultPut;
+    await route.continue().catch(() => {});
+  });
+  await failResult.evaluate((el) => el.click());
+  await page.waitForFunction(() => /Saving closure information/i.test(document.body.innerText), undefined, { timeout: 15000 }).catch(() => {});
+  await assessmentSave().evaluate((el) => el.click());
+  const childFirstLock = {
+    childPuts: heldResultPutCount,
+    closureSaveDisabled: await assessmentSave().isDisabled(),
+    closurePuts: heldPutCount,
+  };
+  releaseHeldResultPut();
+  await page.waitForFunction(() => !/Saving closure information/i.test(document.body.innerText), undefined, { timeout: 30000 }).catch(() => {});
+  ok("QA-2420: a child result mutation first holds the shared coordinator and cannot strand a competing Closure Save",
+    childFirstLock.childPuts === 1 && childFirstLock.closureSaveDisabled && childFirstLock.closurePuts === 1,
+    JSON.stringify(childFirstLock));
+  await page.unroute(isPath(batch._id, resultPath));
+
   // A failed write must leave the typed value available for retry and must never announce success.
   await page.route(putA, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
@@ -263,6 +293,17 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   ok("QA-2420 [precondition]: the fixture is Completed and only its post-completion Closure dates remain writable",
     forced.data?.item?.status === "Completed" && hydratedCompletedForm && completedDates.certificationFrozen && completedDates.distributionWritable && completedDates.sidhWritable,
     JSON.stringify({ status: forced.data?.item?.status, hydratedCompletedForm, ...completedDates }));
+
+  // Saving a non-date field must refresh its own persisted key only. The typed SIDH date stays a
+  // draft until the Certification Save explicitly sends it; this is the regression that a single
+  // boolean dirty flag could not express.
+  await page.getByLabel("Uploaded to SIDH portal on").fill("2026-09-22");
+  await page.getByPlaceholder("Dues note (optional — what was settled, references)").fill("QA-2420 per-field draft");
+  await page.getByRole("button", { name: "Save note", exact: true }).click();
+  await page.getByRole("status").filter({ hasText: "Dues note saved." }).waitFor({ timeout: 30000 }).catch(() => {});
+  ok("QA-2420: a non-date action read-back keeps an unrelated typed date draft until that date is persisted",
+    await page.getByLabel("Uploaded to SIDH portal on").inputValue() === "2026-09-22",
+    JSON.stringify({ sidhDraft: await page.getByLabel("Uploaded to SIDH portal on").inputValue() }));
   await page.getByLabel("Uploaded to SIDH portal on").fill("2026-09-22");
   // The React controlled input's change handler must commit before this separate click consumes
   // `form`; otherwise a synthetic same-tick test can submit the pre-fill snapshot.
@@ -291,15 +332,28 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   await page.getByLabel("Certificate distribution date").fill("2026-09-23");
   await certificationSave().evaluate((el) => el.click());
   await page.waitForFunction(() => /Saving closure information/i.test(document.body.innerText), undefined, { timeout: 15000 }).catch(() => {});
-  await openClosure(closureSwitchBatch._id);
+  // This is an actual Next client-router transition, not page.goto() (which destroys the old
+  // component and aborts the held fetch before its stale-response guards can be exercised).
+  await page.getByRole("link", { name: "Batches", exact: true }).click();
+  const switchRow = page.getByRole("row", { name: new RegExp(closureSwitchBatch.code) }).first();
+  await switchRow.waitFor({ timeout: 30000 });
+  await switchRow.click();
+  await page.waitForURL((u) => u.pathname.endsWith(`/batches/${closureSwitchBatch._id}`), { timeout: 30000 });
+  const closureTabB = page.getByRole("button", { name: "Closure", exact: true });
+  await closureTabB.click();
+  await page.getByLabel("Mock test date").waitFor({ timeout: 30000 });
   heldOldPut();
   await page.waitForTimeout(600);
+  const completedOldWrite = await req(admin, "GET", closurePath(batch._id));
+  const bClosure = await req(admin, "GET", closurePath(closureSwitchBatch._id));
   const switchedText = await page.locator("body").innerText();
-  ok("QA-2420: a delayed A write released after navigation cannot paint, announce, or refresh A over B",
+  ok("QA-2420: a held A PUT completes after real client navigation, while B stays unchanged and A cannot repaint it",
     page.url().includes(String(closureSwitchBatch._id))
+      && String(completedOldWrite.data?.closure?.certificate_distribution_date ?? "").includes("2026-09-23")
+      && !bClosure.data?.closure?.certificate_distribution_date
       && !/Certification information saved\./i.test(switchedText)
       && oldParentLoads === 0,
-    JSON.stringify({ url: page.url(), oldParentLoads, text: switchedText.slice(0, 350) }));
+    JSON.stringify({ url: page.url(), oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
   await page.unroute(putA);
   await page.unroute(isPath(batch._id, parentPath));
 }

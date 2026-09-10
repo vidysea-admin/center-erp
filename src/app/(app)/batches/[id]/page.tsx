@@ -1988,7 +1988,7 @@ function Enrollment({ batchId, batch, error, setError }: any) {
 //
 // It renders NOTHING when there is no gap. A panel that says "0 students are missing an ID" is noise
 // on the screen of a centre that has nothing to fix.
-function PortalIdGaps({ batchId, onChanged }: any) {
+function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
   const [plan, setPlan] = useState<any>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -2010,6 +2010,10 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   // refused rather than overwritten.
   const [health, setHealth] = useState<any>(null);
   const [moving, setMoving] = useState(false);
+  const operationBusy = !!operationCoordinator?.busy;
+  const beginOperation = (operation: string) => operationCoordinator?.begin(operation) ?? { token: -1, batchId, operation };
+  const operationIsCurrent = (started: any) => !operationCoordinator || operationCoordinator.current(started);
+  const finishOperation = (started: any) => operationCoordinator?.finish(started);
   // QA-775 (-216, checker on qa-215): the apply needs `candidates.manage` at EDIT. Both GETs behind
   // this panel need only read, so a Location or Operations login whose edit right has been revoked
   // saw the banner and the button and got 403 on press - the fourth outing of the dead-button class
@@ -2032,7 +2036,9 @@ function PortalIdGaps({ batchId, onChanged }: any) {
   const recoverable: any[] = ((health?.misfiled ?? []) as any[]).filter((m) => blockedIds.has(String(m.candidate)));
 
   async function moveMisfiled() {
-    if (moving || !recoverable.length) return;
+    if (moving || operationBusy || !recoverable.length) return;
+    const started = beginOperation("portal-id-recovery");
+    if (!started) return;
     setMoving(true); setErr("");
     try {
       const asked = recoverable.length;
@@ -2049,22 +2055,29 @@ function PortalIdGaps({ batchId, onChanged }: any) {
       } else if (copied < asked) {
         setErr(`${copied} of ${asked} moved. The rest already had an ID by the time this ran.`);
       }
-      await load(); onChanged?.();
+      if (!operationIsCurrent(started)) return;
+      await load();
+      if (!operationIsCurrent(started)) return;
+      await Promise.resolve(onChanged?.(started));
     } catch (e: any) { setErr(e.message); }
-    setMoving(false);
+    finally { setMoving(false); finishOperation(started); }
   }
 
   async function save(candidateId: string, rawId: string) {
     const v = String(rawId ?? "").trim();
-    if (!v || !candidateId) return;
+    if (!v || !candidateId || operationBusy) return;
+    const started = beginOperation("portal-id-save");
+    if (!started) return;
     setSaving(candidateId); setErr("");
     try {
       await api(`/api/candidates/${candidateId}`, { method: "PATCH", json: { sidh_candidate_id: v } });
+      if (!operationIsCurrent(started)) return;
       setDraft((d) => { const n = { ...d }; delete n[candidateId]; return n; });
       await load();
-      onChanged?.();
+      if (!operationIsCurrent(started)) return;
+      await Promise.resolve(onChanged?.(started));
     } catch (e: any) { setErr(e?.message ?? String(e)); }
-    finally { setSaving(null); }
+    finally { setSaving(null); finishOperation(started); }
   }
 
   const gaps = plan?.missing ?? [];
@@ -2109,7 +2122,7 @@ function PortalIdGaps({ batchId, onChanged }: any) {
             {recoverable.slice(0, 4).map((m: any) => personLabel({ name: m.name, phone: m.phone, sidh_candidate_id: m.can })).join("  ·  ")}
             {recoverable.length > 4 ? `  ·  +${recoverable.length - 4} more` : ""}
           </div>
-          <button type="button" onClick={moveMisfiled} disabled={moving}
+          <button type="button" onClick={moveMisfiled} disabled={moving || operationBusy}
             className="mt-1.5 rounded-lg bg-green-700 px-2.5 py-1 font-medium text-white hover:bg-green-800 disabled:bg-green-300">
             {moving ? "Moving…" : `Move ${recoverable.length} into the portal ID field`}
           </button>
@@ -2150,11 +2163,11 @@ function PortalIdGaps({ batchId, onChanged }: any) {
                 <span className="text-amber-700">no candidate record on this row — nothing to write an ID onto</span>
               ) : (<>
                 <input className="w-40 rounded-lg border border-gray-300 px-2 py-1 text-xs" placeholder={m.unreadable ? "replace it…" : "CAN_…"}
-                  value={draft[m.candidate] ?? ""}
+                  disabled={operationBusy} value={draft[m.candidate] ?? ""}
                   onChange={(e) => setDraft({ ...draft, [m.candidate]: e.target.value })}
                   onKeyDown={(e) => { if (e.key === "Enter") save(m.candidate, draft[m.candidate] ?? ""); }} />
                 <button type="button" onClick={() => save(m.candidate, draft[m.candidate] ?? "")}
-                  disabled={saving === m.candidate || !(draft[m.candidate] ?? "").trim()}
+                  disabled={operationBusy || saving === m.candidate || !(draft[m.candidate] ?? "").trim()}
                   className="rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
                   {saving === m.candidate ? "Saving…" : "Save"}
                 </button>
@@ -3474,8 +3487,9 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   // frozen lifecycle controls in that gap. The two post-completion dates keep their own gate.
   const [completedInThisClosure, setCompletedInThisClosure] = useState(false);
   // Background refreshes (candidate marking, portal-id edits, parent reloads) must refresh the
-  // stored closure/status without erasing dates the operator has typed but not saved yet.
-  const closureFormDirty = useRef(false);
+  // stored closure/status without erasing fields the operator has typed but not saved yet. A
+  // boolean loses that distinction: a dues write could clear an unrelated typed date.
+  const closureFormDirtyKeys = useRef(new Set<string>());
   const latestClosureLoad = useRef(0);
   const [invForm, setInvForm] = useState<any>({});
   // QA-1831: the server-computed proposal. Null for anyone without finance.view - it is money.
@@ -3558,6 +3572,14 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setClosureSaveError(message);
     setError(message);
   };
+  // This coordinator is intentionally passed into the two child writers below. Their mutations
+  // must not start a competing GET/parent reload while a Closure save is proving its read-back.
+  const closureOperationCoordinator = {
+    busy: closureBusy,
+    begin: beginClosureOperation,
+    current: closureOperationIsCurrent,
+    finish: finishClosureOperation,
+  };
   // QA-712 (-209, checker on qa-207): this button was DEAD from the moment -206 shipped. It renders
   // only when blockers exist, and -206 made a press without `force` refuse 409 whenever blockers
   // exist - the same condition that shows it. Every press returned "Nothing has been changed".
@@ -3581,7 +3603,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     try {
       await api(`/api/batches/${started.batchId}/complete`, { method: "POST", json: { reason: why.trim(), force: true } });
       if (!closureOperationIsCurrent(started)) return;
-      const refreshed = await load(true, started.batchId);
+      const refreshed = await load([], started.batchId);
       if (refreshed === "failed") throw new Error("Completed, but the refreshed closure values could not be loaded. Reload this tab before editing again.");
       if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
       const parentRefreshed = await Promise.resolve(onChanged());
@@ -3594,22 +3616,26 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     finally { finishClosureOperation(started); }
   }
   const updateClosureForm = (patch: Record<string, unknown>) => {
-    closureFormDirty.current = true;
+    for (const key of Object.keys(patch)) closureFormDirtyKeys.current.add(key);
     setClosureSaveNotice("");
     setClosureSaveError("");
     setForm((current: any) => ({ ...current, ...patch }));
   };
-  const load = async (forceForm = false, requestedBatchId = batchId): Promise<"loaded" | "stale" | "failed"> => {
+  const load = async (persistedFormKeys: string[] = [], requestedBatchId = batchId): Promise<"loaded" | "stale" | "failed"> => {
     const request = ++latestClosureLoad.current;
     try {
       const d = await api(`/api/batches/${requestedBatchId}/closure`);
       // A GET begun before a newer refresh may finish last. Only the newest response may paint.
       if (activeClosureBatchId.current !== requestedBatchId || request !== latestClosureLoad.current) return "stale";
       setClosure(d.closure); setInvoice(d.invoice); setInvProposal(d.invoice_proposal ?? null);
-      if (forceForm || !closureFormDirty.current) {
-        setForm(d.closure ?? {});
-        closureFormDirty.current = false;
-      }
+      // Only keys written by this operation become clean after their persisted read-back. A
+      // different operation's refresh cannot erase a field that is still a local draft.
+      for (const key of persistedFormKeys) closureFormDirtyKeys.current.delete(key);
+      setForm((current: any) => {
+        const next = { ...(d.closure ?? {}) };
+        for (const key of closureFormDirtyKeys.current) next[key] = current?.[key];
+        return next;
+      });
       setInvForm(d.invoice ?? {});
       setLegacy(d.legacy !== false);
       setSummary(d.results_summary ?? null);
@@ -3634,7 +3660,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     closureSaveSequence.current += 1;
     closureSaveInFlight.current = null;
     setClosureSaving(null);
-    closureFormDirty.current = false;
+    closureFormDirtyKeys.current.clear();
     setClosureSaveNotice("");
     setClosureSaveError("");
     setCompletedInThisClosure(false);
@@ -3650,7 +3676,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setNoCan([]);
     setBlockers(null);
     setBlockersFailed(false);
-    void load(true, batchId);
+    void load([], batchId);
   }, [batchId]);
 
   // ---- -223: the four dates nobody ever sent ----
@@ -3691,10 +3717,12 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     try {
       await api(`/api/batches/${started.batchId}/closure`, { method: "PUT", json: patch });
       if (!closureOperationIsCurrent(started)) return false;
-      const refreshed = await load(true, started.batchId);
+      const refreshed = await load(Object.keys(patch), started.batchId);
       if (refreshed === "failed") throw new Error("Saved, but the refreshed values could not be loaded. Reload this tab before editing again.");
       if (refreshed === "stale" || !closureOperationIsCurrent(started)) return false;
-      closureFormDirty.current = false;
+      // Parent props arrive one render after onChanged(). Freeze the completed certification
+      // immediately from the persisted read-back so its Save/Mark controls cannot flash live.
+      if (operation === "certification-complete") setCompletedInThisClosure(true);
       const parentRefreshed = await Promise.resolve(onChanged());
       if (!closureOperationIsCurrent(started)) return false;
       if (parentRefreshed === false) throw new Error("Saved and refreshed the closure, but the batch summary could not be refreshed. Reload before continuing.");
@@ -3770,7 +3798,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       // AFTER the reopen lands, and stays shut if it does not.
       await api(`/api/batches/${started.batchId}/closure`, { method: "PUT", json: { assessment_status: "Pending" } });
       if (!closureOperationIsCurrent(started)) return;
-      const refreshed = await load(true, started.batchId);
+      const refreshed = await load([], started.batchId);
       if (refreshed === "failed") throw new Error("Reopened, but the refreshed closure values could not be loaded. Reload this tab before editing again.");
       if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
       const parentRefreshed = await Promise.resolve(onChanged());
@@ -3787,7 +3815,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     try {
       await api(`/api/batches/${started.batchId}/invoice`, { method: "PATCH", json: patch });
       if (!closureOperationIsCurrent(started)) return;
-      const refreshed = await load(true, started.batchId);
+      const refreshed = await load([], started.batchId);
       if (refreshed === "failed") throw new Error("Invoice saved, but the refreshed values could not be loaded. Reload before continuing.");
       if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
       setClosureSaveNotice("Invoice information saved.");
@@ -3851,7 +3879,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     try {
       await api(`/api/batches/${started.batchId}/closure/recompute`, { method: "POST" });
       if (!closureOperationIsCurrent(started)) return;
-      const refreshed = await load(true, started.batchId);
+      const refreshed = await load([], started.batchId);
       if (refreshed === "failed") throw new Error("Figures derived, but the refreshed values could not be loaded. Reload before continuing.");
       if (refreshed === "stale" || !closureOperationIsCurrent(started)) return;
       const parentRefreshed = await Promise.resolve(onChanged());
@@ -3930,10 +3958,21 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           Mounted here, unconditionally, it is present the moment the Closure tab is, matching the
           Attendance-tab mount above. Removed from CandidateResults below so the two homes never
           double-render the same box when per-candidate marking IS on. */}
-      <PortalIdGaps batchId={batchId} onChanged={() => { load(); onChanged(); }} />
+      <PortalIdGaps batchId={batchId} operationCoordinator={closureOperationCoordinator}
+        onChanged={async () => {
+          const refreshed = await load([], batchId);
+          if (refreshed !== "loaded") return false;
+          return await Promise.resolve(onChanged());
+        }} />
       {/* Per-candidate marking gets the full width — it is a data-entry grid, not a side panel. */}
       {perCandidate && (
-        <CandidateResults batchId={batchId} batch={batch} error={error} setError={setError} onChanged={() => { load(); onChanged(); }} />
+        <CandidateResults batchId={batchId} batch={batch} error={error} setError={setError}
+          operationCoordinator={closureOperationCoordinator}
+          onChanged={async () => {
+            const refreshed = await load([], batchId);
+            if (refreshed !== "loaded") return false;
+            return await Promise.resolve(onChanged());
+          }} />
       )}
       <div className="grid gap-4 lg:grid-cols-2">
       <Section
@@ -4299,7 +4338,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
 }
 
 // ---------- Per-candidate assessment & certification (RPL M17/M18) ----------
-function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
+function CandidateResults({ batchId, batch, error, setError, onChanged, operationCoordinator }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [reasons, setReasons] = useState<any[]>([]);
@@ -4353,6 +4392,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   const [linkPlan, setLinkPlan] = useState<any>(null); // portal-id readiness for the pre-flight panel
   const [linking, setLinking] = useState(false);
   const [certBusy, setCertBusy] = useState<string | null>(null); // per-candidate upload in flight
+  const operationBusy = !!operationCoordinator?.busy;
+  const beginOperation = (operation: string) => operationCoordinator?.begin(operation) ?? { token: -1, batchId, operation };
+  const operationIsCurrent = (started: any) => !operationCoordinator || operationCoordinator.current(started);
+  const finishOperation = (started: any) => operationCoordinator?.finish(started);
+  const refreshAfterOperation = async (started: any) => {
+    if (!operationIsCurrent(started)) return false;
+    await load();
+    if (!operationIsCurrent(started)) return false;
+    return (await Promise.resolve(onChanged?.(started))) !== false && operationIsCurrent(started);
+  };
 
   // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
   // hi bachche ke saamne assign." Multi-file picker → the CAN id in each FILENAME joins
@@ -4373,6 +4422,8 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         : `No candidate is marked Pass yet, and a certificate can only go to a candidate who passed. Mark the results first — nothing has been uploaded.`);
       return;
     }
+    const started = beginOperation("candidate-certificate-stage");
+    if (!started) return;
     setUploading(true);
     setCertUpload(null);
     try {
@@ -4403,11 +4454,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       const res = await fetch(`${BASE_PATH}/api/batches/${batchId}/certificates`, { method: "POST", body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
+      if (!operationIsCurrent(started)) return;
       // Each staged file carries its own chosen member, seeded from the server's proposal so a
       // correct auto-match needs no clicks and a wrong one is one dropdown away.
       setMapping({ ...data, choice: Object.fromEntries((data.staged ?? []).map((s: any) => [s.url, s.member ?? ""])) });
     } catch (e: any) { fail(e); }
-    finally { setUploading(false); }
+    finally { setUploading(false); finishOperation(started); }
   }
 
   // -108 step 2: attach exactly the pairs the operator confirmed — the correction wins, not the
@@ -4419,41 +4471,56 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
       .map((s: any) => ({ url: s.url, member: mapping.choice[s.url] }));
     const discard = (mapping.staged ?? []).filter((s: any) => !mapping.choice[s.url]).map((s: any) => s.url);
     if (!pairs.length) { report("Nothing to attach — point at least one certificate at a candidate, or press Cancel to discard them."); return; }
+    const started = beginOperation("candidate-certificate-attach");
+    if (!started) return;
     setUploading(true);
     try {
       const data = await api(`/api/batches/${batchId}/certificates`, { method: "POST", json: { confirm: true, pairs, discard } });
+      if (!operationIsCurrent(started)) return;
       setCertUpload(data); setCertOk(true);
       setMapping(null);
       setGridError(null);
-      await load(); onChanged(); loadLinkPlan();
+      await refreshAfterOperation(started);
+      if (operationIsCurrent(started)) await loadLinkPlan();
     } catch (e: any) { fail(e); }
-    finally { setUploading(false); }
+    finally { setUploading(false); finishOperation(started); }
   }
 
   // Cancel = the staged files leave the bucket. An abandoned preview is not a reason to keep bytes.
   async function cancelMapping() {
     const urls = (mapping?.staged ?? []).map((s: any) => s.url);
+    if (!urls.length) return;
+    const started = beginOperation("candidate-certificate-discard");
+    if (!started) return;
     setMapping(null);
-    for (const u of urls) {
-      const name = String(u).split("/").pop();
-      await api(`/api/files/${name}`, { method: "DELETE" }).catch(() => null);
-    }
+    try {
+      for (const u of urls) {
+        if (!operationIsCurrent(started)) return;
+        const name = String(u).split("/").pop();
+        await api(`/api/files/${name}`, { method: "DELETE" }).catch(() => null);
+      }
+    } finally { finishOperation(started); }
   }
 
   // -108: the roster's portal-ID readiness — the one fact that explained Manish's eight red lines.
   const loadLinkPlan = () => api(`/api/batches/${batchId}/link-portal-ids`).then(setLinkPlan).catch(() => setLinkPlan(null));
   async function linkPortalIds() {
+    const started = beginOperation("candidate-portal-link");
+    if (!started) return;
     setLinking(true);
     try {
       const res = await api(`/api/batches/${batchId}/link-portal-ids`, { method: "POST" });
+      if (!operationIsCurrent(started)) return;
       setCertUpload(null);
-      await load(); await loadLinkPlan();
+      await refreshAfterOperation(started);
+      if (!operationIsCurrent(started)) return;
+      await loadLinkPlan();
       if (res.linked) setLinkNote(`${res.linked} portal ID${res.linked === 1 ? "" : "s"} linked from the government imports — those certificates will now match by file name.`);
       if (!res.linked) report(res.conflicts?.length
         ? `Nothing linked — ${res.conflicts.length} candidate(s) have conflicting portal IDs, left untouched. Fix them on the candidate record.`
         : "Nothing to link — the portal attendance imported so far names no new IDs for this roster.");
     } catch (e: any) { fail(e); }
-    finally { setLinking(false); }
+    finally { setLinking(false); finishOperation(started); }
   }
 
 
@@ -4477,19 +4544,25 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   useEffect(() => { load(); loadLinkPlan(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function mark(member: string, patch: any) {
+    const started = beginOperation("candidate-result");
+    if (!started) return;
     try {
       await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows: [{ member, assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined, ...patch }] } });
+      if (!operationIsCurrent(started)) return;
       clearCardError(member); setGridError(null);
-      await load(); onChanged();
+      await refreshAfterOperation(started);
     } catch (e: any) {
       const m = fail(e);
       setCardErrors((c) => ({ ...c, [member]: m }));
-    }
+    } finally { finishOperation(started); }
   }
   async function bulkApply(rows: any[]) {
     if (!rows.length) return;
+    const started = beginOperation("candidate-results-bulk");
+    if (!started) return;
     try {
       const res = await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows } });
+      if (!operationIsCurrent(started)) return;
       // -224: bulkMarkResults (rules.ts:1429) collects per-row failures and the route throws ONLY
       // when every single row failed (results/route.ts:121) - otherwise it returns 200 with
       // { updated, errors }. This function discarded `errors` entirely, so "Mark 45 pending as Pass"
@@ -4518,12 +4591,14 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
         // …and the page-top banner the same report() wrote, or the two surfaces disagree (QA-877).
         setGridError(null); setError("");
       }
-      await load(); onChanged();
-    } catch (e: any) { fail(e); }
+      await refreshAfterOperation(started);
+    } catch (e: any) { fail(e); } finally { finishOperation(started); }
   }
   async function certPatch(resultId: string, patch: any) {
-    try { setGridError(null); await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await load(); onChanged(); }
-    catch (e: any) { fail(e); }
+    const started = beginOperation("candidate-certificate");
+    if (!started) return;
+    try { setGridError(null); await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await refreshAfterOperation(started); }
+    catch (e: any) { fail(e); } finally { finishOperation(started); }
   }
 
   // -108: one certificate, one candidate. Goes through the SAME upload door as every other file
@@ -4531,15 +4606,19 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
   // field patch — no new server contract, and no file-name matching to get wrong.
   async function uploadOneCertificate(i: any, file: File) {
     if (!i.result?._id) { report("Mark this candidate's result first — a certificate attaches to a result."); return; }
+    const started = beginOperation("candidate-certificate-upload");
+    if (!started) return;
     setCertBusy(String(i.result._id));
     try {
       const url = await uploadWithRetry(file, "closure", {
         folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: "certificates",
         entity: "Batch", entity_id: batchId,
       });
-      await certPatch(String(i.result._id), { certificate_file: url });
+      if (!operationIsCurrent(started)) return;
+      await api(`/api/results/${i.result._id}`, { method: "PATCH", json: { certificate_file: url } });
+      await refreshAfterOperation(started);
     } catch (e: any) { fail(e); }
-    finally { setCertBusy(null); }
+    finally { setCertBusy(null); finishOperation(started); }
   }
 
   const active = activeOnly(items);
@@ -4668,7 +4747,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     // The server refuses it now (upsertCandidateResult), so leaving these enabled would render a
     // control whose only outcome is a 409 - the dead-control class this file has paid for five
     // times (QA-712, QA-723, QA-754, QA-775, QA-785), twice on this very tab.
-    const readOnly = closed || hasLeft(i);
+    const readOnly = closed || operationBusy || hasLeft(i);
     return (
     <div className="flex flex-wrap gap-1.5">
       {["Pass", "Fail", "Absent"].map((r) => {
@@ -4708,7 +4787,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
     // left_on refusal does not touch that door, and being able to attach the certificate they earned
     // is the reason their card was kept at all.
     const leftOn = i.left_on;
-    const readOnly = closed || !!leftOn;
+    const readOnly = closed || operationBusy || !!leftOn;
     return (
     <div className="space-y-2 rounded-xl border bg-white p-3">
       <div className="flex items-center justify-between">
@@ -4864,9 +4943,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                     onClick={async () => {
                       const reason = window.prompt(`Remove ${i.candidate?.name}'s certificate file? The certificate number and status stay. Reason:`);
                       if (reason === null) return;
-                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); setGridError(null); await load(); onChanged(); }
-                      catch (e: any) { fail(e); }
-                    }}>remove</button>
+                      const started = beginOperation("candidate-certificate-remove");
+                      if (!started) return;
+                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); setGridError(null); await refreshAfterOperation(started); }
+                      catch (e: any) { fail(e); } finally { finishOperation(started); }
+                    }} disabled={operationBusy}>remove</button>
                 )}
               </>
             ) : <span className="text-gray-400">none</span>}
@@ -4878,7 +4959,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               <label className="cursor-pointer rounded-lg border border-blue-600 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50">
                 {certBusy === String(i.result?._id) ? "Uploading…" : i.result?.certificate_file ? "Replace" : "⬆ Upload"}
                 <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
-                  disabled={certBusy === String(i.result?._id)}
+                  disabled={operationBusy || certBusy === String(i.result?._id)}
                   onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadOneCertificate(i, f); }} />
               </label>
             ) : null}
@@ -4935,7 +5016,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
           <Field label="Assessor">
             <input className={inputCls + " max-w-44"} value={bulk.assessor} onChange={(e) => setBulk({ ...bulk, assessor: e.target.value })} placeholder="Assessor name (optional)" title="The assessment body appoints the assessor, so a centre often never learns the name. Nothing here needs it — leave it blank and closure still proceeds." />
           </Field>
-          <Btn small kind="ghost" onClick={() => bulkApply(pending.map((i) => ({ member: i.member, result: "Pass", assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined })))} disabled={!pending.length}>
+          <Btn small kind="ghost" onClick={() => bulkApply(pending.map((i) => ({ member: i.member, result: "Pass", assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined })))} disabled={operationBusy || !pending.length}>
             Mark {pending.length} pending as Pass
           </Btn>
           <Btn small kind="ghost" onClick={async () => {
@@ -4944,7 +5025,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             const present = new Set((logs[0]?.present_member_ids ?? []).map(String));
             const absent = pending.filter((i) => logs.length && !present.has(String(i.member)));
             bulkApply(absent.map((i) => ({ member: i.member, result: "Absent", assessed_on: bulk.assessed_on })));
-          }} disabled={!pending.length}>Mark absentees from last log</Btn>
+          }} disabled={operationBusy || !pending.length}>Mark absentees from last log</Btn>
           {/* -224: `disabled={!passes.length}` with nothing beside it is indistinguishable from a
               broken button - and on a batch where marking itself was refused, this was the FIRST
               thing the operator pressed. A control that cannot fire says why (the QA-004 pattern). */}
@@ -5018,7 +5099,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               {(linkPlan.blocking ?? 0) > 0 && (linkPlan.linkable_blocking ?? 0) > 0 && (
                 <span className="ml-1">
                   The portal attendance already imported names <b>{linkPlan.linkable_blocking}</b> of them.
-                  <button onClick={linkPortalIds} disabled={linking}
+                  <button onClick={linkPortalIds} disabled={operationBusy || linking}
                     className="ml-2 rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
                     {linking ? "Linking…" : `Link portal IDs (${linkPlan.linkable?.length ?? 0})`}
                   </button>
@@ -5148,9 +5229,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                 disappeared instead of refusing, so the reason takes its place, in the same words the
                 Closure card already uses for Save and Mark Completed. */}
             {mayMark ? (
-              <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
+              <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading || operationBusy ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
                 {uploading ? "Reading…" : "⬆ Upload certificates (bulk)"}
-                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading}
+                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading || operationBusy}
                   onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
               </label>
             ) : (
@@ -5370,10 +5451,10 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
               </div>
 
               <div className="flex flex-wrap items-center gap-3 border-t border-gray-100 pt-2">
-                <Btn onClick={confirmMapping} disabled={uploading || !okCount}>
+                <Btn onClick={confirmMapping} disabled={operationBusy || uploading || !okCount}>
                   {uploading ? "Attaching…" : `Attach ${okCount} certificate${okCount === 1 ? "" : "s"}`}
                 </Btn>
-                <Btn kind="ghost" onClick={cancelMapping} disabled={uploading}>Cancel &amp; discard</Btn>
+                <Btn kind="ghost" onClick={cancelMapping} disabled={operationBusy || uploading}>Cancel &amp; discard</Btn>
                 <span className="text-xs text-gray-500">
                   {rows.length - okCount > 0 ? `${rows.length - okCount} file(s) will not be attached${rows.some((r: any) => !mapping.choice[r.s.url]) ? " — unmapped ones are discarded" : ""}.` : "Every file is mapped and ready."}
                 </span>
@@ -5409,6 +5490,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             </div>
           ))}
           <Btn onClick={async () => {
+            const started = beginOperation("candidate-certificate-issue");
+            if (!started) return;
+            try {
             // -224 cycle 2 (QA-862, checker on cycle 1). This loop is the NINTH failure path in this
             // panel and cycle 1 missed it - and it is the real action behind the very button Umesh
             // named. Three faults in five lines: the catch reported only to the page-top banner; each
@@ -5428,6 +5512,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             const skipped: string[] = [];
             let issued = 0, numbered = 0;
             for (const p of passes) {
+              if (!operationIsCurrent(started)) return;
               const no = certForm.numbers?.[p.result._id] ?? p.result.certificate_no;
               if (!no) { skipped.push(p.candidate?.name ?? "This candidate"); continue; }
               numbered++;
@@ -5440,7 +5525,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
                 issued++;
               } catch (e: any) { failures.push(`${p.candidate?.name ?? "This candidate"}: ${e?.message ?? String(e)}`); }
             }
-            await load(); onChanged();
+            await refreshAfterOperation(started);
             const names = (xs: string[]) => `${xs.slice(0, 3).join(" · ")}${xs.length > 3 ? ` · +${xs.length - 3} more` : ""}`;
             const skippedClause = skipped.length
               ? ` · ${skipped.length} left out, no certificate number typed yet (${names(skipped)})` : "";
@@ -5464,7 +5549,8 @@ function CandidateResults({ batchId, batch, error, setError, onChanged }: any) {
             // zero times in this file before this line.
             setGridError(null); setError("");
             setCertDrawer(false);
-          }}>Generate &amp; issue</Btn>
+            } finally { finishOperation(started); }
+          }} disabled={operationBusy}>Generate &amp; issue</Btn>
         </div>
       </Drawer>
     </Section>
