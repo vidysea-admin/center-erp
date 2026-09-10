@@ -133,6 +133,7 @@ async function deliverOwnerEvents(
 export async function ensureCostDeletionAuditEvent(input: {
   costId: unknown;
   actor: unknown;
+  expectedUpdatedAt: unknown;
   oldValue: { amount: unknown; note: unknown };
 }) {
   const costId = new Types.ObjectId(String(input.costId));
@@ -148,6 +149,7 @@ export async function ensureCostDeletionAuditEvent(input: {
       _id: costId,
       ...COST_AUDIT_OWNER_ELIGIBLE,
       deletion_state: { $exists: false },
+      updatedAt: input.expectedUpdatedAt,
       amount: input.oldValue.amount,
       note: input.oldValue.note,
       "_audit_events.event_id": { $ne: event.event_id },
@@ -193,7 +195,7 @@ export async function ensureCostDeletionAuditEvent(input: {
       || stored.actor_type !== "USER"
       || !stored.actor
       || (claim.modifiedCount === 1 && committedEventId !== event.event_id)) {
-    throw new Error(`Cost ${costId} has a foreign deletion-audit claim.`);
+    throw new HttpError(409, `Cost ${costId} changed while its deletion was being prepared. Refresh and retry.`);
   }
   return { eventId: committedEventId, actor: String(stored.actor), claimed: claim.modifiedCount === 1 };
 }

@@ -432,20 +432,25 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const made = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, ...original }));
   const costId = made.data?.item?._id;
   if (costId) {
-    let patchSettled = false;
-    const patchPromise = req(admin, "PATCH", `/api/costs/${costId}?_test_pause_before_write_ms=600`, {
+    const barrier = `patch-first-${stamp}`;
+    const patchPromise = req(admin, "PATCH", `/api/costs/${costId}?_test_wait_after_patch_load=${barrier}`, {
       amount: 1616, note: `late-patch-${stamp}`,
-    }).finally(() => { patchSettled = true; });
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    });
+    let barrierSeen = false;
+    for (let i = 0; i < 100 && !barrierSeen; i++) {
+      const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+      barrierSeen = row?._test_patch_loaded_barrier === barrier;
+      if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     const deleteResult = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`);
     const tombstoneBeforePatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
-    const patchWasStillInFlight = !patchSettled;
+    await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_patch_loaded_barrier: "" } });
     const patchResult = await patchPromise;
     const tombstoneAfterPatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     const deletionEvent = (tombstoneAfterPatch?._audit_events ?? []).find((event) => event?.field === "deleted");
-    ok("PATCH/delete race [precondition]: PATCH loaded first and was still paused when DELETE claimed the tombstone",
-      patchWasStillInFlight && deleteResult.status === 409 && tombstoneBeforePatch?.deletion_state === "Pending",
-      JSON.stringify({ patchWasStillInFlight, delete: deleteResult.status, state: tombstoneBeforePatch?.deletion_state }));
+    ok("PATCH/delete race [precondition]: the route barrier proves PATCH loaded before DELETE claimed the tombstone",
+      barrierSeen && deleteResult.status === 409 && tombstoneBeforePatch?.deletion_state === "Pending",
+      JSON.stringify({ barrierSeen, delete: deleteResult.status, state: tombstoneBeforePatch?.deletion_state }));
     ok("PATCH/delete race: the late PATCH loses the write CAS and cannot change the committed deletion snapshot",
       patchResult.status === 409 && tombstoneAfterPatch?.amount === original.amount && tombstoneAfterPatch?.note === original.note
         && deletionEvent?.old_value?.amount === original.amount && deletionEvent?.old_value?.note === original.note,
@@ -454,6 +459,51 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   } else {
     ok("PATCH/delete race [precondition]: an ordinary cost exists", false, `status=${made.status}`);
   }
+}
+
+// Reverse the interleaving: DELETE loads first, then a correction or Payment Done wins. updatedAt
+// is part of the tombstone claim CAS, so neither kind of successful PATCH can be followed by a
+// stale deletion snapshot; the loser is an explicit 409, not a generic handler 500.
+for (const variant of ["ordinary", "mark_paid"]) {
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const original = { amount: variant === "ordinary" ? 616.1 : 616.2, note: `delete-loads-${variant}-${stamp}` };
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, ...original, vendor_payee: `before-${variant}-${stamp}`, payment_mode: "Cash",
+  }));
+  const costId = made.data?.item?._id;
+  if (!costId) {
+    ok(`DELETE-loads/${variant} [precondition]: an ordinary cost exists`, false, `status=${made.status}`);
+    continue;
+  }
+  const barrier = `delete-first-${variant}-${stamp}`;
+  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`);
+  let barrierSeen = false;
+  for (let i = 0; i < 100 && !barrierSeen; i++) {
+    const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    barrierSeen = row?._test_delete_loaded_barrier === barrier;
+    if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const patchBody = variant === "ordinary"
+    ? { amount: original.amount + 100, note: `patch-won-${variant}-${stamp}` }
+    : { mark_paid: true, paid_on: "2026-09-08", payment_ref: `RACE-${stamp}`, vendor_payee: `paid-${stamp}`, payment_mode: "UPI" };
+  const patchResult = await req(admin, "PATCH", `/api/costs/${costId}`, patchBody);
+  await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_delete_loaded_barrier: "" } });
+  const deleteResult = await deletePromise;
+  const after = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+  const deletionAudits = await rawAudits.countDocuments({
+    entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted",
+  });
+  ok(`DELETE-loads/${variant} [precondition]: route barrier proves DELETE loaded before the PATCH won`,
+    barrierSeen && patchResult.status === 200,
+    JSON.stringify({ barrierSeen, patch: patchResult.status }));
+  ok(`DELETE-loads/${variant}: stale tombstone claim loses with 409 and writes no deletion event/audit`,
+    deleteResult.status === 409 && after?.deletion_state === undefined && deletionAudits === 0
+      && (variant === "ordinary"
+        ? after?.amount === patchBody.amount && after?.note === patchBody.note
+        : after?.payment_status === "Paid" && after?.payment_ref === patchBody.payment_ref),
+    JSON.stringify({ delete: deleteResult.status, state: after?.deletion_state, audits: deletionAudits, amount: after?.amount, note: after?.note, payment: after?.payment_status, ref: after?.payment_ref }));
+  await req(admin, "DELETE", `/api/costs/${costId}`);
 }
 
 // The winning DELETE must stay successful if an ordinary recovery read acknowledges and collects
@@ -516,23 +566,49 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     const ordinaryId = ordinary.data?.item?._id;
     if (doomedId && ordinaryId) {
       const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
+      const formulaHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
+        name: `ZZ Cascade Formula ${stamp}`, pre_approved: true,
+        pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+        pre_approved_min_billable: 0, pre_approved_basis: "cycle 10 cascade race",
+      });
+      await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+      const formulaNote = `cascade-formula-pending-${stamp}`;
+      const formulaPromise = req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: batchId, category: formulaHead.data?.item?._id,
+        amount: 1, note: formulaNote, _test_formula_pause_after_reserve_ms: 800,
+      });
+      let formulaPendingBeforeCascade = null;
+      for (let i = 0; i < 100 && !formulaPendingBeforeCascade; i++) {
+        formulaPendingBeforeCascade = await rawCosts.findOne({
+          batch: batchId, note: formulaNote, reservation_state: "Pending",
+        });
+        if (!formulaPendingBeforeCascade) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       const cascade = await req(admin, "DELETE", `/api/batches/${batchId}`, { reason: "cycle 9 tombstone cascade attack" });
+      const formulaResult = await formulaPromise;
+      await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
       const tombstoneAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) });
       const ordinaryAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(ordinaryId)) });
+      const formulaAfterCascade = await rawCosts.findOne({ batch: batchId, note: formulaNote });
       const deletionEvent = (tombstoneAfterCascade?._audit_events ?? []).find((event) => event?.field === "deleted");
       const auditBeforeRecovery = deletionEvent?.event_id
         ? await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) : -1;
-      ok("batch cascade [precondition]: force-delete ran while one carried cost was a pending deletion tombstone",
-        claimed.status === 409 && cascade.status === 200 && tombstoneAfterCascade?.deletion_state === "Pending",
-        JSON.stringify({ claimed: claimed.status, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
-      ok("batch cascade: ordinary carried cost is removed but the unacknowledged tombstone owner is fenced from deleteMany",
-        !ordinaryAfterCascade && !!tombstoneAfterCascade && auditBeforeRecovery === 0,
-        JSON.stringify({ ordinary: !!ordinaryAfterCascade, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery }));
+      ok("batch cascade [precondition]: force-delete ran while a tombstone and a live Formula Pending reservation both existed",
+        claimed.status === 409 && !!formulaPendingBeforeCascade && cascade.status === 200
+          && tombstoneAfterCascade?.deletion_state === "Pending",
+        JSON.stringify({ claimed: claimed.status, formulaPending: !!formulaPendingBeforeCascade, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
+      ok("batch cascade: ordinary and Formula Pending children are removed while only the audit tombstone survives deleteMany",
+        !ordinaryAfterCascade && !formulaAfterCascade && !!tombstoneAfterCascade && auditBeforeRecovery === 0
+          && formulaResult.status === 202,
+        JSON.stringify({ ordinary: !!ordinaryAfterCascade, formula: !!formulaAfterCascade, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery, formulaResult: formulaResult.status }));
       await req(admin, "GET", "/api/costs");
       ok("batch cascade: later audit acknowledgement collects the surviving tombstone exactly once",
         !(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))
           && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) === 1,
         `remains=${!!(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))}`);
+      if (formulaResult.data?.item?._id) {
+        await rawApprovals.deleteOne({ _id: new ObjectId(String(formulaResult.data.item._id)) });
+      }
     } else {
       ok("batch cascade [precondition]: two carried costs exist", false,
         JSON.stringify({ doomed: doomed.status, ordinary: ordinary.status }));

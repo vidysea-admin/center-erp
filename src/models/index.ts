@@ -1258,12 +1258,20 @@ const VISIBLE_COST_ENTRY = {
     { reservation_state: { $exists: false } },
   ],
 };
-for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments", "deleteMany"] as const) {
+for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {
   CostEntrySchema.pre(op as any, function (this: any) {
     const current = this.getFilter();
     this.setQuery(Object.keys(current).length ? { $and: [current, VISIBLE_COST_ENTRY] } : VISIBLE_COST_ENTRY);
   });
 }
+// A batch force-delete must cascade its hidden Formula Pending/Cancelled reservation rows too;
+// those are batch-owned fencing rows, not audit durability owners. Only a logically deleted cost's
+// tombstone survives generic deletion until its outbox acknowledgement permits raw GC.
+CostEntrySchema.pre("deleteMany", function (this: any) {
+  const current = this.getFilter();
+  const withoutDeletionTombstones = { deletion_state: { $exists: false } };
+  this.setQuery(Object.keys(current).length ? { $and: [current, withoutDeletionTombstones] } : withoutDeletionTombstones);
+});
 CostEntrySchema.pre("aggregate", function (this: any) {
   this.pipeline().unshift({ $match: VISIBLE_COST_ENTRY });
 });

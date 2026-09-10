@@ -51,8 +51,20 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
-  const pauseBeforeWrite = isTestDb ? Math.min(Number(req.nextUrl.searchParams.get("_test_pause_before_write_ms")) || 0, 1000) : 0;
-  if (pauseBeforeWrite > 0) await new Promise((resolve) => setTimeout(resolve, pauseBeforeWrite));
+  const patchBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_patch_load") ?? "").slice(0, 100) : "";
+  if (patchBarrier) {
+    await CostEntry.collection.updateOne(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: { _test_patch_loaded_barrier: patchBarrier } } as any,
+    );
+    for (let i = 0; i < 100; i++) {
+      const held: any = await CostEntry.collection.findOne(
+        { _id: doc._id }, { projection: { _test_patch_loaded_barrier: 1 } },
+      );
+      if (held?._test_patch_loaded_barrier !== patchBarrier) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
   if (body.mark_paid === true) {
     if (doc.payment_status === "Paid") throw new HttpError(409, "This cost is already recorded as paid.");
     const paymentRef = String(body.payment_ref ?? "").trim();
@@ -124,6 +136,21 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const { id } = await ctx.params;
   const tombstone = await loadDeletionTombstoneInScope(user, id);
   const doc = tombstone ?? await loadInScope(user, id);
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const deleteBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_delete_load") ?? "").slice(0, 100) : "";
+  if (deleteBarrier) {
+    await CostEntry.collection.updateOne(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: { _test_delete_loaded_barrier: deleteBarrier } } as any,
+    );
+    for (let i = 0; i < 100; i++) {
+      const held: any = await CostEntry.collection.findOne(
+        { _id: doc._id }, { projection: { _test_delete_loaded_barrier: 1 } },
+      );
+      if (held?._test_delete_loaded_barrier !== deleteBarrier) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
   // Deleting an applied row would free the visible ledger amount without returning the atomic
   // reservation, allowing the same commitment to be spent again. Preserve the original record.
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
@@ -135,12 +162,12 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const claim = await ensureCostDeletionAuditEvent({
     costId: doc._id,
     actor: user.id,
+    expectedUpdatedAt: doc.updatedAt,
     oldValue: { amount: doc.amount, note: doc.note },
   });
   if (!claim.claimed && claim.actor !== String(user.id)) {
     throw new HttpError(409, "Another authorized user already committed this deletion. Its audit history is being finalized.");
   }
-  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   const pauseAfterClaim = isTestDb ? Math.min(Number(req.nextUrl.searchParams.get("_test_pause_after_delete_claim_ms")) || 0, 1000) : 0;
   if (pauseAfterClaim > 0) await new Promise((resolve) => setTimeout(resolve, pauseAfterClaim));
   const injectedFailure = isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "before"
