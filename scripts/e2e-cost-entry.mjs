@@ -15,6 +15,87 @@ import { requireLocalBase } from "./db-guard.mjs";
 import { MongoClient, ObjectId } from "mongodb";
 import * as XLSX from "xlsx";
 import { readFileSync } from "node:fs";
+
+// This is deliberately a source-level runtime mutant, not a second Next build. The focused
+// suite drives the compiled route, whereas this mode extracts the exact private helper below,
+// replaces only its post-persist conditional fence, and executes both versions against the same
+// in-memory collection. It therefore remains runnable when a disposable Next build cannot fetch
+// Google Fonts or start a server. The expected mutant result is non-zero: a Pending Formula row
+// survives after its simulated Batch confirmation rejects.
+if (process.env.FORMULA_POST_PERSIST_MUTANT === "1") {
+  const rulesSource = readFileSync(new URL("../src/lib/rules.ts", import.meta.url), "utf8");
+  const helperStart = rulesSource.indexOf("async function persistFormulaReservation(");
+  const helperEnd = rulesSource.indexOf("\nasync function cancelFormulaReservation(", helperStart);
+  const helper = helperStart >= 0 && helperEnd > helperStart ? rulesSource.slice(helperStart, helperEnd) : "";
+  const postPersistStart = helper.indexOf("  if (durableEntry.batch) {");
+  const braceEnd = (text, opening) => {
+    let depth = 0, quote = "", escaped = false;
+    for (let i = opening; i < text.length; i++) {
+      const char = text[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === quote) quote = "";
+        continue;
+      }
+      if (char === "'" || char === '"' || char === "`") { quote = char; continue; }
+      if (char === "{") depth++;
+      if (char === "}" && --depth === 0) return i;
+    }
+    return -1;
+  };
+  const postPersistEnd = postPersistStart < 0 ? -1 : braceEnd(helper, helper.indexOf("{", postPersistStart));
+  const toExecutable = (candidate) => candidate
+    .replace("entry: CostEntryDraft,", "entry,")
+    .replace("options: { simulateAmbiguousAfterCreate?: boolean } = {},", "options = {},")
+    .replace(") as CostEntryDraft;", ");");
+  const execute = async (candidate) => {
+    const rows = new Map();
+    let confirmations = 0;
+    function Entry() { this.validateSync = () => null; }
+    Entry.collection = {
+      insertOne: async (row) => { rows.set(String(row._id), row); },
+      deleteOne: async (filter) => {
+        const row = rows.get(String(filter._id));
+        const matches = !!row && String(row.batch) === String(filter.batch)
+          && row.reservation_kind === filter.reservation_kind;
+        if (matches) rows.delete(String(filter._id));
+        return { deletedCount: matches ? 1 : 0 };
+      },
+    };
+    const Types = { ObjectId: class { constructor(value) { this.value = String(value); } toString() { return this.value; } } };
+    const makePersist = new Function("CostEntry", "readBackCostEntry", "Types", "confirmBatchAcceptingFinanceWork",
+      `${toExecutable(candidate)}\nreturn persistFormulaReservation;`);
+    const persist = makePersist(Entry, async () => null, Types, async () => {
+      confirmations++;
+      throw new Error("simulated post-persist Batch deletion fence");
+    });
+    let thrown = null;
+    try {
+      await persist({ _id: "formula-post-persist-mutant", batch: "batch-being-deleted", reservation_kind: "Formula" });
+    } catch (error) {
+      thrown = error;
+    }
+    return { confirmations, thrown, stranded: rows.has("formula-post-persist-mutant") };
+  };
+  if (!helper || postPersistStart < 0 || postPersistEnd < 0
+      || (helper.match(/await confirmBatchAcceptingFinanceWork\(durableEntry\.batch\);/g) ?? []).length !== 1) {
+    console.error("FAIL formula post-persist mutant setup: the exact helper/fence could not be uniquely located");
+    process.exit(2);
+  }
+  const normal = await execute(helper);
+  const mutant = await execute(helper.slice(0, postPersistStart) + helper.slice(postPersistEnd + 1));
+  const normalProtected = normal.confirmations === 1 && !!normal.thrown && !normal.stranded;
+  const mutantFailsGuarantee = mutant.confirmations === 0 && !mutant.thrown && mutant.stranded;
+  console.log(`formula post-persist normal: confirmation=${normal.confirmations} thrown=${!!normal.thrown} stranded=${normal.stranded}`);
+  console.error(`formula post-persist mutant: confirmation=${mutant.confirmations} thrown=${!!mutant.thrown} stranded=${mutant.stranded}`);
+  if (!normalProtected || !mutantFailsGuarantee) {
+    console.error("FAIL formula post-persist mutant: harness did not distinguish the real confirmation from its removal");
+    process.exit(2);
+  }
+  console.error("FAIL formula post-persist mutant: removed final conditional confirmation leaves a Formula reservation stranded");
+  process.exit(1);
+}
 // QA-1966: never write through a BASE_URL nobody checked. This suite creates cost heads, posts
 // money and decides approvals; run against a non-local address it would do all three on production.
 const BASE = requireLocalBase("e2e-cost-entry", process.env.BASE_URL || "http://localhost:3000/erp");
