@@ -4286,15 +4286,51 @@ for (const file of walk(root)) {
   const candidateCoordinatorPass = (tab.match(/<CandidateResults\b[\s\S]{0,160}?operationCoordinator=\{closureOperationCoordinator\}/g) ?? []).length === 1;
   const childWritesCoordinated = portalCoordinatorPass && candidateCoordinatorPass
     && candidate.includes('beginOperation("candidate-result")')
-    && candidate.includes("await refreshAfterOperation(started);")
+    && candidate.includes("if (!await refreshAfterOperation(started)) return;")
     && candidate.includes("const operationBusy = !!operationCoordinator?.busy;")
     && portal.includes('beginOperation("portal-id-save")')
     && portal.includes('beginOperation("portal-id-recovery")')
     && portal.includes("await Promise.resolve(onChanged?.(started));");
 
+  // A child result write is not complete just because its PUT returned 200. Its grid and the
+  // parent closure can both still be stale, so every result/certificate writer must stop before
+  // clearing a refusal, announcing success, or closing a drawer when either read-back fails.
+  const candidateLoadReportsOutcome = candidate.includes("const load = async (): Promise<boolean>")
+    && candidate.includes("const resultsRefreshed = await load();")
+    && candidate.includes("if (!resultsRefreshed)")
+    && candidate.includes("return false;")
+    && candidate.includes("Saved and refreshed candidate results, but the batch summary could not be refreshed.");
+  const resultWriteOperations = [
+    "candidate-certificate-attach", "candidate-portal-link", "candidate-result",
+    "candidate-results-bulk", "candidate-certificate", "candidate-certificate-upload",
+  ];
+  const candidateOperationSegment = (operation) => {
+    const start = candidate.indexOf(`beginOperation("${operation}")`);
+    if (start < 0) return "";
+    const next = candidate.indexOf("beginOperation(", start + 1);
+    return candidate.slice(start, next < 0 ? candidate.length : next);
+  };
+  const resultWritesGateSuccessOnRefresh = resultWriteOperations.every((operation) =>
+    /if \(!await refreshAfterOperation\(started\)\) return(?: false)?;/.test(candidateOperationSegment(operation)));
+  const inlineCertificateWritesGateSuccessOnRefresh = candidate.includes('beginOperation("candidate-certificate-remove")')
+    && candidate.includes('beginOperation("candidate-certificate-issue")')
+    && (candidate.match(/if \(!await refreshAfterOperation\(started\)\) return;/g) ?? []).length >= 7;
+  const stagedCertificateWritesStayCoordinated = candidate.includes('beginOperation("candidate-certificate-stage")')
+    && candidate.includes('beginOperation("candidate-certificate-attach")')
+    && candidate.includes('beginOperation("candidate-certificate-discard")');
+  const completionProjectionFreezesCandidateControls = tab.includes("completionFrozen={completedInThisClosure}")
+    && candidate.includes("const resultControlsFrozen = completionFrozen || batchClosedByStatus;")
+    && candidate.includes("const closed = resultControlsFrozen || !mayMark;")
+    && candidate.includes("mayMark && !resultControlsFrozen")
+    && candidate.includes("disabled={resultControlsFrozen || operationBusy || certBusy")
+    && candidate.includes("disabled={resultControlsFrozen || uploading || operationBusy}")
+    && candidate.includes("disabled={resultControlsFrozen || operationBusy}>Generate &amp; issue</Btn>");
+
   const ok = mutexBeforeWrite && awaitedReadback && dirtyProtected && parentRefreshSignals && batchBound && completionGatePaintsImmediately
     && sharedBusySurface && !missingFromBusySurface.length && !escapedBusyControls.length
-    && localFeedback && saveIndependent && childWritesCoordinated;
+    && localFeedback && saveIndependent && childWritesCoordinated && candidateLoadReportsOutcome
+    && resultWritesGateSuccessOnRefresh && inlineCertificateWritesGateSuccessOnRefresh
+    && stagedCertificateWritesStayCoordinated && completionProjectionFreezesCandidateControls;
   if (ok) passed++;
   else {
     failed++;
@@ -4308,6 +4344,11 @@ for (const file of walk(root)) {
       + ", controls outside busy surface=" + JSON.stringify(missingFromBusySurface)
       + ", controls without exact busy gate=" + JSON.stringify(escapedBusyControls)
       + ", CandidateResults/PortalIdGaps use the same coordinator=" + childWritesCoordinated
+      + ", candidate load propagates success/failure=" + candidateLoadReportsOutcome
+      + ", named result/certificate writers gate UI success on refresh=" + resultWritesGateSuccessOnRefresh
+      + ", inline certificate writers gate UI success on refresh=" + inlineCertificateWritesGateSuccessOnRefresh
+      + ", certificate stage/attach/discard share coordinator=" + stagedCertificateWritesStayCoordinated
+      + ", local certification completion freezes candidate result/certificate controls=" + completionProjectionFreezesCandidateControls
       + ", local saving/saved/error feedback=" + localFeedback
       + ", Save independent of sign-off prerequisites=" + saveIndependent + ")"
       + " - a double-click can race two full-form date patches, or a background GET can erase"

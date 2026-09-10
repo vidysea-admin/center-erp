@@ -71,6 +71,21 @@ const closureSwitchBatch = (await req(admin, "POST", "/api/batches", {
   location: loc._id, program: prog._id, trainer: trainer._id, room: room._id,
   planned_start: switchStart.toISOString().slice(0, 10), target_size: 1,
 }, 201)).data.item;
+// QA-2420 cycle 4 needs an ordinary (not Admin-force) certification completion path with a
+// candidate grid still mounted. Keep its candidate name independent of `s`: the candidate-list
+// fixture below intentionally counts only the three Fresh + one Enrolled names carrying that stamp.
+const certCompletionBatch = (await req(admin, "POST", "/api/batches", {
+  location: loc._id, program: prog._id, trainer: trainer._id, room: room._id,
+  planned_start: today(), target_size: 1,
+}, 201)).data.item;
+const certCompletionCandidate = (await req(admin, "POST", "/api/candidates", {
+  name: "TEST-QA2420 Ordinary Completion " + Date.now(), phone: phone("65"), location: loc._id, program: prog._id,
+}, 201)).data.item;
+const certCompletionMember = (await req(admin, "POST", `/api/batches/${certCompletionBatch._id}/members`, { candidate: certCompletionCandidate._id }, 201)).data.item;
+await req(admin, "PATCH", `/api/members/${certCompletionMember._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/candidates/${certCompletionCandidate._id}`, { sidh_candidate_id: "CAN_" + String(Date.now()).slice(-8) }, 200);
+await req(admin, "POST", `/api/batches/${certCompletionBatch._id}/transition`, { target: "Ready" }, 200);
+await req(admin, "POST", `/api/batches/${certCompletionBatch._id}/transition`, { target: "Active" }, 200);
 
 let browser;
 try {
@@ -201,9 +216,17 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   };
   releaseHeldResultPut();
   await page.waitForFunction(() => !/Saving closure information/i.test(document.body.innerText), undefined, { timeout: 30000 }).catch(() => {});
-  ok("QA-2420: a child result mutation first holds the shared coordinator and cannot strand a competing Closure Save",
-    childFirstLock.childPuts === 1 && childFirstLock.closureSaveDisabled && childFirstLock.closurePuts === 1,
-    JSON.stringify(childFirstLock));
+  const childFirstResult = await req(admin, "GET", resultPath(batch._id));
+  const childFirstSettled = {
+    coordinatorCleared: await assessmentSave().isEnabled(),
+    childResult: childFirstResult.data?.items?.find((i) => String(i.member) === String(mem._id))?.result?.result,
+    closurePuts: heldPutCount,
+  };
+  ok("QA-2420: a child result mutation first holds the shared coordinator, then clears it so Closure Save re-enables with the child result persisted",
+    childFirstLock.childPuts === 1 && childFirstLock.closureSaveDisabled
+      && childFirstSettled.coordinatorCleared && childFirstSettled.childResult === "Fail"
+      && childFirstSettled.closurePuts === 1,
+    JSON.stringify({ ...childFirstLock, ...childFirstSettled }));
   await page.unroute(isPath(batch._id, resultPath));
 
   // A failed write must leave the typed value available for retry and must never announce success.
@@ -356,6 +379,55 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     JSON.stringify({ url: page.url(), oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
   await page.unroute(putA);
   await page.unroute(isPath(batch._id, parentPath));
+
+  // Ordinary certification completion (not the Admin force escape hatch) writes its own closure
+  // read-back before asking the parent to refresh. Make that final parent fetch fail: the local
+  // completion projection must still freeze the mounted candidate result and certificate controls
+  // immediately, rather than letting a stale Active parent prop reopen one writable paint.
+  await openClosure(certCompletionBatch._id);
+  await page.getByRole("button", { name: "Start per-candidate marking", exact: true }).click();
+  const ordinaryFail = page.getByRole("button", { name: "Fail", exact: true }).first();
+  await ordinaryFail.waitFor({ timeout: 30000 });
+  await ordinaryFail.click();
+  // The completion-plan fetch is intentionally separate from a result refresh. Reopen this real
+  // route after the child write so its unmarked precondition is freshly derived before pressing
+  // the ordinary Assessment completion door.
+  await openClosure(certCompletionBatch._id);
+  await page.getByRole("button", { name: "Fail", exact: true }).first().waitFor({ timeout: 30000 });
+  const ordinaryMarks = page.getByRole("button", { name: "Mark Completed", exact: true });
+  await page.waitForFunction(() => {
+    const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
+    return !!buttons[0] && !buttons[0].disabled;
+  }, undefined, { timeout: 30000 }).catch(() => {});
+  await ordinaryMarks.first().click();
+  await page.getByRole("status").filter({ hasText: "Assessment marked completed." }).waitFor({ timeout: 30000 }).catch(() => {});
+  await page.waitForFunction(() => {
+    const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
+    return !!buttons[1] && !buttons[1].disabled;
+  }, undefined, { timeout: 30000 }).catch(() => {});
+  await page.route(isPath(certCompletionBatch._id, parentPath), async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 ordinary certification parent refresh failure" }) });
+    }
+    return route.continue();
+  });
+  await ordinaryMarks.nth(1).click();
+  await page.getByRole("alert").filter({ hasText: "batch summary could not be refreshed" }).waitFor({ timeout: 30000 }).catch(() => {});
+  const ordinaryClosure = await req(admin, "GET", closurePath(certCompletionBatch._id));
+  const ordinaryFreeze = {
+    ordinaryCertificationPersisted: ordinaryClosure.data?.closure?.certification_status,
+    parentRefreshFailureVisible: /batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
+    resultButtonDisabled: await ordinaryFail.isDisabled(),
+    candidateIdDisabled: await page.getByPlaceholder("Candidate ID").isDisabled(),
+    bulkCertificateInputDisabled: await page.locator('input[type="file"][multiple]').isDisabled(),
+  };
+  ok("QA-2420: ordinary certification completion freezes candidate result/certificate controls immediately even when the parent refresh fails",
+    ordinaryFreeze.ordinaryCertificationPersisted === "Completed"
+      && ordinaryFreeze.parentRefreshFailureVisible
+      && ordinaryFreeze.resultButtonDisabled && ordinaryFreeze.candidateIdDisabled
+      && ordinaryFreeze.bulkCertificateInputDisabled,
+    JSON.stringify(ordinaryFreeze));
+  await page.unroute(isPath(certCompletionBatch._id, parentPath));
 }
 
 // QA-1248: wait for the list to have SETTLED, not for a stopwatch. The page fetches limit=2000

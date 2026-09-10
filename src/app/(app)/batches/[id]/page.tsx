@@ -3968,6 +3968,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       {perCandidate && (
         <CandidateResults batchId={batchId} batch={batch} error={error} setError={setError}
           operationCoordinator={closureOperationCoordinator}
+          completionFrozen={completedInThisClosure}
           onChanged={async () => {
             const refreshed = await load([], batchId);
             if (refreshed !== "loaded") return false;
@@ -4338,7 +4339,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
 }
 
 // ---------- Per-candidate assessment & certification (RPL M17/M18) ----------
-function CandidateResults({ batchId, batch, error, setError, onChanged, operationCoordinator }: any) {
+function CandidateResults({ batchId, batch, error, setError, onChanged, operationCoordinator, completionFrozen }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [reasons, setReasons] = useState<any[]>([]);
@@ -4384,7 +4385,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
   //   batchClosedByStatus - is this BATCH finished?
   //   mayMark             - may THIS PERSON mark?
   const batchClosedByStatus = ["Completed", "Cancelled"].includes(batch?.status);
-  const closed = batchClosedByStatus || !mayMark;
+  // The parent refresh after ordinary certification completion can fail. Its persisted closure
+  // read-back has nevertheless completed, so keep this grid frozen from the local projection
+  // until the parent status catches up rather than offering one stale, writable paint.
+  const resultControlsFrozen = completionFrozen || batchClosedByStatus;
+  const closed = resultControlsFrozen || !mayMark;
   // -108: bulk upload is preview-first — the staged files and their proposed mapping, editable
   // before anything is written. Umesh: "agar koi wrong auto map hua ya nahi map ho paye toh preview
   // me map kar sakte hain, har certificate ke aligned."
@@ -4396,11 +4401,29 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
   const beginOperation = (operation: string) => operationCoordinator?.begin(operation) ?? { token: -1, batchId, operation };
   const operationIsCurrent = (started: any) => !operationCoordinator || operationCoordinator.current(started);
   const finishOperation = (started: any) => operationCoordinator?.finish(started);
-  const refreshAfterOperation = async (started: any) => {
+  // Every child write is only a visible success after both the result grid and the parent closure
+  // have read back. Returning false lets each caller retain its current error/drawer instead of
+  // clearing evidence for a write whose final state we could not prove to the operator.
+  const refreshAfterOperation = async (started: any): Promise<boolean> => {
     if (!operationIsCurrent(started)) return false;
-    await load();
+    const resultsRefreshed = await load();
+    if (!resultsRefreshed) {
+      if (operationIsCurrent(started)) report("Saved, but candidate results could not be refreshed. Reload before continuing.");
+      return false;
+    }
     if (!operationIsCurrent(started)) return false;
-    return (await Promise.resolve(onChanged?.(started))) !== false && operationIsCurrent(started);
+    try {
+      const parentRefreshed = await Promise.resolve(onChanged?.(started));
+      if (!operationIsCurrent(started)) return false;
+      if (parentRefreshed === false) {
+        report("Saved and refreshed candidate results, but the batch summary could not be refreshed. Reload before continuing.");
+        return false;
+      }
+      return true;
+    } catch (e: any) {
+      if (operationIsCurrent(started)) fail(e);
+      return false;
+    }
   };
 
   // 2026-08-14 (CEO 49:33): "sare certificate ek folder mein ID ke saath — upload hote
@@ -4477,11 +4500,12 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
     try {
       const data = await api(`/api/batches/${batchId}/certificates`, { method: "POST", json: { confirm: true, pairs, discard } });
       if (!operationIsCurrent(started)) return;
+      if (!await refreshAfterOperation(started)) return;
+      if (!operationIsCurrent(started)) return;
+      if (!await loadLinkPlan()) { report("Certificates attached and results refreshed, but portal-ID readiness could not be refreshed. Reload before continuing."); return; }
       setCertUpload(data); setCertOk(true);
       setMapping(null);
       setGridError(null);
-      await refreshAfterOperation(started);
-      if (operationIsCurrent(started)) await loadLinkPlan();
     } catch (e: any) { fail(e); }
     finally { setUploading(false); finishOperation(started); }
   }
@@ -4503,7 +4527,15 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
   }
 
   // -108: the roster's portal-ID readiness — the one fact that explained Manish's eight red lines.
-  const loadLinkPlan = () => api(`/api/batches/${batchId}/link-portal-ids`).then(setLinkPlan).catch(() => setLinkPlan(null));
+  const loadLinkPlan = async (): Promise<boolean> => {
+    try {
+      setLinkPlan(await api(`/api/batches/${batchId}/link-portal-ids`));
+      return true;
+    } catch {
+      setLinkPlan(null);
+      return false;
+    }
+  };
   async function linkPortalIds() {
     const started = beginOperation("candidate-portal-link");
     if (!started) return;
@@ -4511,10 +4543,10 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
     try {
       const res = await api(`/api/batches/${batchId}/link-portal-ids`, { method: "POST" });
       if (!operationIsCurrent(started)) return;
-      setCertUpload(null);
-      await refreshAfterOperation(started);
+      if (!await refreshAfterOperation(started)) return;
       if (!operationIsCurrent(started)) return;
-      await loadLinkPlan();
+      if (!await loadLinkPlan()) { report("Portal IDs linked and results refreshed, but portal-ID readiness could not be refreshed. Reload before continuing."); return; }
+      setCertUpload(null);
       if (res.linked) setLinkNote(`${res.linked} portal ID${res.linked === 1 ? "" : "s"} linked from the government imports — those certificates will now match by file name.`);
       if (!res.linked) report(res.conflicts?.length
         ? `Nothing linked — ${res.conflicts.length} candidate(s) have conflicting portal IDs, left untouched. Fix them on the candidate record.`
@@ -4529,31 +4561,43 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
   // qualified while marking results. Same existing attendance API, joined by member_id.
   const [hoursBy, setHoursBy] = useState<Map<string, any>>(new Map());
   const [attMeta, setAttMeta] = useState<any>(null); // -109: the bar, whether the course is over, and the verdict breakdown
-  const load = () => Promise.all([
-    api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
-    api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
-    api(`/api/batches/${batchId}/attendance`).then((d) => {
+  const load = async (): Promise<boolean> => {
+    try {
+      await Promise.all([
+        api(`/api/batches/${batchId}/results`).then((d) => { setItems(d.items); setSummary(d.summary); }),
+        api("/api/master-lists/failure-reasons").then((d) => setReasons(d.items)).catch(() => setReasons([])),
+        api(`/api/batches/${batchId}/attendance`).then((d) => {
       // A-04: this picker is an ALLOW-LIST, so a field the server starts sending is a field the
       // screen silently never sees. `roster_count` and `left_count` were added to the route and the
       // sentence below was written to print them - and rendered nothing, because they stopped here.
       // Found by looking at the screen, not by the pins: the API assertions passed the whole time.
       setAttMeta({ required_hours: d.required_hours, course_finished: d.course_finished, portal_working_days: d.portal_working_days, verdict_counts: d.verdict_counts ?? {}, awaiting_match_rows: d.awaiting_match_rows ?? 0, roster_count: d.roster_count ?? null, left_count: d.left_count ?? 0 });
-      setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours, verdict: m.verdict }])));
-    }).catch(() => {}),
-  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
+          setHoursBy(new Map((d.members ?? []).map((m: any) => [String(m.member_id), { qualified: m.qualified, attended_hours: m.attended_hours, basis: m.basis, required_hours: d.required_hours, verdict: m.verdict }])));
+        }).catch(() => {}),
+      ]);
+      return true;
+    } catch (e: any) {
+      fail(e);
+      return false;
+    } finally {
+      setLoaded(true);
+    }
+  };
   useEffect(() => { load(); loadLinkPlan(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function mark(member: string, patch: any) {
+  async function mark(member: string, patch: any): Promise<boolean> {
     const started = beginOperation("candidate-result");
-    if (!started) return;
+    if (!started) return false;
     try {
       await api(`/api/batches/${batchId}/results`, { method: "PUT", json: { rows: [{ member, assessed_on: bulk.assessed_on, assessor: bulk.assessor || undefined, ...patch }] } });
-      if (!operationIsCurrent(started)) return;
+      if (!operationIsCurrent(started)) return false;
+      if (!await refreshAfterOperation(started)) return false;
       clearCardError(member); setGridError(null);
-      await refreshAfterOperation(started);
+      return true;
     } catch (e: any) {
       const m = fail(e);
       setCardErrors((c) => ({ ...c, [member]: m }));
+      return false;
     } finally { finishOperation(started); }
   }
   async function bulkApply(rows: any[]) {
@@ -4576,6 +4620,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
       // unit exists to remove, and it contradicted this component's own comment ("clears on that
       // card's next successful mark"), which was true only for the single-candidate path. Every
       // member this call actually updated gets its card cleared, exactly as mark() does.
+      if (!await refreshAfterOperation(started)) return;
       const failed = new Set(errs.map((e) => String(e?.member)));
       setCardErrors((c) => {
         const n = { ...c };
@@ -4591,13 +4636,16 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
         // …and the page-top banner the same report() wrote, or the two surfaces disagree (QA-877).
         setGridError(null); setError("");
       }
-      await refreshAfterOperation(started);
     } catch (e: any) { fail(e); } finally { finishOperation(started); }
   }
   async function certPatch(resultId: string, patch: any) {
     const started = beginOperation("candidate-certificate");
     if (!started) return;
-    try { setGridError(null); await api(`/api/results/${resultId}`, { method: "PATCH", json: patch }); await refreshAfterOperation(started); }
+    try {
+      await api(`/api/results/${resultId}`, { method: "PATCH", json: patch });
+      if (!await refreshAfterOperation(started)) return;
+      setGridError(null);
+    }
     catch (e: any) { fail(e); } finally { finishOperation(started); }
   }
 
@@ -4616,7 +4664,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
       });
       if (!operationIsCurrent(started)) return;
       await api(`/api/results/${i.result._id}`, { method: "PATCH", json: { certificate_file: url } });
-      await refreshAfterOperation(started);
+      if (!await refreshAfterOperation(started)) return;
     } catch (e: any) { fail(e); }
     finally { setCertBusy(null); finishOperation(started); }
   }
@@ -4945,7 +4993,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                       if (reason === null) return;
                       const started = beginOperation("candidate-certificate-remove");
                       if (!started) return;
-                      try { await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } }); setGridError(null); await refreshAfterOperation(started); }
+                      try {
+                        await api(`/api/results/${i.result._id}/certificate`, { method: "DELETE", json: { reason } });
+                        if (!await refreshAfterOperation(started)) return;
+                        setGridError(null);
+                      }
                       catch (e: any) { fail(e); } finally { finishOperation(started); }
                     }} disabled={operationBusy}>remove</button>
                 )}
@@ -4955,11 +5007,11 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                 may not mark" made the upload control render MORE often, not less - and both
                 certificate paths push the file to STORAGE before the server's 403. The permission is
                 asked on its own; the status condition keeps the meaning it always had. */}
-            {mayMark && (!batchClosedByStatus || !i.result?.certificate_file) ? (
+            {mayMark && !resultControlsFrozen ? (
               <label className="cursor-pointer rounded-lg border border-blue-600 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50">
                 {certBusy === String(i.result?._id) ? "Uploading…" : i.result?.certificate_file ? "Replace" : "⬆ Upload"}
                 <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden"
-                  disabled={operationBusy || certBusy === String(i.result?._id)}
+                  disabled={resultControlsFrozen || operationBusy || certBusy === String(i.result?._id)}
                   onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) uploadOneCertificate(i, f); }} />
               </label>
             ) : null}
@@ -5044,7 +5096,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                 BUTTON say what pressing it will actually do, which on that batch is settle the
                 certificate NUMBERS the header is already complaining are missing. One predicate per
                 sentence, and the label names its own subject. */}
-            <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={!passes.length}>
+            <Btn small onClick={() => { setCertForm({ certificate_date: toInputDate(new Date()), prefix: "RPL/2026/", numbers: {} }); setCertDrawer(true); }} disabled={resultControlsFrozen || !passes.length}>
               {certReady.length
                 ? `Issue certificates (${certReady.length})`
                 : certNoNumber.length
@@ -5099,7 +5151,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
               {(linkPlan.blocking ?? 0) > 0 && (linkPlan.linkable_blocking ?? 0) > 0 && (
                 <span className="ml-1">
                   The portal attendance already imported names <b>{linkPlan.linkable_blocking}</b> of them.
-                  <button onClick={linkPortalIds} disabled={operationBusy || linking}
+                  <button onClick={linkPortalIds} disabled={resultControlsFrozen || operationBusy || linking}
                     className="ml-2 rounded-lg bg-blue-600 px-2.5 py-1 font-medium text-white hover:bg-blue-700 disabled:bg-blue-300">
                     {linking ? "Linking…" : `Link portal IDs (${linkPlan.linkable?.length ?? 0})`}
                   </button>
@@ -5229,9 +5281,9 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                 disappeared instead of refusing, so the reason takes its place, in the same words the
                 Closure card already uses for Save and Mark Completed. */}
             {mayMark ? (
-              <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${uploading || operationBusy ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
+              <label className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-medium text-white ${resultControlsFrozen || uploading || operationBusy ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}>
                 {uploading ? "Reading…" : "⬆ Upload certificates (bulk)"}
-                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={uploading || operationBusy}
+                <input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" disabled={resultControlsFrozen || uploading || operationBusy}
                   onChange={(e) => { uploadCertificates(e.target.files); e.target.value = ""; }} />
               </label>
             ) : (
@@ -5433,7 +5485,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                       {st.markPass && (
                         <button className="rounded-lg border border-amber-500 px-2 py-0.5 font-medium text-amber-800 hover:bg-amber-100"
                           onClick={async () => {
-                            await mark(st.markPass, { result: "Pass" });
+                            if (!await mark(st.markPass, { result: "Pass" })) return;
                             const fresh = await api(`/api/batches/${batchId}/results`).then((d) => d.items).catch(() => null);
                             if (fresh) {
                               const row = fresh.find((x: any) => String(x.member) === String(st.markPass));
@@ -5525,7 +5577,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
                 issued++;
               } catch (e: any) { failures.push(`${p.candidate?.name ?? "This candidate"}: ${e?.message ?? String(e)}`); }
             }
-            await refreshAfterOperation(started);
+            if (!await refreshAfterOperation(started)) return;
             const names = (xs: string[]) => `${xs.slice(0, 3).join(" · ")}${xs.length > 3 ? ` · +${xs.length - 3} more` : ""}`;
             const skippedClause = skipped.length
               ? ` · ${skipped.length} left out, no certificate number typed yet (${names(skipped)})` : "";
@@ -5550,7 +5602,7 @@ function CandidateResults({ batchId, batch, error, setError, onChanged, operatio
             setGridError(null); setError("");
             setCertDrawer(false);
             } finally { finishOperation(started); }
-          }} disabled={operationBusy}>Generate &amp; issue</Btn>
+          }} disabled={resultControlsFrozen || operationBusy}>Generate &amp; issue</Btn>
         </div>
       </Drawer>
     </Section>
