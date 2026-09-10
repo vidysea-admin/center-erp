@@ -4190,6 +4190,59 @@ for (const file of walk(root)) {
   }
 }
 
+// ---- QA-2420: Closure Save is one awaited, observable transaction ----
+// A Closure Save sends every date in the form. With controls left live, two presses could put two
+// full-form PATCHes in flight and let the older response win; `load()` was also fire-and-forget, so
+// navigation or a background refresh could repaint stale data while the operator received no
+// acknowledgement. The server's Mark Completed gates are deliberately unrelated: Save must remain
+// available when students are unmarked or assessment/certification sign-off is not yet allowed.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const raw = fs.readFileSync(path.join(root, rel), "utf-8");
+  const src = stripComments(raw);
+  const tab = src.slice(src.indexOf("function ClosureTab("), src.indexOf("function CandidateResults("));
+  const save = tab.slice(tab.indexOf("async function saveClosure("), tab.indexOf("async function notifyAssessment("));
+  const load = tab.slice(tab.indexOf("const load = async"), tab.indexOf("useEffect(() =>", tab.indexOf("const load = async")));
+
+  const mutexBeforeWrite = save.indexOf("if (closureSaveInFlight.current) return;") >= 0
+    && save.indexOf("if (closureSaveInFlight.current) return;") < save.indexOf("await api(")
+    && save.includes("closureSaveInFlight.current = true;")
+    && save.includes("closureSaveInFlight.current = false;");
+  const awaitedReadback = save.includes("const refreshed = await load(true);")
+    && save.includes("await Promise.resolve(onChanged());")
+    && save.includes("setClosureSaveNotice(success);");
+  const dirtyProtected = load.includes("request !== latestClosureLoad.current")
+    && load.includes("forceForm || !closureFormDirty.current")
+    && tab.includes("closureFormDirty.current = true;")
+    && !tab.includes("onChange={(e) => setForm(");
+  const editorsFreeze = (tab.match(/disabled=\{[^}\n]*!!closureSaving[^}\n]*\}/g) ?? []).length >= 11;
+  const localFeedback = tab.includes('role="status" aria-live="polite"')
+    && tab.includes('role="alert"')
+    && tab.includes('Saving…')
+    && tab.includes('Assessment information saved.')
+    && tab.includes('Certification information saved.');
+  // The two plain Save controls carry only status/permission + in-flight gates. Result/certificate
+  // prerequisites belong exclusively to their neighbouring Mark Completed buttons.
+  const saveIndependent = tab.includes('kind="ghost" disabled={closed || !!closureSaving}')
+    && tab.includes('kind="ghost" disabled={!mayMarkTab || !!closureSaving}');
+
+  const ok = mutexBeforeWrite && awaitedReadback && dirtyProtected && editorsFreeze
+    && localFeedback && saveIndependent;
+  if (ok) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": Closure Save is not one awaited, operator-visible transaction"
+      + " (same-tick mutex before PUT=" + mutexBeforeWrite
+      + ", forced readback + parent refresh awaited=" + awaitedReadback
+      + ", dirty form/newest GET protected=" + dirtyProtected
+      + ", editors frozen while saving=" + editorsFreeze
+      + ", local saving/saved/error feedback=" + localFeedback
+      + ", Save independent of sign-off prerequisites=" + saveIndependent + ")"
+      + " - a double-click can race two full-form date patches, or a background GET can erase"
+      + " unsaved fields, while the operator cannot tell whether Save finished (QA-2420).");
+  }
+}
+
 // ---- -223: a failed fetch must never read as an empty answer ----
 // Three instances of this on ONE screen, and each cost something different:
 //   * loadBlockers 403s for anyone without `batches.manage`, the failure was swallowed, `blockers`

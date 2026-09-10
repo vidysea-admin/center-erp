@@ -3433,6 +3433,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
   const [closure, setClosure] = useState<any>(null);
   const [invoice, setInvoice] = useState<any>(null);
   const [form, setForm] = useState<any>({});
+  // QA-2420: Closure saves carry the whole date form. Keep one request in flight at a time so an
+  // older full-form patch cannot arrive after a newer click and win. The ref closes the same-tick
+  // double-click window before React has rendered the disabled state; the state is the operator's
+  // visible feedback and disables every closure editor while that snapshot is being persisted.
+  const closureSaveInFlight = useRef(false);
+  const [closureSaving, setClosureSaving] = useState<string | null>(null);
+  const [closureSaveNotice, setClosureSaveNotice] = useState("");
+  const [closureSaveError, setClosureSaveError] = useState("");
+  // Background refreshes (candidate marking, portal-id edits, parent reloads) must refresh the
+  // stored closure/status without erasing dates the operator has typed but not saved yet.
+  const closureFormDirty = useRef(false);
+  const latestClosureLoad = useRef(0);
   const [invForm, setInvForm] = useState<any>({});
   // QA-1831: the server-computed proposal. Null for anyone without finance.view - it is money.
   const [invProposal, setInvProposal] = useState<any>(null);
@@ -3496,19 +3508,44 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     } catch (e: any) { setError(e.message); }
     finally { setAdminBusy(false); }
   }
-  const load = () => api(`/api/batches/${batchId}/closure`).then((d) => {
-    setClosure(d.closure); setInvoice(d.invoice); setInvProposal(d.invoice_proposal ?? null);
-    setForm(d.closure ?? {}); setInvForm(d.invoice ?? {});
-    setLegacy(d.legacy !== false);
-    setSummary(d.results_summary ?? null);
-    // -157 (QA-462): -156 shipped this field and no component read it, so the gate it explains
-    // stopped certification deriving with nothing on screen to say why - the operator's first news
-    // was a 409 after pressing a button that looked live. A guard that changes what a screen will
-    // do explains itself on that screen.
-    setNoCan(Array.isArray(d.certification_blocked_no_can) ? d.certification_blocked_no_can : []);
-    if (d.legacy === false) setPerCandidate(true);
-  }).catch((e: any) => setError(e.message));
-  useEffect(() => { load(); }, [batchId]);
+  const updateClosureForm = (patch: Record<string, unknown>) => {
+    closureFormDirty.current = true;
+    setClosureSaveNotice("");
+    setClosureSaveError("");
+    setForm((current: any) => ({ ...current, ...patch }));
+  };
+  const load = async (forceForm = false): Promise<boolean> => {
+    const request = ++latestClosureLoad.current;
+    try {
+      const d = await api(`/api/batches/${batchId}/closure`);
+      // A GET begun before a newer refresh may finish last. Only the newest response may paint.
+      if (request !== latestClosureLoad.current) return true;
+      setClosure(d.closure); setInvoice(d.invoice); setInvProposal(d.invoice_proposal ?? null);
+      if (forceForm || !closureFormDirty.current) {
+        setForm(d.closure ?? {});
+        closureFormDirty.current = false;
+      }
+      setInvForm(d.invoice ?? {});
+      setLegacy(d.legacy !== false);
+      setSummary(d.results_summary ?? null);
+      // -157 (QA-462): -156 shipped this field and no component read it, so the gate it explains
+      // stopped certification deriving with nothing on screen to say why - the operator's first news
+      // was a 409 after pressing a button that looked live. A guard that changes what a screen will
+      // do explains itself on that screen.
+      setNoCan(Array.isArray(d.certification_blocked_no_can) ? d.certification_blocked_no_can : []);
+      if (d.legacy === false) setPerCandidate(true);
+      return true;
+    } catch (e: any) {
+      if (request === latestClosureLoad.current) setError(e.message);
+      return false;
+    }
+  };
+  useEffect(() => {
+    closureFormDirty.current = false;
+    setClosureSaveNotice("");
+    setClosureSaveError("");
+    void load(true);
+  }, [batchId]);
 
   // ---- -223: the four dates nobody ever sent ----
   // The card renders SIX date inputs. `Save` sent TWO. `mock_test_date`, `result_expected_date`,
@@ -3534,9 +3571,31 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     return out;
   };
 
-  async function saveClosure(patch: any) {
-    try { await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch }); load(); onChanged(); }
-    catch (e: any) { setError(e.message); }
+  async function saveClosure(patch: any, operation = "closure", success = "Closure information saved.") {
+    // React's disabled prop is not synchronous. The ref makes a double-click a single write even
+    // before the first state update paints, while disabled editors ensure the saved snapshot cannot
+    // change underneath the request.
+    if (closureSaveInFlight.current) return;
+    closureSaveInFlight.current = true;
+    setClosureSaving(operation);
+    setClosureSaveNotice("");
+    setClosureSaveError("");
+    setError("");
+    try {
+      await api(`/api/batches/${batchId}/closure`, { method: "PUT", json: patch });
+      closureFormDirty.current = false;
+      const refreshed = await load(true);
+      if (!refreshed) throw new Error("Saved, but the refreshed values could not be loaded. Reload this tab before editing again.");
+      await Promise.resolve(onChanged());
+      setClosureSaveNotice(success);
+    } catch (e: any) {
+      const message = e?.message || "The closure information could not be saved.";
+      setClosureSaveError(message);
+      setError(message);
+    } finally {
+      closureSaveInFlight.current = false;
+      setClosureSaving(null);
+    }
   }
 
   // QA-179: "trainer batayega ki kab aapki assessment date hai" — mails every enrolled candidate
@@ -3617,7 +3676,10 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         folder_centre: batch?.location?.code ?? batch?.location?.name ?? "", folder_batch: batch?.code ?? "", folder_kind: field === "result_file" ? "results" : "certificates",
         entity: "Batch", entity_id: batchId,
       });
-      saveClosure({ [field]: url });
+      await saveClosure(
+        { [field]: url },
+        field === "result_file" ? "result-upload" : "certificate-upload",
+        field === "result_file" ? "Result sheet saved." : "Certificate bundle saved.");
     } catch (err: any) { setError(err.message); }
   }
 
@@ -3670,6 +3732,16 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         <span className="cursor-help rounded-full border border-blue-300 px-1.5 text-[10px] font-bold text-blue-700"
           title="Assessment done moves the batch to Result Awaited; certification done marks it Completed. Nothing about money is needed for that. Invoice and dues are the later step that ends in Closed — a Completed batch can sit there indefinitely.">?</span>
       </div>
+      {(closureSaving || closureSaveNotice) && (
+        <div role="status" aria-live="polite" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {closureSaving ? "Saving closure information…" : closureSaveNotice}
+        </div>
+      )}
+      {closureSaveError && (
+        <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {closureSaveError}
+        </div>
+      )}
       {/* -116: the door Umesh asked for, ON THIS TAB. It is only offered when the ordinary buttons
           CANNOT fire — when they can, the honest path is to press them. */}
       {/* -206 (QA-678): this hid the Admin door exactly when everything the flag knows about was
@@ -3734,7 +3806,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           </span>
         ) : undefined}
       >
-        <div className="grid grid-cols-2 gap-3">
+        <fieldset disabled={!!closureSaving} className="grid grid-cols-2 gap-3">
           {/* -232 (QA-833): all six of these were typeable by a login whose Save is disabled - the
               operator could fill a date, press a dead Save and lose it, with nothing saying why.
               Same dead-control class as QA-712/723/754/775/785/791 on this very tab, in its
@@ -3742,7 +3814,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               `closed` is the one that already gates Save, so the box and its Save now agree. */}
           <Field label="Assessment date">
             <div className="flex items-center gap-2">
-              <input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => setForm({ ...form, assessment_date: e.target.value })} />
+              <input type="date" disabled={closed} className={inputCls} value={toInputDate(form.assessment_date)} onChange={(e) => updateClosureForm({ assessment_date: e.target.value })} />
               {/* QA-179: refuses server-side when there is no saved date yet — save it first. */}
               <span title={!closure?.assessment_date ? "Save the assessment date first" : "Email every enrolled candidate this date"}>
                 <Btn small kind="ghost" disabled={notifying || !closure?.assessment_date} onClick={notifyAssessment}>
@@ -3757,13 +3829,13 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               mock-test STATUS wording is still owed, so no status is invented here — only the facts he
               named. What already existed is not rebuilt: the assessment date above, pass/fail counts,
               the fail reason (Rule 44), the certificate number (Rule 46), the file, and the invoice. */}
-          <Field label="Mock test date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => setForm({ ...form, mock_test_date: e.target.value })} /></Field>
-          <Field label="Result expected (tentative)"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => setForm({ ...form, result_expected_date: e.target.value })} /></Field>
+          <Field label="Mock test date"><input type="date" disabled={closed || !!closureSaving} className={inputCls} value={toInputDate(form.mock_test_date)} onChange={(e) => updateClosureForm({ mock_test_date: e.target.value })} /></Field>
+          <Field label="Result expected (tentative)"><input type="date" disabled={closed || !!closureSaving} className={inputCls} value={toInputDate(form.result_expected_date)} onChange={(e) => updateClosureForm({ result_expected_date: e.target.value })} /></Field>
           <div />
           {legacy && !perCandidate && showLegacyEntry ? (
             <>
-              <Field label="Appeared (legacy batch-level)"><input type="number" disabled={closed} className={inputCls} value={form.appeared ?? ""} onChange={(e) => setForm({ ...form, appeared: +e.target.value })} /></Field>
-              <Field label="Passed (legacy batch-level)"><input type="number" disabled={closed} className={inputCls} value={form.passed ?? ""} onChange={(e) => setForm({ ...form, passed: +e.target.value })} /></Field>
+              <Field label="Appeared (legacy batch-level)"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.appeared ?? ""} onChange={(e) => updateClosureForm({ appeared: +e.target.value })} /></Field>
+              <Field label="Passed (legacy batch-level)"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.passed ?? ""} onChange={(e) => updateClosureForm({ passed: +e.target.value })} /></Field>
             </>
           ) : !legacy || perCandidate ? (
             <>
@@ -3773,7 +3845,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
           ) : (
             <p className="col-span-2 text-xs text-gray-500">Mark each candidate ("Start per-candidate marking") — Appeared/Passed derive from the marks. Batch-level entry exists only for legacy paper records.</p>
           )}
-        </div>
+        </fieldset>
         {/* DEC-4 (2026-08-13): dropped-but-passed never bill. Show the split whenever it exists. */}
         {!legacy && (closure?.dropped_passed ?? 0) > 0 && (
           <p className="mt-2 text-xs text-amber-700">
@@ -3789,14 +3861,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             not a sign-off, which the screen never said. */}
         <div className="mt-3 flex items-start gap-2">
           <span className="inline-flex flex-col gap-0.5">
-            <Btn small kind="ghost" disabled={closed}
-              onClick={() => saveClosure({ ...closureDatePatch(form), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}>Save</Btn>
-            <span className="text-[10px] font-medium text-gray-500">saves the dates — not a sign-off</span>
+            <Btn small kind="ghost" disabled={closed || !!closureSaving}
+              onClick={() => saveClosure(
+                { ...closureDatePatch(form), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) },
+                "assessment", "Assessment information saved.")}>Save</Btn>
+            <span className="text-[10px] font-medium text-gray-500">{closureSaving === "assessment" ? "Saving…" : "saves the dates — not a sign-off"}</span>
           </span>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
-              onClick={() => saveClosure({ ...closureDatePatch(form), assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) })}
-              disabled={closed || blockersFailed || closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
+              onClick={() => saveClosure(
+                { ...closureDatePatch(form), assessment_status: "Completed", assessment_date: form.assessment_date ?? new Date(), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) },
+                "assessment-complete", "Assessment marked completed.")}
+              disabled={closed || !!closureSaving || blockersFailed || closure?.assessment_status === "Completed" || (blockers?.unmarked?.length ?? 0) > 0}>Mark Completed</Btn>
             {closure?.assessment_status !== "Completed" && (blockers?.unmarked?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unmarked)}>
@@ -3845,11 +3921,11 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
           </span>
         </div>
-        <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
+        <ClosureFileSlot label="Result sheet" value={closure?.result_file} disabled={closed || !!closureSaving} onUpload={(e: any) => uploadClosureFile(e, "result_file")} />
       </Section>
       <Section title={`Certification — ${closure?.certification_status ?? "Pending"}`}>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Certification date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => setForm({ ...form, certification_date: e.target.value })} /></Field>
+        <fieldset disabled={!!closureSaving} className="grid grid-cols-2 gap-3">
+          <Field label="Certification date"><input type="date" disabled={closed} className={inputCls} value={toInputDate(form.certification_date)} onChange={(e) => updateClosureForm({ certification_date: e.target.value })} /></Field>
           {/* -120 (M4-14): the two dates after certification that his chain ends on.
               QA-1265 (client call 25/08, Umesh decided the same day): these two are gated on the
               RIGHT alone, never on completion. `closed` conflates two questions — "is this batch
@@ -3867,12 +3943,12 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               first, because a certificate is distributed AFTER the batch completes and the SIDH
               upload happens after that. There is a pin on this in check-user-copy.mjs now, because
               a comment alone did not survive one afternoon. */}
-          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => setForm({ ...form, certificate_distribution_date: e.target.value })} /></Field>
-          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => setForm({ ...form, sidh_uploaded_on: e.target.value })} /></Field>
+          <Field label="Certificate distribution date"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.certificate_distribution_date)} onChange={(e) => updateClosureForm({ certificate_distribution_date: e.target.value })} /></Field>
+          <Field label="Uploaded to SIDH portal on"><input type="date" disabled={!mayMarkTab} className={inputCls} value={toInputDate(form.sidh_uploaded_on)} onChange={(e) => updateClosureForm({ sidh_uploaded_on: e.target.value })} /></Field>
           {legacy && !perCandidate
-            ? <Field label="Certificates issued"><input type="number" disabled={closed} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => setForm({ ...form, certificates_issued: +e.target.value })} /></Field>
+            ? <Field label="Certificates issued"><input type="number" disabled={closed || !!closureSaving} className={inputCls} value={form.certificates_issued ?? ""} onChange={(e) => updateClosureForm({ certificates_issued: +e.target.value })} /></Field>
             : <Field label="Certificates issued"><div className={inputCls + " bg-gray-50 text-gray-700"}>{closure?.certificates_issued ?? 0} <span className="text-xs text-gray-400">derived</span></div></Field>}
-        </div>
+        </fieldset>
         {!legacy && summary && summary.passed > summary.certificates_issued && (
           <p className="mt-2 text-xs text-amber-700">{summary.passed - summary.certificates_issued} passed candidate(s) still need an issued certificate.</p>
         )}
@@ -3893,14 +3969,18 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 it — otherwise the boxes above accept a value that has no way to reach the server.
                 The permission half still refuses. Unchanged frozen dates ride along at their stored
                 values and the server treats them as the no-ops they are (sameStoredValue). */}
-            <Btn small kind="ghost" disabled={!mayMarkTab}
-              onClick={() => saveClosure({ ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}>Save</Btn>
-            <span className="text-[10px] font-medium text-gray-500">saves the dates — not a sign-off</span>
+            <Btn small kind="ghost" disabled={!mayMarkTab || !!closureSaving}
+              onClick={() => saveClosure(
+                { ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) },
+                "certification", "Certification information saved.")}>Save</Btn>
+            <span className="text-[10px] font-medium text-gray-500">{closureSaving === "certification" ? "Saving…" : "saves the dates — not a sign-off"}</span>
           </span>
           <span className="inline-flex flex-col gap-0.5">
             <Btn small
-              onClick={() => saveClosure({ ...closureDatePatch(form), certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) })}
-              disabled={closed || blockersFailed || closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
+              onClick={() => saveClosure(
+                { ...closureDatePatch(form), certification_status: "Completed", certification_date: form.certification_date ?? new Date(), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) },
+                "certification-complete", "Certification marked completed.")}
+              disabled={closed || !!closureSaving || blockersFailed || closure?.certification_status === "Completed" || (blockers?.unsettled?.length ?? 0) > 0 || closure?.assessment_status !== "Completed" || noCan.length > 0}>Mark Completed</Btn>
             {closure?.certification_status !== "Completed" && (blockers?.unsettled?.length ?? 0) > 0 && (
               <span className="text-[10px] font-medium text-amber-700"
                 title={personList(blockers.unsettled)}>
@@ -3944,7 +4024,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
             )}
           </span>
         </div>
-        <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
+        <ClosureFileSlot label="Certificate bundle" value={closure?.certificate_file} disabled={closed || !!closureSaving} onUpload={(e: any) => uploadClosureFile(e, "certificate_file")} />
       </Section>
       {/* QA-038 (checker): a Location/SPOC login saw the whole Invoice section with buttons the
           server refuses — money surfaces render only for the roles that hold them. */}

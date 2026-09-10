@@ -816,6 +816,17 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     JSON.stringify({ a: c3?.assessment_status, c: c3?.certification_status, s: await statusOf(d3._id) }));
   ok("-112: …and the hand press is still refused while that student is unmarked — the gate did not move",
     (await req("POST", `/api/batches/${d3._id}/transition`, { target: "Closing" })).status === 409);
+  // QA-2420: Save and sign-off answer different questions. The neighbouring Mark Completed button
+  // is intentionally blocked here, but an operator must still be able to record the dates they know.
+  const saveBeforeSignoff = await req("PUT", `/api/batches/${d3._id}/closure`, {
+    mock_test_date: today, result_expected_date: today,
+  });
+  const savedBeforeSignoff = await closureOf(d3._id);
+  ok("QA-2420: Closure Save persists dates while Mark Completed is correctly blocked by an unmarked student",
+    saveBeforeSignoff.status === 200 && !!savedBeforeSignoff?.mock_test_date && !!savedBeforeSignoff?.result_expected_date
+      && savedBeforeSignoff?.assessment_status !== "Completed",
+    JSON.stringify({ status: saveBeforeSignoff.status, mock: savedBeforeSignoff?.mock_test_date,
+      expected: savedBeforeSignoff?.result_expected_date, assessment: savedBeforeSignoff?.assessment_status }));
   // Marking the last student is all it takes — the same tick then derives both halves.
   await req("PUT", `/api/batches/${d3._id}/results`, { rows: [{ member: String(m3[1]._id), result: "Absent", assessed_on: today }] }, 200);
   const c3b = await closureOf(d3._id);
