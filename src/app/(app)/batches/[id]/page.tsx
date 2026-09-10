@@ -2055,7 +2055,10 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
     try {
       const parentRefreshed = await Promise.resolve(onChanged?.(started));
       if (!operationIsCurrent(started)) return false;
-      if (parentRefreshed === false) {
+      // The parent owns the batch summary. Anything except its explicit success means this child
+      // cannot prove the operator's screen is coherent; in particular, an old callback that
+      // resolves `undefined` must keep the typed draft and failure state rather than read as save.
+      if (parentRefreshed !== true) {
         setErr("Saved and refreshed portal ID status, but the batch summary could not be refreshed. Reload before continuing.");
         return false;
       }
@@ -2217,7 +2220,17 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
 
 function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   const [data, setData] = useState<any>(null);
-  const load = () => api(`/api/batches/${batchId}/attendance`).then(setData).catch((e: any) => setError(e.message));
+  // Keep the same truthful contract as the Closure child loaders: callers must be able to tell a
+  // mounted attendance response from a swallowed transport failure.
+  const load = async (): Promise<boolean> => {
+    try {
+      setData(await api(`/api/batches/${batchId}/attendance`));
+      return true;
+    } catch (e: any) {
+      setError(e.message);
+      return false;
+    }
+  };
   useEffect(() => { load(); }, [batchId]); // eslint-disable-line react-hooks/exhaustive-deps
   // -82 (Umesh, 15/08): "batch ke andar Attendance tab se bhi us batch ki attendance fill karne
   // ka option, that too bulk." A date-range × roster grid: every cell starts Present, the

@@ -57,10 +57,20 @@ for (let i = 0; i < 3; i++) {
   fresh.push((await req(admin, "POST", "/api/candidates", { name: `TEST-RC Fresh ${i} ${s}`, phone: phone("7" + i), location: loc._id, program: prog._id }, 201)).data.item);
 }
 // ...and one walked all the way onto an ACTIVE batch, so the Enrolled bucket has this suite's own row.
-const batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 1 }, 201)).data.item;  // target_size 1: the Ready gate needs 80% of the roster filled (roster_80pct), and this fixture puts exactly ONE candidate on the batch. At 5 it refused with 409 and the Enrolled arm never existed - which is the same hole QA-1245 named, arriving a second way.
+const batch = (await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, trainer: trainer._id, room: room._id, planned_start: today(), target_size: 2 }, 201)).data.item;  // The QA-2420 recovery fault needs two completed roster members: the ordinary typed-ID row and a distinct CAN-in-id_reference row. Keep capacity equal to that actual fixture population so its readiness gate is a real precondition, not a hidden rejection.
 const enrolledCand = (await req(admin, "POST", "/api/candidates", { name: `TEST-RC Enrolled ${s}`, phone: phone("88"), location: loc._id, program: prog._id }, 201)).data.item;
 const mem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: enrolledCand._id }, 201)).data.item;
+// QA-2420 cycle 6: this is a real batch member whose otherwise valid portal Candidate ID was
+// deliberately filed in id_reference. The rendered recovery POST must surface its own failure;
+// an arbitrary health-only candidate would never mount the recovery control on this batch.
+const misfiledCan = "CAN_2420" + String(Date.now()).slice(-6);
+const misfiledCand = (await req(admin, "POST", "/api/candidates", {
+  name: "TEST-QA2420 Misfiled Recovery " + Date.now(), phone: phone("67"), location: loc._id, program: prog._id,
+  id_reference: misfiledCan,
+}, 201)).data.item;
+const misfiledMem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: misfiledCand._id }, 201)).data.item;
 await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+await req(admin, "PATCH", `/api/members/${misfiledMem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
 await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
 // QA-2420 needs a second real batch for the browser's A -> B navigation attack. It shares the
@@ -80,14 +90,13 @@ ok("QA-2420 [precondition]: ordinary-completion fixture owns a distinct room", c
   JSON.stringify({ status: certCompletionRoomRes.status, room: certCompletionRoom?._id ?? null }));
 if (!certCompletionRoom?._id) throw new Error("QA-2420 ordinary-completion fixture room was not created; refusing to reuse another fixture's room");
 const certCompletionStart = new Date();
-certCompletionStart.setDate(certCompletionStart.getDate() + 90);
 const certCompletionBatchRes = await req(admin, "POST", "/api/batches", {
   location: loc._id, program: prog._id, trainer: trainer._id, room: certCompletionRoom._id,
-  planned_start: certCompletionStart.toISOString().slice(0, 10), target_size: 1,
+  planned_start: today(), target_size: 1,
 }, 201);
 const certCompletionBatch = certCompletionBatchRes.data.item;
 ok("QA-2420 [precondition]: ordinary-completion batch POST succeeds with its own _id before use", certCompletionBatchRes.status === 201 && !!certCompletionBatch?._id,
-  JSON.stringify({ status: certCompletionBatchRes.status, batch: certCompletionBatch?._id ?? null, room: certCompletionRoom._id, planned_start: certCompletionStart.toISOString().slice(0, 10) }));
+  JSON.stringify({ status: certCompletionBatchRes.status, batch: certCompletionBatch?._id ?? null, room: certCompletionRoom._id, planned_start: today() }));
 if (!certCompletionBatch?._id) throw new Error("QA-2420 ordinary-completion batch was not created; refusing to run the completion assertions on an overlapping fixture");
 const certCompletionCandidate = (await req(admin, "POST", "/api/candidates", {
   name: "TEST-QA2420 Ordinary Completion " + Date.now(), phone: phone("65"), location: loc._id, program: prog._id,
@@ -129,6 +138,9 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   const batchPath = (id) => `${BASE}/batches/${id}`;
   const closurePath = (id) => `/api/batches/${id}/closure`;
   const parentPath = (id) => `/api/batches/${id}`;
+  const attendancePath = (id) => `/api/batches/${id}/attendance`;
+  const portalHealthPath = "/api/candidates/portal-id-health";
+  const isPortalHealthPath = (url) => new URL(url).pathname.endsWith(portalHealthPath);
   const isPath = (id, suffix) => (url) => {
     const p = new URL(url).pathname;
     return p.endsWith(`/erp${suffix(id)}`) || p.endsWith(suffix(id));
@@ -140,8 +152,13 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     await closureTab.click();
     await page.getByLabel("Mock test date").waitFor({ timeout: 30000 });
   };
-  const assessmentSave = () => page.getByRole("button", { name: "Save", exact: true }).first();
-  const certificationSave = () => page.getByRole("button", { name: "Save", exact: true }).nth(1);
+  // Portal-ID rows also have a button named Save. Scope these controls to their actual cards so
+  // opening the portal list cannot silently turn a Closure assertion into a portal-ID assertion.
+  const closureCard = (title) => page.getByRole("heading", { name: title }).locator("xpath=ancestor::div[contains(@class, 'rounded-xl')][1]");
+  const assessmentSave = () => closureCard(/^Assessment —/).getByRole("button", { name: "Save", exact: true });
+  const certificationSave = () => closureCard(/^Certification —/).getByRole("button", { name: "Save", exact: true });
+  const portalRow = (candidateName) => page.getByText(candidateName, { exact: true })
+    .locator("xpath=ancestor::div[.//input[@placeholder='CAN_…']][1]");
   // `onChanged()` resolves after it schedules the parent batch update; wait for React to commit
   // that new prop rather than sampling the still-mounted Closure form in that same paint.
   // This remains a bounded assertion: a permanently writable frozen date returns false.
@@ -162,6 +179,21 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   const putA = isPath(batch._id, closurePath);
 
   await openClosure(batch._id);
+  // The Attendance mount itself is a child read. Its old promise swallowed a failed GET into
+  // undefined, making this failure invisible to any future caller awaiting the mount's outcome.
+  await page.route(isPath(batch._id, attendancePath), async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 attendance mount failure" }) });
+    }
+    return route.continue();
+  });
+  await page.getByRole("button", { name: "Attendance", exact: true }).click();
+  await page.getByText(/QA-2420 attendance mount failure/i).waitFor({ timeout: 30000 }).catch(() => {});
+  const attendanceMountFailure = await page.locator("body").innerText();
+  ok("QA-2420: an Attendance mount GET failure is operator-visible instead of resolving as an empty successful load",
+    /QA-2420 attendance mount failure/i.test(attendanceMountFailure), attendanceMountFailure.slice(0, 500));
+  await page.unroute(isPath(batch._id, attendancePath));
+  await openClosure(batch._id);
   const markButtons = page.getByRole("button", { name: "Mark Completed", exact: true });
   // Blockers are fetched independently of the closure form. Waiting for its actual refusal text
   // proves this fixture has reached the deliberate lifecycle gate before testing that Save stays
@@ -176,10 +208,31 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   // into a false success. This fixture's enrolled candidate deliberately starts without a CAN.
   const portalPlanPath = (id) => `/api/batches/${id}/link-portal-ids`;
   const portalCan = "CAN_2420" + String(Date.now()).slice(-6);
+  const portalParentCan = "CAN_2420" + String(Date.now() + 1).slice(-6);
+  const recoverMisfiled = page.getByRole("button", { name: /Move \d+ into the portal ID field/i }).first();
+  await recoverMisfiled.waitFor({ timeout: 30000 });
+  await page.route(isPortalHealthPath, async (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 misfiled recovery POST failure" }) });
+    }
+    return route.continue();
+  });
+  await recoverMisfiled.click();
+  await page.getByText(/QA-2420 misfiled recovery POST failure/i).waitFor({ timeout: 30000 }).catch(() => {});
+  const misfiledRecoveryFailure = {
+    errorVisible: /QA-2420 misfiled recovery POST failure/i.test(await page.locator("body").innerText()),
+    recoveryReenabled: await recoverMisfiled.isEnabled(),
+    stillOffered: await recoverMisfiled.count() === 1,
+  };
+  ok("QA-2420: a misfiled-ID recovery POST failure stays visible and leaves recovery retryable without false success",
+    misfiledRecoveryFailure.errorVisible && misfiledRecoveryFailure.recoveryReenabled && misfiledRecoveryFailure.stillOffered,
+    JSON.stringify(misfiledRecoveryFailure));
+  await page.unroute(isPortalHealthPath);
   const showPortalGaps = page.getByRole("button", { name: /show which/i }).first();
   await showPortalGaps.waitFor({ timeout: 30000 });
   await showPortalGaps.click();
-  const portalDraft = page.getByPlaceholder("CAN_…").first();
+  const portalDraft = portalRow(enrolledCand.name).getByPlaceholder("CAN_…");
+  await portalDraft.waitFor({ timeout: 30000 });
   const portalSave = portalDraft.locator("xpath=following-sibling::button");
   await portalDraft.fill(portalCan);
   await page.route(isPath(batch._id, portalPlanPath), async (route) => {
@@ -200,19 +253,41 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     JSON.stringify(portalChildFailure));
   await page.unroute(isPath(batch._id, portalPlanPath));
 
+  // The child-failure attempt reached its PATCH before its read-back was faulted. Remount from a
+  // fresh plan and deliberately reopen the list around the OTHER fixture row, so this branch
+  // proves its parent GET happens after a successful child read-back rather than clicking a
+  // vanished/stale row whose candidate now already has a CAN.
+  await openClosure(batch._id);
+  const showPortalGapsAfterRemount = page.getByRole("button", { name: /show which/i }).first();
+  await showPortalGapsAfterRemount.waitFor({ timeout: 30000 });
+  await showPortalGapsAfterRemount.click();
+  const portalParentDraft = portalRow(misfiledCand.name).getByPlaceholder("CAN_…");
+  await portalParentDraft.waitFor({ timeout: 30000 });
+  const portalParentSave = portalParentDraft.locator("xpath=following-sibling::button");
+  const parentRowIsIndependent = await portalParentDraft.count() === 1;
+  ok("QA-2420 [precondition]: the parent-refresh fault targets the independently misfiled roster row after the first save persisted",
+    parentRowIsIndependent, JSON.stringify({ candidate: misfiledCand.name, rows: await portalParentDraft.count() }));
+  await portalParentDraft.fill(portalParentCan);
+  let portalParentGetObserved = false;
   await page.route(isPath(batch._id, parentPath), async (route) => {
     if (route.request().method() === "GET") {
+      portalParentGetObserved = true;
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal parent refresh failure" }) });
     }
     return route.continue();
   });
-  await portalSave.click();
+  await portalParentSave.click();
   await page.getByText(/portal ID status, but the batch summary could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
-  const portalParentFailureText = await page.locator("body").innerText();
+  const portalParentFailure = {
+    parentGetObserved: portalParentGetObserved,
+    errorVisible: /portal ID status, but the batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
+    draftRetained: await portalParentDraft.inputValue(),
+    saveReenabled: await portalParentSave.isEnabled(),
+  };
   ok("QA-2420: failed PortalIdGaps parent refresh remains visible after child read-back instead of reporting a false save",
-    /portal ID status, but the batch summary could not be refreshed/i.test(portalParentFailureText)
-      && !/portal ID saved/i.test(portalParentFailureText),
-    portalParentFailureText.slice(0, 500));
+    portalParentFailure.parentGetObserved && portalParentFailure.errorVisible
+      && portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled,
+    JSON.stringify(portalParentFailure));
   await page.unroute(isPath(batch._id, parentPath));
 
   // Two DOM clicks in the SAME JS turn, while the PUT is deliberately held: this specifically

@@ -4303,6 +4303,17 @@ for (const file of walk(root)) {
     && portal.includes("if (!await load())")
     && portal.includes("Saved, but portal ID status could not be refreshed.")
     && portal.includes("Saved and refreshed portal ID status, but the batch summary could not be refreshed.");
+  // A callback that resolves `undefined` is not a parent refresh. Pin the affirmative check
+  // exactly: accepting only `!== false` repeats the old false-save path while every happy-path
+  // browser assertion remains green.
+  const portalParentRefreshRequiresAffirmativeSuccess = /const parentRefreshed = await Promise\.resolve\(onChanged\?\.\(started\)\);\s*if \(!operationIsCurrent\(started\)\) return false;\s*if \(parentRefreshed !== true\) \{\s*setErr\("Saved and refreshed portal ID status, but the batch summary could not be refreshed\. Reload before continuing\."\);\s*return false;\s*\}/s.test(portal);
+  const attendance = src.slice(src.indexOf("function AttendanceTab("), src.indexOf("function BatchDocuments("));
+  const attendanceMountReportsBooleanOutcome = /const load = async \(\): Promise<boolean> => \{\s*try \{\s*setData\(await api\(`\/api\/batches\/\$\{batchId\}\/attendance`\)\);\s*return true;\s*\} catch \(e: any\) \{\s*setError\(e\.message\);\s*return false;\s*\}\s*\}/s.test(attendance);
+  const renderedClosureSuite = fs.readFileSync(path.resolve(root, "..", "scripts", "e2e-rendered-candidates.mjs"), "utf8");
+  const runtimeFaultCoverage = renderedClosureSuite.includes("QA-2420 attendance mount failure")
+    && renderedClosureSuite.includes("QA-2420 misfiled recovery POST failure")
+    && renderedClosureSuite.includes("isPortalHealthPath")
+    && renderedClosureSuite.includes("recoverMisfiled");
   const portalOperationSegment = (operation) => {
     const start = portal.indexOf(`beginOperation("${operation}")`);
     if (start < 0) return "";
@@ -4359,7 +4370,9 @@ for (const file of walk(root)) {
     && resultWritesGateSuccessOnRefresh && inlineCertificateWritesGateSuccessOnRefresh
     && stagedCertificateWritesStayCoordinated && completionProjectionFreezesCandidateControls
     && portalLoadReportsOutcome && portalWritesGateSuccessOnRefresh
-    && portalDraftClearsAfterBothReadbacks && portalFailureRemainsVisibleAfterPlanSettles;
+    && portalDraftClearsAfterBothReadbacks && portalFailureRemainsVisibleAfterPlanSettles
+    && portalParentRefreshRequiresAffirmativeSuccess && attendanceMountReportsBooleanOutcome
+    && runtimeFaultCoverage;
   if (ok) passed++;
   else {
     failed++;
@@ -4377,6 +4390,9 @@ for (const file of walk(root)) {
       + ", portal writes wait for both child and parent read-backs=" + portalWritesGateSuccessOnRefresh
       + ", portal draft clears only after both reads=" + portalDraftClearsAfterBothReadbacks
       + ", portal parent-refresh failure remains visible after a resolved plan=" + portalFailureRemainsVisibleAfterPlanSettles
+      + ", portal parent refresh requires explicit true=" + portalParentRefreshRequiresAffirmativeSuccess
+      + ", Attendance mount returns explicit success/failure=" + attendanceMountReportsBooleanOutcome
+      + ", rendered Attendance/recovery fault coverage=" + runtimeFaultCoverage
       + ", candidate load propagates success/failure=" + candidateLoadReportsOutcome
       + ", named result/certificate writers gate UI success on refresh=" + resultWritesGateSuccessOnRefresh
       + ", inline certificate writers gate UI success on refresh=" + inlineCertificateWritesGateSuccessOnRefresh
