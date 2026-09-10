@@ -36,7 +36,7 @@ export type FinanceAuditEvent = {
   old_value?: unknown;
   new_value?: unknown;
   actor: Types.ObjectId;
-  actor_type: "User";
+  actor_type: "USER";
 };
 
 export function financeAuditEvent(
@@ -46,7 +46,7 @@ export function financeAuditEvent(
   return {
     ...input,
     event_id: createHash("sha256").update(`finance-audit-v1:${key}`).digest("hex").slice(0, 24),
-    actor_type: "User",
+    actor_type: "USER",
   };
 }
 
@@ -77,18 +77,31 @@ async function deliverOwnerEvents(
       old_value: event.old_value ?? null,
       new_value: event.new_value ?? null,
       actor: new Types.ObjectId(String(event.actor)),
-      actor_type: event.actor_type ?? "User",
+      actor_type: "USER",
     };
     if (failure === "before") throw new Error("test-only audit delivery failure before insert");
-    const now = new Date();
-    await AuditLog.collection.updateOne(
-      { _id: eventId },
-      { $setOnInsert: { ...durable, createdAt: now, updatedAt: now } },
-      { upsert: true },
-    );
+    try {
+      await AuditLog.collection.updateOne(
+        { _id: eventId },
+        { $setOnInsert: { ...durable, created_at: new Date() } },
+        { upsert: true },
+      );
+    } catch (error: any) {
+      // Two readers may drain the same owner concurrently. A duplicate-key from two racing
+      // upserts is ambiguous until the deterministic occupant is read and compared below.
+      if (error?.code !== 11000) throw error;
+    }
     const written: any = await AuditLog.collection.findOne({ _id: eventId });
-    if (!written || !["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
-      .every((field) => sameAuditValue(written[field], (durable as any)[field]))) {
+    const canonicalKeys = ["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"];
+    const writtenKeys = written ? Object.keys(written).sort() : [];
+    if (!written
+        || written.actor_type !== "USER"
+        || !(written.created_at instanceof Date)
+        || written.createdAt !== undefined
+        || written.updatedAt !== undefined
+        || !sameAuditValue(writtenKeys, canonicalKeys)
+        || !["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
+          .every((field) => sameAuditValue(written[field], (durable as any)[field]))) {
       throw new Error(`Audit event ${event.event_id} exists with different immutable details.`);
     }
     if (failure === "after") throw new Error("test-only audit delivery failure after insert");
@@ -115,6 +128,17 @@ export async function settleFinanceAuditEvents(input: {
   }
 }
 
+export async function costFinanceAuditOutboxIsSettled(id: unknown) {
+  const owner: any = await CostEntry.collection.findOne(
+    { _id: new Types.ObjectId(String(id)) },
+    { projection: { _audit_events: 1, _audit_delivered_event_ids: 1 } },
+  );
+  if (!owner) return false;
+  const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
+  return (owner._audit_events ?? []).every((event: any) =>
+    !!event?.event_id && delivered.has(String(event.event_id)));
+}
+
 // Recovery does not depend on another write. Every normal finance ledger/approval list read calls
 // this bounded drain; deterministic AuditLog ids make retries after either acknowledgement window
 // exactly-once from the user's perspective.
@@ -134,14 +158,36 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
       ],
     },
   };
-  const costs = await CostEntry.collection.find({
-    reservation_state: "Applied", "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
-  }, { projection: { _id: 1 } }).limit(limit).toArray();
-  const approvals = await ApprovalRequest.collection.find({
-    status: { $in: ["Approved", "Rejected"] }, "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
-  }, { projection: { _id: 1 } }).limit(limit).toArray();
-  for (const owner of costs) await settleFinanceAuditEvents({ costIds: [owner._id] }).catch(() => {});
-  for (const owner of approvals) await settleFinanceAuditEvents({ approvalIds: [owner._id] }).catch(() => {});
+  async function drainOwners(collection: any, eligible: Record<string, unknown>, kind: "cost" | "approval") {
+    let after: Types.ObjectId | undefined;
+    let deliveredOwners = 0;
+    // Failures do not consume the delivery budget. Keep paging by _id so a poison owner in the
+    // first page cannot make every later, valid owner permanently unreachable on each read.
+    while (deliveredOwners < limit) {
+      const page = await collection.find({
+        ...eligible,
+        "_audit_events.0": { $exists: true },
+        ...hasUndeliveredEvent,
+        ...(after ? { _id: { $gt: after } } : {}),
+      }, { projection: { _id: 1 } }).sort({ _id: 1 }).limit(limit).toArray();
+      if (!page.length) break;
+      for (const owner of page) {
+        try {
+          if (kind === "cost") await settleFinanceAuditEvents({ costIds: [owner._id] });
+          else await settleFinanceAuditEvents({ approvalIds: [owner._id] });
+          deliveredOwners++;
+          if (deliveredOwners >= limit) break;
+        } catch {
+          // This owner stays durable for reconciliation; continue to later ids in the same read.
+        }
+      }
+      after = page[page.length - 1]._id;
+      if (page.length < limit) break;
+    }
+  }
+
+  await drainOwners(CostEntry.collection, { reservation_state: "Applied" }, "cost");
+  await drainOwners(ApprovalRequest.collection, { status: { $in: ["Approved", "Rejected"] } }, "approval");
 }
 
 // Returns null → proceed with the action.

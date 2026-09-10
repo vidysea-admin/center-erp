@@ -48,6 +48,7 @@ const rawCosts = rawDb.collection("costentries");
 const rawCategories = rawDb.collection("costcategories");
 const rawApprovals = rawDb.collection("approvalrequests");
 const rawAudits = rawDb.collection("auditlogs");
+const rawUsers = rawDb.collection("users");
 
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
@@ -204,18 +205,113 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       window === "before" ? beforeCount === 0 : beforeCount === 1,
       `audit rows before recovery=${beforeCount}`);
 
-    const ordinaryRead = await req(admin, "GET", "/api/costs");
+    const concurrentReads = await Promise.all(Array.from({ length: 8 }, () => req(admin, "GET", "/api/costs")));
     const recovered = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    const recoveredRow = eventId ? await rawAudits.findOne({ _id: new ObjectId(String(eventId)) }) : null;
     const ownerAfter = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
     await req(admin, "GET", "/api/costs");
     const afterSecondRead = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
     ok(`durable audit ${window}: a subsequent ordinary ledger read delivers and acknowledges the pending event`,
-      ordinaryRead.status === 200 && recovered === 1
+      concurrentReads.every((r) => r.status === 200) && recovered === 1
         && (ownerAfter?._audit_delivered_event_ids ?? []).includes(String(eventId)),
-      JSON.stringify({ read: ordinaryRead.status, recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
+      JSON.stringify({ reads: concurrentReads.map((r) => r.status), recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
     ok(`durable audit ${window}: repeated recovery remains exactly one AuditLog row`,
       afterSecondRead === 1,
       `audit rows after second read=${afterSecondRead}`);
+    const auditKeys = recoveredRow ? Object.keys(recoveredRow).sort() : [];
+    ok(`durable audit ${window}: raw AuditLog uses the canonical contract exactly`,
+      recoveredRow?.actor_type === "USER" && recoveredRow?.created_at instanceof Date
+        && recoveredRow?.createdAt === undefined && recoveredRow?.updatedAt === undefined
+        && JSON.stringify(auditKeys) === JSON.stringify(["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"]),
+      JSON.stringify({ actor_type: recoveredRow?.actor_type, keys: auditKeys }));
+  }
+}
+
+// Deleting the business owner before its creation event is confirmed would erase recovery. A
+// foreign deterministic AuditLog occupant must therefore preserve the cost, then a later clean
+// drain must deliver once before the same delete succeeds and records its own deletion event.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const note = `audit-delete-${stamp}`;
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, amount: 613, note, _test_fail_audit_before_insert: true,
+  }));
+  const costId = made.data?.item?._id;
+  const owner = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
+  const eventId = owner?._audit_events?.[0]?.event_id;
+  if (costId && eventId) {
+    const eventObjectId = new ObjectId(String(eventId));
+    const foreign = {
+      _id: eventObjectId,
+      entity: "ForeignAuditOccupant", entity_id: new ObjectId(), field: null,
+      old_value: null, new_value: null, actor: new ObjectId(), actor_type: "USER",
+      created_at: new Date(),
+    };
+    await rawAudits.insertOne(foreign);
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}`);
+    const preserved = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const occupant = await rawAudits.findOne({ _id: eventObjectId });
+    ok("audit-owner delete: a foreign deterministic event occupant refuses deletion and preserves both records",
+      refused.status === 409 && !!preserved && occupant?.entity === foreign.entity
+        && !(preserved?._audit_delivered_event_ids ?? []).includes(String(eventId)),
+      JSON.stringify({ status: refused.status, owner: !!preserved, occupant: occupant?.entity, delivered: preserved?._audit_delivered_event_ids }));
+
+    await rawAudits.deleteOne({ _id: eventObjectId, entity: foreign.entity });
+    const drain = await req(admin, "GET", "/api/costs");
+    const delivered = await rawAudits.findOne({ _id: eventObjectId });
+    const ownerAfterDrain = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    ok("audit-owner delete: a later ordinary read delivers and acknowledges the original creation exactly once",
+      drain.status === 200 && delivered?.entity === "CostEntry"
+        && await rawAudits.countDocuments({ _id: eventObjectId }) === 1
+        && (ownerAfterDrain?._audit_delivered_event_ids ?? []).filter((x) => String(x) === String(eventId)).length === 1,
+      JSON.stringify({ drain: drain.status, event: delivered?.entity, deliveredIds: ownerAfterDrain?._audit_delivered_event_ids }));
+
+    const removed = await req(admin, "DELETE", `/api/costs/${costId}`);
+    const deletionAudit = await rawAudits.findOne({ entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted" });
+    ok("audit-owner delete: only after acknowledgement the cost deletes and its deletion is audited",
+      removed.status === 200 && !(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })) && !!deletionAudit,
+      JSON.stringify({ status: removed.status, remains: !!(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })), deletionAudit: !!deletionAudit }));
+  } else {
+    ok("audit-owner delete [precondition]: pending creation owner exists", false, JSON.stringify({ status: made.status, costId, eventId }));
+  }
+}
+
+// One poison page must not monopolise every future drain. The valid owner is deliberately the
+// 101st id, after one full page of malformed events that each throw before delivery.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const actor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  const poisonIds = Array.from({ length: 100 }, () => new ObjectId());
+  const validOwnerId = new ObjectId();
+  const validEventId = new ObjectId();
+  const ownerBase = (id, event) => ({
+    _id: id, entry_date: new Date("2026-09-07"), location: new ObjectId(String(anyLoc)),
+    category: new ObjectId(String(cat?._id)), amount: 1, note: `drain-page-${stamp}`,
+    reservation_state: "Applied", entered_by: actor?._id,
+    _audit_events: [event], createdAt: new Date(), updatedAt: new Date(),
+  });
+  if (cat?._id && actor?._id) {
+    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, {
+      event_id: `poison-${i}`, entity: "CostEntry", entity_id: id, field: null,
+      old_value: null, new_value: "poison", actor: actor._id, actor_type: "USER",
+    })));
+    await rawCosts.insertOne(ownerBase(validOwnerId, {
+      event_id: validEventId.toHexString(), entity: "CostEntry", entity_id: validOwnerId, field: null,
+      old_value: null, new_value: "valid after poison page", actor: actor._id, actor_type: "USER",
+    }));
+    const drained = await req(admin, "GET", "/api/costs");
+    const validAudit = await rawAudits.findOne({ _id: validEventId });
+    const validOwner = await rawCosts.findOne({ _id: validOwnerId });
+    ok("audit drain pagination: 100 poison owners cannot starve the later valid owner",
+      drained.status === 200 && validAudit?.new_value === "valid after poison page"
+        && (validOwner?._audit_delivered_event_ids ?? []).includes(validEventId.toHexString()),
+      JSON.stringify({ status: drained.status, validAudit: validAudit?.new_value, delivered: validOwner?._audit_delivered_event_ids }));
+    await rawCosts.deleteMany({ _id: { $in: [...poisonIds, validOwnerId] } });
+    await rawAudits.deleteOne({ _id: validEventId });
+  } else {
+    ok("audit drain pagination [precondition]: category and actor exist", false, JSON.stringify({ category: cat?._id, actor: actor?._id }));
   }
 }
 
@@ -896,14 +992,25 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       const rawHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
       const rawCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
       const rawRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      const opsUser = await rawUsers.findOne({ email: "ops@vidysea.com" });
+      const fillerIds = Array.from({ length: 101 }, () => new ObjectId());
+      if (opsUser?._id) {
+        await rawApprovals.insertMany(fillerIds.map((id, i) => ({
+          _id: id, action: "cost.post", summary: `newer pending filler ${i}`,
+          payload: { amount: i + 1 }, initiator: opsUser._id, approver_role: "Admin",
+          status: "Pending", createdAt: new Date(Date.now() + i + 1000), updatedAt: new Date(),
+        })));
+      }
       const defaultQueue = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
+      const applyingOnly = (await req(admin, "GET", "/api/approvals?status=Applying")).data?.items ?? [];
       ok("Applying saga [precondition]: injected interruption landed after head publication and before cost visibility",
         interrupted.status === 500 && rawHead?.active === true && !rawHead?.staged_by_approval
           && rawCost?.reservation_state === "Pending" && rawRequest?.status === "Applying",
         JSON.stringify({ status: interrupted.status, head: rawHead && { active: rawHead.active, owner: rawHead.staged_by_approval }, cost: rawCost?.reservation_state, request: rawRequest?.status }));
       ok("Applying saga: the default Pending queue still returns an interrupted Applying request",
-        defaultQueue.some((r) => String(r._id) === String(requestId) && r.status === "Applying"),
-        JSON.stringify(defaultQueue.filter((r) => String(r._id) === String(requestId)).map((r) => r.status)));
+        defaultQueue[0]?.status === "Applying" && defaultQueue.some((r) => String(r._id) === String(requestId))
+          && applyingOnly.some((r) => String(r._id) === String(requestId)),
+        JSON.stringify({ first: defaultQueue[0]?.status, found: defaultQueue.filter((r) => String(r._id) === String(requestId)).map((r) => r.status), applyingOnly: applyingOnly.length }));
 
       let browser, context;
       try {
@@ -920,22 +1027,39 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
           await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
         }
         await page.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
-        await page.waitForFunction((s) => document.body.innerText.includes(s), nm, { timeout: 30000 }).catch(() => {});
-        const text = await page.locator("body").innerText();
+        const exactRow = page.locator(`#approval-request-${requestId}`);
+        await exactRow.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+        const text = await exactRow.innerText().catch(() => "");
         ok("Applying saga UI: the approver sees the interrupted row and a Resume apply control",
-          text.includes(nm) && text.includes("Applying") && text.includes("Resume apply"),
+          await exactRow.count() === 1 && text.includes(nm) && text.includes("Applying") && text.includes("Resume apply"),
           text.slice(0, 400));
       } finally {
         try { await context?.close(); } catch {}
         try { await browser?.close(); } catch {}
       }
 
-      const changedDecision = await req(admin, "POST", `/api/approvals/${requestId}`, {
-        decision: "Approved", approved_amount: 1, note: "attempt to change an applying decision",
+      await rawApprovals.deleteMany({ _id: { $in: fillerIds } });
+
+      const changedAmount = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", approved_amount: 1, note: "publish interruption",
       });
       ok("Applying saga: retry cannot change the already-claimed sanctioned amount",
-        changedDecision.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
-        `got ${changedDecision.status}`);
+        changedAmount.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
+        `got ${changedAmount.status}`);
+      const changedNote = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", note: "changed note",
+      });
+      ok("Applying saga: retry cannot change the already-claimed decision note",
+        changedNote.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
+        `got ${changedNote.status}`);
+      const mapTarget = (await catList()).find((c) => c.active !== false && String(c._id) !== String(requestId));
+      const changedMap = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", map_to_category: mapTarget?._id,
+      });
+      ok("Applying saga: retry cannot change the already-claimed category mapping",
+        !!mapTarget && changedMap.status === 409
+          && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
+        `target=${mapTarget?._id} got ${changedMap.status}`);
       await rawApprovals.updateOne(
         { _id: new ObjectId(String(requestId)), status: "Applying" },
         { $unset: { "payload._test_fail_after_publish_before_cost_apply": "" } },

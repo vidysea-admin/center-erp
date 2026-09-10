@@ -50,11 +50,22 @@ export const GET = apiHandler(async (req: NextRequest) => {
       : { status };
   if (isScoped(user)) Object.assign(filter, locationFilter(user));
 
-  const [items, rules] = await Promise.all([
-    ApprovalRequest.find(filter).sort({ createdAt: -1 }).limit(100)
-      .populate("initiator", "name").populate("decided_by", "name").populate("location", "name code").lean(),
-    ApprovalRule.find({}).lean(),
-  ]);
+  const queryItems = (queryFilter: Record<string, unknown>, take: number, oldestFirst = false) =>
+    ApprovalRequest.find(queryFilter).sort({ createdAt: oldestFirst ? 1 : -1 }).limit(take)
+      .populate("initiator", "name").populate("decided_by", "name").populate("location", "name code").lean();
+  // An Applying row is recovery work, not ordinary backlog. Put every visible Applying claim ahead
+  // of Pending rows so 100 newer requests cannot hide the one row whose effect may be half durable.
+  // `?status=Applying` remains an exact filter for an operator who wants only recovery work.
+  const itemsPromise = status === "Pending"
+    ? (async () => {
+        const applyingFilter = { ...filter, status: "Applying" };
+        const pendingFilter = { ...filter, status: "Pending" };
+        const applying = await queryItems(applyingFilter, 100, true);
+        const pending = applying.length < 100 ? await queryItems(pendingFilter, 100 - applying.length) : [];
+        return [...applying, ...pending];
+      })()
+    : queryItems(filter, 100);
+  const [items, rules] = await Promise.all([itemsPromise, ApprovalRule.find({}).lean()]);
   // Actions with no stored rule are simply off.
   const config = APPROVAL_ACTIONS.map((action) => {
     const r = rules.find((x: any) => x.action === action);

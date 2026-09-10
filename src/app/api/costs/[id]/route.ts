@@ -5,6 +5,7 @@ import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { audit, auditDiff } from "@/lib/audit";
+import { costFinanceAuditOutboxIsSettled, settleFinanceAuditEvents } from "@/lib/approvals";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -96,7 +97,32 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     throw new HttpError(409, "A pre-approved cost cannot be deleted after its commitment has been applied.");
   }
-  await doc.deleteOne();
+  // Creation is a durable owner-backed event. Deleting its owner before the event is acknowledged
+  // would erase the only recovery path, so drain first and fail closed while a poison/foreign
+  // deterministic occupant or temporary audit outage keeps the event unconfirmed.
+  await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
+  if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
+    throw new HttpError(409, "This cost's creation history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
+  }
+  const removed = await CostEntry.collection.deleteOne({
+    _id: doc._id,
+    $expr: {
+      $eq: [
+        {
+          $size: {
+            $setDifference: [
+              { $map: { input: { $ifNull: ["$_audit_events", []] }, as: "event", in: "$$event.event_id" } },
+              { $ifNull: ["$_audit_delivered_event_ids", []] },
+            ],
+          },
+        },
+        0,
+      ],
+    },
+  });
+  if (removed.deletedCount !== 1) {
+    throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
+  }
   await audit({ entity: "CostEntry", entityId: doc._id, field: "deleted", oldValue: { amount: doc.amount, note: doc.note }, actor: user.id });
   return NextResponse.json({ ok: true });
 });
