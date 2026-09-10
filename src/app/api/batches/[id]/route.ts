@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
+import { ApprovalRequest, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
 import { getDefaults } from "@/lib/defaults";
@@ -114,6 +114,20 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     if (moneyNow > 0) {
       await requireFinance(user, "approve");
     }
+    // Claim before any child cascade. Formula POST cannot share this Batch write atomically, so it
+    // treats this marker as a durable deletion fence both around its reservation and its queue
+    // write. A second force-delete sees the failed claim and cannot race a second cascade.
+    const claimed = await Batch.collection.updateOne(
+      { _id: batch._id, deletion_state: { $exists: false } },
+      { $set: { deletion_state: "Deleting", deletion_started_at: new Date() } },
+    );
+    if (claimed.modifiedCount !== 1) {
+      throw new HttpError(409, "This batch is already being deleted. Refresh before trying again.");
+    }
+    const testFencePause = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+      ? Math.max(0, Math.min(5_000, Number(req.nextUrl.searchParams.get("_test_pause_after_deletion_fence_ms") ?? 0)))
+      : 0;
+    if (testFencePause) await new Promise((resolve) => setTimeout(resolve, testFencePause));
     await Promise.all([
       BatchMember.deleteMany({ batch: id }),
       CandidateResult.deleteMany({ batch: id }),
@@ -122,8 +136,9 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
       Closure.deleteMany({ batch: id }),
       GovtAttendanceRow.deleteMany({ batch: id }),
       Invoice.deleteMany({ batch: id }),
+      ApprovalRequest.deleteMany({ batch: id }),
     ]);
-    await Batch.deleteOne({ _id: id });
+    await Batch.collection.deleteOne({ _id: batch._id, deletion_state: "Deleting" });
     await audit({ entity: "Batch", entityId: id, field: "delete", newValue: `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${breakdown}) — reason: ${reason}`, actor: user.id });
     return NextResponse.json({ deleted: batch.code, forced: true, carried });
   }

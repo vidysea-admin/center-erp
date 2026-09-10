@@ -1,7 +1,7 @@
 // Approval matrix (RPL M24). Ships as an engine with every action switched OFF: with no
 // enabled rule, `requireApproval` returns null and the caller proceeds exactly as before —
 // zero behaviour change until an Admin turns an action on.
-import { ApprovalRequest, ApprovalRule, AuditLog, CostEntry, Notification } from "@/models";
+import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostEntry, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
@@ -366,10 +366,21 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
-  ctx: { entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown },
+  ctx: { entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown; batch?: unknown },
 ): Promise<ApprovalOutcome> {
   const rule = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
   if (!rule) return null;
+
+  const batchId = ctx.batch ? new Types.ObjectId(String(ctx.batch)) : undefined;
+  if (batchId) {
+    const live = await Batch.collection.findOne(
+      { _id: batchId, deletion_state: { $exists: false } },
+      { projection: { _id: 1 } },
+    );
+    if (!live) {
+      throw new HttpError(409, "This batch is being deleted or no longer exists, so this request cannot be queued.");
+    }
+  }
 
   // QA-1826 (S1, filed 2026-09-05 on the CEO's own words): this line used to read
   //   `if (user.role === rule.approver_role && user.role === "Admin") return null;`
@@ -391,11 +402,25 @@ export async function requireApproval(
     action,
     entity: ctx.entity, entity_id: ctx.entity_id,
     summary: ctx.summary, payload: ctx.payload,
-    location: ctx.location,
+    location: ctx.location, batch: batchId,
     initiator: user.id,
     approver_role: rule.approver_role,
     approver_users: approverUsers,
   });
+
+  // There is no cross-collection transaction on every supported deployment. Re-read the durable
+  // batch fence after the request write; if force-delete won the gap, delete only this newborn
+  // request before any notification/audit side effect and fail closed.
+  if (batchId) {
+    const live = await Batch.collection.findOne(
+      { _id: batchId, deletion_state: { $exists: false } },
+      { projection: { _id: 1 } },
+    );
+    if (!live) {
+      await ApprovalRequest.deleteOne({ _id: request._id, batch: batchId });
+      throw new HttpError(409, "This batch began deletion while the request was being queued. Nothing was left pending.");
+    }
+  }
 
   // Senior review of QA-1825 cycles 2-4: the queue was masked and then the SAME figure was
   // broadcast around it. This notification goes to `role_target: [approver_role]` — every user of

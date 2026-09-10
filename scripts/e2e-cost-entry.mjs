@@ -574,7 +574,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
       const formulaNote = `cascade-formula-pending-${stamp}`;
       const formulaPromise = req(ops, "POST", "/api/costs", {
         entry_date: "2026-09-07", batch: batchId, category: formulaHead.data?.item?._id,
-        amount: 1, note: formulaNote, _test_formula_pause_after_reserve_ms: 800,
+        amount: 1, note: formulaNote, _test_formula_wait_for_batch_deletion_fence_ms: 3000,
       });
       let formulaPendingBeforeCascade = null;
       for (let i = 0; i < 100 && !formulaPendingBeforeCascade; i++) {
@@ -586,31 +586,39 @@ for (const variant of ["ordinary", "mark_paid"]) {
       // Claim only after the formula POST has passed its initial recovery drain; otherwise that
       // POST would correctly acknowledge and collect the tombstone before the cascade attack.
       const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
-      const cascade = await req(admin, "DELETE", `/api/batches/${batchId}`, { reason: "cycle 9 tombstone cascade attack" });
+      // The formula has persisted and is waiting only for the force-delete's durable marker. The
+      // deletion route pauses after claiming it, so this is an ordered race, not a sleep guess:
+      // pre-fix code would cancel and queue a request during this window.
+      const cascadePromise = req(admin, "DELETE", `/api/batches/${batchId}?_test_pause_after_deletion_fence_ms=2000`, { reason: "cycle 11 formula deletion-fence attack" });
+      let sawDeletionFence = false;
+      for (let i = 0; i < 100 && !sawDeletionFence; i++) {
+        const fence = await rawBatches.findOne({ _id: batchId }, { projection: { deletion_state: 1 } });
+        sawDeletionFence = fence?.deletion_state === "Deleting";
+        if (!sawDeletionFence) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
       const formulaResult = await formulaPromise;
+      const cascade = await cascadePromise;
       await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
       const tombstoneAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) });
       const ordinaryAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(ordinaryId)) });
       const formulaAfterCascade = await rawCosts.findOne({ batch: batchId, note: formulaNote });
+      const formulaApprovalsAfterCascade = await rawApprovals.find({ batch: batchId, action: "cost.post" }).toArray();
       const deletionEvent = (tombstoneAfterCascade?._audit_events ?? []).find((event) => event?.field === "deleted");
       const auditBeforeRecovery = deletionEvent?.event_id
         ? await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) : -1;
       ok("batch cascade [precondition]: force-delete ran while a tombstone and a live Formula Pending reservation both existed",
-        claimed.status === 409 && !!formulaPendingBeforeCascade && cascade.status === 200
+        claimed.status === 409 && !!formulaPendingBeforeCascade && sawDeletionFence && cascade.status === 200
           && tombstoneAfterCascade?.deletion_state === "Pending",
-        JSON.stringify({ claimed: claimed.status, formulaPending: !!formulaPendingBeforeCascade, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
-      ok("batch cascade: ordinary and Formula Pending children are removed while only the audit tombstone survives deleteMany",
-        !ordinaryAfterCascade && !formulaAfterCascade && !!tombstoneAfterCascade && auditBeforeRecovery === 0
-          && [202, 409].includes(formulaResult.status),
-        JSON.stringify({ ordinary: !!ordinaryAfterCascade, formula: !!formulaAfterCascade, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery, formulaResult: formulaResult.status }));
+        JSON.stringify({ claimed: claimed.status, formulaPending: !!formulaPendingBeforeCascade, sawDeletionFence, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
+      ok("batch deletion fence: a Formula POST paused at its durable reservation returns 409 and leaves no cost or approval orphan",
+        formulaResult.status === 409 && !ordinaryAfterCascade && !formulaAfterCascade
+          && formulaApprovalsAfterCascade.length === 0 && !!tombstoneAfterCascade && auditBeforeRecovery === 0,
+        JSON.stringify({ formulaResult: formulaResult.status, ordinary: !!ordinaryAfterCascade, formula: !!formulaAfterCascade, approvals: formulaApprovalsAfterCascade.length, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery }));
       await req(admin, "GET", "/api/costs");
       ok("batch cascade: later audit acknowledgement collects the surviving tombstone exactly once",
         !!deletionEvent?.event_id && !(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))
           && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent?.event_id)) }) === 1,
         `remains=${!!(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))}`);
-      if (formulaResult.data?.item?._id) {
-        await rawApprovals.deleteOne({ _id: new ObjectId(String(formulaResult.data.item._id)) });
-      }
     } else {
       ok("batch cascade [precondition]: two carried costs exist", false,
         JSON.stringify({ doomed: doomed.status, ordinary: ordinary.status }));

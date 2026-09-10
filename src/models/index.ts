@@ -1439,6 +1439,10 @@ const ApprovalRequestSchema = new Schema({
   summary: { type: String, required: true },   // human-readable "what is being asked"
   payload: Schema.Types.Mixed,                 // replayed verbatim once approved
   location: oid("Location"),
+  // A batch-backed request must be removed with that batch. Keeping this outside the replay payload
+  // makes the force-delete fence/cascade an indexed relationship rather than a best-effort search
+  // through arbitrary historical payload shapes.
+  batch: oid("Batch"),
   initiator: oid("User", true),
   approver_role: { type: String, enum: USER_ROLE, required: true },
   // Snapshotted at PARK time, deliberately: who was entitled to decide this request is a fact about
@@ -1458,6 +1462,7 @@ const ApprovalRequestSchema = new Schema({
   _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
 }, { timestamps: true });
 ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
+ApprovalRequestSchema.index({ batch: 1, status: 1 });
 
 // ---------- Notification (RPL M22) ----------
 export const NOTIFICATION_STATUS = ["New", "Acknowledged", "Resolved"] as const;

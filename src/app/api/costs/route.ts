@@ -107,6 +107,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       summary: `New cost head "${proposed}" for a ₹${body.amount} entry by ${user.name} — ${body.note}`,
       payload: { ...body, new_subhead: proposed },
       location: body.location || undefined,
+      batch: body.batch || undefined,
     });
     // If nobody has enabled the rule there is no approver, and silently writing an unreviewed head
     // would be the opposite of what was asked. Say so instead of inventing one.
@@ -148,6 +149,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       entry: baseEntry,
       ...(isTestDb && Number(body._test_formula_ttl_ms) > 0 ? { expiresInMs: Number(body._test_formula_ttl_ms) } : {}),
       ...(isTestDb && Number(body._test_formula_pause_after_reserve_ms) > 0 ? { pauseAfterPersistMs: Number(body._test_formula_pause_after_reserve_ms) } : {}),
+      ...(isTestDb && Number(body._test_formula_wait_for_batch_deletion_fence_ms) > 0 ? { waitForBatchDeletionFenceMs: Number(body._test_formula_wait_for_batch_deletion_fence_ms) } : {}),
       simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
     },
   });
@@ -157,6 +159,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${pre.basis ? ` · pre-approved basis: ${pre.basis}` : ""}`,
     payload: { ...body, _pre_approved_basis: pre.basis },
     location: body.location || undefined,
+    batch: body.batch || undefined,
   });
   if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
   if (pre.applied && pre.reservation?.state === "Applied") {
