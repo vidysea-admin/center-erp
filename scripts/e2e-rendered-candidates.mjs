@@ -176,6 +176,13 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     }
     return false;
   };
+  const eventuallyVisible = async (locator) => {
+    for (let attempt = 0; attempt < 300; attempt++) {
+      if (await locator.isVisible()) return true;
+      await page.waitForTimeout(100);
+    }
+    return false;
+  };
   const putA = isPath(batch._id, closurePath);
 
   await openClosure(batch._id);
@@ -253,42 +260,74 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     JSON.stringify(portalChildFailure));
   await page.unroute(isPath(batch._id, portalPlanPath));
 
-  // The child-failure attempt reached its PATCH before its read-back was faulted. Remount from a
-  // fresh plan and deliberately reopen the list around the OTHER fixture row, so this branch
-  // proves its parent GET happens after a successful child read-back rather than clicking a
-  // vanished/stale row whose candidate now already has a CAN.
-  await openClosure(batch._id);
-  const showPortalGapsAfterRemount = page.getByRole("button", { name: /show which/i }).first();
-  await showPortalGapsAfterRemount.waitFor({ timeout: 30000 });
-  await showPortalGapsAfterRemount.click();
-  const portalParentDraft = portalRow(misfiledCand.name).getByPlaceholder("CAN_…");
-  await portalParentDraft.waitFor({ timeout: 30000 });
-  const portalParentSave = portalParentDraft.locator("xpath=following-sibling::button");
-  const parentRowIsIndependent = await portalParentDraft.count() === 1;
-  ok("QA-2420 [precondition]: the parent-refresh fault targets the independently misfiled roster row after the first save persisted",
-    parentRowIsIndependent, JSON.stringify({ candidate: misfiledCand.name, rows: await portalParentDraft.count() }));
-  await portalParentDraft.fill(portalParentCan);
-  let portalParentGetObserved = false;
-  await page.route(isPath(batch._id, parentPath), async (route) => {
-    if (route.request().method() === "GET") {
-      portalParentGetObserved = true;
-      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal parent refresh failure" }) });
+  // The child-failure attempt reached its PATCH before its read-back was faulted. Before driving
+  // the parent-refresh arm, prove by the two real child payloads that the independent fixture row
+  // is still eligible. Otherwise a later missing "show which" control is an unhelpful timeout,
+  // not a statement about the parent-refresh contract.
+  const [misfiledPlanPreflight, misfiledHealthPreflight] = await Promise.all([
+    req(admin, "GET", portalPlanPath(batch._id)),
+    req(admin, "GET", `${portalHealthPath}?batch=${batch._id}`),
+  ]);
+  const plannedMisfiled = (misfiledPlanPreflight.data?.missing ?? [])
+    .filter((row) => String(row?.candidate) === String(misfiledCand._id));
+  const healthMisfiled = (misfiledHealthPreflight.data?.misfiled ?? [])
+    .filter((row) => String(row?.candidate) === String(misfiledCand._id));
+  const parentRefreshFixtureReady = misfiledPlanPreflight.status === 200 && misfiledHealthPreflight.status === 200
+    && plannedMisfiled.length === 1 && healthMisfiled.length === 1
+    && healthMisfiled[0]?.can === misfiledCan;
+  ok("QA-2420 [precondition]: direct portal plan and scoped health both name the exact misfiled roster candidate before the parent-refresh UI control",
+    parentRefreshFixtureReady,
+    JSON.stringify({
+      planStatus: misfiledPlanPreflight.status,
+      healthStatus: misfiledHealthPreflight.status,
+      candidate: String(misfiledCand._id),
+      planned: plannedMisfiled.map((row) => row.candidate),
+      misfiled: healthMisfiled.map((row) => ({ candidate: row.candidate, can: row.can })),
+    }));
+
+  // Only exercise the UI arm when its API-derived fixture precondition is true. A failed named
+  // precondition remains a normal suite assertion and lets the rest of the browser evidence finish.
+  if (parentRefreshFixtureReady) {
+    await openClosure(batch._id);
+    const showPortalGapsAfterRemount = page.getByRole("button", { name: /show which/i }).first();
+    const parentRefreshControlVisible = await eventuallyVisible(showPortalGapsAfterRemount);
+    ok("QA-2420 [precondition]: remounted Closure displays the preflighted portal-ID list control",
+      parentRefreshControlVisible,
+      JSON.stringify({ candidate: misfiledCand.name, body: (await page.locator("body").innerText()).slice(0, 500) }));
+    if (parentRefreshControlVisible) {
+      await showPortalGapsAfterRemount.click();
+      const portalParentDraft = portalRow(misfiledCand.name).getByPlaceholder("CAN_…");
+      const parentRowVisible = await eventuallyVisible(portalParentDraft);
+      const parentRowIsIndependent = parentRowVisible && await portalParentDraft.count() === 1;
+      ok("QA-2420 [precondition]: remounted portal list exposes exactly the preflighted misfiled roster row",
+        parentRowIsIndependent, JSON.stringify({ candidate: misfiledCand.name, visible: parentRowVisible, rows: await portalParentDraft.count() }));
+      if (parentRowIsIndependent) {
+        const portalParentSave = portalParentDraft.locator("xpath=following-sibling::button");
+        await portalParentDraft.fill(portalParentCan);
+        let portalParentGetObserved = false;
+        await page.route(isPath(batch._id, parentPath), async (route) => {
+          if (route.request().method() === "GET") {
+            portalParentGetObserved = true;
+            return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal parent refresh failure" }) });
+          }
+          return route.continue();
+        });
+        await portalParentSave.click();
+        await page.getByText(/portal ID status, but the batch summary could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
+        const portalParentFailure = {
+          parentGetObserved: portalParentGetObserved,
+          errorVisible: /portal ID status, but the batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
+          draftRetained: await portalParentDraft.inputValue(),
+          saveReenabled: await portalParentSave.isEnabled(),
+        };
+        ok("QA-2420: failed PortalIdGaps parent refresh observes the parent GET and retains the exact row's draft for retry",
+          portalParentFailure.parentGetObserved && portalParentFailure.errorVisible
+            && portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled,
+          JSON.stringify(portalParentFailure));
+        await page.unroute(isPath(batch._id, parentPath));
+      }
     }
-    return route.continue();
-  });
-  await portalParentSave.click();
-  await page.getByText(/portal ID status, but the batch summary could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
-  const portalParentFailure = {
-    parentGetObserved: portalParentGetObserved,
-    errorVisible: /portal ID status, but the batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
-    draftRetained: await portalParentDraft.inputValue(),
-    saveReenabled: await portalParentSave.isEnabled(),
-  };
-  ok("QA-2420: failed PortalIdGaps parent refresh remains visible after child read-back instead of reporting a false save",
-    portalParentFailure.parentGetObserved && portalParentFailure.errorVisible
-      && portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled,
-    JSON.stringify(portalParentFailure));
-  await page.unroute(isPath(batch._id, parentPath));
+  }
 
   // Two DOM clicks in the SAME JS turn, while the PUT is deliberately held: this specifically
   // exercises the ref mutex rather than relying on Playwright's actionability retry after disabled
