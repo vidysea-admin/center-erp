@@ -4290,7 +4290,34 @@ for (const file of walk(root)) {
     && candidate.includes("const operationBusy = !!operationCoordinator?.busy;")
     && portal.includes('beginOperation("portal-id-save")')
     && portal.includes('beginOperation("portal-id-recovery")')
+    && portal.includes("const refreshAfterOperation = async (started: any): Promise<boolean>")
     && portal.includes("await Promise.resolve(onChanged?.(started));");
+
+  // PortalIdGaps is a child writer too. It used to swallow both child GET failures, clear the
+  // typed CAN immediately after PATCH, and ignore a failed parent refresh. Assert the two child
+  // sources, both operation callers, ordering of draft clear, and an error surface that survives
+  // the successful child plan no longer having any missing rows.
+  const portalLoadReportsOutcome = portal.includes("const load = async (): Promise<boolean>")
+    && portal.includes("api(`/api/batches/${batchId}/link-portal-ids`)")
+    && portal.includes("api(`/api/candidates/portal-id-health?batch=${batchId}`)")
+    && portal.includes("if (!await load())")
+    && portal.includes("Saved, but portal ID status could not be refreshed.")
+    && portal.includes("Saved and refreshed portal ID status, but the batch summary could not be refreshed.");
+  const portalOperationSegment = (operation) => {
+    const start = portal.indexOf(`beginOperation("${operation}")`);
+    if (start < 0) return "";
+    const next = portal.indexOf("beginOperation(", start + 1);
+    return portal.slice(start, next < 0 ? portal.length : next);
+  };
+  const portalWritesGateSuccessOnRefresh = ["portal-id-save", "portal-id-recovery"].every((operation) =>
+    portalOperationSegment(operation).includes("if (!await refreshAfterOperation(started)) return;"));
+  const portalDraftClearsAfterBothReadbacks = (() => {
+    const savePortal = portalOperationSegment("portal-id-save");
+    return savePortal.indexOf("if (!await refreshAfterOperation(started)) return;") >= 0
+      && savePortal.indexOf("if (!await refreshAfterOperation(started)) return;") < savePortal.indexOf("setDraft((d) =>");
+  })();
+  const portalFailureRemainsVisibleAfterPlanSettles = portal.includes("if (!plan.without_portal_id && !err) return null;")
+    && portal.includes("{err && <div className={plan.without_portal_id ? \"mt-1\" : \"\"}>{err}</div>}");
 
   // A child result write is not complete just because its PUT returned 200. Its grid and the
   // parent closure can both still be stale, so every result/certificate writer must stop before
@@ -4330,7 +4357,9 @@ for (const file of walk(root)) {
     && sharedBusySurface && !missingFromBusySurface.length && !escapedBusyControls.length
     && localFeedback && saveIndependent && childWritesCoordinated && candidateLoadReportsOutcome
     && resultWritesGateSuccessOnRefresh && inlineCertificateWritesGateSuccessOnRefresh
-    && stagedCertificateWritesStayCoordinated && completionProjectionFreezesCandidateControls;
+    && stagedCertificateWritesStayCoordinated && completionProjectionFreezesCandidateControls
+    && portalLoadReportsOutcome && portalWritesGateSuccessOnRefresh
+    && portalDraftClearsAfterBothReadbacks && portalFailureRemainsVisibleAfterPlanSettles;
   if (ok) passed++;
   else {
     failed++;
@@ -4344,6 +4373,10 @@ for (const file of walk(root)) {
       + ", controls outside busy surface=" + JSON.stringify(missingFromBusySurface)
       + ", controls without exact busy gate=" + JSON.stringify(escapedBusyControls)
       + ", CandidateResults/PortalIdGaps use the same coordinator=" + childWritesCoordinated
+      + ", portal child load propagates success/failure=" + portalLoadReportsOutcome
+      + ", portal writes wait for both child and parent read-backs=" + portalWritesGateSuccessOnRefresh
+      + ", portal draft clears only after both reads=" + portalDraftClearsAfterBothReadbacks
+      + ", portal parent-refresh failure remains visible after a resolved plan=" + portalFailureRemainsVisibleAfterPlanSettles
       + ", candidate load propagates success/failure=" + candidateLoadReportsOutcome
       + ", named result/certificate writers gate UI success on refresh=" + resultWritesGateSuccessOnRefresh
       + ", inline certificate writers gate UI success on refresh=" + inlineCertificateWritesGateSuccessOnRefresh

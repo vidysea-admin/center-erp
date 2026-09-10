@@ -74,10 +74,21 @@ const closureSwitchBatch = (await req(admin, "POST", "/api/batches", {
 // QA-2420 cycle 4 needs an ordinary (not Admin-force) certification completion path with a
 // candidate grid still mounted. Keep its candidate name independent of `s`: the candidate-list
 // fixture below intentionally counts only the three Fresh + one Enrolled names carrying that stamp.
-const certCompletionBatch = (await req(admin, "POST", "/api/batches", {
-  location: loc._id, program: prog._id, trainer: trainer._id, room: room._id,
-  planned_start: today(), target_size: 1,
-}, 201)).data.item;
+const certCompletionRoomRes = await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: "CR2-QA2420-" + s, type: "Classroom" }, 201);
+const certCompletionRoom = certCompletionRoomRes.data.item;
+ok("QA-2420 [precondition]: ordinary-completion fixture owns a distinct room", certCompletionRoomRes.status === 201 && !!certCompletionRoom?._id,
+  JSON.stringify({ status: certCompletionRoomRes.status, room: certCompletionRoom?._id ?? null }));
+if (!certCompletionRoom?._id) throw new Error("QA-2420 ordinary-completion fixture room was not created; refusing to reuse another fixture's room");
+const certCompletionStart = new Date();
+certCompletionStart.setDate(certCompletionStart.getDate() + 90);
+const certCompletionBatchRes = await req(admin, "POST", "/api/batches", {
+  location: loc._id, program: prog._id, trainer: trainer._id, room: certCompletionRoom._id,
+  planned_start: certCompletionStart.toISOString().slice(0, 10), target_size: 1,
+}, 201);
+const certCompletionBatch = certCompletionBatchRes.data.item;
+ok("QA-2420 [precondition]: ordinary-completion batch POST succeeds with its own _id before use", certCompletionBatchRes.status === 201 && !!certCompletionBatch?._id,
+  JSON.stringify({ status: certCompletionBatchRes.status, batch: certCompletionBatch?._id ?? null, room: certCompletionRoom._id, planned_start: certCompletionStart.toISOString().slice(0, 10) }));
+if (!certCompletionBatch?._id) throw new Error("QA-2420 ordinary-completion batch was not created; refusing to run the completion assertions on an overlapping fixture");
 const certCompletionCandidate = (await req(admin, "POST", "/api/candidates", {
   name: "TEST-QA2420 Ordinary Completion " + Date.now(), phone: phone("65"), location: loc._id, program: prog._id,
 }, 201)).data.item;
@@ -159,6 +170,50 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   ok("QA-2420 [precondition]: this fixture has an enabled Assessment Save and a separately blocked Mark Completed",
     await assessmentSave().isEnabled() && await markButtons.first().isDisabled(),
     JSON.stringify({ saveEnabled: await assessmentSave().isEnabled(), markDisabled: await markButtons.first().isDisabled() }));
+
+  // PortalIdGaps shares Closure's coordinator. Its PATCH may persist while either child plan/health
+  // read-back or the parent batch refresh fails; in both cases the typed CAN must not be cleared
+  // into a false success. This fixture's enrolled candidate deliberately starts without a CAN.
+  const portalPlanPath = (id) => `/api/batches/${id}/link-portal-ids`;
+  const portalCan = "CAN_2420" + String(Date.now()).slice(-6);
+  const showPortalGaps = page.getByRole("button", { name: /show which/i }).first();
+  await showPortalGaps.waitFor({ timeout: 30000 });
+  await showPortalGaps.click();
+  const portalDraft = page.getByPlaceholder("CAN_…").first();
+  const portalSave = portalDraft.locator("xpath=following-sibling::button");
+  await portalDraft.fill(portalCan);
+  await page.route(isPath(batch._id, portalPlanPath), async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal child read-back failure" }) });
+    }
+    return route.continue();
+  });
+  await portalSave.click();
+  await page.getByText(/portal ID status could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
+  const portalChildFailure = {
+    errorVisible: /portal ID status could not be refreshed/i.test(await page.locator("body").innerText()),
+    draftRetained: await portalDraft.inputValue(),
+    saveReenabled: await portalSave.isEnabled(),
+  };
+  ok("QA-2420: failed PortalIdGaps child read-back retains the typed ID and does not strand its shared coordinator",
+    portalChildFailure.errorVisible && portalChildFailure.draftRetained === portalCan && portalChildFailure.saveReenabled,
+    JSON.stringify(portalChildFailure));
+  await page.unroute(isPath(batch._id, portalPlanPath));
+
+  await page.route(isPath(batch._id, parentPath), async (route) => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal parent refresh failure" }) });
+    }
+    return route.continue();
+  });
+  await portalSave.click();
+  await page.getByText(/portal ID status, but the batch summary could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
+  const portalParentFailureText = await page.locator("body").innerText();
+  ok("QA-2420: failed PortalIdGaps parent refresh remains visible after child read-back instead of reporting a false save",
+    /portal ID status, but the batch summary could not be refreshed/i.test(portalParentFailureText)
+      && !/portal ID saved/i.test(portalParentFailureText),
+    portalParentFailureText.slice(0, 500));
+  await page.unroute(isPath(batch._id, parentPath));
 
   // Two DOM clicks in the SAME JS turn, while the PUT is deliberately held: this specifically
   // exercises the ref mutex rather than relying on Playwright's actionability retry after disabled

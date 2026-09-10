@@ -2021,14 +2021,50 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
   // rights are still loading assume yes, so the control does not flicker away from someone who has it.
   const { can: canPerm, loaded: permsReady } = usePerms();
   const canMove = !permsReady || canPerm("candidates.manage", "edit");
-  const load = () => Promise.all([
-    api(`/api/batches/${batchId}/link-portal-ids`).then(setPlan).catch(() => setPlan(null)),
-    // QA-776: narrowed by the SERVER now (`?batch=`), not by an intersection in the browser. The
-    // client-side filter below stays as a second belt, but the thing that decides whose students
-    // these are is a query this suite can actually test.
-    api(`/api/candidates/portal-id-health?batch=${batchId}`).then(setHealth).catch(() => setHealth(null)),
-  ]);
+  // A portal-ID PATCH is not confirmed by its 200 alone. The refreshed per-batch plan AND the
+  // scoped health picture are the child read-back; paint neither half from a failed pair, or a
+  // caller will clear its draft against an answer it cannot prove.
+  const load = async (): Promise<boolean> => {
+    try {
+      const [nextPlan, nextHealth] = await Promise.all([
+        api(`/api/batches/${batchId}/link-portal-ids`),
+        // QA-776: narrowed by the SERVER now (`?batch=`), not by an intersection in the browser.
+        // The client-side filter below stays as a second belt, but the thing that decides whose
+        // students these are is a query this suite can actually test.
+        api(`/api/candidates/portal-id-health?batch=${batchId}`),
+      ]);
+      setPlan(nextPlan);
+      setHealth(nextHealth);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [batchId]);
+
+  // A parent batch refresh may fail after this child has persisted and read back. Keep the shared
+  // coordinator held until both stages finish, and return the outcome so callers cannot clear a
+  // typed value, close the list, or report the write as settled on a partial refresh.
+  const refreshAfterOperation = async (started: any): Promise<boolean> => {
+    if (!operationIsCurrent(started)) return false;
+    if (!await load()) {
+      if (operationIsCurrent(started)) setErr("Saved, but portal ID status could not be refreshed. The typed ID is still available; reload before continuing.");
+      return false;
+    }
+    if (!operationIsCurrent(started)) return false;
+    try {
+      const parentRefreshed = await Promise.resolve(onChanged?.(started));
+      if (!operationIsCurrent(started)) return false;
+      if (parentRefreshed === false) {
+        setErr("Saved and refreshed portal ID status, but the batch summary could not be refreshed. Reload before continuing.");
+        return false;
+      }
+      return true;
+    } catch (e: any) {
+      if (operationIsCurrent(started)) setErr(e?.message ?? String(e));
+      return false;
+    }
+  };
 
   // Only the misfiled rows that belong to THIS batch's blocked students - the health screen is
   // system-wide and a centre must not be offered someone else's roster to fix from here.
@@ -2050,15 +2086,13 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
       // refusal reaching the operator as silence is the same defect as a sentence that is not true.
       const refused = (res?.refused ?? res?.results?.refused ?? []) as string[];
       const copied = Number(res?.copied ?? res?.results?.copied ?? 0);
+      if (!operationIsCurrent(started)) return;
+      if (!await refreshAfterOperation(started)) return;
       if (refused.length) {
         setErr(`${copied} of ${asked} moved. ${refused.length} left untouched — ${refused[0]}`);
       } else if (copied < asked) {
         setErr(`${copied} of ${asked} moved. The rest already had an ID by the time this ran.`);
       }
-      if (!operationIsCurrent(started)) return;
-      await load();
-      if (!operationIsCurrent(started)) return;
-      await Promise.resolve(onChanged?.(started));
     } catch (e: any) { setErr(e.message); }
     finally { setMoving(false); finishOperation(started); }
   }
@@ -2072,16 +2106,14 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
     try {
       await api(`/api/candidates/${candidateId}`, { method: "PATCH", json: { sidh_candidate_id: v } });
       if (!operationIsCurrent(started)) return;
+      if (!await refreshAfterOperation(started)) return;
       setDraft((d) => { const n = { ...d }; delete n[candidateId]; return n; });
-      await load();
-      if (!operationIsCurrent(started)) return;
-      await Promise.resolve(onChanged?.(started));
     } catch (e: any) { setErr(e?.message ?? String(e)); }
     finally { setSaving(null); finishOperation(started); }
   }
 
   const gaps = plan?.missing ?? [];
-  if (!plan) return null;
+  if (!plan) return err ? <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{err}</div> : null;
   // QA-701 (S2, re-opened on live -218): `without_portal_id` and `missing` answer two different
   // questions on purpose (see the route's own comment) — roster-wide "who does the certificate
   // matcher need an id for" vs. gate-blocking "who is actually stopping certification right now".
@@ -2092,12 +2124,15 @@ function PortalIdGaps({ batchId, onChanged, operationCoordinator }: any) {
   // (that was the pre-207 shape and it was wrong for a different reason) — it just stops hiding the
   // roster-wide gap entirely when it exists and nothing is blocking yet.
   if (gaps.length === 0) {
-    if (!plan.without_portal_id) return null;
+    if (!plan.without_portal_id && !err) return null;
     return (
-      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
-        {plan.without_portal_id} student{plan.without_portal_id === 1 ? "" : "s"} on this roster
-        {plan.without_portal_id === 1 ? " has" : " have"} no portal Candidate ID yet.{" "}
-        Not blocking certification right now — none of them are enrolled yet.
+      <div className={`rounded-lg border px-3 py-2 text-xs ${err ? "border-red-200 bg-red-50 text-red-800" : "border-gray-200 bg-gray-50 text-gray-700"}`}>
+        {plan.without_portal_id > 0 && <>
+          {plan.without_portal_id} student{plan.without_portal_id === 1 ? "" : "s"} on this roster
+          {plan.without_portal_id === 1 ? " has" : " have"} no portal Candidate ID yet.{" "}
+          Not blocking certification right now — none of them are enrolled yet.
+        </>}
+        {err && <div className={plan.without_portal_id ? "mt-1" : ""}>{err}</div>}
       </div>
     );
   }
