@@ -2636,7 +2636,7 @@ const COST_ENTRY_IMMUTABLE_FIELDS = [
   "requested_amount", "approval_request", "payment_status", "note", "vendor_payee",
   "voucher_no", "payment_mode", "pre_approved_applied", "pre_approved_basis",
   "pre_approved_unit", "reservation_state", "reservation_expires_at", "reservation_kind",
-  "entered_by",
+  "_audit_events", "entered_by",
 ] as const;
 
 function stableCostValue(value: unknown): string {
@@ -2647,19 +2647,25 @@ function stableCostValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function assertSameCostEntry(existing: Record<string, any>, expected: CostEntryDraft) {
+function assertSameCostEntry(
+  existing: Record<string, any>,
+  expected: CostEntryDraft,
+  acceptedReservationStates?: readonly string[],
+) {
   const mismatched = COST_ENTRY_IMMUTABLE_FIELDS.filter(
-    (field) => stableCostValue(existing[field]) !== stableCostValue(expected[field]),
+    (field) => field === "reservation_state" && acceptedReservationStates?.includes(String(existing[field]))
+      ? false
+      : stableCostValue(existing[field]) !== stableCostValue(expected[field]),
   );
   if (mismatched.length) {
     throw new HttpError(409, `A cost entry with this id already exists with different immutable details (${mismatched.join(", ")}). Nothing was retried.`);
   }
 }
 
-async function readBackCostEntry(expected: CostEntryDraft) {
+async function readBackCostEntry(expected: CostEntryDraft, acceptedReservationStates?: readonly string[]) {
   const existing = await CostEntry.collection.findOne({ _id: expected._id });
   if (!existing) return null;
-  assertSameCostEntry(existing as any, expected);
+  assertSameCostEntry(existing as any, expected, acceptedReservationStates);
   return (CostEntry as any).hydrate(existing);
 }
 
@@ -2669,7 +2675,7 @@ async function readBackCostEntry(expected: CostEntryDraft) {
 // with different money/context fails closed.
 export async function createCostEntryIdempotently(
   entry: CostEntryDraft,
-  options: { simulateAmbiguousAfterCreate?: boolean } = {},
+  options: { simulateAmbiguousAfterCreate?: boolean; acceptedReservationStates?: readonly string[] } = {},
 ) {
   try {
     const created = await CostEntry.create(entry);
@@ -2678,7 +2684,7 @@ export async function createCostEntryIdempotently(
     }
     return created;
   } catch (error) {
-    const existing = await readBackCostEntry(entry);
+    const existing = await readBackCostEntry(entry, options.acceptedReservationStates);
     if (existing) return existing;
     throw error;
   }

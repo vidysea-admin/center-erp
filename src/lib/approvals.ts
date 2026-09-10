@@ -1,12 +1,14 @@
 // Approval matrix (RPL M24). Ships as an engine with every action switched OFF: with no
 // enabled rule, `requireApproval` returns null and the caller proceeds exactly as before —
 // zero behaviour change until an Admin turns an action on.
-import { ApprovalRequest, ApprovalRule, Notification } from "@/models";
+import { ApprovalRequest, ApprovalRule, AuditLog, CostEntry, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
 import { mailUsers, mailUsersByRole } from "@/lib/mailer";
 import { redactMoneyInText } from "@/lib/permissions";
+import { createHash } from "crypto";
+import { Types } from "mongoose";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -20,9 +22,127 @@ export type ApprovalAction =
 export type ApprovalOutcome = { request: any } | null;
 type ClaimedApproval = {
   _id: unknown;
+  action?: string;
+  status?: string;
   decided_by?: unknown;
   decided_at?: Date;
 };
+
+export type FinanceAuditEvent = {
+  event_id: string;
+  entity: string;
+  entity_id: Types.ObjectId;
+  field?: string;
+  old_value?: unknown;
+  new_value?: unknown;
+  actor: Types.ObjectId;
+  actor_type: "User";
+};
+
+export function financeAuditEvent(
+  key: string,
+  input: Omit<FinanceAuditEvent, "event_id" | "actor_type">,
+): FinanceAuditEvent {
+  return {
+    ...input,
+    event_id: createHash("sha256").update(`finance-audit-v1:${key}`).digest("hex").slice(0, 24),
+    actor_type: "User",
+  };
+}
+
+function sameAuditValue(a: unknown, b: unknown) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+async function deliverOwnerEvents(
+  collection: any,
+  ownerId: Types.ObjectId,
+  eligible: Record<string, unknown>,
+  failure?: "before" | "after",
+) {
+  const owner = await collection.findOne({ _id: ownerId, ...eligible });
+  if (!owner) return;
+  const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
+  for (const event of owner._audit_events ?? []) {
+    if (!event?.event_id || delivered.has(String(event.event_id))) continue;
+    const eventId = new Types.ObjectId(String(event.event_id));
+    const durable = {
+      _id: eventId,
+      entity: event.entity,
+      entity_id: new Types.ObjectId(String(event.entity_id)),
+      // The MongoDB driver serializes undefined fields as null in this existing Mixed-shaped audit
+      // schema. Normalize before both insert and comparison so a successful delivery can be marked
+      // acknowledged instead of being retried forever after its own exact insert.
+      field: event.field ?? null,
+      old_value: event.old_value ?? null,
+      new_value: event.new_value ?? null,
+      actor: new Types.ObjectId(String(event.actor)),
+      actor_type: event.actor_type ?? "User",
+    };
+    if (failure === "before") throw new Error("test-only audit delivery failure before insert");
+    const now = new Date();
+    await AuditLog.collection.updateOne(
+      { _id: eventId },
+      { $setOnInsert: { ...durable, createdAt: now, updatedAt: now } },
+      { upsert: true },
+    );
+    const written: any = await AuditLog.collection.findOne({ _id: eventId });
+    if (!written || !["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
+      .every((field) => sameAuditValue(written[field], (durable as any)[field]))) {
+      throw new Error(`Audit event ${event.event_id} exists with different immutable details.`);
+    }
+    if (failure === "after") throw new Error("test-only audit delivery failure after insert");
+    await collection.updateOne(
+      { _id: ownerId, ...eligible },
+      { $addToSet: { _audit_delivered_event_ids: String(event.event_id) } },
+    );
+  }
+}
+
+export async function settleFinanceAuditEvents(input: {
+  costIds?: unknown[];
+  approvalIds?: unknown[];
+  failure?: "before" | "after";
+}) {
+  let failure = input.failure;
+  for (const id of input.costIds ?? []) {
+    await deliverOwnerEvents(CostEntry.collection, new Types.ObjectId(String(id)), { reservation_state: "Applied" }, failure);
+    failure = undefined;
+  }
+  for (const id of input.approvalIds ?? []) {
+    await deliverOwnerEvents(ApprovalRequest.collection, new Types.ObjectId(String(id)), { status: { $in: ["Approved", "Rejected"] } }, failure);
+    failure = undefined;
+  }
+}
+
+// Recovery does not depend on another write. Every normal finance ledger/approval list read calls
+// this bounded drain; deterministic AuditLog ids make retries after either acknowledgement window
+// exactly-once from the user's perspective.
+export async function flushPendingFinanceAuditEvents(limit = 100) {
+  const hasUndeliveredEvent = {
+    $expr: {
+      $gt: [
+        {
+          $size: {
+            $setDifference: [
+              { $map: { input: { $ifNull: ["$_audit_events", []] }, as: "event", in: "$$event.event_id" } },
+              { $ifNull: ["$_audit_delivered_event_ids", []] },
+            ],
+          },
+        },
+        0,
+      ],
+    },
+  };
+  const costs = await CostEntry.collection.find({
+    reservation_state: "Applied", "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
+  }, { projection: { _id: 1 } }).limit(limit).toArray();
+  const approvals = await ApprovalRequest.collection.find({
+    status: { $in: ["Approved", "Rejected"] }, "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
+  }, { projection: { _id: 1 } }).limit(limit).toArray();
+  for (const owner of costs) await settleFinanceAuditEvents({ costIds: [owner._id] }).catch(() => {});
+  for (const owner of approvals) await settleFinanceAuditEvents({ approvalIds: [owner._id] }).catch(() => {});
+}
 
 // Returns null → proceed with the action.
 // Returns { request } → the action was parked for approval; the caller must NOT apply it.
@@ -118,11 +238,12 @@ export async function decideApproval(
   user: SessionUser,
   decision: "Approved" | "Rejected",
   note?: string,
-  decisionData: { approvedAmount?: number } = {},
+  decisionData: { approvedAmount?: number; applying?: boolean; mapToCategory?: string } = {},
 ) {
   const request = await ApprovalRequest.findById(requestId);
   if (!request) throw new HttpError(404, "Approval request not found");
-  if (request.status !== "Pending") throw new HttpError(409, `Already ${request.status}.`);
+  const resuming = request.status === "Applying" && decision === "Approved" && decisionData.applying;
+  if (request.status !== "Pending" && !resuming) throw new HttpError(409, `Already ${request.status}.`);
   if (user.role !== request.approver_role && user.role !== "Admin") {
     throw new HttpError(403, `Only ${request.approver_role} may decide this request.`);
   }
@@ -137,16 +258,40 @@ export async function decideApproval(
   if (String(request.initiator) === String(user.id)) {
     throw new HttpError(403, "You cannot approve your own request.");
   }
+  if (resuming) {
+    if (note !== undefined && String(request.decision_note ?? "") !== String(note ?? "")) {
+      throw new HttpError(409, "This approval is already applying a different decision note. Resume it without changing the decision.");
+    }
+    if (decisionData.approvedAmount !== undefined
+        && Number(request.approved_amount ?? request.payload?.amount) !== decisionData.approvedAmount) {
+      throw new HttpError(409, "This approval is already applying a different sanctioned amount. Resume it without changing the decision.");
+    }
+    if (decisionData.mapToCategory !== undefined
+        && String(request.decision_map_to_category ?? "") !== String(decisionData.mapToCategory ?? "")) {
+      throw new HttpError(409, "This approval is already applying a different cost head. Resume its original decision.");
+    }
+    return request;
+  }
   const decidedAt = new Date();
+  const nextStatus = decision === "Approved" && decisionData.applying ? "Applying" : decision;
+  const decisionEvent = request.action === "cost.post" || request.action === "costcategory.create"
+    ? financeAuditEvent(`approval:${request._id}:status:${decision}`, {
+        entity: "ApprovalRequest", entity_id: new Types.ObjectId(String(request._id)), field: "status",
+        new_value: decisionData.approvedAmount === undefined ? decision : { decision, approved_amount: decisionData.approvedAmount },
+        actor: new Types.ObjectId(String(user.id)),
+      })
+    : null;
   const claimed = await ApprovalRequest.findOneAndUpdate(
     { _id: request._id, status: "Pending" },
     {
       $set: {
-        status: decision,
+        status: nextStatus,
         decided_by: user.id,
         decided_at: decidedAt,
         decision_note: note,
         ...(decisionData.approvedAmount !== undefined ? { approved_amount: decisionData.approvedAmount } : {}),
+        ...(decisionData.mapToCategory ? { decision_map_to_category: decisionData.mapToCategory } : {}),
+        ...(decisionEvent ? { _audit_events: [decisionEvent] } : {}),
       },
     },
     { new: true, runValidators: true },
@@ -166,16 +311,38 @@ export async function finalizeApprovalDecision(
   decision: "Approved" | "Rejected",
   decisionData: { approvedAmount?: number } = {},
 ) {
+  let finalized: any = request;
+  if (decision === "Approved" && request.status === "Applying") {
+    finalized = await ApprovalRequest.findOneAndUpdate(
+      { _id: request._id, status: "Applying", decided_by: request.decided_by, decided_at: request.decided_at },
+      { $set: { status: "Approved" } },
+      { new: true, runValidators: true },
+    );
+    if (!finalized) {
+      const current: any = await ApprovalRequest.findById(request._id);
+      if (current?.status === "Approved"
+          && String(current.decided_by) === String(request.decided_by)
+          && String(current.decided_at) === String(request.decided_at)) {
+        finalized = current;
+      } else {
+        throw new Error(`Could not finalize applying approval ${request._id}; its claim changed.`);
+      }
+    }
+  }
   await Notification.updateMany(
     { entity: "ApprovalRequest", entity_id: request._id, status: { $in: ["New", "Acknowledged"] } },
     { $set: { status: "Resolved" } },
-  );
+  ).catch(() => {});
+  if (request.action === "cost.post" || request.action === "costcategory.create") {
+    await settleFinanceAuditEvents({ approvalIds: [request._id] }).catch(() => {});
+    return finalized;
+  }
   await audit({
     entity: "ApprovalRequest", entityId: request._id, field: "status",
     newValue: decisionData.approvedAmount === undefined ? decision : { decision, approved_amount: decisionData.approvedAmount },
     actor: user.id,
   });
-  return request;
+  return finalized;
 }
 
 // If replay fails before its effect is known to have landed, give the request back to the queue.
@@ -185,7 +352,7 @@ export async function rollbackApprovalDecision(request: ClaimedApproval) {
   const rolledBack = await ApprovalRequest.findOneAndUpdate(
     {
       _id: request._id,
-      status: "Approved",
+      status: { $in: ["Applying", "Approved"] },
       decided_by: request.decided_by,
       decided_at: request.decided_at,
     },
@@ -196,6 +363,9 @@ export async function rollbackApprovalDecision(request: ClaimedApproval) {
         decided_at: 1,
         decision_note: 1,
         approved_amount: 1,
+        decision_map_to_category: 1,
+        _audit_events: 1,
+        _audit_delivered_event_ids: 1,
       },
     },
     { new: true, runValidators: true },

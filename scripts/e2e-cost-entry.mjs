@@ -47,6 +47,7 @@ const rawDb = rawClient.db((process.env.MONGODB_DB || "center_erp_ci").trim());
 const rawCosts = rawDb.collection("costentries");
 const rawCategories = rawDb.collection("costcategories");
 const rawApprovals = rawDb.collection("approvalrequests");
+const rawAudits = rawDb.collection("auditlogs");
 
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
@@ -174,6 +175,47 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       .find((c) => String(c._id) === String(madeId));
     ok("cost correction: a normal (not pre-approved) row remains deletable",
       removed.status === 200 && !afterDelete, `delete=${removed.status} remains=${!!afterDelete}`);
+  }
+}
+
+// A CostEntry is the money fact; a temporary audit transport failure after that fact must not turn
+// a successful POST into a retriable 500. Both acknowledgement windows leave a durable marker,
+// and a normal ledger read drains it exactly once.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  for (const window of ["before", "after"]) {
+    const note = `audit-${window}-${stamp}`;
+    const made = await req(admin, "POST", "/api/costs", baseEntry({
+      category: cat?._id, amount: window === "before" ? 611 : 612, note,
+      ...(window === "before" ? { _test_fail_audit_before_insert: true } : { _test_fail_audit_after_insert: true }),
+    }));
+    const costId = made.data?.item?._id;
+    const raw = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
+    const eventId = raw?._audit_events?.[0]?.event_id;
+    const beforeCount = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    ok(`durable audit ${window} [precondition]: business write returns 201 with one persisted audit marker`,
+      made.status === 201 && !!raw && !!eventId,
+      JSON.stringify({ status: made.status, cost: !!raw, eventId }));
+    ok(`durable audit ${window}: injected delivery failure does not create a duplicate liability`,
+      await rawCosts.countDocuments({ note }) === 1,
+      `rows=${await rawCosts.countDocuments({ note })}`);
+    ok(`durable audit ${window} [precondition]: injection reached the intended acknowledgement window`,
+      window === "before" ? beforeCount === 0 : beforeCount === 1,
+      `audit rows before recovery=${beforeCount}`);
+
+    const ordinaryRead = await req(admin, "GET", "/api/costs");
+    const recovered = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    const ownerAfter = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
+    await req(admin, "GET", "/api/costs");
+    const afterSecondRead = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    ok(`durable audit ${window}: a subsequent ordinary ledger read delivers and acknowledges the pending event`,
+      ordinaryRead.status === 200 && recovered === 1
+        && (ownerAfter?._audit_delivered_event_ids ?? []).includes(String(eventId)),
+      JSON.stringify({ read: ordinaryRead.status, recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
+    ok(`durable audit ${window}: repeated recovery remains exactly one AuditLog row`,
+      afterSecondRead === 1,
+      `audit rows after second read=${afterSecondRead}`);
   }
 }
 
@@ -835,6 +877,135 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         JSON.stringify({ approval: approved.status, head: afterHead && { id: afterHead._id, active: afterHead.active }, costs: afterCosts.map((c) => ({ id: c._id, amount: c.amount })) }));
     } else {
       ok("staged head [precondition]: a valid unknown-head request parked", false, `got ${parked.status}`);
+    }
+  }
+
+  // A crash after publication cannot be compensated backwards: ordinary users may already have
+  // observed the head. The request therefore stays Applying, remains in the default queue, and a
+  // retry resumes the request-owned Pending cost instead of trying to recreate either row.
+  {
+    const nm = `ZZ Resume Published ${stamp}`;
+    const note = `resume-published-${stamp}`;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      amount: 780, note, new_subhead: nm, payment_mode: "Cash",
+      _test_fail_after_publish_before_cost_apply: true,
+    }));
+    const requestId = parked.data?.item?._id;
+    if (requestId) {
+      const interrupted = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "publish interruption" });
+      const rawHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+      const rawCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
+      const rawRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      const defaultQueue = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
+      ok("Applying saga [precondition]: injected interruption landed after head publication and before cost visibility",
+        interrupted.status === 500 && rawHead?.active === true && !rawHead?.staged_by_approval
+          && rawCost?.reservation_state === "Pending" && rawRequest?.status === "Applying",
+        JSON.stringify({ status: interrupted.status, head: rawHead && { active: rawHead.active, owner: rawHead.staged_by_approval }, cost: rawCost?.reservation_state, request: rawRequest?.status }));
+      ok("Applying saga: the default Pending queue still returns an interrupted Applying request",
+        defaultQueue.some((r) => String(r._id) === String(requestId) && r.status === "Applying"),
+        JSON.stringify(defaultQueue.filter((r) => String(r._id) === String(requestId)).map((r) => r.status)));
+
+      let browser, context;
+      try {
+        const { chromium } = await import("playwright");
+        browser = await chromium.launch({ headless: true });
+        context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+        const page = await context.newPage();
+        await page.goto(BASE, { waitUntil: "networkidle" });
+        const email = page.locator('input[type="email"], input[name="email"]').first();
+        if (await email.count()) {
+          await email.fill("admin@vidysea.com");
+          await page.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+          await page.locator('button[type="submit"]').first().click();
+          await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+        }
+        await page.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
+        await page.waitForFunction((s) => document.body.innerText.includes(s), nm, { timeout: 30000 }).catch(() => {});
+        const text = await page.locator("body").innerText();
+        ok("Applying saga UI: the approver sees the interrupted row and a Resume apply control",
+          text.includes(nm) && text.includes("Applying") && text.includes("Resume apply"),
+          text.slice(0, 400));
+      } finally {
+        try { await context?.close(); } catch {}
+        try { await browser?.close(); } catch {}
+      }
+
+      const changedDecision = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", approved_amount: 1, note: "attempt to change an applying decision",
+      });
+      ok("Applying saga: retry cannot change the already-claimed sanctioned amount",
+        changedDecision.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
+        `got ${changedDecision.status}`);
+      await rawApprovals.updateOne(
+        { _id: new ObjectId(String(requestId)), status: "Applying" },
+        { $unset: { "payload._test_fail_after_publish_before_cost_apply": "" } },
+      );
+      const resumed = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved" });
+      const afterHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+      const afterCosts = await rawCosts.find({ approval_request: new ObjectId(String(requestId)) }).toArray();
+      const afterRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      ok("Applying saga: retry resumes published-head plus Pending-cost and finalizes only after visibility",
+        resumed.status === 200 && afterHead?.active === true && afterCosts.length === 1
+          && afterCosts[0].reservation_state === "Applied" && afterRequest?.status === "Approved",
+        JSON.stringify({ status: resumed.status, head: afterHead?.active, costs: afterCosts.map((c) => c.reservation_state), request: afterRequest?.status }));
+    } else {
+      ok("Applying saga [precondition]: published-head interruption request parked", false, `got ${parked.status}`);
+    }
+  }
+
+  // The other crash window is after the cost itself is visible. It must remain a single liability
+  // and move forward from Applying on retry; returning it to Pending would let a fresh replay bill
+  // the same approved request twice.
+  {
+    const cat = (await catList()).find((c) => !c.pre_approved && c.active !== false);
+    const note = `resume-applied-${stamp}`;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      category: cat?._id, amount: 781, note, _test_fail_after_cost_applied: true,
+    }));
+    const requestId = parked.data?.item?._id;
+    if (requestId) {
+      const interrupted = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "cost visible interruption" });
+      const rawRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      const rows = await rawCosts.find({ approval_request: new ObjectId(String(requestId)) }).toArray();
+      ok("Applying cost saga: interruption after visible CostEntry leaves one liability and an Applying claim",
+        interrupted.status === 500 && rawRequest?.status === "Applying" && rows.length === 1 && rows[0].reservation_state === "Applied",
+        JSON.stringify({ status: interrupted.status, request: rawRequest?.status, rows: rows.map((c) => c.reservation_state) }));
+      await rawApprovals.updateOne(
+        { _id: new ObjectId(String(requestId)), status: "Applying" },
+        { $unset: { "payload._test_fail_after_cost_applied": "" } },
+      );
+      const resumed = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved" });
+      ok("Applying cost saga: retry confirms the existing deterministic cost and approves without duplication",
+        resumed.status === 200
+          && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Approved"
+          && await rawCosts.countDocuments({ approval_request: new ObjectId(String(requestId)) }) === 1,
+        `got ${resumed.status}`);
+    } else {
+      ok("Applying cost saga [precondition]: ordinary cost request parked", false, `got ${parked.status}`);
+    }
+  }
+
+  // Negative ownership: a deterministic id occupied by somebody else's head is never adopted or
+  // deleted. The claimed request fails closed in Applying for reconciliation.
+  {
+    const nm = `ZZ Foreign Owner ${stamp}`;
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 782, new_subhead: nm, payment_mode: "Cash" }));
+    const requestId = parked.data?.item?._id;
+    if (requestId) {
+      const foreign = {
+        _id: new ObjectId(String(requestId)), name: `ZZ Foreign Occupant ${stamp}`, active: true,
+        createdAt: new Date(), updatedAt: new Date(),
+      };
+      await rawCategories.insertOne(foreign);
+      const refused = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved" });
+      const occupant = await rawCategories.findOne({ _id: foreign._id });
+      const afterRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      ok("Applying ownership: foreign deterministic-id head is preserved and request fails closed",
+        refused.status >= 400 && occupant?.name === foreign.name && afterRequest?.status === "Applying",
+        JSON.stringify({ status: refused.status, occupant: occupant?.name, request: afterRequest?.status }));
+      await rawCategories.deleteOne({ _id: foreign._id, name: foreign.name });
+    } else {
+      ok("Applying ownership [precondition]: unknown-head request parked", false, `got ${parked.status}`);
     }
   }
 

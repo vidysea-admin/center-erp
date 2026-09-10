@@ -5,11 +5,13 @@ import { requirePerm, requireView, hasPermission, maskApprovalMoney, FINANCE_VIE
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
+import { flushPendingFinanceAuditEvents } from "@/lib/approvals";
 
 // GET — pending/decided requests plus the current rule configuration.
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
+  await flushPendingFinanceAuditEvents().catch(() => {});
   // R-E: ?mine=1 — the initiator's own submissions only (CEO: once approved "it should go
   // from their queue and then they're done"; a rejection shows its note so they can fix and
   // repost). No approvals.decide needed: these are the caller's own requests, nobody else's.
@@ -41,7 +43,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // now is too. QA-025 P2: seeing = view level; deciding (POST/decide paths) keeps edit.
   await requireView(user, "approvals.decide");
   const status = req.nextUrl.searchParams.get("status") ?? "Pending";
-  const filter: Record<string, unknown> = status === "all" ? {} : { status };
+  // Applying is a recoverable in-flight finance claim, not a completed decision. Keep it in the
+  // default approver queue so a process restart cannot turn durable work into an invisible orphan.
+  const filter: Record<string, unknown> = status === "all" ? {}
+    : status === "Pending" ? { status: { $in: ["Pending", "Applying"] } }
+      : { status };
   if (isScoped(user)) Object.assign(filter, locationFilter(user));
 
   const [items, rules] = await Promise.all([

@@ -1006,24 +1006,24 @@ function Approvals({ error, setError }: any) {
                         {r.decision_note}
                       </div>
                     ) : null}
-                    {r.status === "Approved" && r.approved_amount !== undefined ? (
+                    {["Applying", "Approved"].includes(r.status) && r.approved_amount !== undefined ? (
                       <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
                     ) : null}
                   </div>
                   <Chip value={r.status} />
                 </div>
-                {r.status === "Pending" && (
+                {["Pending", "Applying"].includes(r.status) && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    {(r.action === "cost.post" || r.action === "costcategory.create") && r.payload?.amount !== undefined && (
+                    {r.status === "Pending" && (r.action === "cost.post" || r.action === "costcategory.create") && r.payload?.amount !== undefined && (
                       <input type="number" min="0.01" max={Number(r.payload.amount)} step="0.01"
                         className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                         value={approvedAmount[r._id] ?? ""}
                         onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
                     )}
-                    <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
-                      value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />
-                    <Btn small onClick={() => decide(r._id, "Approved")}>Approve &amp; apply</Btn>
-                    <Btn small kind="danger" onClick={() => decide(r._id, "Rejected")}>Reject</Btn>
+                    {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
+                      value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />}
+                    <Btn small onClick={() => decide(r._id, "Approved")}>{r.status === "Applying" ? "Resume apply" : <>Approve &amp; apply</>}</Btn>
+                    {r.status === "Pending" && <Btn small kind="danger" onClick={() => decide(r._id, "Rejected")}>Reject</Btn>}
                   </div>
                 )}
               </li>

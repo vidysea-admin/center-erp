@@ -1229,6 +1229,11 @@ const CostEntrySchema = new Schema({
   reservation_state: { type: String, enum: ["Pending", "Applied", "Cancelled"], default: "Applied" },
   reservation_expires_at: Date,
   reservation_kind: { type: String, enum: ["Formula", "ApprovalHead"] },
+  // Durable audit outbox. A CostEntry is the source of truth for its own creation event: if the
+  // business write is acknowledged but AuditLog is temporarily unavailable, the API still returns
+  // the confirmed cost and an ordinary later finance read drains this marker idempotently.
+  _audit_events: { type: [Schema.Types.Mixed], default: undefined, select: false },
+  _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
   entered_by: oid("User", true),
 }, { timestamps: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
@@ -1400,7 +1405,7 @@ export const APPROVAL_ACTIONS = [
   // the admin before we kind of change it".
   "location.edit",
 ] as const;
-export const APPROVAL_REQUEST_STATUS = ["Pending", "Approved", "Rejected", "Cancelled"] as const;
+export const APPROVAL_REQUEST_STATUS = ["Pending", "Applying", "Approved", "Rejected", "Cancelled"] as const;
 
 const ApprovalRuleSchema = new Schema({
   action: { type: String, enum: APPROVAL_ACTIONS, required: true, unique: true },
@@ -1433,6 +1438,11 @@ const ApprovalRequestSchema = new Schema({
   // For a partially sanctioned cost, payload.amount stays the original request and this is the
   // amount the approver actually authorised. Keeping both is the audit trail Karunn described.
   approved_amount: Number,
+  // The Applying claim owns these replay choices. A retry must resume the same decision rather than
+  // accepting new money/taxonomy input after part of the original effect may already be durable.
+  decision_map_to_category: oid("CostCategory"),
+  _audit_events: { type: [Schema.Types.Mixed], default: undefined, select: false },
+  _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
 }, { timestamps: true });
 ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
 

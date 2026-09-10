@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { decideApproval, finalizeApprovalDecision, rollbackApprovalDecision } from "@/lib/approvals";
+import { decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -30,6 +30,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // the cost entry that prompted it. Both halves write money, so it belongs here by this file's own
   // stated criterion rather than as an exception to it.
   const MONEY_ACTIONS = new Set(["cost.post", "invoice.raise", "invoice.paid", "costcategory.create"]);
+  const RESUMABLE_COST_ACTIONS = new Set(["cost.post", "costcategory.create"]);
   const { id } = await ctx.params;
   // QA-1828c: `map_to_category` is the CEO's first option - *"एप्रोप्रियेट हेड सब हेड में डाल पाएं
   // या फिर एक नया हेड और सब हेड क्रिएट करें"*. Approving WITHOUT it creates the head the poster
@@ -54,15 +55,20 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // e2e-cost-entry caught it immediately: 25 passed / 5 failed, and the three consequence pins
   // ("the head now exists", "the entry is in the ledger") failed downstream of the two 400s rather
   // than independently. The pins were right; nobody ran them.
-  const pending = await ApprovalRequest.findById(id).select("action payload").lean<any>();
+  const pending = await ApprovalRequest.findById(id)
+    .select("action payload status approved_amount decision_map_to_category").lean<any>();
   if (!pending) throw new HttpError(404, "Approval request not found");
   if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
+  await flushPendingFinanceAuditEvents().catch(() => {});
+  const resuming = pending.status === "Applying" && decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action);
+  const chosenMap = resuming ? String(pending.decision_map_to_category ?? "") : String(map_to_category ?? "");
 
   // A finance approver may sanction less than was requested, never more. The original request
   // remains in payload.amount; approved_amount is a separate decision fact. A partial approval
   // without a note would leave the raiser unable to understand the cut, so it is refused here.
   const canPartiallyApprove = pending.action === "cost.post" || pending.action === "costcategory.create";
-  let sanctionedAmount: number | undefined;
+  let sanctionedAmount: number | undefined = resuming && pending.approved_amount !== undefined
+    ? Number(pending.approved_amount) : undefined;
   if (approved_amount !== undefined && approved_amount !== null && approved_amount !== "") {
     if (decision !== "Approved" || !canPartiallyApprove) {
       throw new HttpError(400, "approved_amount is only valid while approving a cost entry.");
@@ -98,16 +104,20 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     if (pp.payment_mode && !COST_PAYMENT_MODE.includes(pp.payment_mode)) {
       throw new HttpError(400, `This request carries a payment mode this system does not use ("${pp.payment_mode}"). Reject it and ask for it again.`);
     }
-    if (map_to_category) {
+    if (chosenMap) {
       // Checked here as well as in the replay, because reaching the replay means the decision is
       // already saved. QA-1980: a deactivated head is not a place to file new money either.
-      const target = await CostCategory.findById(String(map_to_category)).select("_id active").lean<any>();
+      const target = await CostCategory.findById(chosenMap).select("_id active").lean<any>();
       if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
       if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it. Pick an active one, or approve the new head as proposed.");
     }
   }
 
-  const request = await decideApproval(id, user, decision, note, { approvedAmount: sanctionedAmount });
+  const request = await decideApproval(id, user, decision, note, {
+    approvedAmount: sanctionedAmount,
+    applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action),
+    ...(map_to_category !== undefined ? { mapToCategory: String(map_to_category ?? "") } : {}),
+  });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.
   if (decision !== "Approved") {
@@ -124,7 +134,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // Only populated when THIS request owns an inactive staged head. A replay failure may reopen the
   // request only after its own deterministic cost has been cancelled and this exact unpublished
   // head has been conditionally removed.
-  let stagedCategory: { id: Types.ObjectId; name: string; costId: Types.ObjectId } | null = null;
+  let stagedCategory: { id: Types.ObjectId; name: string; costId: Types.ObjectId; published: boolean } | null = null;
+  let appliedCostId: Types.ObjectId | null = null;
   try {
     switch (request.action) {
     case "location.close":
@@ -183,7 +194,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // The WHOLE cost entry parked, not just the taxonomy request (Umesh, D8): nothing reaches the
       // ledger until somebody has decided where it belongs. So this replay does both writes, in the
       // order that makes the second possible.
-      let categoryId = map_to_category ? String(map_to_category) : "";
+      let categoryId = chosenMap;
       if (categoryId) {
         await assertActiveCostCategory(categoryId);
       } else {
@@ -198,7 +209,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         };
         const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const sameName = { name: { $regex: `^${escaped}$`, $options: "i" } };
-        let existing: any = await CostCategory.collection.findOne(sameName);
+        let existing: any = await CostCategory.collection.findOne({ _id: requestId });
+        if (existing && (existing.name !== name || String(existing.parent ?? "") !== String(parent ?? ""))) {
+          throw new HttpError(409, "This approval's deterministic cost-head id is occupied by foreign data. It remains Applying for reconciliation.");
+        }
+        if (!existing) existing = await CostCategory.collection.findOne(sameName);
         if (!existing) {
           try {
             const now = new Date();
@@ -207,22 +222,28 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           } catch (createError) {
             // Either our insert was acknowledged ambiguously or a same-name writer won. Only our
             // exact inactive row is resumable; an independently published head may be reused.
-            existing = await CostCategory.collection.findOne(sameName);
+            existing = await CostCategory.collection.findOne({ _id: requestId })
+              ?? await CostCategory.collection.findOne(sameName);
             if (!existing) throw createError;
           }
         }
-        if (String(existing._id) === String(requestId)
-            && existing.active === false
-            && String(existing.staged_by_approval) === String(requestId)
-            && String(existing.parent ?? "") === String(parent ?? "")) {
+        const ownsInactive = String(existing._id) === String(requestId)
+          && existing.active === false
+          && String(existing.staged_by_approval) === String(requestId)
+          && String(existing.parent ?? "") === String(parent ?? "");
+        const ownsPublished = String(existing._id) === String(requestId)
+          && existing.active === true
+          && !existing.staged_by_approval
+          && String(existing.parent ?? "") === String(parent ?? "");
+        if (ownsInactive || ownsPublished) {
           categoryId = String(requestId);
-          stagedCategory = { id: requestId, name, costId: requestId };
+          stagedCategory = { id: requestId, name, costId: requestId, published: ownsPublished };
         } else if (existing.active !== false && !existing.staged_by_approval) {
           categoryId = String(existing._id);
         } else {
           throw new HttpError(409, `"${name}" is inactive or currently staged by another approval. This request remains claimed for reconciliation.`);
         }
-        if (stagedCategory && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+        if (stagedCategory && !stagedCategory.published && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
           if (Number(p._test_pause_after_head_ms) > 0) {
             await new Promise((resolve) => setTimeout(resolve, Number(p._test_pause_after_head_ms)));
           }
@@ -234,6 +255,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       const approvedAmount = Number(request.approved_amount ?? p.amount);
       await assertCostEntryValid({ ...p, amount: approvedAmount, category: categoryId });
       const costId = new Types.ObjectId(String(request._id));
+      const costEvents = [
+        ...(stagedCategory ? [financeAuditEvent(`category:${stagedCategory.id}:created`, {
+          entity: "CostCategory", entity_id: stagedCategory.id, field: "created",
+          new_value: `"${stagedCategory.name}" created by approving ${request.initiator}'s cost entry`,
+          actor: new Types.ObjectId(String(request.decided_by)),
+        })] : []),
+        financeAuditEvent(`cost:${costId}:created`, {
+          entity: "CostEntry", entity_id: costId,
+          new_value: chosenMap ? "created (filed under an existing head by the approver)" : "created (new head approved)",
+          actor: new Types.ObjectId(String(request.decided_by)),
+        }),
+      ];
       const entryDraft = {
         _id: costId,
         entry_date: new Date(p.entry_date ?? request.createdAt),
@@ -248,26 +281,35 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         pre_approved_applied: false,
         reservation_state: stagedCategory ? "Pending" : "Applied",
         ...(stagedCategory ? { reservation_kind: "ApprovalHead" } : {}),
+        _audit_events: costEvents,
         entered_by: new Types.ObjectId(String(request.initiator)),
       };
       const entry = await createCostEntryIdempotently(entryDraft, {
         simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
           && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
+        ...(stagedCategory ? { acceptedReservationStates: ["Pending", "Applied"] } : {}),
       });
       if (stagedCategory) {
-        if (p._test_fail_after_cost_before_publish === true
+        if (!stagedCategory.published && p._test_fail_after_cost_before_publish === true
             && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
           throw new Error("test-only failure after staged cost creation before head publish");
         }
-        const published = await CostCategory.collection.updateOne(
-          { _id: stagedCategory.id, active: false, staged_by_approval: request._id },
-          { $set: { active: true, updatedAt: new Date() }, $unset: { staged_by_approval: "" } },
-        );
-        if (published.modifiedCount !== 1) {
-          const current = await CostCategory.collection.findOne({ _id: stagedCategory.id }, { projection: { active: 1, staged_by_approval: 1 } });
-          if (current?.active !== true || current?.staged_by_approval) {
-            throw new Error("The staged cost head could not be published by its owning approval.");
+        if (!stagedCategory.published) {
+          const published = await CostCategory.collection.updateOne(
+            { _id: stagedCategory.id, active: false, staged_by_approval: request._id },
+            { $set: { active: true, updatedAt: new Date() }, $unset: { staged_by_approval: "" } },
+          );
+          if (published.modifiedCount !== 1) {
+            const current = await CostCategory.collection.findOne({ _id: stagedCategory.id }, { projection: { active: 1, staged_by_approval: 1 } });
+            if (current?.active !== true || current?.staged_by_approval) {
+              throw new Error("The staged cost head could not be published by its owning approval.");
+            }
           }
+          stagedCategory.published = true;
+        }
+        if (p._test_fail_after_publish_before_cost_apply === true
+            && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+          throw new Error("test-only interruption after cost head publish before cost visibility");
         }
         const applied = await CostEntry.collection.updateOne(
           {
@@ -285,11 +327,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           }
         }
       }
+      const visible = await CostEntry.findById(costId);
+      if (!visible) throw new Error("The approved cost was not visible after replay.");
+      appliedCostId = costId;
       effectApplied = true;
-      if (stagedCategory) {
-        await audit({ entity: "CostCategory", entityId: stagedCategory.id, field: "created", newValue: `"${stagedCategory.name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
+      if (p._test_fail_after_cost_applied === true
+          && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+        throw new Error("test-only interruption after cost visibility before approval finalization");
       }
-      await audit({ entity: "CostEntry", entityId: entry._id, newValue: map_to_category ? "created (filed under an existing head by the approver)" : "created (new head approved)", actor: user.id });
       break;
     }
     case "cost.post": {
@@ -298,8 +343,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       const approvedAmount = Number(request.approved_amount ?? p.amount);
       await assertCostEntryValid({ ...p, amount: approvedAmount });
       await assertActiveCostCategory(p.category);
+      const costId = new Types.ObjectId(String(request._id));
       const cost = await createCostEntryIdempotently({
-        _id: new Types.ObjectId(String(request._id)),
+        _id: costId,
         entry_date: new Date(p.entry_date ?? request.createdAt),
         location: p.location ? new Types.ObjectId(String(p.location)) : undefined,
         batch: p.batch ? new Types.ObjectId(String(p.batch)) : undefined,
@@ -319,24 +365,51 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         pre_approved_applied: false,
         pre_approved_basis: p._pre_approved_basis || undefined,
         reservation_state: "Applied",
+        _audit_events: [financeAuditEvent(`cost:${costId}:created`, {
+          entity: "CostEntry", entity_id: costId, new_value: `created via approval ${request._id}`,
+          actor: new Types.ObjectId(String(request.decided_by)),
+        })],
       }, {
         simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
           && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
       });
+      appliedCostId = costId;
       effectApplied = true;
-      await audit({ entity: "CostEntry", entityId: cost._id, newValue: `created via approval ${request._id}`, actor: user.id });
+      if (p._test_fail_after_cost_applied === true
+          && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")) {
+        throw new Error("test-only interruption after cost visibility before approval finalization");
+      }
       break;
     }
     default:
       throw new HttpError(400, "Approved request has no replay handler: " + request.action);
     }
   } catch (error) {
-    if (effectApplied) {
-      // The business write landed; do not reopen the request and risk replaying it. Best-effort
-      // finalization keeps the queue and notification consistent even when a following audit fails.
-      await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount }).catch(() => {});
-    } else {
-      if (stagedCategory) {
+    const deterministicId = new Types.ObjectId(String(request._id));
+    const rawCost: any = RESUMABLE_COST_ACTIONS.has(request.action)
+      ? await CostEntry.collection.findOne({ _id: deterministicId }) : null;
+    const ownedCost = !rawCost || String(rawCost.approval_request) === String(request._id);
+    const rawHead: any = request.action === "costcategory.create"
+      ? await CostCategory.collection.findOne({ _id: deterministicId }) : null;
+    const expectedParent = p.new_head_parent ? String(p.new_head_parent) : "";
+    const ownedPublishedHead = !!rawHead && rawHead.active === true && !rawHead.staged_by_approval
+      && rawHead.name === String(p.new_subhead ?? "").trim()
+      && String(rawHead.parent ?? "") === expectedParent;
+    const ownedInactiveHead = !!rawHead && rawHead.active === false
+      && String(rawHead.staged_by_approval) === String(request._id)
+      && rawHead.name === String(p.new_subhead ?? "").trim()
+      && String(rawHead.parent ?? "") === expectedParent;
+    const foreignHead = !!rawHead && !ownedPublishedHead && !ownedInactiveHead;
+
+    // Once any owned liability or published taxonomy is visible the only safe direction is
+    // forward. Leave the durable claim Applying; the default queue shows it and a retry resumes
+    // from these exact rows. Foreign deterministic-id data is also fail-closed: never delete or
+    // reinterpret somebody else's record merely to make our request look retryable.
+    if (effectApplied || rawCost?.reservation_state === "Applied" || ownedPublishedHead || foreignHead || !ownedCost) {
+      throw error;
+    }
+
+    if (stagedCategory) {
         // Compensate the deterministic associated cost first. Only our own Pending row may become
         // Cancelled; Applied or foreign data means the effect may be visible, so fail closed. Once
         // cancellation is proven, remove that exact hidden row so reopening the request can reuse
@@ -382,22 +455,28 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         if (removed.deletedCount !== 1 || stillThere) {
           throw new HttpError(500, `Approval apply failed after staging "${stagedCategory.name}" and safe compensation could not be proven. The request remains claimed for manual reconciliation; it was not reopened for replay.`);
         }
-      }
-      try {
-        await rollbackApprovalDecision(request);
-      } catch (rollbackError) {
-        const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
-        throw new HttpError(500, `Approval apply failed and its claim could not be released safely: ${detail}`);
-      }
+    }
+    try {
+      await rollbackApprovalDecision(request);
+    } catch (rollbackError) {
+      const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      throw new HttpError(500, `Approval apply failed and its claim could not be released safely: ${detail}`);
     }
     throw error;
   }
-  await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const auditFailure = isTestDb && p._test_fail_audit_before_insert === true
+    ? "before" as const
+    : isTestDb && p._test_fail_audit_after_insert === true ? "after" as const : undefined;
+  if (appliedCostId) {
+    await settleFinanceAuditEvents({ costIds: [appliedCostId], failure: auditFailure }).catch(() => {});
+  }
+  const finalized = await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
   // Senior review of cycles 2-4: this handed back the RAW request — full `payload` (amount,
   // invoice_no) and the original summary — to whoever decided it. The door here is
   // `approvals.decide`, not `finance.view`, and `decideApproval` admits anyone whose role matches
   // the rule's `approver_role` (default "Admin"). So the sibling GET was masked in cycle 4 and the
   // decide response, one file away, handed the same figure over the instant the button was pressed.
   const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
-  return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, canSeeMoney), applied: true });
+  return NextResponse.json({ item: maskApprovalMoney(finalized.toObject ? finalized.toObject() : finalized, canSeeMoney), applied: true });
 });

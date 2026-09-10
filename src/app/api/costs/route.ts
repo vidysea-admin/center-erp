@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInS
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
-import { requireApproval } from "@/lib/approvals";
+import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
 
@@ -23,6 +23,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // "kisi ke bhi paas nahi hogi chaahe super admin ho." An Admin without the grant now 403s here
   // too, which the role hardcode could never have done.
   await requireFinance(user, "view");
+  await flushPendingFinanceAuditEvents().catch(() => {});
   const sp = req.nextUrl.searchParams;
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   for (const k of ["location", "batch", "trainer", "category"]) {
@@ -41,6 +42,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requirePerm(user, "costs.manage");
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
+  await flushPendingFinanceAuditEvents().catch(() => {});
   const body = await readJson(req);
   assertCostEntryValid(body); // Rule 37
   // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
@@ -117,6 +119,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Allocate the id before any write. Formula submissions persist under this id as hidden Pending
   // rows before the cap decision; fixed/non-approved submissions use it for ambiguity-safe create.
   const costEntryId = new Types.ObjectId();
+  const createdEvent = (id: Types.ObjectId, value = "created") => financeAuditEvent(`cost:${id}:created`, {
+    entity: "CostEntry", entity_id: id, new_value: value,
+    actor: new Types.ObjectId(String(user.id)),
+  });
   const baseEntry = {
     _id: costEntryId,
     entry_date: body.entry_date ? new Date(body.entry_date) : new Date(),
@@ -129,9 +135,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     vendor_payee: body.vendor_payee || undefined,
     voucher_no: body.voucher_no || undefined,
     payment_mode: body.payment_mode || undefined,
+    _audit_events: [createdEvent(costEntryId)],
     entered_by: new Types.ObjectId(String(user.id)),
   };
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const auditFailure = isTestDb && body._test_fail_audit_before_insert === true
+    ? "before" as const
+    : isTestDb && body._test_fail_audit_after_insert === true ? "after" as const : undefined;
   const pre = await evaluatePreApproval(body.category, Number(body.amount), {
     batch: body.batch,
     reservation: {
@@ -152,7 +162,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   if (pre.applied && pre.reservation?.state === "Applied") {
     const applied = await CostEntry.findById(pre.reservation.cost_entry_id);
     if (!applied) throw new HttpError(500, "The pre-approved reservation was applied but its ledger row could not be confirmed.");
-    await audit({ entity: "CostEntry", entityId: applied._id, newValue: "created", actor: user.id });
+    await settleFinanceAuditEvents({ costIds: [applied._id], failure: auditFailure }).catch(() => {});
     return NextResponse.json({ item: applied }, { status: 201 });
   }
 
@@ -163,6 +173,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const entry = {
     ...baseEntry,
     _id: ledgerEntryId,
+    _audit_events: [createdEvent(ledgerEntryId)],
     // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
     // head must never rewrite what was approved today.
     pre_approved_applied: pre.applied,
@@ -173,6 +184,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const doc = await createCostEntryIdempotently(entry, {
     simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
   });
-  await audit({ entity: "CostEntry", entityId: doc._id, newValue: "created", actor: user.id });
-  return NextResponse.json({ item: doc }, { status: 201 });
+  await settleFinanceAuditEvents({ costIds: [doc._id], failure: auditFailure }).catch(() => {});
+  const confirmed = await CostEntry.findById(doc._id);
+  if (!confirmed) throw new HttpError(500, "The cost was written but could not be read back.");
+  return NextResponse.json({ item: confirmed }, { status: 201 });
 });
