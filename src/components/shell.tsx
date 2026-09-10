@@ -75,7 +75,9 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   // Before this the grant was DEAD: Anuj Kumar already carried the right and no screen ever
   // showed it, because every gate read the ROLE while the API read the PERMISSION.
   { prefix: "/govt-attendance", roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
-  { prefix: "/costs", roles: ["Admin", "Operations"], perm: "costs.manage" },
+  // Cost submission follows the effective right alone. Finance visibility remains a separate
+  // no-Admin-bypass door at /finance; opening this form never opens the ledger.
+  { prefix: "/costs", perm: "costs.manage" },
   // QA-1830 — the finance dashboard. NO `roles` list, deliberately, and it is the only rule here
   // without one: the CEO's control is IDENTITY, not job title (*"कॉस्ट की अप्रूवल केवल और केवल मनीष जी
   // और मेरे पास होगी… चाहे सुपर एडमिन हो, सुपर एडमिन का काका हो"*). `finance.view` is in
@@ -92,7 +94,7 @@ export function routeAllowed(pathname: string, perms: Perms): boolean {
   // the second of the two client short-circuits; both read the server's list, neither restates it.
   if (perms.role === "Admin" && !(rule.perm && perms.noAdminBypass.includes(rule.perm))) return true;
   const roleOk = !rule.roles || rule.roles.includes(perms.role);
-  if (!roleOk) return false; // the role list is the CEILING (R-I: a Trainer's doors are Home and Batches, full stop)
+  if (!roleOk) return false; // where present, the role list is the ceiling; permission-only doors deliberately omit it
   if (rule.perm && perms.loaded) {
     // …and a revoked right closes a door the role would otherwise have (the matrix can narrow, never widen past the role)
     const l = perms.levels[rule.perm];
@@ -111,7 +113,8 @@ const NAV = [
   { href: "/sheet-watch", label: "Sheet Sync", Icon: IconSync, badge: "sheets" as string | undefined, roles: ["Admin"], perm: "sheet.sources" },
   // R-I (CEO 14/08 [38:10-38:43], as the trainer persona): "I shouldn't be able to see
   // other trainers … why new location tab is here — this all should be disabled … I should
-  // just see my batch-wise details." A Trainer's doors are Home and Batches, full stop.
+  // just see my batch-wise details." Those directory doors remain shut; Costs is the later,
+  // permission-only submission exception and does not expose the trainer directory or ledger.
   { href: "/locations", label: "Locations", Icon: IconPin, roles: ["Admin", "Operations", "Location", "Enrollment"] },
   // QA-061/065: Enrollment's brief is candidates — the Trainers door (whose page offered
   // them Add/Import buttons the server refuses anyway) closes for them too.
@@ -124,7 +127,7 @@ const NAV = [
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
   { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
-  { href: "/costs", label: "Costs", Icon: IconWallet, roles: ["Admin", "Operations"], perm: "costs.manage" },
+  { href: "/costs", label: "Costs", Icon: IconWallet, perm: "costs.manage" },
   // QA-1830. `routeAllowed` decides this entry too, so a login without `finance.view` never sees
   // the door — the same single statement of the rule the route gate reads, not a second copy.
   { href: "/finance", label: "Finance", Icon: IconWallet, perm: "finance.view" },

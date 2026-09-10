@@ -8,7 +8,7 @@ import { Batch, Trainer, User } from "@/models";
 import { assertTrainerDocInScope, trainerScopeTies } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { emailError } from "@/lib/validate";
-import { renderMail, sendMail } from "@/lib/mailer";
+import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
 
 // QA-149 (Manish, 15/08): "Add Trainer se trainer add kiya, bypass se Certified, batch
 // assign — ab is trainer se login kaise karun?" There was NO bridge: Add Trainer makes a
@@ -69,7 +69,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     const { html, text } = renderMail({
       title: "Your Center ERP trainer login is ready",
       lines: [`Hello ${tr.name},`, `A trainer login (${email}) has been created for you on the Vidysea Center ERP.`, `${user.name} will share your password with you separately.`],
-      cta: { label: "Sign in to the ERP", url: "https://www.vidysea.com/erp" },
+      cta: { label: "Sign in to the ERP", url: staffSignInUrl(email) },
     });
     sendMail({ to: email, subject: "Your Center ERP trainer login is ready", html, text, entity: "User", entity_id: doc._id }).catch(() => {});
   }

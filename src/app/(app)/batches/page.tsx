@@ -125,7 +125,7 @@ function BatchesInner() {
   useEffect(() => { load(); }, [fLoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Closed" (Rule 52) included so settled batches can be isolated and counted (audit find).
-  const BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"];
+  const BATCH_STATUSES = ["Planning", "Ready", "Active", "Assessment Awaited", "Closing", "Completed", "Closed", "Cancelled"];
   const trainerScoped = role === "Trainer" && mineFilter === "mine" ? items.filter((b) => b.is_mine) : items;
   const statusCount = (s: string) => trainerScoped.filter((b) => b.status === s).length;
   // QA-027 (-71): the client spec wanted Trainer Required / Candidate Shortage /
@@ -150,9 +150,9 @@ function BatchesInner() {
   // being false is the kind of accident that stops being true when someone rewrites the comparison.
   const noAttendance = (b: any) => !((b.attendance_days ?? 0) > 0) && !b.portal_as_of;
   const shown = fBlock === "no-attendance"
-    ? statusShown.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status))
+    ? statusShown.filter((b) => noAttendance(b) && ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"].includes(b.status))
     : fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
-  const noAttendanceCount = trainerScoped.filter((b) => noAttendance(b) && ["Ready", "Active", "Closing", "Completed"].includes(b.status)).length;
+  const noAttendanceCount = trainerScoped.filter((b) => noAttendance(b) && ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"].includes(b.status)).length;
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => {

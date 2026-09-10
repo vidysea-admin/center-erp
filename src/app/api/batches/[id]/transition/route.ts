@@ -7,7 +7,7 @@ import { requireApproval } from "@/lib/approvals";
 import { Batch, Closure } from "@/models";
 import { audit } from "@/lib/audit";
 
-// POST { target: "Ready"|"Active"|"Closing"|"Completed"|"Cancelled"|"Planning", reason?,
+// POST { target: "Ready"|"Active"|"Assessment Awaited"|"Closing"|"Completed"|"Cancelled"|"Planning", reason?,
 //        actual_start?, actual_end?, backdate_override? }
 //        actual_start (YYYY-MM-DD, today or earlier) only for target Active:
 //        -81 (Umesh 15/08) a batch entered after it began starts with its REAL date.
@@ -74,11 +74,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // stamped onto a batch in Planning by a request the product then refused outright - the flag
   // persisting (see the comment below on why the write is deliberately independent of the
   // transition) and granting a free Rule 18 pass later, with no press made during the batch's
-  // Active life. That is precisely the silent drift Umesh rejected the inferred-date option to
-  // prevent: "the exam was held" is a claim about a batch that is RUNNING. Refused rather than
-  // ignored, for the same reason as every other override on this route.
-  if (exam_held === true && before?.status !== "Active") {
-    throw new HttpError(400, "Recording that the assessment was held applies to a batch that is currently running, nothing else.");
+  // Active life. Assessment Awaited is the one intentional exception: delivery is over, but this
+  // is still the explicit press that records the assessment was held. Refused rather than ignored
+  // everywhere else, for the same reason as every other override on this route.
+  if (exam_held === true && !["Active", "Assessment Awaited"].includes(String(before?.status ?? ""))) {
+    throw new HttpError(400, "Recording that the assessment was held applies to a running batch or one waiting for its assessment, nothing else.");
   }
   // QA-2250: recorded BEFORE the transition, because Rule 18 reads it off the Closure - written
   // after, the rule would refuse the very press that carries the fact. It is deliberately its own

@@ -894,6 +894,7 @@ function Approvals({ error, setError }: any) {
   const [items, setItems] = useState<any[]>([]);
   const [status, setStatus] = useState("Pending");
   const [note, setNote] = useState<Record<string, string>>({});
+  const [approvedAmount, setApprovedAmount] = useState<Record<string, string>>({});
 
   // QA-1827: the named-approver picker needs people to pick. Fetched once; the list is small.
   const [people, setPeople] = useState<any[]>([]);
@@ -907,7 +908,14 @@ function Approvals({ error, setError }: any) {
     catch (e: any) { setError(e.message); }
   }
   async function decide(id: string, decision: string) {
-    try { await api(`/api/approvals/${id}`, { method: "POST", json: { decision, note: note[id] } }); load(); }
+    const amount = approvedAmount[id];
+    try {
+      await api(`/api/approvals/${id}`, {
+        method: "POST",
+        json: { decision, note: note[id], ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}) },
+      });
+      load();
+    }
     catch (e: any) { setError(e.message); }
   }
 
@@ -998,11 +1006,20 @@ function Approvals({ error, setError }: any) {
                         {r.decision_note}
                       </div>
                     ) : null}
+                    {r.status === "Approved" && r.approved_amount !== undefined ? (
+                      <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
+                    ) : null}
                   </div>
                   <Chip value={r.status} />
                 </div>
                 {r.status === "Pending" && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {(r.action === "cost.post" || r.action === "costcategory.create") && r.payload?.amount !== undefined && (
+                      <input type="number" min="0.01" max={Number(r.payload.amount)} step="0.01"
+                        className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
+                        value={approvedAmount[r._id] ?? ""}
+                        onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
+                    )}
                     <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
                       value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />
                     <Btn small onClick={() => decide(r._id, "Approved")}>Approve &amp; apply</Btn>
@@ -1088,6 +1105,7 @@ function MasterLists({ error, setError }: any) {
 function CostHeads({ items, reload, setError }: { items: any[]; reload: () => void; setError: (s: string) => void }) {
   const { can, loaded } = usePerms();
   const showMoney = loaded && can("finance.view");
+  const canSetPreapproval = loaded && can("finance.approve");
   const heads = items.filter((i) => !i.parent);
   const subs = (headId: string) => items.filter((i) => String(i.parent?._id ?? i.parent) === String(headId));
   const orphans = items.filter((i) => i.parent && !heads.some((h) => String(h._id) === String(i.parent?._id ?? i.parent)));
@@ -1111,9 +1129,9 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
       <div className="space-y-3">
         {heads.map((h) => (
           <div key={h._id} className="rounded border border-gray-200 p-2">
-            <CostHeadRow c={h} showMoney={showMoney} onSave={save} isHead />
+            <CostHeadRow c={h} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} isHead />
             <div className="mt-1 space-y-1 border-l-2 border-gray-100 pl-3">
-              {subs(h._id).map((s) => <CostHeadRow key={s._id} c={s} showMoney={showMoney} onSave={save} />)}
+              {subs(h._id).map((s) => <CostHeadRow key={s._id} c={s} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
               {subs(h._id).length === 0 && <p className="py-1 text-xs text-gray-400">No subheads.</p>}
             </div>
           </div>
@@ -1123,7 +1141,7 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
         {orphans.length > 0 && (
           <div className="rounded border border-amber-200 bg-amber-50 p-2">
             <p className="mb-1 text-xs font-medium text-amber-800">Subheads whose head is missing</p>
-            {orphans.map((o) => <CostHeadRow key={o._id} c={o} showMoney={showMoney} onSave={save} />)}
+            {orphans.map((o) => <CostHeadRow key={o._id} c={o} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
           </div>
         )}
       </div>
@@ -1150,22 +1168,38 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
   );
 }
 
-function CostHeadRow({ c, showMoney, onSave, isHead }: { c: any; showMoney: boolean; onSave: (id: string, patch: any) => void; isHead?: boolean }) {
+function CostHeadRow({ c, showMoney, canSetPreapproval, onSave, isHead }: { c: any; showMoney: boolean; canSetPreapproval: boolean; onSave: (id: string, patch: any) => void; isHead?: boolean }) {
   const [f, setF] = useState<any>({
     description: c.description ?? "", head_type: c.head_type ?? "",
     budget: c.budget ?? "", pre_approved: !!c.pre_approved,
     pre_approved_amount: c.pre_approved_amount ?? "", pre_approved_basis: c.pre_approved_basis ?? "",
+    pre_approved_unit: c.pre_approved_unit ?? "Fixed amount",
+    pre_approved_min_billable: c.pre_approved_min_billable ?? "",
   });
   const same = (k: string, orig: any) => String(f[k] ?? "") === String(orig ?? "");
   const dirty = !same("description", c.description) || !same("head_type", c.head_type)
-    || f.pre_approved !== !!c.pre_approved
-    || (showMoney && (!same("budget", c.budget) || !same("pre_approved_amount", c.pre_approved_amount) || !same("pre_approved_basis", c.pre_approved_basis)));
+    || (canSetPreapproval && f.pre_approved !== !!c.pre_approved)
+    || (showMoney && !same("budget", c.budget))
+    || (canSetPreapproval && (!same("pre_approved_amount", c.pre_approved_amount)
+      || !same("pre_approved_basis", c.pre_approved_basis) || !same("pre_approved_unit", c.pre_approved_unit ?? "Fixed amount")
+      || !same("pre_approved_min_billable", c.pre_approved_min_billable)));
   const cell = "rounded border border-gray-200 px-2 py-1 text-sm";
   // Only the fields this reader can actually see are sent. A PATCH built from a form that never
   // received `budget` would otherwise post an empty string and CLEAR a budget the sender was not
   // allowed to know existed — masking a field on read while letting a blind write erase it is worse
   // than not masking it at all.
-  const patch = () => (showMoney ? f : { description: f.description, head_type: f.head_type, pre_approved: f.pre_approved });
+  const patch = () => ({
+    description: f.description,
+    head_type: f.head_type,
+    ...(showMoney ? { budget: f.budget } : {}),
+    ...(canSetPreapproval ? {
+      pre_approved: f.pre_approved,
+      pre_approved_amount: f.pre_approved_amount,
+      pre_approved_basis: f.pre_approved_basis,
+      pre_approved_unit: f.pre_approved_unit,
+      pre_approved_min_billable: f.pre_approved_min_billable,
+    } : {}),
+  });
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 py-1">
@@ -1178,12 +1212,21 @@ function CostHeadRow({ c, showMoney, onSave, isHead }: { c: any; showMoney: bool
         </select>
       )}
       <label className="flex items-center gap-1 text-xs text-gray-600">
-        <input type="checkbox" checked={f.pre_approved} onChange={(e) => setF({ ...f, pre_approved: e.target.checked })} />
+        <input type="checkbox" checked={f.pre_approved} disabled={!canSetPreapproval} title={canSetPreapproval ? undefined : "finance.approve is required to change this policy"} onChange={(e) => setF({ ...f, pre_approved: e.target.checked })} />
         pre-approved
       </label>
       {showMoney && <input type="number" className={`${cell} w-24`} placeholder="budget" value={f.budget} onChange={(e) => setF({ ...f, budget: e.target.value })} />}
-      {showMoney && f.pre_approved && <input type="number" className={`${cell} w-24`} placeholder="₹ limit" value={f.pre_approved_amount} onChange={(e) => setF({ ...f, pre_approved_amount: e.target.value })} />}
-      {showMoney && f.pre_approved && <input className={`${cell} w-40`} placeholder="basis, e.g. ₹50 per child" value={f.pre_approved_basis} onChange={(e) => setF({ ...f, pre_approved_basis: e.target.value })} />}
+      {showMoney && f.pre_approved && (
+        <select className={cell} value={f.pre_approved_unit} disabled={!canSetPreapproval} onChange={(e) => setF({ ...f, pre_approved_unit: e.target.value })}>
+          <option value="Fixed amount">Fixed amount</option>
+          <option value="Per billable passed">Per billable passed</option>
+        </select>
+      )}
+      {showMoney && f.pre_approved && <input type="number" className={`${cell} w-28`} disabled={!canSetPreapproval} placeholder={f.pre_approved_unit === "Per billable passed" ? "₹ per pass" : "₹ limit"} value={f.pre_approved_amount} onChange={(e) => setF({ ...f, pre_approved_amount: e.target.value })} />}
+      {showMoney && f.pre_approved && f.pre_approved_unit === "Per billable passed" && (
+        <input type="number" className={`${cell} w-28`} disabled={!canSetPreapproval} placeholder="min pass-outs" value={f.pre_approved_min_billable} onChange={(e) => setF({ ...f, pre_approved_min_billable: e.target.value })} />
+      )}
+      {showMoney && f.pre_approved && <input className={`${cell} w-40`} disabled={!canSetPreapproval} placeholder="basis, e.g. ₹50 per child" value={f.pre_approved_basis} onChange={(e) => setF({ ...f, pre_approved_basis: e.target.value })} />}
       <Btn small onClick={() => onSave(c._id, { active: !c.active })}>{c.active ? "Deactivate" : "Reactivate"}</Btn>
       {dirty && <Btn small onClick={() => onSave(c._id, patch())}>Save</Btn>}
     </div>

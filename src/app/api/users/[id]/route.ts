@@ -6,7 +6,7 @@ import { requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
 import { emailError } from "@/lib/validate";
-import { renderMail, sendMail } from "@/lib/mailer";
+import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
 
 // QA-1996 (checker, cycle 1, S2) — THE GUARD BELOW WAS CHECK-THEN-WRITE, AND THE CHECK WAS A
 // COUNT. Two live Admins each deactivating the OTHER in the same instant both read "one other
@@ -237,7 +237,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     const { html, text } = renderMail({
       title: "Your Center ERP account is approved",
       lines: [`Hello ${doc.name},`, `Your account (${doc.email}) has been approved as ${doc.role}. You can sign in now.`],
-      cta: { label: "Sign in to the ERP", url: "https://www.vidysea.com/erp" },
+      cta: { label: "Sign in to the ERP", url: staffSignInUrl(String(doc.email)) },
     });
     sendMail({ to: doc.email, subject: "Your Center ERP account is approved", html, text, entity: "User", entity_id: doc._id }).catch(() => {});
   }

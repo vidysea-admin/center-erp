@@ -1547,6 +1547,78 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   }
 }
 
+// ---- Assessment Awaited: delivery is over, the assessor/date is not ready yet ----
+// This is a stored lifecycle stage, not a UI-only bucket. It must remove the batch from every
+// Active/hour-log queue, keep assessment-date entry available, and still require an explicit
+// "assessment was held" press before Result Awaited.
+{
+  const tomorrow = new Date(Date.parse(`${today}T00:00:00.000Z`) + 864e5);
+  const yesterday = new Date(Date.parse(`${today}T00:00:00.000Z`) - 864e5);
+  const weekAgo = new Date(Date.parse(`${today}T00:00:00.000Z`) - 7 * 864e5);
+  const aa = (await req("POST", "/api/batches", {
+    location: loc._id, program: prog._id, planned_start: today, target_size: 1,
+  }, 201)).data.item;
+
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await mc.connect();
+  const dbp = mc.db(process.env.MONGODB_DB || "center_erp_ci");
+  await dbp.collection("batches").updateOne(
+    { _id: new ObjectId(String(aa._id)) },
+    { $set: { status: "Active", actual_start: weekAgo, planned_end: tomorrow } },
+  );
+
+  const tooSoon = await req("POST", `/api/batches/${aa._id}/transition`, { target: "Assessment Awaited" }, 409);
+  ok("Assessment Awaited: a batch whose delivery is not over is refused",
+    /delivery|end|finished|over/i.test(String(tooSoon.data?.error ?? "")), String(tooSoon.data?.error ?? ""));
+
+  await dbp.collection("batches").updateOne(
+    { _id: new ObjectId(String(aa._id)) },
+    { $set: { planned_end: yesterday } },
+  );
+  const homeBefore = (await req("GET", "/api/home")).data;
+  ok("Assessment Awaited precondition: Active batch is in today's hour-log queue",
+    (homeBefore.queues?.today_logging ?? []).some((x) => String(x._id) === String(aa._id)));
+  ok("Assessment Awaited precondition: overdue Active batch is in the missing-log reminder queue",
+    (homeBefore.queues?.missing_logs ?? []).some((x) => String(x.batch?._id) === String(aa._id)));
+
+  const moved = await req("POST", `/api/batches/${aa._id}/transition`, { target: "Assessment Awaited" }, 200);
+  ok("Assessment Awaited: ended delivery leaves Active in one explicit transition",
+    moved.data?.item?.status === "Assessment Awaited", String(moved.data?.item?.status));
+  const homeAfter = (await req("GET", "/api/home")).data;
+  ok("Assessment Awaited: Home count moves exactly one batch out of Active into its own count",
+    homeAfter.kpis?.active_batches === homeBefore.kpis?.active_batches - 1
+      && homeAfter.kpis?.assessment_awaited_batches === (homeBefore.kpis?.assessment_awaited_batches ?? 0) + 1,
+    JSON.stringify({ before: homeBefore.kpis, after: homeAfter.kpis }));
+  ok("Assessment Awaited: daily hour-log and missing-log reminders both stop",
+    !(homeAfter.queues?.today_logging ?? []).some((x) => String(x._id) === String(aa._id))
+      && !(homeAfter.queues?.missing_logs ?? []).some((x) => String(x.batch?._id) === String(aa._id)));
+
+  const listedAwaited = ((await req("GET", "/api/batches?limit=2000")).data.items ?? [])
+    .find((x) => String(x._id) === String(aa._id));
+  ok("Assessment Awaited: batch register/reporting carries the new stage",
+    listedAwaited?.status === "Assessment Awaited" && /^Assessment awaited$/i.test(String(listedAwaited?.settlement_stage ?? "")),
+    JSON.stringify({ status: listedAwaited?.status, stage: listedAwaited?.settlement_stage }));
+  ok("Assessment Awaited: assessment date can be recorded while waiting",
+    (await req("PUT", `/api/batches/${aa._id}/closure`, { assessment_date: today }, 200)).status === 200
+      && (await req("GET", `/api/batches/${aa._id}`)).data.item?.status === "Assessment Awaited");
+
+  await req("POST", `/api/batches/${aa._id}/transition`, { target: "Closing" }, 409);
+  const held = await req("POST", `/api/batches/${aa._id}/transition`, { target: "Closing", exam_held: true }, 200);
+  ok("Assessment Awaited: explicit held press advances to Result Awaited",
+    held.data?.item?.status === "Closing", String(held.data?.item?.status));
+  const listedResult = ((await req("GET", "/api/batches?limit=2000")).data.items ?? [])
+    .find((x) => String(x._id) === String(aa._id));
+  ok("Assessment Awaited: reporting advances from Assessment Awaited to Result Awaited",
+    /^Result awaited$/i.test(String(listedResult?.settlement_stage ?? "")), JSON.stringify(listedResult?.settlement_stage));
+
+  await dbp.collection("notifications").deleteMany({ entity_id: new ObjectId(String(aa._id)) });
+  await dbp.collection("auditlogs").deleteMany({ entity_id: new ObjectId(String(aa._id)) });
+  await dbp.collection("closures").deleteOne({ batch: new ObjectId(String(aa._id)) });
+  await dbp.collection("batches").deleteOne({ _id: new ObjectId(String(aa._id)) });
+  await mc.close();
+}
+
 // ---- closure ----
 // 2026-08-12 audit F-010 (S0): Rules 43/46 lived only inside the per-candidate branch, and that
 // branch is skipped exactly when nobody has been assessed. A batch with zero results could be

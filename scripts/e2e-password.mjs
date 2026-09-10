@@ -64,6 +64,76 @@ const subjectId = made.data?.item?._id ?? made.data?._id;
 let sess = await login(EMAIL, PW1);
 ok("QA-1829a [precondition] the subject can sign in with the password they were given", !!sess, "login failed");
 
+// Karunn's welcome-link report (2026-09-10): a bare /erp CTA reused the Admin session already
+// open in his browser, so clicking an invitation appeared to log him in without a password. Drive
+// the two-account journey in a browser: start as Admin, open the account-specific switch URL, prove
+// the old session is gone, then prove the invited account still needs and accepts its own password.
+if (admin && subjectId) {
+  let switchBrowser;
+  try {
+    const { chromium } = await import("playwright");
+    switchBrowser = await chromium.launch({ headless: true });
+
+    // Keep the deliberately broken sign-out in its own cookie jar. Reusing that poisoned browser
+    // state for the happy path would test recovery from a synthetic network abort, not a normal
+    // invitation click, and could make the two cases silently replace each other's evidence.
+    const failedCtx = await switchBrowser.newContext({ viewport: { width: 1280, height: 900 } });
+    const failedPage = await failedCtx.newPage();
+    await failedPage.goto(BASE + "/login", { waitUntil: "networkidle" });
+    await failedPage.locator('input[type="email"]').fill("admin@vidysea.com");
+    await failedPage.locator('input[type="password"]').fill(ADMIN_PW);
+    await failedPage.locator('button[type="submit"]').click();
+    await failedPage.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 20000 });
+    await failedPage.route("**/api/auth/signout", (route) => route.abort("failed"));
+    await failedPage.goto(BASE + `/login?email=${encodeURIComponent(EMAIL)}&switch=1`, { waitUntil: "networkidle" });
+    await failedPage.getByText(/could not prepare account switching/i).waitFor({ timeout: 20000 });
+    const failedSwitchCopy = await failedPage.locator("body").innerText();
+    ok("welcome-account switch: failed sign-out keeps submit disabled and never claims success",
+      await failedPage.locator('button[type="submit"]').isDisabled()
+        && !/previously open.*signed out/i.test(failedSwitchCopy),
+      failedSwitchCopy.replace(/\s+/g, " ").slice(0, 220));
+    await failedCtx.close();
+
+    const switchCtx = await switchBrowser.newContext({ viewport: { width: 1280, height: 900 } });
+    const switchPage = await switchCtx.newPage();
+    await switchPage.goto(BASE + "/login", { waitUntil: "networkidle" });
+    await switchPage.locator('input[type="email"]').fill("admin@vidysea.com");
+    await switchPage.locator('input[type="password"]').fill(ADMIN_PW);
+    await switchPage.locator('button[type="submit"]').click();
+    await switchPage.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 20000 });
+    const adminSession = await switchPage.evaluate(async (base) => (await fetch(base + "/api/auth/session")).json(), BASE);
+    ok("welcome-account switch [precondition]: this browser really starts signed in as Admin",
+      adminSession?.user?.email === "admin@vidysea.com", JSON.stringify(adminSession?.user ?? null));
+
+    await switchPage.goto(BASE + `/login?email=${encodeURIComponent(EMAIL)}&switch=1`, { waitUntil: "networkidle" });
+    const switchEmail = switchPage.locator('input[type="email"]');
+    await switchEmail.waitFor({ timeout: 20000 });
+    ok("welcome-account switch: invitation pre-fills and locks the intended email",
+      await switchEmail.inputValue() === EMAIL && await switchEmail.getAttribute("readonly") !== null,
+      `value=${await switchEmail.inputValue()} readonly=${await switchEmail.getAttribute("readonly")}`);
+    const switchCopy = await switchPage.locator("body").innerText();
+    ok("welcome-account switch: the screen explicitly says the previous browser account was signed out",
+      switchCopy.includes(EMAIL) && /previously open.*signed out/i.test(switchCopy), switchCopy.replace(/\s+/g, " ").slice(0, 220));
+    await switchPage.locator('button[type="submit"]').waitFor({ state: "visible", timeout: 20000 });
+    await switchPage.waitForFunction(() => !(document.querySelector('button[type="submit"]'))?.disabled);
+    const clearedSession = await switchPage.evaluate(async (base) => (await fetch(base + "/api/auth/session")).json(), BASE);
+    ok("welcome-account switch: opening the invitation clears the old Admin session before submit",
+      !clearedSession?.user, JSON.stringify(clearedSession?.user ?? null));
+
+    await switchPage.locator('input[type="password"]').fill(PW1);
+    await switchPage.locator('button[type="submit"]').click();
+    await switchPage.waitForURL((u) => !u.pathname.endsWith("/login"), { timeout: 20000 });
+    const invitedSession = await switchPage.evaluate(async (base) => (await fetch(base + "/api/auth/session")).json(), BASE);
+    ok("welcome-account switch: only the invited account's password opens the invited account",
+      invitedSession?.user?.email === EMAIL, JSON.stringify(invitedSession?.user ?? null));
+    await switchCtx.close();
+  } catch (e) {
+    ok("welcome-account switch: browser journey completes", false, String(e?.message ?? e).slice(0, 260));
+  } finally {
+    try { await switchBrowser?.close(); } catch {}
+  }
+}
+
 if (sess) {
   // ---- the refusals first, so a later success cannot be explained by the route accepting anything
   const wrong = await req(sess, "POST", "/api/me/password", { current_password: "NotTheirPassword1", new_password: PW2 });

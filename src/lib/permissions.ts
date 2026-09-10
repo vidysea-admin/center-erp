@@ -126,7 +126,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     // govt-attendance milna chahiye." Narrower than the 08-13 "NO attendance" line above: that
     // ruled out routine daily attendance logging (still Trainer's job, batches.daily_log), not the
     // government-portal reconciliation import a SPOC needs to see for their own location.
-    "closure.manage", "attendance.govt", "feedback.links",
+    "closure.manage", "attendance.govt", "costs.manage", "feedback.links",
     // 2026-08-24: the CANDIDATE delete only. A principal clears a mis-typed row out of their own
     // pool; erasing a trainer or a batch is a wider blast radius than their remit, and the 2026-08-13
     // ruling on this role already drew that line ("NO batch edit"). An Admin can still grant either
@@ -135,12 +135,15 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
   // QA-036 (checker, vs the role table): Enrollment's brief is candidate registration and
   // the enrollment worklist — daily attendance is the SPOC/Trainer's job, removed 14/08.
-  Enrollment: ["candidates.manage", "candidates.assign"],
+  // Cost submission is the later explicit exception shared by every operational role; it does
+  // not include finance.view, so the person entering the expense still cannot read the ledger.
+  Enrollment: ["candidates.manage", "candidates.assign", "costs.manage"],
   // QA-1469 (feedback-inbox, 2026-08-24 outage postmortem): Umesh, asked directly — "Trainer ko
   // pass/fail + certificate ka haq hona chahiye?" -> "Haan, Trainer ko haq do." Trainer never held
   // closure.manage, so -216/-217's mayMarkTab check (QA-777/QA-785) left every Trainer locked out
-  // of marking results and uploading certificates the day it shipped.
-  Trainer: ["batches.daily_log", "closure.manage"],
+  // of marking results and uploading certificates the day it shipped. costs.manage is submission
+  // only; the separate finance.view right remains absent.
+  Trainer: ["batches.daily_log", "closure.manage", "costs.manage"],
 };
 
 // Role toggles are read per request; a tiny TTL cache keeps that cheap without letting a
@@ -471,7 +474,15 @@ export function maskInvoiceMoneyList<T>(docs: T[], canSeeMoney: boolean): T[] {
 // way — and the reason to write it the moment the fields are added rather than afterwards is that
 // nine money doors in this module were opened by adding a money field to something that was already
 // readable and only noticing later.
-export const COST_CATEGORY_MONEY_FIELDS = ["budget", "pre_approved_amount", "pre_approved_basis"] as const;
+export const COST_CATEGORY_MONEY_FIELDS = [
+  "budget", "pre_approved_amount", "pre_approved_basis",
+  "pre_approved_unit", "pre_approved_min_billable",
+] as const;
+
+export const COST_CATEGORY_PREAPPROVAL_FIELDS = [
+  "pre_approved", "pre_approved_amount", "pre_approved_basis",
+  "pre_approved_unit", "pre_approved_min_billable",
+] as const;
 
 export function maskCostCategoryMoney<T>(doc: T, canSeeMoney: boolean): T {
   if (canSeeMoney || doc == null || typeof doc !== "object") return doc;
@@ -634,6 +645,10 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
   if (canSeeMoney) return request;
   const out: Record<string, any> = { ...request };
   const payload = out.payload;
+  const approvedAmount = out.approved_amount;
+  // Partial sanction is a money fact just like the requested amount. It lives at the request's
+  // top level rather than inside payload, so the generic payload stripper cannot see it.
+  delete out.approved_amount;
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     out.payload = stripMoneyKeys(payload as Record<string, unknown>);
   }
@@ -645,7 +660,10 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
   // Naming ONE field is the defect; QA-1865's rule is every string, decided once, here.
   // Redact using the ORIGINAL payload - the stripped one no longer knows the values.
   for (const k of Object.keys(out)) {
-    if (typeof out[k] === "string") out[k] = redactMoneyInText(out[k], payload);
+    if (typeof out[k] === "string") {
+      out[k] = redactMoneyInText(out[k], payload);
+      if (approvedAmount !== undefined) out[k] = redactMoneyInText(out[k], { amount: approvedAmount });
+    }
   }
   return out as T;
 }

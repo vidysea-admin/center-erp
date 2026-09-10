@@ -112,7 +112,7 @@ function ReportsInner() {
       // QA-532: `r.location` carries a programme's identity when flipped (rules.ts reuses the same
       // field rather than a parallel type) - the label follows so the header still names what the
       // row actually is.
-      key: "name", label: orientation === "program" ? "Programme" : "Batch Location", minWidth: 260, sortable: true, filterable: true,
+      key: "name", label: "Batch Location", minWidth: 260, sortable: true, filterable: true,
       total: (rs: any[]) => <span className="whitespace-nowrap">{orientation === "program" ? "All programmes" : "All centres"} <span className="font-normal text-gray-400">({rs.length})</span></span>,
       sortValue: (r: any) => r.location.name,
       filterText: (r: any) => r.location.name,
@@ -129,6 +129,7 @@ function ReportsInner() {
       ),
     },
   ];
+  if (orientation === "program") columns[0].label = "Programme";
   // QA-542 / QA-554 (-176) — the verdict as a COLUMN, not only a chip. Umesh: "bas centre pr label
   // show krne se kuch nhi hoga naa… ya ek status wala column de de aur uss column mai status daal
   // dena." He is right and the -175 trade was wrong: I saved table width and gave up the one thing

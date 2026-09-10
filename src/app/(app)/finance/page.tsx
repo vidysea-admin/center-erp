@@ -348,6 +348,10 @@ function FinanceInner() {
             { key: "vendor_payee", label: "Paid to", sortable: true, filterable: true, render: (r: any) => r.vendor_payee || <span className="text-gray-300">—</span> },
             { key: "voucher_no", label: "Voucher no", sortable: true, filterable: true, render: (r: any) => r.voucher_no || <span className="text-gray-300">—</span> },
             { key: "payment_mode", label: "Paid how", sortable: true, filterable: true, render: (r: any) => r.payment_mode || <span className="text-gray-300">—</span> },
+            { key: "payment_status", label: "Payment status", sortable: true, filterable: true, render: (r: any) => r.payment_status || <span className="text-gray-300">Not recorded</span> },
+            { key: "paid_on", label: "Paid on", sortable: true, render: (r: any) => r.paid_on ? String(r.paid_on).slice(0, 10) : <span className="text-gray-300">—</span> },
+            { key: "payment_ref", label: "Payment ref", sortable: true, filterable: true, render: (r: any) => r.payment_ref || <span className="text-gray-300">—</span> },
+            { key: "requested_amount", label: "Requested", sortable: true, sortValue: (r: any) => r.requested_amount ?? r.amount, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? rupee(r.requested_amount) : <span className="text-gray-300">—</span> },
             { key: "pre_approved", label: "Pre-approved", minWidth: 160, render: (r: any) => r.pre_approved || <span className="text-gray-300">—</span> },
             { key: "entered_by", label: "Entered by", sortable: true, filterable: true, render: (r: any) => r.entered_by },
           ]} />

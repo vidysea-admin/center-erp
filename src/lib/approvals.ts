@@ -18,6 +18,11 @@ export type ApprovalAction =
   | "costcategory.create";
 
 export type ApprovalOutcome = { request: any } | null;
+type ClaimedApproval = {
+  _id: unknown;
+  decided_by?: unknown;
+  decided_at?: Date;
+};
 
 // Returns null → proceed with the action.
 // Returns { request } → the action was parked for approval; the caller must NOT apply it.
@@ -105,8 +110,16 @@ export async function requireApproval(
   return { request };
 }
 
-// Approve/reject. Returns the request so the caller can replay the payload on approval.
-export async function decideApproval(requestId: string, user: SessionUser, decision: "Approved" | "Rejected", note?: string) {
+// Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
+// changes the row and receives a request to replay. Reading Pending and then saving a document is
+// not a claim — two readers can both do that — so do not replace the findOneAndUpdate with save().
+export async function decideApproval(
+  requestId: string,
+  user: SessionUser,
+  decision: "Approved" | "Rejected",
+  note?: string,
+  decisionData: { approvedAmount?: number } = {},
+) {
   const request = await ApprovalRequest.findById(requestId);
   if (!request) throw new HttpError(404, "Approval request not found");
   if (request.status !== "Pending") throw new HttpError(409, `Already ${request.status}.`);
@@ -124,15 +137,71 @@ export async function decideApproval(requestId: string, user: SessionUser, decis
   if (String(request.initiator) === String(user.id)) {
     throw new HttpError(403, "You cannot approve your own request.");
   }
-  request.status = decision;
-  request.decided_by = user.id as any;
-  request.decided_at = new Date();
-  request.decision_note = note;
-  await request.save();
+  const decidedAt = new Date();
+  const claimed = await ApprovalRequest.findOneAndUpdate(
+    { _id: request._id, status: "Pending" },
+    {
+      $set: {
+        status: decision,
+        decided_by: user.id,
+        decided_at: decidedAt,
+        decision_note: note,
+        ...(decisionData.approvedAmount !== undefined ? { approved_amount: decisionData.approvedAmount } : {}),
+      },
+    },
+    { new: true, runValidators: true },
+  );
+  if (!claimed) {
+    throw new HttpError(409, "This request was already claimed by another approver. Refresh the queue.");
+  }
+  return claimed;
+}
+
+// Side effects that say a decision is final run only after an Approved replay has succeeded (or
+// immediately for Rejected, which has no replay). This keeps a failed apply out of the audit trail
+// as a completed decision and leaves its notification actionable after rollback.
+export async function finalizeApprovalDecision(
+  request: ClaimedApproval,
+  user: SessionUser,
+  decision: "Approved" | "Rejected",
+  decisionData: { approvedAmount?: number } = {},
+) {
   await Notification.updateMany(
     { entity: "ApprovalRequest", entity_id: request._id, status: { $in: ["New", "Acknowledged"] } },
     { $set: { status: "Resolved" } },
   );
-  await audit({ entity: "ApprovalRequest", entityId: request._id, field: "status", newValue: decision, actor: user.id });
+  await audit({
+    entity: "ApprovalRequest", entityId: request._id, field: "status",
+    newValue: decisionData.approvedAmount === undefined ? decision : { decision, approved_amount: decisionData.approvedAmount },
+    actor: user.id,
+  });
   return request;
+}
+
+// If replay fails before its effect is known to have landed, give the request back to the queue.
+// The ownership + exact decided_at predicates are a compare-and-swap token: this rollback cannot
+// reopen a row that another process has subsequently touched.
+export async function rollbackApprovalDecision(request: ClaimedApproval) {
+  const rolledBack = await ApprovalRequest.findOneAndUpdate(
+    {
+      _id: request._id,
+      status: "Approved",
+      decided_by: request.decided_by,
+      decided_at: request.decided_at,
+    },
+    {
+      $set: { status: "Pending" },
+      $unset: {
+        decided_by: 1,
+        decided_at: 1,
+        decision_note: 1,
+        approved_amount: 1,
+      },
+    },
+    { new: true, runValidators: true },
+  );
+  if (!rolledBack) {
+    throw new Error(`Could not return failed approval ${request._id} to Pending; its claim changed.`);
+  }
+  return rolledBack;
 }

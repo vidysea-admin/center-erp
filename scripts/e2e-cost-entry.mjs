@@ -38,7 +38,12 @@ async function req(cookie, method, p, body) {
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
 const ops = await login("ops@vidysea.com", PW);
-ok("[precondition] an Admin and an Operations session exist", !!admin && !!ops, `admin=${!!admin} ops=${!!ops}`);
+const spoc = await login("spoc.jpr03@vidysea.com", PW);
+const trainerUser = await login("trainer.jpr03@vidysea.com", PW);
+const enroll = await login("enroll@vidysea.com", PW);
+const viewer = await login("viewer.jpr03@vidysea.com", PW);
+ok("[precondition] cost-entry personas can sign in", !!admin && !!ops && !!spoc && !!trainerUser && !!enroll && !!viewer,
+  `admin=${!!admin} ops=${!!ops} spoc=${!!spoc} trainer=${!!trainerUser} enroll=${!!enroll} viewer=${!!viewer}`);
 
 const stamp = Date.now().toString(36);
 const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
@@ -47,10 +52,71 @@ ok("[precondition] a location exists to hang entries on", !!anyLoc, "none");
 // Rule 37 needs one of location/batch/trainer; a location is the simplest.
 const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc, amount: 500, note: "pin: what this was for", ...extra });
 
+// -------------------------------- every operational role may submit, but only inside its scope
+{
+  // Pin the rule OFF here so a successful scoped submission has one unambiguous outcome (201).
+  // Later blocks turn it on and verify the parking path separately.
+  const ruleOff = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+  ok("cost scope [precondition]: cost.post approval is OFF for direct-write assertions", ruleOff.status === 200, `got ${ruleOff.status}`);
+
+  const allLocs = (await req(admin, "GET", "/api/locations?limit=2000")).data?.items ?? [];
+  const ownLoc = allLocs.find((l) => l.code === "JPR03");
+  const foreignLoc = allLocs.find((l) => l.code === "KOT02");
+  const ownBatch = ((await req(spoc, "GET", "/api/batches?limit=2000")).data?.items ?? [])[0];
+  const foreignBatch = ((await req(admin, "GET", `/api/batches?location=${foreignLoc?._id}&limit=2000`)).data?.items ?? [])
+    .find((b) => String(b.location?._id ?? b.location) === String(foreignLoc?._id));
+  const ownTrainer = ((await req(spoc, "GET", "/api/trainers?limit=2000")).data?.items ?? [])[0];
+  const foreignTrainer = ((await req(admin, "GET", `/api/trainers?home_location=${foreignLoc?._id}&limit=2000`)).data?.items ?? [])[0];
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])[0];
+  ok("cost scope [precondition]: own and foreign fixtures exist for all three dimensions",
+    !!ownLoc && !!foreignLoc && !!ownBatch && !!foreignBatch && !!ownTrainer && !!foreignTrainer && !!cat,
+    JSON.stringify({ ownLoc: ownLoc?.code, foreignLoc: foreignLoc?.code, ownBatch: ownBatch?.code, foreignBatch: foreignBatch?.code, ownTrainer: ownTrainer?.name, foreignTrainer: foreignTrainer?.name, cat: cat?.name }));
+
+  const scopeStamp = `scope-${stamp}`;
+  const post = (cookie, extra, note) => req(cookie, "POST", "/api/costs", {
+    entry_date: "2026-09-07", category: cat?._id, amount: 111, note: `${scopeStamp}-${note}`, ...extra,
+  });
+
+  if (ownLoc && foreignLoc && ownBatch && foreignBatch && ownTrainer && foreignTrainer && cat) {
+    const badLocation = await post(spoc, { location: foreignLoc._id }, "bad-location");
+    const badBatch = await post(spoc, { batch: foreignBatch._id }, "bad-batch");
+    const badTrainer = await post(spoc, { trainer: foreignTrainer._id }, "bad-trainer");
+    ok("cost scope: a Location user cannot POST a foreign location", badLocation.status === 403, `got ${badLocation.status}`);
+    ok("cost scope: a Location user cannot POST a foreign batch", badBatch.status === 403, `got ${badBatch.status}`);
+    ok("cost scope: a Location user cannot POST a foreign trainer", badTrainer.status === 403, `got ${badTrainer.status}`);
+
+    // A missing scope guard and a working one both return a response; prove the refusals happened
+    // before any durable side effect, including the approval queue.
+    const ledgerAfterRefusals = (await req(admin, "GET", "/api/costs")).data?.items ?? [];
+    const mineAfterRefusals = (await req(spoc, "GET", "/api/approvals?mine=1")).data?.items ?? [];
+    ok("cost scope: refused foreign dimensions create no ledger row and no parked request",
+      !ledgerAfterRefusals.some((c) => String(c.note ?? "").startsWith(scopeStamp))
+        && !mineAfterRefusals.some((a) => String(a.summary ?? "").includes(scopeStamp)),
+      JSON.stringify({ ledger: ledgerAfterRefusals.filter((c) => String(c.note ?? "").startsWith(scopeStamp)).length, approvals: mineAfterRefusals.filter((a) => String(a.summary ?? "").includes(scopeStamp)).length }));
+
+    const goodLocation = await post(spoc, { location: ownLoc._id }, "good-location");
+    const goodBatch = await post(spoc, { batch: ownBatch._id }, "good-batch");
+    const goodTrainer = await post(spoc, { trainer: ownTrainer._id }, "good-trainer");
+    ok("cost scope: the same Location user can POST its own location", goodLocation.status === 201, `got ${goodLocation.status}`);
+    ok("cost scope: the same Location user can POST its own batch", goodBatch.status === 201, `got ${goodBatch.status}`);
+    ok("cost scope: the same Location user can POST an own-centre trainer", goodTrainer.status === 201, `got ${goodTrainer.status}`);
+
+    const trainerOwnBatch = await post(trainerUser, { batch: ownBatch._id }, "trainer-own-batch");
+    const enrollmentAnyLocation = await post(enroll, { location: foreignLoc._id }, "enrollment-location");
+    ok("cost submission: Trainer can POST a cost against a batch in their scope", trainerOwnBatch.status === 201, `got ${trainerOwnBatch.status}`);
+    ok("cost submission: central Enrollment can POST a location cost (empty scope means all locations)", enrollmentAnyLocation.status === 201, `got ${enrollmentAnyLocation.status}`);
+    ok("cost submission: a view-only Location login still cannot POST", (await post(viewer, { location: ownLoc._id }, "viewer-refused")).status === 403);
+
+    ok("finance boundary: cost submitters still cannot read the cost ledger",
+      (await Promise.all([spoc, trainerUser, enroll].map((cookie) => req(cookie, "GET", "/api/costs")))).every((r) => r.status === 403));
+  }
+}
+
 // ---------------------------------------------------------------- item 5: the fields
 {
-  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])[0];
-  ok("[precondition] a cost head exists", !!cat, "none");
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  ok("[precondition] a normal cost head exists", !!cat, "none");
 
   // The description is the CEO's *"डिस्क्रिप्शन हो"* and it is REQUIRED on the server, not merely
   // on a disabled button. A client-side rule is a courtesy; this is the rule.
@@ -81,6 +147,20 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const badMode = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, payment_mode: "by hand" }));
   ok("QA-1828b: payment mode is a vocabulary, not free text - an unlisted value is refused",
     badMode.status >= 400, `got ${badMode.status}`);
+
+  // Ordinary ledger corrections are still supported. The cap guard below is intentionally scoped
+  // only to rows whose pre-approval commitment was applied at post time.
+  if (madeId) {
+    const corrected = await req(admin, "PATCH", `/api/costs/${madeId}`, { amount: 501, note: "ordinary correction remains editable" });
+    ok("cost correction: a normal (not pre-approved) row remains mutable",
+      corrected.status === 200 && corrected.data?.item?.amount === 501,
+      `got ${corrected.status} ${JSON.stringify(corrected.data?.error ?? "")}`);
+    const removed = await req(admin, "DELETE", `/api/costs/${madeId}`);
+    const afterDelete = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+      .find((c) => String(c._id) === String(madeId));
+    ok("cost correction: a normal (not pre-approved) row remains deletable",
+      removed.status === 200 && !afterDelete, `delete=${removed.status} remains=${!!afterDelete}`);
+  }
 }
 
 // ------------------------------------------------- item 6: pre-approved is a CONDITION
@@ -131,6 +211,231 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     const summary = String(parked.data?.item?.summary ?? "");
     ok("QA-1828b: ...and the basis travels in the summary, so the approver ticks instead of rediscovering it",
       /30\+ pass-outs/.test(summary), summary.slice(0, 120));
+  }
+}
+
+// ---------------- structured per-pass commitment + partial sanction + outgoing payment
+{
+  const allBatches = (await req(admin, "GET", "/api/batches?limit=2000")).data?.items ?? [];
+  let closedBatch = null;
+  let billable = null;
+  for (const b of allBatches.filter((x) => ["Completed", "Closed"].includes(x.status))) {
+    const got = await req(admin, "GET", `/api/batches/${b._id}/closure`);
+    const c = got.data?.item ?? got.data?.closure ?? got.data;
+    const n = typeof c?.billable_passed === "number" ? c.billable_passed : c?.passed;
+    if (typeof n === "number" && n > 0) { closedBatch = b; billable = n; break; }
+  }
+  ok("finance policy [precondition]: a batch has a recorded billable-pass result", !!closedBatch && billable > 0,
+    JSON.stringify({ batch: closedBatch?.code, billable }));
+
+  if (closedBatch && billable > 0) {
+    const formula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ PerPass ${stamp}`, pre_approved: true,
+      pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+      pre_approved_min_billable: billable, pre_approved_basis: "Rs 50 per billable passed at the recorded threshold",
+    });
+    const formulaId = formula.data?.item?._id;
+    ok("finance policy: structured per-pass commitment can be configured", formula.status === 201 && !!formulaId, `got ${formula.status}`);
+    if (formulaId) {
+      const within = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: formulaId,
+        amount: 50 * billable, note: "structured formula pin",
+      });
+      ok("finance policy: Rs 50 x billable pass-outs is calculated and posts without re-approval",
+        within.status === 201, `got ${within.status} ${JSON.stringify(within.data).slice(0, 140)}`);
+      const withinId = within.data?.item?._id;
+      if (withinId) {
+        const otherBatch = allBatches.find((b) => String(b._id) !== String(closedBatch._id));
+        const otherCategory = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+          .find((c) => String(c._id) !== String(formulaId));
+        const amountEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { amount: (50 * billable) - 1 });
+        const batchEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { batch: otherBatch?._id ?? "000000000000000000000001" });
+        const categoryEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { category: otherCategory?._id ?? "000000000000000000000002" });
+        const deleted = await req(admin, "DELETE", `/api/costs/${withinId}`);
+        ok("formula reservation: an applied amount cannot be resized to release capacity",
+          amountEdit.status === 409, `got ${amountEdit.status}`);
+        ok("formula reservation: an applied row cannot move its capacity to another batch",
+          batchEdit.status === 409, `got ${batchEdit.status}`);
+        ok("formula reservation: an applied row cannot move its capacity to another category",
+          categoryEdit.status === 409, `got ${categoryEdit.status}`);
+        ok("formula reservation: an applied row cannot be deleted to disguise or re-spend its capacity",
+          deleted.status === 409, `got ${deleted.status}`);
+        const unchanged = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${formulaId}`)).data?.items ?? [])
+          .find((c) => String(c._id) === String(withinId));
+        ok("formula reservation: refused mutations leave the reserved ledger row unchanged",
+          !!unchanged && unchanged.amount === 50 * billable
+            && String(unchanged.batch?._id ?? unchanged.batch) === String(closedBatch._id)
+            && String(unchanged.category?._id ?? unchanged.category) === String(formulaId),
+          JSON.stringify(unchanged ? { amount: unchanged.amount, batch: unchanged.batch?._id ?? unchanged.batch, category: unchanged.category?._id ?? unchanged.category } : null));
+      }
+      const exhausted = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: formulaId,
+        amount: 1, note: "cumulative cap pin",
+      });
+      ok("finance policy: the per-batch commitment is cumulative, so a second entry above the remainder parks",
+        exhausted.status === 202, `got ${exhausted.status}`);
+    }
+
+    const raceFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ PerPass Race ${stamp}`, pre_approved: true,
+      pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+      pre_approved_min_billable: billable, pre_approved_basis: "atomic cumulative cap pin",
+    });
+    const raceFormulaId = raceFormula.data?.item?._id;
+    ok("formula race [precondition]: an unused per-pass commitment exists", raceFormula.status === 201 && !!raceFormulaId, `got ${raceFormula.status}`);
+    if (raceFormulaId) {
+      const totalCap = 50 * billable;
+      const raced = await Promise.all(Array.from({ length: 8 }, (_, i) => req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: raceFormulaId,
+        amount: totalCap, note: `atomic formula race ${i}`,
+      })));
+      const direct = raced.filter((r) => r.status === 201);
+      const parked = raced.filter((r) => r.status === 202);
+      ok("formula race: concurrent requests cannot spend the same remainder twice",
+        direct.length === 1 && parked.length === 7,
+        JSON.stringify(raced.map((r) => r.status)));
+      const raceRows = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${raceFormulaId}`)).data?.items ?? [])
+        .filter((c) => String(c.category?._id ?? c.category) === String(raceFormulaId) && c.pre_approved_applied === true);
+      ok("formula race: the durable pre-approved ledger never exceeds the calculated cap",
+        raceRows.length === 1 && raceRows.reduce((n, c) => n + Number(c.amount || 0), 0) <= totalCap,
+        JSON.stringify(raceRows.map((c) => c.amount)));
+    }
+
+    const rollbackFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ PerPass Rollback ${stamp}`, pre_approved: true,
+      pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+      pre_approved_min_billable: billable, pre_approved_basis: "reservation rollback pin",
+    });
+    const rollbackId = rollbackFormula.data?.item?._id;
+    if (rollbackId) {
+      const totalCap = 50 * billable;
+      const invalid = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: rollbackId,
+        amount: totalCap, note: "reservation must roll back", payment_mode: "not-a-payment-mode",
+      });
+      const retry = await req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: closedBatch._id, category: rollbackId,
+        amount: totalCap, note: "capacity survives failed create",
+      });
+      ok("formula reservation: a failed CostEntry create releases the reserved capacity",
+        invalid.status === 400 && retry.status === 201,
+        `invalid=${invalid.status} retry=${retry.status}`);
+    } else ok("formula rollback [precondition]: a per-pass commitment exists", false, `got ${rollbackFormula.status}`);
+
+    const threshold = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      name: `ZZ Threshold ${stamp}`, pre_approved: true,
+      pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+      pre_approved_min_billable: billable + 1, pre_approved_basis: "minimum pass-outs pin",
+    });
+    const below = threshold.data?.item?._id ? await req(ops, "POST", "/api/costs", {
+      entry_date: "2026-09-07", batch: closedBatch._id, category: threshold.data.item._id,
+      amount: 50, note: "threshold miss pin",
+    }) : { status: 0 };
+    ok("finance policy: below the configured pass-out threshold parks for a human decision",
+      below.status === 202, `got ${below.status}`);
+  }
+
+  const normal = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved);
+  ok("partial approval [precondition]: a normal cost head exists", !!normal, "none");
+  if (normal) {
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      category: normal._id, amount: 1000, vendor_payee: `Partial vendor ${stamp}`, payment_mode: "UPI",
+      note: "partial sanction pin",
+    }));
+    const requestId = parked.data?.item?._id;
+    ok("partial approval [precondition]: requested Rs 1,000 is parked", parked.status === 202 && !!requestId, `got ${parked.status}`);
+    if (requestId) {
+      const noReason = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", approved_amount: 800 });
+      ok("partial approval: reducing an amount without a reason is refused", noReason.status === 400, `got ${noReason.status}`);
+      const increase = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", approved_amount: 1200, note: "invalid" });
+      ok("partial approval: an approver cannot sanction more than requested", increase.status === 400, `got ${increase.status}`);
+      const approved = await req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", approved_amount: 800, note: "Rs 200 unsupported" });
+      ok("partial approval: one peer can sanction a lower amount with a remark", approved.status === 200, `got ${approved.status}`);
+      const cost = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+        .find((c) => String(c.approval_request) === String(requestId));
+      ok("partial approval: ledger uses Rs 800 and preserves the original Rs 1,000 request",
+        !!cost && cost.amount === 800 && cost.requested_amount === 1000 && cost.payment_status === "Payment Pending",
+        JSON.stringify(cost ? { amount: cost.amount, requested: cost.requested_amount, status: cost.payment_status } : null));
+      if (cost) {
+        const missingRef = await req(admin, "PATCH", `/api/costs/${cost._id}`, { mark_paid: true, payment_mode: "UPI", vendor_payee: `Partial vendor ${stamp}` });
+        ok("outgoing payment: Payment Done cannot be recorded without a reference", missingRef.status === 400, `got ${missingRef.status}`);
+        const paid = await req(admin, "PATCH", `/api/costs/${cost._id}`, {
+          mark_paid: true, paid_on: "2026-09-08", payment_ref: `UTR-${stamp}`,
+          payment_mode: "UPI", vendor_payee: `Partial vendor ${stamp}`,
+        });
+        ok("outgoing payment: Accounts records Payment Done with date, reference and payee", paid.status === 200, `got ${paid.status}`);
+        const paidBack = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).find((c) => String(c._id) === String(cost._id));
+        ok("outgoing payment: paid state and reference read back from the ledger",
+          paidBack?.payment_status === "Paid" && paidBack?.payment_ref === `UTR-${stamp}` && String(paidBack?.paid_on ?? "").startsWith("2026-09-08"),
+          JSON.stringify(paidBack ? { status: paidBack.payment_status, ref: paidBack.payment_ref, on: paidBack.paid_on } : null));
+
+        const XLSX = await import("xlsx");
+        const exported = await fetch(BASE + "/api/reports/costs/export", { headers: { cookie: admin } });
+        ok("finance export parity [precondition]: the cost workbook downloads", exported.status === 200, `got ${exported.status}`);
+        if (exported.status === 200) {
+          const wb = XLSX.read(new Uint8Array(await exported.arrayBuffer()), { type: "array" });
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets["cost entry register"] ?? {}, { defval: null });
+          const row = rows.find((r) => String(r["Payment reference"] ?? "") === `UTR-${stamp}`);
+          ok("finance export parity: requested amount, payment status/date/reference reach the workbook together",
+            !!row && Number(row["Requested amount"]) === 1000 && row["Payment status"] === "Paid"
+              && String(row["Paid on"] ?? "").startsWith("2026-09-08") && row["Payment reference"] === `UTR-${stamp}`,
+            JSON.stringify(row ?? null));
+        }
+      }
+    }
+  }
+}
+
+// A pre-approval policy can bypass a human decision, so finance.view is insufficient to author
+// one. Exercise the same PATCH as an ungranted Admin, a view-only Admin, and an approver.
+{
+  const policyHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    name: `ZZ Policy Auth ${stamp}`, description: "policy authorization pin",
+  });
+  const policyId = policyHead.data?.item?._id;
+  ok("pre-approval policy auth [precondition]: a neutral cost head exists", policyHead.status === 201 && !!policyId, `got ${policyHead.status}`);
+
+  const makeAdmin = async (tag, grants) => {
+    const email = `zz.policy.${tag}.${stamp}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", {
+      name: `Policy ${tag} ${stamp}`, email, password: PW, role: "Admin", can_edit: true, location_scope: [],
+    });
+    if (made.data?.item?._id && grants.length) {
+      await req(admin, "PATCH", `/api/users/${made.data.item._id}`, { extra_permissions: grants });
+    }
+    return { made, cookie: await login(email, PW) };
+  };
+  const ungranted = await makeAdmin("none", []);
+  const viewOnly = await makeAdmin("view", ["finance.view"]);
+  ok("pre-approval policy auth [precondition]: ungranted and finance.view-only Admins sign in",
+    ungranted.made.status === 201 && !!ungranted.cookie && viewOnly.made.status === 201 && !!viewOnly.cookie);
+
+  if (policyId && ungranted.cookie && viewOnly.cookie) {
+    const fields = [
+      ["pre_approved", true],
+      ["pre_approved_amount", 50],
+      ["pre_approved_unit", "Per billable passed"],
+      ["pre_approved_min_billable", 30],
+      ["pre_approved_basis", "Rs 50 per billable passed"],
+    ];
+    for (const [cookie, label] of [[ungranted.cookie, "ungranted Admin"], [viewOnly.cookie, "finance.view-only Admin"]]) {
+      const attempts = await Promise.all(fields.map(([field, value]) =>
+        req(cookie, "PATCH", `/api/master-lists/cost-categories/${policyId}`, { [field]: value })));
+      ok(`pre-approval policy auth: ${label} cannot change any bypass-policy field`,
+        attempts.every((r) => r.status === 403),
+        JSON.stringify(attempts.map((r) => r.status)));
+    }
+    const allowed = await req(admin, "PATCH", `/api/master-lists/cost-categories/${policyId}`, {
+      pre_approved: true, pre_approved_amount: 50, pre_approved_unit: "Per billable passed",
+      pre_approved_min_billable: 30, pre_approved_basis: "Rs 50 per billable passed",
+    });
+    ok("pre-approval policy auth: finance.approve can author the full structured policy",
+      allowed.status === 200 && allowed.data?.item?.pre_approved === true
+        && allowed.data?.item?.pre_approved_amount === 50
+        && allowed.data?.item?.pre_approved_unit === "Per billable passed"
+        && allowed.data?.item?.pre_approved_min_billable === 30,
+      `got ${allowed.status} ${JSON.stringify(allowed.data ?? {}).slice(0, 220)}`);
   }
 }
 
@@ -237,6 +542,40 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       !!viaQueue && viaQueue.vendor_payee === `Both ${stamp}` && viaQueue.payment_mode === "Cheque",
       viaQueue ? JSON.stringify({ v: viaQueue.vendor_payee, m: viaQueue.payment_mode })
         : `no ledger row carries voucher B-${stamp}; ${ledger.length} rows, amounts ${ledger.slice(0, 5).map((c) => c.amount).join(",")}`);
+  }
+}
+
+// Two authorized approvers can click together. The Pending compare-and-swap must make exactly
+// one the winner, and the unique approval_request link must leave exactly one ledger effect.
+{
+  const email = `zz.approver.race.${stamp}@vidysea-test.local`;
+  const made = await req(admin, "POST", "/api/users", {
+    name: `Approval Race ${stamp}`, email, password: PW, role: "Admin", can_edit: true, location_scope: [],
+  });
+  if (made.data?.item?._id) {
+    await req(admin, "PATCH", `/api/users/${made.data.item._id}`, { extra_permissions: ["finance.view", "finance.approve"] });
+  }
+  const peer = await login(email, PW);
+  const normal = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const parked = normal ? await req(ops, "POST", "/api/costs", baseEntry({
+    category: normal._id, amount: 654, note: `approval race ${stamp}`,
+  })) : { status: 0, data: {} };
+  const requestId = parked.data?.item?._id;
+  ok("approval race [precondition]: a second authorized approver and one pending cost exist",
+    made.status === 201 && !!peer && parked.status === 202 && !!requestId,
+    `made=${made.status} peer=${!!peer} parked=${parked.status}`);
+  if (peer && requestId) {
+    const decisions = await Promise.all([admin, peer].map((cookie, i) =>
+      req(cookie, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: `race click ${i}` })));
+    const statuses = decisions.map((r) => r.status).sort((a, b) => a - b);
+    ok("approval race: exactly one approver wins and the loser receives 409",
+      statuses.length === 2 && statuses[0] === 200 && statuses[1] === 409,
+      JSON.stringify(statuses));
+    const rows = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+      .filter((c) => String(c.approval_request) === String(requestId));
+    ok("approval race: exactly one CostEntry exists for the approval request",
+      rows.length === 1, JSON.stringify(rows.map((c) => c._id)));
   }
 }
 

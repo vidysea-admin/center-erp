@@ -7,6 +7,19 @@ export async function proxy(req: NextRequest) {
   // prefix — strip defensively so both shapes behave identically.
   const pathname = req.nextUrl.pathname.replace(/^\/erp(?=\/|$)/, "") || "/";
   if (process.env.PROXY_DEBUG) console.log("[proxy]", JSON.stringify(req.nextUrl.pathname), "->", JSON.stringify(pathname));
+  // An account-specific welcome link is an explicit browser-account switch. Clear every Auth.js
+  // session-token chunk on the navigation response itself, before the login form can render. The
+  // client also signs out as defence in depth, but a client fetch must not be the only boundary:
+  // browsers have retained the old privileged cookie even after that endpoint answered 200.
+  if (pathname === "/login" && req.nextUrl.searchParams.get("switch") === "1" && req.nextUrl.searchParams.get("email")) {
+    const res = NextResponse.next();
+    for (const { name } of req.cookies.getAll()) {
+      if (/^(?:__Secure-)?authjs\.session-token(?:\.\d+)?$/.test(name)) res.cookies.delete(name);
+    }
+    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.headers.set("Pragma", "no-cache");
+    return res;
+  }
   if (
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { decideApproval } from "@/lib/approvals";
+import { decideApproval, finalizeApprovalDecision, rollbackApprovalDecision } from "@/lib/approvals";
 import { assertCostEntryValid, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -35,7 +35,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // proposed; approving WITH it files the cost under an existing head instead and creates nothing.
   // Both are an approval, because in both cases the cost is real and belongs somewhere - only the
   // taxonomy differs, and that is the approver's expertise, not the poster's.
-  const { decision, note, map_to_category } = await readJson(req);
+  const { decision, note, map_to_category, approved_amount } = await readJson(req);
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would
@@ -57,6 +57,25 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!pending) throw new HttpError(404, "Approval request not found");
   if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
 
+  // A finance approver may sanction less than was requested, never more. The original request
+  // remains in payload.amount; approved_amount is a separate decision fact. A partial approval
+  // without a note would leave the raiser unable to understand the cut, so it is refused here.
+  const canPartiallyApprove = pending.action === "cost.post" || pending.action === "costcategory.create";
+  let sanctionedAmount: number | undefined;
+  if (approved_amount !== undefined && approved_amount !== null && approved_amount !== "") {
+    if (decision !== "Approved" || !canPartiallyApprove) {
+      throw new HttpError(400, "approved_amount is only valid while approving a cost entry.");
+    }
+    const requested = Number((pending.payload ?? {}).amount);
+    sanctionedAmount = Number(approved_amount);
+    if (!(sanctionedAmount > 0) || !Number.isFinite(requested) || sanctionedAmount > requested) {
+      throw new HttpError(400, "Approved amount must be positive and cannot exceed the requested amount.");
+    }
+    if (sanctionedAmount < requested && !String(note ?? "").trim()) {
+      throw new HttpError(400, "Add a note explaining a partial approval.");
+    }
+  }
+
   // QA-1975 (checker, cycle 1) — THE QUEUE COULD HALF-WRITE, AND THE HALF IT WROTE WAS PERMANENT.
   //
   // `decideApproval` saves the request as Approved and only THEN does the replay run. So on a
@@ -74,7 +93,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // write cannot fail on data the first write already committed to.
   if (decision === "Approved" && pending.action === "costcategory.create") {
     const pp = (pending.payload ?? {}) as any;
-    assertCostEntryValid({ ...pp, category: pp.category ?? "pending" }); // Rule 37, before anything is written
+    assertCostEntryValid({ ...pp, amount: sanctionedAmount ?? pp.amount, category: pp.category ?? "pending" }); // Rule 37, before anything is written
     if (pp.payment_mode && !COST_PAYMENT_MODE.includes(pp.payment_mode)) {
       throw new HttpError(400, `This request carries a payment mode this system does not use ("${pp.payment_mode}"). Reject it and ask for it again.`);
     }
@@ -87,32 +106,39 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
   }
 
-  const request = await decideApproval(id, user, decision, note);
+  const request = await decideApproval(id, user, decision, note, { approvedAmount: sanctionedAmount });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.
   if (decision !== "Approved") {
+    await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
     const seeMoney = await hasPermission(user, FINANCE_VIEW);
     return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, seeMoney), applied: false });
   }
 
   const p = (request.payload ?? {}) as any;
-  switch (request.action) {
+  let effectApplied = false;
+  try {
+    switch (request.action) {
     case "location.close":
     case "location.stop":
       await Location.findByIdAndUpdate(request.entity_id, {
         operational_status: request.action === "location.close" ? "Closed" : "Stopped",
         status_reason: p.reason, status_changed_on: new Date(),
       });
+      effectApplied = true;
       break;
     case "batch.cancel":
       await transitionBatch(String(request.entity_id), "Cancelled", { isAdmin: true, reason: p.reason });
+      effectApplied = true;
       break;
     case "batch.complete":
       await transitionBatch(String(request.entity_id), "Completed", { isAdmin: true });
+      effectApplied = true;
       break;
     case "invoice.raise":
     case "invoice.paid":
       await updateInvoiceChecked(String(request.entity_id), p);
+      effectApplied = true;
       break;
     case "location.edit": {
       // R-F: apply the SPOC's parked suggestion. The fixed ten are stripped again here —
@@ -142,6 +168,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       if (p.room?.name && p.room?.type) {
         await Room.create({ location: request.entity_id, name: p.room.name, type: p.room.type, capacity: p.room.capacity, active: true });
       }
+      effectApplied = true;
       break;
     }
     case "costcategory.create": {
@@ -169,11 +196,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${name}" created by approving ${request.initiator}'s cost entry`, actor: user.id });
         }
       }
-      await assertCostEntryValid({ ...p, category: categoryId });
+      const approvedAmount = Number(request.approved_amount ?? p.amount);
+      await assertCostEntryValid({ ...p, amount: approvedAmount, category: categoryId });
       const entry = await CostEntry.create({
         entry_date: p.entry_date ?? request.createdAt,
         location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
-        category: categoryId, amount: p.amount, note: p.note,
+        category: categoryId, amount: approvedAmount, requested_amount: p.amount,
+        approval_request: request._id, payment_status: "Payment Pending", note: p.note,
         vendor_payee: p.vendor_payee || undefined,
         voucher_no: p.voucher_no || undefined,
         payment_mode: p.payment_mode || undefined,
@@ -181,17 +210,20 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         pre_approved_applied: false,
         entered_by: request.initiator,
       });
+      effectApplied = true;
       await audit({ entity: "CostEntry", entityId: entry._id, newValue: map_to_category ? "created (filed under an existing head by the approver)" : "created (new head approved)", actor: user.id });
       break;
     }
     case "cost.post": {
       // R-E: the ledger row is written only here — approval IS the write. It belongs to the
       // person who posted it (entered_by = initiator), with the approval trail alongside.
-      await assertCostEntryValid(p);
+      const approvedAmount = Number(request.approved_amount ?? p.amount);
+      await assertCostEntryValid({ ...p, amount: approvedAmount });
       const cost = await CostEntry.create({
         entry_date: p.entry_date ?? request.createdAt,
         location: p.location || undefined, batch: p.batch || undefined, trainer: p.trainer || undefined,
-        category: p.category, amount: p.amount, note: p.note,
+        category: p.category, amount: approvedAmount, requested_amount: p.amount,
+        approval_request: request._id, payment_status: "Payment Pending", note: p.note,
         entered_by: request.initiator,
               // QA-1828b: the SECOND place a CostEntry is built. The inbound payload was never filtered
         // (`payload: body` in costs/route.ts), so a new form field reaches the queue for free and is
@@ -205,12 +237,29 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         pre_approved_applied: false,
         pre_approved_basis: p._pre_approved_basis || undefined,
 });
+      effectApplied = true;
       await audit({ entity: "CostEntry", entityId: cost._id, newValue: `created via approval ${request._id}`, actor: user.id });
       break;
     }
     default:
       throw new HttpError(400, "Approved request has no replay handler: " + request.action);
+    }
+  } catch (error) {
+    if (effectApplied) {
+      // The business write landed; do not reopen the request and risk replaying it. Best-effort
+      // finalization keeps the queue and notification consistent even when a following audit fails.
+      await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount }).catch(() => {});
+    } else {
+      try {
+        await rollbackApprovalDecision(request);
+      } catch (rollbackError) {
+        const detail = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        throw new HttpError(500, `Approval apply failed and its claim could not be released safely: ${detail}`);
+      }
+    }
+    throw error;
   }
+  await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
   // Senior review of cycles 2-4: this handed back the RAW request — full `payload` (amount,
   // invoice_no) and the original summary — to whoever decided it. The door here is
   // `approvals.decide`, not `finance.view`, and `decideApproval` admits anyone whose role matches

@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, readJson, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory } from "@/models";
-import { assertCostEntryValid, evaluatePreApproval } from "@/lib/rules";
+import { assertBatchInScope, assertCostEntryValid, assertTrainerInScope, evaluatePreApproval, releasePreApprovalReservation } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 
@@ -52,6 +52,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
     throw new HttpError(400, "Say what this cost was for — the description is what makes it answerable later.");
   }
 
+  // Cost entry is intentionally wider than finance visibility: every operational role can submit
+  // its own expense, but a granted form must never become a foreign-centre write door. Check every
+  // dimension the caller supplied before creating a head, an approval request, or a ledger row.
+  // The shared assertions preserve the project's existing scope semantics, including a Trainer's
+  // explicit assignment being stronger than a stale location_scope for a batch.
+  if (body.location) assertLocationInScope(user, String(body.location));
+  if (body.batch) await assertBatchInScope(user, String(body.batch));
+  if (body.trainer) await assertTrainerInScope(user, String(body.trainer));
+
   // Is it pre-approved, and can a machine tell? A cap can be checked; a free-text basis cannot, so
   // that entry parks WITH the basis quoted rather than being waved through on a flag. The CEO named
   // the failing case himself: *"अब अगर उसके 29 रह गए… तो वो एक बार अप्रूव होनी चाहिए।"*
@@ -92,7 +101,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return NextResponse.json({ queued: true, item: queued.request, awaiting: "a new cost head" }, { status: 202 });
   }
 
-  const pre = await evaluatePreApproval(body.category, Number(body.amount));
+  const pre = await evaluatePreApproval(body.category, Number(body.amount), { batch: body.batch, reserve: true });
 
   const parked = pre.applied ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
@@ -101,19 +110,28 @@ export const POST = apiHandler(async (req: NextRequest) => {
     location: body.location || undefined,
   });
   if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
-  const doc = await CostEntry.create({
-    entry_date: body.entry_date ?? new Date(),
-    location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
-    category: body.category, amount: body.amount, note: body.note,
-    vendor_payee: body.vendor_payee || undefined,
-    voucher_no: body.voucher_no || undefined,
-    payment_mode: body.payment_mode || undefined,
-    // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
-    // head must never rewrite what was approved today.
-    pre_approved_applied: pre.applied,
-    pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
-    entered_by: user.id,
-  });
+  let doc;
+  try {
+    doc = await CostEntry.create({
+      entry_date: body.entry_date ?? new Date(),
+      location: body.location || undefined, batch: body.batch || undefined, trainer: body.trainer || undefined,
+      category: body.category, amount: body.amount, requested_amount: body.amount,
+      payment_status: "Payment Pending", note: body.note,
+      vendor_payee: body.vendor_payee || undefined,
+      voucher_no: body.voucher_no || undefined,
+      payment_mode: body.payment_mode || undefined,
+      // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
+      // head must never rewrite what was approved today.
+      pre_approved_applied: pre.applied,
+      pre_approved_basis: pre.applied ? pre.basis ?? undefined : undefined,
+      entered_by: user.id,
+    });
+  } catch (error) {
+    // A formula reservation is taken before create so concurrent requests cannot both spend the
+    // same remainder. Validation/write failure means no liability exists, so return that capacity.
+    await releasePreApprovalReservation(pre.reservation);
+    throw error;
+  }
   await audit({ entity: "CostEntry", entityId: doc._id, newValue: "created", actor: user.id });
   return NextResponse.json({ item: doc }, { status: 201 });
 });

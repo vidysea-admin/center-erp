@@ -130,7 +130,7 @@ ok("SPOC with can_edit can write own location", spocWrite.status === 200, `got $
 const enrollChanges = await req(enroll, "GET", "/api/sheet-changes");
 ok("Rule 40: Enrollment role blocked from Sync Inbox (403)", enrollChanges.status === 403, `got ${enrollChanges.status}`);
 const spocCosts = await req(spoc, "GET", "/api/costs");
-ok("Rule 40: Location role blocked from Costs (403)", spocCosts.status === 403, `got ${spocCosts.status}`);
+ok("Rule 40: Location can submit scoped costs but cannot read the finance ledger (403)", spocCosts.status === 403, `got ${spocCosts.status}`);
 const opsChanges = await req(ops, "GET", "/api/sheet-changes");
 ok("Rule 40/QA-083: Operations is OUT of the Sync Inbox now", opsChanges.status === 403, `got ${opsChanges.status}`);
 const opsUsers = await req(ops, "GET", "/api/users");
@@ -934,7 +934,11 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const s25 = Date.now().toString().slice(-6);
   const jpr = (await req(spoc, "GET", "/api/locations?limit=1")).data.items[0];
   const em = `q025.${s25}@vidysea-test.local`;
-  const mkU = await req(admin, "POST", "/api/users", { name: "Q025 Viewer", email: em, password: "Q025pass!xyz", role: "Enrollment", location_scope: [jpr._id], can_edit: true });
+  // Enrollment now carries costs.manage by role so this fixture must use Rule 39's explicit
+  // can_edit=false cap to create a genuine view-only lattice point. Without the cap the role's
+  // edit grant correctly wins over an extra `:view` grant and this test would be asserting a
+  // downgrade that the permission model has never promised.
+  const mkU = await req(admin, "POST", "/api/users", { name: "Q025 Viewer", email: em, password: "Q025pass!xyz", role: "Enrollment", location_scope: [jpr._id], can_edit: false });
   ok("QA-025: fixture user created", mkU.status === 201 || mkU.status === 200, `got ${mkU.status}`);
   const uid = mkU.data.item?._id;
   // QA-1825: two keys now, because the lattice point this pins spans both — finance.view is what
@@ -976,8 +980,8 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
       } else ok("QA-904: second fixture candidate created", false, JSON.stringify(c2));
     }
     const meTr = await req(trainer, "GET", "/api/permissions/me");
-    ok("QA-153: a trainer's effective rights carry no attendance.govt / costs.manage / sheet.sources (so Govt Attendance, Costs, Sheet Sync do not exist for them)",
-      meTr.status === 200 && meTr.data.role === "Trainer" && !meTr.data.levels?.["attendance.govt"] && !meTr.data.levels?.["costs.manage"] && !meTr.data.levels?.["sheet.sources"] && meTr.data.levels?.["batches.daily_log"] === "edit",
+    ok("cost submission: a trainer carries costs.manage, while Govt Attendance and Sheet Sync still stay out of their default work",
+      meTr.status === 200 && meTr.data.role === "Trainer" && !meTr.data.levels?.["attendance.govt"] && meTr.data.levels?.["costs.manage"] === "edit" && !meTr.data.levels?.["sheet.sources"] && meTr.data.levels?.["batches.daily_log"] === "edit",
       JSON.stringify(meTr.data.levels));
     // ---- -107 (Umesh 17/08): "trainer dashboard mai ek aur remaining hai — upload government
     // sheet of attendance." The grant was DEAD: the importer's API has always gated on
@@ -1020,9 +1024,10 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     // QA-1469 (2026-08-24 outage postmortem): Umesh - "Location ko bhi govt-attendance milna
     // chahiye." Narrower than the 13/08 "attendance is off the SPOC plate" ruling below: that was
     // about routine daily attendance logging (still Trainer's job), not the government-portal
-    // reconciliation import a SPOC needs to see for their own location. costs.manage is untouched.
-    ok("QA-153/QA-1469: a SPOC's rights carry attendance.govt (govt-attendance import), still no costs.manage",
-      meSp.status === 200 && meSp.data.role === "Location" && meSp.data.levels?.["attendance.govt"] === "edit" && !meSp.data.levels?.["costs.manage"], JSON.stringify(meSp.data.levels));
+    // reconciliation import a SPOC needs to see for their own location. Cost submission is now
+    // part of every operational role, while finance.view remains absent.
+    ok("QA-153/QA-1469: a SPOC carries attendance.govt and cost submission, but no finance visibility",
+      meSp.status === 200 && meSp.data.role === "Location" && meSp.data.levels?.["attendance.govt"] === "edit" && meSp.data.levels?.["costs.manage"] === "edit" && !meSp.data.levels?.["finance.view"], JSON.stringify(meSp.data.levels));
     ok("QA-1469: …and the govt-attendance importer actually OPENS for a SPOC now (200, not 403)",
       (await req(spoc, "GET", "/api/govt-attendance")).status === 200);
     const meOps = await req(ops, "GET", "/api/permissions/me");
@@ -1045,7 +1050,7 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const put = await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: ["candidates.manage", "candidates.assign", "costs.manage:view"] });
   ok("QA-025 P1: the matrix PUT keeps a :view entry verbatim",
     put.status === 200 && (put.data.item?.permissions ?? []).includes("costs.manage:view"), JSON.stringify(put.data.item?.permissions ?? null));
-  const restore = await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: ["candidates.manage", "candidates.assign"] });
+  const restore = await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: ["candidates.manage", "candidates.assign", "costs.manage"] });
   ok("QA-025: role matrix restored for the rest of the wall", restore.status === 200);
 }
 
@@ -2832,6 +2837,30 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       ok(`QA-1843/QA-1844: the DECIDE route (${decision}) REFUSES an Admin without finance.approve — the response-masking branch is unreachable for them`,
         dec.status === 403, `got ${dec.status} · ${JSON.stringify(dec.data ?? {}).slice(0, 220)}`);
     }
+    // A partial sanction is stored at top level (`approved_amount`), not in payload. The initiator
+    // may read their own decision but still has no finance.view, so both the field and any prose
+    // echo of the sanctioned figure must be removed from that response.
+    const partialTarget = pendingNow[1];
+    if (partialTarget) {
+      const approvedAmount = 765432;
+      const decided = await req(admin, "POST", `/api/approvals/${partialTarget._id}`, {
+        decision: "Approved", approved_amount: approvedAmount,
+        note: `Partial sanction ${approvedAmount} after voucher review`,
+      });
+      ok("partial approval masking [precondition]: a finance approver can record the sanctioned amount",
+        decided.status === 200 && decided.data?.item?.approved_amount === approvedAmount,
+        `got ${decided.status} · ${JSON.stringify(decided.data ?? {}).slice(0, 180)}`);
+      const mine = ((await req(ops, "GET", "/api/approvals?mine=1")).data?.items ?? [])
+        .find((i) => String(i._id) === String(partialTarget._id));
+      const outsideOwnAmount = mine ? JSON.parse(JSON.stringify(mine)) : {};
+      if (outsideOwnAmount?.payload) delete outsideOwnAmount.payload.amount;
+      const wire = JSON.stringify(outsideOwnAmount);
+      ok("partial approval masking: the raiser keeps only their own payload.amount, never sanction fields or figure echoes",
+        !!mine && mine.status === "Approved" && mine.payload?.amount === 876543
+          && mine.approved_amount === undefined && mine.decision_note === undefined
+          && !/765432|7,65,432|765,432|876543|8,76,543|876,543/.test(wire),
+        JSON.stringify(mine ?? {}).slice(0, 320));
+    }
 
     // The notification the park created is broadcast to a ROLE, not to grant-holders, and is mailed.
     // It must not carry the figure to anyone, which is why it is redacted unconditionally.
@@ -3365,8 +3394,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const trainerU = ((await req(admin, "GET", "/api/users")).data.items ?? []).find((u) => u.role === "Trainer" && u.active !== false);
       if (trainerU) {
         const before = (await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? [];
-        const key = "costs.manage";
-        ok("QA-1906 fixture: a Trainer does not hold costs.manage by role",
+        // Cost submission is now a Trainer default. `sheet.sources` remains outside that role and
+        // therefore still distinguishes a personal grant from role-default-only reporting.
+        const key = "sheet.sources";
+        ok("QA-1906 fixture: a Trainer does not hold sheet.sources by role",
           (before.find((r) => r.key === key) ?? {}).level === "none", JSON.stringify(before.find((r) => r.key === key) ?? null));
         await req(admin, "PATCH", `/api/users/${trainerU._id}`, { extra_permissions: [key] });
         const granted = ((await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? []).find((r) => r.key === key);
@@ -3376,7 +3407,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           granted && /person|grant/i.test(String(granted.source ?? "")), String(granted?.source));
         await req(admin, "PATCH", `/api/users/${trainerU._id}`, { extra_permissions: [] });
         const back = ((await req(admin, "GET", `/api/users/${trainerU._id}/rights`)).data?.rights ?? []).find((r) => r.key === key);
-        ok("QA-1906: taking the grant back reads as 'none' again on a server re-read",
+        ok("QA-1906: taking the personal grant back reads as 'none' again on a server re-read",
           back && back.level === "none", JSON.stringify(back ?? null));
       } else ok("QA-1906 fixture: an active Trainer exists to grant to", false, "none found");
     } else ok("QA-1897 fixture: the ungranted Admin's id resolves", false, "no id");

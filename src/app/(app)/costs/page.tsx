@@ -17,7 +17,7 @@ function CostsInner() {
   // instead of a 403 banner over an empty ledger. `loaded` guards the first paint: until the
   // rights arrive we assume post-only, which is the SAFE assumption (never render a ledger we are
   // not yet sure this person may see) and matches what the old code did while the session loaded.
-  const { can, loaded: permsLoaded } = usePerms();
+  const { can, role, loaded: permsLoaded } = usePerms();
   const postOnly = !permsLoaded || !can("finance.view");
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
@@ -25,6 +25,7 @@ function CostsInner() {
   const [invoices, setInvoices] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
   const [locations, setLocations] = useState<any[]>([]);
+  const [batches, setBatches] = useState<any[]>([]);
   const [trainers, setTrainers] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [editId, setEditId] = useState("");
@@ -47,8 +48,9 @@ function CostsInner() {
       : api("/api/costs").then((d) => setCosts(d.items)),
     asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
-    api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
-    api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
+    role === "Trainer" ? Promise.resolve() : api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
+    api("/api/batches?limit=2000").then((d) => setBatches(d.items ?? [])),
+    ["Enrollment", "Trainer"].includes(role) ? Promise.resolve() : api("/api/trainers?limit=2000").then((d) => setTrainers(d.items)),
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   // Wait for the RIGHTS, not the session (QA-1825) — the first paint does not know them yet, and
   // firing the ledger fetch for a post-only user would just banner their own 403 at them.
@@ -76,10 +78,13 @@ function CostsInner() {
     setForm({
       entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
       category: r.category?._id ?? "", location: r.location?._id ?? "", trainer: r.trainer?._id ?? "",
+      batch: r.batch?._id ?? "",
       // QA-1828b: an edit that does not repopulate a field posts it back empty. The PATCH filters
       // "" out so nothing is erased today, but that is the route being forgiving rather than this
       // form being right, and the next field added here would not get that courtesy.
       vendor_payee: r.vendor_payee ?? "", voucher_no: r.voucher_no ?? "", payment_mode: r.payment_mode ?? "",
+      payment_status: r.payment_status ?? "", payment_ref: r.payment_ref ?? "",
+      paid_on: r.paid_on ? toInputDate(r.paid_on) : toInputDate(new Date()),
     });
   }
 
@@ -87,6 +92,22 @@ function CostsInner() {
     if (!editId || !window.confirm("Delete this cost entry? The amount disappears from every total.")) return;
     try { await api(`/api/costs/${editId}`, { method: "DELETE" }); setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly); }
     catch (e: any) { setError(e.message); }
+  }
+
+  async function markPaymentDone() {
+    if (!editId) return;
+    try {
+      await api(`/api/costs/${editId}`, {
+        method: "PATCH",
+        json: {
+          mark_paid: true, paid_on: form.paid_on || toInputDate(new Date()),
+          payment_ref: form.payment_ref, payment_mode: form.payment_mode,
+          vendor_payee: form.vendor_payee,
+        },
+      });
+      setNotice("Payment recorded with its date, reference and actor.");
+      setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
+    } catch (e: any) { setError(e.message); }
   }
 
   const total = costs.reduce((s, c) => s + (c.amount ?? 0), 0);
@@ -111,6 +132,12 @@ function CostsInner() {
                 <select className={inputCls} value={form.location ?? ""} onChange={(e) => setForm({ ...form, location: e.target.value })}>
                   <option value="">—</option>
                   {offerable(locations, form.location).map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                </select>
+              </Field>
+              <Field label="Batch">
+                <select className={inputCls} value={form.batch ?? ""} onChange={(e) => setForm({ ...form, batch: e.target.value })}>
+                  <option value="">—</option>
+                  {offerable(batches, form.batch).map((b: any) => <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>)}
                 </select>
               </Field>
               <Field label="Trainer (retainer/TOT)">
@@ -138,10 +165,17 @@ function CostsInner() {
                   {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
+              {editId && (
+                <>
+                  <Field label="Payment date"><input type="date" className={inputCls} value={form.paid_on ?? toInputDate(new Date())} onChange={(e) => setForm({ ...form, paid_on: e.target.value })} /></Field>
+                  <Field label="Payment reference"><input className={inputCls} value={form.payment_ref ?? ""} onChange={(e) => setForm({ ...form, payment_ref: e.target.value })} /></Field>
+                </>
+              )}
               <div className="flex items-end gap-2">
                 <Btn onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
+                {editId && form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
               </div>
             </div>
             {/* The description was rendered ONLY when editing, so the person posting the cost - the
@@ -214,6 +248,9 @@ function CostsInner() {
                 { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => r.entry_date ? new Date(r.entry_date).getTime() : null, render: (r: any) => fmtDate(r.entry_date) },
                 { key: "category", label: "Category", sortable: true, sortValue: (r: any) => r.category?.name, render: (r: any) => r.category?.name },
                 { key: "amount", label: "Amount", sortable: true, render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
+                { key: "requested_amount", label: "Requested", sortable: true, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? `₹${Number(r.requested_amount).toLocaleString("en-IN")}` : "—" },
+                { key: "payment_status", label: "Payment", sortable: true, filterable: true, render: (r: any) => r.payment_status ?? "Not recorded" },
+                { key: "payment_ref", label: "Payment ref", mobile: false, render: (r: any) => r.payment_ref ?? "—" },
                 { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name ?? "—" },
                 { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code ?? "—" },
                 { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name, render: (r: any) => r.trainer?.name ?? "—" },

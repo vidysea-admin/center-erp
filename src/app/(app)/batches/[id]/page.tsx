@@ -125,19 +125,19 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           colour, same as the portal-ID panels) for the normal case. */}
       {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && dismissed(`erp_dismiss_roster_${id}`) && (
         <button data-tick={dismissTick} onClick={() => undismiss(`erp_dismiss_roster_${id}`)}
-          className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${["Completed", "Closing"].includes(b.status)
+          className={`w-fit rounded-full border px-3 py-1 text-xs font-medium ${["Completed", "Assessment Awaited", "Closing"].includes(b.status)
             ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
             : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"}`}>
           No students yet · show
         </button>
       )}
       {(data.readiness?.roster_count ?? 0) === 0 && !["Cancelled"].includes(b.status) && !dismissed(`erp_dismiss_roster_${id}`) && (
-        <div className={`relative rounded-xl border-2 p-4 ${["Completed", "Closing"].includes(b.status) ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"}`} data-tick={dismissTick}>
+        <div className={`relative rounded-xl border-2 p-4 ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "border-red-300 bg-red-50" : "border-amber-300 bg-amber-50"}`} data-tick={dismissTick}>
           <button aria-label="Dismiss" title="Hide for now" onClick={() => dismiss(`erp_dismiss_roster_${id}`)}
-            className={`absolute right-2 top-2 rounded px-1.5 text-lg leading-none ${["Completed", "Closing"].includes(b.status) ? "text-red-400 hover:text-red-700" : "text-amber-400 hover:text-amber-700"}`}>×</button>
-          <div className={`text-sm font-semibold ${["Completed", "Closing"].includes(b.status) ? "text-red-800" : "text-amber-800"}`}>This batch has no students yet — upload the roster</div>
-          <p className={`mt-1 text-sm ${["Completed", "Closing"].includes(b.status) ? "text-red-700" : "text-amber-700"}`}>
-            {b.status === "Completed" || b.status === "Closing"
+            className={`absolute right-2 top-2 rounded px-1.5 text-lg leading-none ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "text-red-400 hover:text-red-700" : "text-amber-400 hover:text-amber-700"}`}>×</button>
+          <div className={`text-sm font-semibold ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "text-red-800" : "text-amber-800"}`}>This batch has no students yet — upload the roster</div>
+          <p className={`mt-1 text-sm ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "text-red-700" : "text-amber-700"}`}>
+            {["Completed", "Assessment Awaited", "Closing"].includes(b.status)
               ? "It is marked " + b.status + " with an empty roster, so its attendance, results and billing are all reading zero."
               : "Readiness, attendance and every count on the dashboard stay wrong until the students are on it."}
           </p>
@@ -216,11 +216,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // GET /results returns them as `summary`. No new API, just the fetch this screen never made.
   const [resSummary, setResSummary] = useState<any>(null);
   useEffect(() => {
-    if (!["Active", "Closing", "Completed", "Closed"].includes(b.status)) { setAtt(null); return; }
+    if (!["Active", "Assessment Awaited", "Closing", "Completed", "Closed"].includes(b.status)) { setAtt(null); return; }
     api(`/api/batches/${b._id}/attendance`).then(setAtt).catch(() => setAtt(null));
     api(`/api/batches/${b._id}/results`).then((d) => setResSummary(d.summary ?? null)).catch(() => setResSummary(null));
   }, [b._id, b.status]);
-  const running = ["Active", "Closing", "Completed", "Closed"].includes(b.status);
+  const running = ["Active", "Assessment Awaited", "Closing", "Completed", "Closed"].includes(b.status);
   const dayN = b.actual_start ? Math.max(1, Math.floor((Date.now() - new Date(b.actual_start).getTime()) / 864e5) + 1) : null;
   const dayM = b.program?.duration_days ?? (b.planned_start && b.planned_end ? Math.round((new Date(b.planned_end).getTime() - new Date(b.planned_start).getTime()) / 864e5) + 1 : null);
   // QA-1767: active-only, matching the Attendance tab's own twin of this sentence (which filters
@@ -498,7 +498,14 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           that contradicted them. It now opens a confirmation instead of firing on the press, per the
           -207 ruling ("vo double confirmation pop up card khule properly"), because it records a
           fact under the presser's name rather than just moving a status. */}
-      {b.status === "Active" && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → Result Awaited</Btn>}
+      {b.status === "Active" && (
+        <Btn small kind="ghost" onClick={() => {
+          if (window.confirm("Move this batch to Assessment Awaited? Daily hour-log reminders will stop, and you can record the assessment date when it is assigned.")) {
+            transition("Assessment Awaited");
+          }
+        }}>Assessment Awaited</Btn>
+      )}
+      {["Active", "Assessment Awaited"].includes(b.status) && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → Result Awaited</Btn>}
       {/* -207 (Umesh, 23/08, with the screen open): "2 duplicate buttons fro similar functionlity
           ?? essaa kyu hai , worst user experiece. only ye blue wala Complete batch button rakho and
           put it in the same row of attendance and all. along with same ui and ye button mai vo
@@ -790,11 +797,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           could satisfy that condition - he asked "assessment hai kahan se?" and there was no answer.
           This is that answer, and it says out loud that results are NOT needed, because the previous
           behaviour taught everyone the opposite. */}
-      <Drawer open={examHeldOpen && b.status === "Active"} onClose={() => setExamHeldOpen(false)} title={`${b.code} — assessment done?`} error={error}>
+      <Drawer open={examHeldOpen && ["Active", "Assessment Awaited"].includes(b.status)} onClose={() => setExamHeldOpen(false)} title={`${b.code} — assessment done?`} error={error}>
         <div className="text-sm">
           <div className="font-semibold">You are recording that the assessment was HELD</div>
           <p className="mt-1 text-slate-700">
-            The batch moves out of <b>Active</b> and into <b>Result Awaited</b>, where it waits for the
+            The batch moves out of <b>{b.status === "Assessment Awaited" ? "Assessment Awaited" : "Active"}</b> and into <b>Result Awaited</b>, where it waits for the
             results. <b>The results are not needed for this</b> — that is what Result Awaited means.
           </p>
           <p className="mt-2 text-slate-700">
@@ -5381,6 +5388,8 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           { key: "note", label: "Description", minWidth: 200 },
           { key: "vendor_payee", label: "Paid to", render: (r: any) => r.vendor_payee || "—", mobile: false },
           { key: "payment_mode", label: "Paid how", render: (r: any) => r.payment_mode || "—", mobile: false },
+          { key: "paid_on", label: "Payment date", render: (r: any) => r.paid_on ? fmtDate(r.paid_on) : "—", mobile: false },
+          { key: "payment_ref", label: "Payment reference", render: (r: any) => r.payment_ref || "—", mobile: false },
           { key: "entered_by", label: "By", render: (r: any) => r.entered_by?.name, mobile: false },
         ]} empty="No costs recorded." />
       <div className="mt-3 grid gap-3 md:grid-cols-5">

@@ -3505,7 +3505,10 @@ for (const file of walk(root)) {
     } else {
       // The batch supplies these itself, so the batch form does not ask for them. Every other field
       // a person can type on /costs has to be typeable on a batch too.
-      const NOT_ON_A_BATCH = new Set(["location", "trainer", "batch", "entry_date"]);
+      // paid_on/payment_ref are not create fields: /costs renders them only after selecting an
+      // existing row, beside its finance-gated "Mark payment done" action. The batch tab is a
+      // submit-only surface, so copying those inputs there would create controls with no edit door.
+      const NOT_ON_A_BATCH = new Set(["location", "trainer", "batch", "entry_date", "paid_on", "payment_ref"]);
       const typed = new Set();
       for (const m of src[0].matchAll(/setForm\(\{ \.\.\.form, (\w+):/g)) typed.add(m[1]);
       const missing = [...typed].filter((f) => !NOT_ON_A_BATCH.has(f) && !src[1].includes("form." + f));

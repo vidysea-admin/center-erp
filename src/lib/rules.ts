@@ -1212,7 +1212,23 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       }
       break;
     }
-    case "Active->Closing": {
+    // Karunn, 2026-09-10: delivery can be over while the assessor is not assigned yet. This
+    // deliberate state ends daily-log/resource obligations without pretending the exam happened.
+    // It carries no result gate: the next edge does, and the operator is explicitly recording that
+    // assessment is the outstanding step.
+    case "Active->Assessment Awaited": {
+      const deliveryEnd = batch.actual_end ?? batch.planned_end;
+      if (!deliveryEnd) {
+        fail("Record the batch's planned end date before marking delivery finished and waiting for assessment.");
+      }
+      const deliveryEndDay = dayKey(deliveryEnd);
+      if (deliveryEndDay > istToday()) {
+        fail(`Training delivery is planned through ${deliveryEndDay.toISOString().slice(0, 10)}. Assessment Awaited is available once delivery has ended.`);
+      }
+      break;
+    }
+    case "Active->Closing":
+    case "Assessment Awaited->Closing": {
       // QA-2250 (Umesh + Manish, live on -298, batch BHA-ITI-RPLHSL-SPIT-02). This used to be
       // `assessment_status !== "Completed"` alone, and that single line made the product contradict
       // its own vocabulary: the button says "Assessment done -> Result Awaited", `Closing` is
@@ -1653,7 +1669,7 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
     if (mgmt.length) return { score: "Amber", reasons: mgmt };
     return { score: "Green", reasons };
   }
-  if (["Active", "Closing", "Planning", "Ready"].includes(batch.status)) {
+  if (["Active", "Assessment Awaited", "Closing", "Planning", "Ready"].includes(batch.status)) {
     const rosterN = await BatchMember.countDocuments({ batch: batchId, left_on: null });
     reasons.push(...asReasons(batchManagementBlockers(batch, rosterN)));
   }
@@ -1705,6 +1721,8 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
 // enforces but nothing displayed. Derived, never stored: the next unmet step IS the stage.
 export function settlementStage(batchStatus: string, closure: any, invoice: any): string | null {
   if (batchStatus === "Closed") return "Closed — all dues settled";
+  if (batchStatus === "Assessment Awaited") return "Assessment awaited";
+  if (batchStatus === "Closing") return "Result awaited";
   if (batchStatus !== "Completed") return null;
   if (closure?.certification_status !== "Completed") return "Awaiting certification";
   if (!invoice || invoice.status === "Not Ready") return "Certified — invoice not ready";
@@ -2601,11 +2619,25 @@ export async function updateInvoiceChecked(batchId: string, patch: Record<string
 // The alternative — treating `pre_approved: true` as "no approval needed" — would have been three
 // lines and would have shipped the CEO's 29-vs-30 example backwards: the one case he named as
 // needing approval is exactly the one it would have skipped.
-export type PreApproval = { applied: boolean; basis: string | null; reason: string };
+export type PreApprovalReservation = {
+  category_id: unknown;
+  usage_field: string;
+  amount: number;
+};
+export type PreApproval = {
+  applied: boolean;
+  basis: string | null;
+  reason: string;
+  reservation?: PreApprovalReservation;
+};
 
-export async function evaluatePreApproval(categoryId: unknown, amount: number): Promise<PreApproval> {
+export async function evaluatePreApproval(
+  categoryId: unknown,
+  amount: number,
+  context: { batch?: unknown; reserve?: boolean } = {},
+): Promise<PreApproval> {
   const cat = categoryId
-    ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis").lean<any>()
+    ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis pre_approved_unit pre_approved_min_billable").lean<any>()
     : null;
   if (!cat) return { applied: false, basis: null, reason: "no cost head on the entry" };
 
@@ -2637,6 +2669,7 @@ export async function evaluatePreApproval(categoryId: unknown, amount: number): 
 
   const basis: string | null = src.pre_approved_basis ?? null;
   const cap: number | null = typeof src.pre_approved_amount === "number" ? src.pre_approved_amount : null;
+  const unit = src.pre_approved_unit ?? "Fixed amount";
 
   if (cap === null) {
     return {
@@ -2646,6 +2679,94 @@ export async function evaluatePreApproval(categoryId: unknown, amount: number): 
         : `"${src.name}" is marked pre-approved but carries neither an amount nor a basis, so there is nothing to check it against`,
     };
   }
+  if (unit === "Per billable passed") {
+    if (!context.batch) {
+      return {
+        applied: false, basis,
+        reason: `pre-approved on "${src.name}" at ${cap} per billable passed, but this entry has no batch whose result can be checked`,
+      };
+    }
+    const closure = await Closure.findOne({ batch: context.batch }).select("billable_passed passed").lean<any>();
+    const billable = typeof closure?.billable_passed === "number"
+      ? closure.billable_passed
+      : typeof closure?.passed === "number" ? closure.passed : null;
+    if (billable === null) {
+      return {
+        applied: false, basis,
+        reason: `pre-approved on "${src.name}" at ${cap} per billable passed, but the batch has no recorded closure result yet`,
+      };
+    }
+    const minimum = typeof src.pre_approved_min_billable === "number" ? src.pre_approved_min_billable : 0;
+    if (billable < minimum) {
+      return {
+        applied: false, basis,
+        reason: `the batch has ${billable} billable passed; this commitment starts at ${minimum}`,
+      };
+    }
+    // Use find(), not aggregate(): auth scopes and request bodies carry string ids and Mongoose
+    // casts them for find queries but not inside aggregation pipelines (ARCHITECTURE §3.3).
+    const prior = await CostEntry.find({ batch: context.batch, category: src._id, pre_approved_applied: true })
+      .select("amount").lean<any[]>();
+    const committed = prior.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    const totalCap = cap * billable;
+
+    // A read-then-create cap is not a cap under concurrency: two requests can both read the same
+    // remainder and both post. The hidden usage counter lives on the category because Mongo can
+    // condition and increment ONE document atomically. It is partitioned by batch, bootstrapped
+    // (and only ever raised) from durable ledger rows, then reserved before CostEntry.create.
+    // The route releases the reservation if creation fails; after creation the reservation IS the
+    // committed cumulative usage. Raw collection access is deliberate: this is concurrency
+    // bookkeeping, not user-facing master data, and adding it to the schema would expose a second
+    // writable finance surface.
+    if (context.reserve) {
+      const usageKey = String(context.batch);
+      const usageField = `_pre_approved_usage.${usageKey}`;
+      const collection: any = CostCategory.collection;
+      await collection.updateOne(
+        { _id: src._id },
+        { $max: { [usageField]: committed } },
+      );
+      const reserved = await collection.updateOne(
+        { _id: src._id, [usageField]: { $lte: totalCap - Number(amount) } },
+        { $inc: { [usageField]: Number(amount) } },
+      );
+      if (reserved.modifiedCount === 1) {
+        const after = await collection.findOne(
+          { _id: src._id },
+          { projection: { [usageField]: 1 } },
+        );
+        const usedAfter = Number(after?._pre_approved_usage?.[usageKey] ?? committed + Number(amount));
+        return {
+          applied: true,
+          basis,
+          reason: `within ${cap} × ${billable} billable passed = ${totalCap} on "${src.name}" (${Math.max(0, usedAfter - Number(amount))} already used)`,
+          reservation: { category_id: src._id, usage_field: usageField, amount: Number(amount) },
+        };
+      }
+      const after = await collection.findOne(
+        { _id: src._id },
+        { projection: { [usageField]: 1 } },
+      );
+      const used = Number(after?._pre_approved_usage?.[usageKey] ?? committed);
+      const available = Math.max(0, totalCap - used);
+      return {
+        applied: false,
+        basis,
+        reason: `above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${used} already used) on "${src.name}"`,
+      };
+    }
+    const available = Math.max(0, totalCap - committed);
+    if (Number(amount) <= available) {
+      return {
+        applied: true, basis,
+        reason: `within ${cap} × ${billable} billable passed = ${totalCap} on "${src.name}" (${committed} already used)`,
+      };
+    }
+    return {
+      applied: false, basis,
+      reason: `above the remaining pre-approved amount ${available} (${cap} × ${billable} = ${totalCap}; ${committed} already used) on "${src.name}"`,
+    };
+  }
   if (Number(amount) <= cap) {
     return { applied: true, basis, reason: `within the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}` };
   }
@@ -2653,6 +2774,18 @@ export async function evaluatePreApproval(categoryId: unknown, amount: number): 
     applied: false, basis,
     reason: `above the pre-approved ${cap} on "${src.name}"${basis ? ` (${basis})` : ""}`,
   };
+}
+
+export async function releasePreApprovalReservation(reservation?: PreApprovalReservation): Promise<void> {
+  if (!reservation) return;
+  const collection: any = CostCategory.collection;
+  await collection.updateOne(
+    {
+      _id: reservation.category_id,
+      [reservation.usage_field]: { $gte: reservation.amount },
+    },
+    { $inc: { [reservation.usage_field]: -reservation.amount } },
+  );
 }
 
 
@@ -4217,7 +4350,7 @@ export async function eligibilityByMember(batchId: string): Promise<Map<string, 
 }
 
 export function courseIsFinished(batch: any, portalWorkingDays: number | null | undefined): boolean {
-  if (["Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
+  if (["Assessment Awaited", "Closing", "Completed", "Closed", "Cancelled"].includes(String(batch?.status))) return true;
   const days = Number(batch?.program?.duration_days ?? 0);
   return !!days && Number(portalWorkingDays ?? 0) >= days;
 }
@@ -4466,7 +4599,7 @@ export function batchManagementBlockers(
   if (status === "Completed" && roster === 0) {
     push("empty_completed", "Completed with no students on the roster — upload the roster or remove the shell", "amber");
   }
-  if (["Active", "Closing"].includes(status) && roster === 0) {
+  if (["Active", "Assessment Awaited", "Closing"].includes(status) && roster === 0) {
     push("empty_roster", "No students on the roster", "red");
   }
   // QA-1921 (checker on cycle 2): this reason is NEW to `batchHealth`, which the Home dashboard and
@@ -5763,6 +5896,10 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       vendor_payee: e.vendor_payee ?? null,
       voucher_no: e.voucher_no ?? null,
       payment_mode: e.payment_mode ?? null,
+      payment_status: e.payment_status ?? null,
+      paid_on: e.paid_on ?? null,
+      payment_ref: e.payment_ref ?? null,
+      requested_amount: e.requested_amount ?? null,
       pre_approved: e.pre_approved_applied ? (e.pre_approved_basis || "yes") : null,
       head: headLabel, subhead: subLabel,
       head_type: head?.head_type ?? null,
@@ -6320,4 +6457,3 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
     register: rows,
   };
 }
-

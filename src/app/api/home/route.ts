@@ -63,10 +63,11 @@ export const GET = apiHandler(async () => {
   // 2026-08-13 (Umesh): "ek ke baad do count — active kitne AUR complete kitne, approved
   // AUR pending" — each KPI carries its natural second number so the card answers the
   // follow-up question without a click.
-  const [approvedLocations, pendingLocations, activeBatches, completedBatches, enrolledMembers, poolCandidates, openRequests, fulfilledRequests] = await Promise.all([
+  const [approvedLocations, pendingLocations, activeBatches, assessmentAwaitedBatches, completedBatches, enrolledMembers, poolCandidates, openRequests, fulfilledRequests] = await Promise.all([
     Location.countDocuments({ approval_status: "Approved", ...locationFilter(user, "_id") }),
     Location.countDocuments({ approval_status: "Pending", ...locationFilter(user, "_id") }),
     Batch.countDocuments({ status: "Active", ...homeBatchFilter }),
+    Batch.countDocuments({ status: "Assessment Awaited", ...homeBatchFilter }),
     Batch.countDocuments({ status: "Completed", ...homeBatchFilter }),
     BatchMember.countDocuments({ left_on: null, enrollment_status: "Completed", ...batchScope }),
     Candidate.countDocuments({ ...scope }),
@@ -408,7 +409,7 @@ export const GET = apiHandler(async () => {
   // not sent to it either; the lean roles keep exactly what their Home renders.
   const lean = ["Location", "Trainer", "Enrollment"].includes(user.role);
   const kpis: Record<string, unknown> = {
-    active_batches: activeBatches, completed_batches: completedBatches,
+    active_batches: activeBatches, assessment_awaited_batches: assessmentAwaitedBatches, completed_batches: completedBatches,
     // -153: WHICH batches these two counted, said out loud rather than left to be inferred. The
     // tile relabels itself from this; a number whose meaning is implicit is how the 2-vs-1 got
     // shipped in the first place.

@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import { MailLog, User } from "@/models";
 import { getDefaults } from "@/lib/defaults";
+import { BASE_PATH } from "@/lib/base-path";
 
 // QA-115 (CEO [19:48] "I didn't get the mail" — 2026-08-15): the product's first real
 // outbound-email layer. Pattern ported from pathlynks-self-discovery-quiz (the working
@@ -18,6 +19,15 @@ import { getDefaults } from "@/lib/defaults";
 
 const FROM_NAME = () => process.env.MAIL_FROM_NAME || "Vidysea Center ERP";
 const FROM_EMAIL = () => process.env.MAIL_FROM_EMAIL || "product@vidysea.com";
+
+// Staff welcome links must name the account they were issued for. A bare product-root link reuses
+// whichever Auth.js session cookie happens to be active in that browser; that made Karunn's
+// invitation silently open Umesh's already-signed-in Admin account. `switch=1` tells the public
+// login page to clear that browser session before asking for this account's password.
+export function staffSignInUrl(email: string): string {
+  const qs = new URLSearchParams({ email: String(email ?? "").trim().toLowerCase(), switch: "1" });
+  return `https://www.vidysea.com${BASE_PATH}/login?${qs.toString()}`;
+}
 
 // QA-129 (-69, "make suppression the DEFAULT, not a flag someone must remember"): a test
 // environment is RECOGNISED, not declared. Every wall points the app at a test DB and a

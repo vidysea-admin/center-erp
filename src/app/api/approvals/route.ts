@@ -17,7 +17,23 @@ export const GET = apiHandler(async (req: NextRequest) => {
     const mineItems = await ApprovalRequest.find({ initiator: user.id })
       .sort({ createdAt: -1 }).limit(100)
       .populate("decided_by", "name").populate("location", "name code").lean();
-    return NextResponse.json({ items: mineItems });
+    const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+    const items = mineItems.map((raw: any) => {
+      if (canSeeMoney) return raw;
+      // The raiser is entitled to the amount they themselves submitted, but not to a later
+      // sanctioned amount or to money repeated in summaries / decision prose. Reuse the one
+      // approval masker, then put back only that single requester-owned fact at its canonical
+      // payload location. Keeping decision_note out entirely also prevents a new prose field from
+      // becoming a second finance door.
+      const masked: any = maskApprovalMoney(raw, canSeeMoney);
+      delete masked.decision_note;
+      if (raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+          && raw.payload.amount !== undefined) {
+        masked.payload = { ...(masked.payload ?? {}), amount: raw.payload.amount };
+      }
+      return masked;
+    });
+    return NextResponse.json({ items });
   }
   // 2026-08-12 audit (auth S3-5): requireUser() alone. Each request carries the replay
   // `payload` — closure reasons, invoice amounts — so any signed-in user could read what the
@@ -44,8 +60,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // QA-1843: a parked cost carries its figure twice — `payload.amount` and the ₹ interpolated into
   // `summary`. Masked here rather than refused, for the same reason as Home and the closure tab:
   // whoever holds `approvals.decide` needs to SEE the queue to work it. Note the `?mine=1` branch
-  // above is deliberately NOT masked — those are the caller's own submissions, they typed the
-  // amount, and R-E requires them to read the rejection note and repost.
+  // above preserves only the requester's own payload.amount; sanction figures and their prose
+  // echoes are finance facts and stay masked.
   const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
   return NextResponse.json({ items: items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), config });
 });

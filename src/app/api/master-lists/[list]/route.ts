@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
-import { hasPermission, FINANCE_VIEW, maskCostCategoryMoneyList, requireFinance, COST_CATEGORY_MONEY_FIELDS } from "@/lib/permissions";
+import { hasPermission, FINANCE_VIEW, maskCostCategoryMoneyList, requireFinance, COST_CATEGORY_MONEY_FIELDS, COST_CATEGORY_PREAPPROVAL_FIELDS } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
 import { CostCategory, DropReason, FailureReason, JobRole, Scheme, SCHEME } from "@/models";
 
@@ -16,12 +16,12 @@ const EXTRA_FIELDS: Record<string, string[]> = {
   "schemes": ["code", "total_hours", "min_required_hours", "amount_received"],
   "job-roles": ["code"],
   // QA-1828 (CEO): head → subhead → description, with the pre-approval rule on the head.
-  "cost-categories": ["code", "parent", "description", "head_type", "budget", "pre_approved", "pre_approved_amount", "pre_approved_basis"],
+  "cost-categories": ["code", "parent", "description", "head_type", "budget", "pre_approved", "pre_approved_amount", "pre_approved_basis", "pre_approved_unit", "pre_approved_min_billable"],
 };
 // Which of those extras are NOT numbers. Everything else in EXTRA_FIELDS is coerced with Number()
 // and refused if it is not finite — the original code special-cased the single field named "code",
 // which stopped being enough the moment a list had a parent id, a description and a boolean.
-const TEXT_FIELDS = new Set(["code", "parent", "description", "head_type", "pre_approved_basis"]);
+const TEXT_FIELDS = new Set(["code", "parent", "description", "head_type", "pre_approved_basis", "pre_approved_unit"]);
 const BOOL_FIELDS = new Set(["pre_approved"]);
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ list: string }> }) => {
@@ -87,6 +87,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 // structure and the CEO's rule is about money.
 export async function assertMayWriteCategoryMoney(user: SessionUser, list: string, body: Record<string, any>) {
   if (list !== "cost-categories") return;
+  const touchingPreapproval = COST_CATEGORY_PREAPPROVAL_FIELDS.some((f) => body[f] !== undefined);
+  if (touchingPreapproval) {
+    await requireFinance(user, "approve");
+    return;
+  }
   const touching = COST_CATEGORY_MONEY_FIELDS.filter((f) => body[f] !== undefined);
   if (!touching.length) return;
   await requireFinance(user, "view");

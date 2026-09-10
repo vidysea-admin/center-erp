@@ -74,7 +74,7 @@ export const ASSESSMENT_RESULT = ["Pending", "Pass", "Fail", "Absent"] as const;
 export const CERTIFICATE_STATUS = ["Pending", "Processing", "Generated", "Issued", "Rejected", "Not Issued"] as const;
 export const BATCH_SESSION = ["Morning", "Afternoon", "Full Day"] as const;
 // "Closed" added 2026-08-14 (Rule 52): Completed = training over; Closed = money over.
-export const BATCH_STATUS = ["Planning", "Ready", "Active", "Closing", "Completed", "Closed", "Cancelled"] as const;
+export const BATCH_STATUS = ["Planning", "Ready", "Active", "Assessment Awaited", "Closing", "Completed", "Closed", "Cancelled"] as const;
 export const ENROLLMENT_STATUS = ["Not Started", "In Progress", "Completed", "Failed"] as const;
 export const ENROLLMENT_ISSUE = ["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"] as const;
 export const MEMBER_SOURCE = ["Manual", "Automation"] as const;
@@ -102,6 +102,13 @@ export const COST_HEAD_TYPE = ["Direct", "Indirect"] as const;
 // "cash"/"Cash"/"CASH"/"by hand" into cannot be grouped, which is the same as not having it. "Other"
 // is deliberate: a vocabulary with no escape hatch gets one invented inside another field.
 export const COST_PAYMENT_MODE = ["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"] as const;
+// A cost commitment and a payment are two different events. The approval workflow creates the
+// commitment; Accounts records the outward payment afterwards. Kept separate from INVOICE_STATUS,
+// which describes money coming IN from the client.
+export const COST_PAYMENT_STATUS = ["Payment Pending", "Paid"] as const;
+// Structured pre-approval policies. `pre_approved_basis` remains the human sentence shown in the
+// audit trail; this enum is the machine-checkable part of that sentence.
+export const COST_PRE_APPROVAL_UNIT = ["Fixed amount", "Per billable passed"] as const;
 
 const oid = (ref: string, required = false) => ({ type: Schema.Types.ObjectId, ref, required });
 
@@ -1198,6 +1205,13 @@ const CostEntrySchema = new Schema({
   vendor_payee: String,
   voucher_no: String,
   payment_mode: { type: String, enum: COST_PAYMENT_MODE },
+  // The amount requested remains visible even when an approver sanctions only part of it. Reports
+  // use `amount` (the sanctioned liability), while this field preserves the raiser's original fact.
+  requested_amount: Number,
+  approval_request: oid("ApprovalRequest"),
+  payment_status: { type: String, enum: COST_PAYMENT_STATUS },
+  paid_on: Date,
+  payment_ref: String,
   // The pre-approved decision AS IT WAS AT POST TIME. Not a live join to the head, because the head
   // is a master row somebody edits: raising a rate next quarter must not silently rewrite what was
   // approved last quarter. The CEO's rule is conditional — *"वो प्री अप्रूव होगा… उसमें फिर किसी की
@@ -1207,6 +1221,10 @@ const CostEntrySchema = new Schema({
   pre_approved_basis: String,
   entered_by: oid("User", true),
 }, { timestamps: true });
+// Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
+// request can create at most one ledger row. Sparse preserves direct/pre-approved costs, which have
+// no approval_request at all.
+CostEntrySchema.index({ approval_request: 1 }, { unique: true, sparse: true });
 
 // ---------- SyncSource ----------
 // mode "mapped": the original Location-field sync (Rules 1–9).
@@ -1380,6 +1398,9 @@ const ApprovalRequestSchema = new Schema({
   approver_users: [oid("User")],
   status: { type: String, enum: APPROVAL_REQUEST_STATUS, required: true, default: "Pending" },
   decided_by: oid("User"), decided_at: Date, decision_note: String,
+  // For a partially sanctioned cost, payload.amount stays the original request and this is the
+  // amount the approver actually authorised. Keeping both is the audit trail Karunn described.
+  approved_amount: Number,
 }, { timestamps: true });
 ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
 
@@ -1797,6 +1818,10 @@ const CostCategorySchema = new Schema({
   budget: Number,
   pre_approved: { type: Boolean, default: false },
   pre_approved_amount: Number,
+  pre_approved_unit: { type: String, enum: COST_PRE_APPROVAL_UNIT },
+  // Used only with `Per billable passed`: below this batch result the commitment does not apply
+  // and the entry must go to a human approver (Karunn's 29-vs-30 example).
+  pre_approved_min_billable: Number,
   // Free text on purpose: the CEO's examples are rules, not numbers — *"₹50 per child"*, *"per batch
   // at 30+ pass-outs"*. A number alone cannot say what it is per.
   pre_approved_basis: String,

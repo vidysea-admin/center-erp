@@ -7,7 +7,7 @@ import { User } from "@/models";
 import { linkTrainerLoginByEmail } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
-import { renderMail, sendMail } from "@/lib/mailer";
+import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
@@ -96,7 +96,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const { html, text } = renderMail({
       title: "Your Center ERP account is ready",
       lines: [`Hello ${doc.name},`, `An account (${doc.email}, role ${doc.role}) has been created for you on the Vidysea Center ERP.`, `${user.name} will share your password with you separately.`],
-      cta: { label: "Sign in to the ERP", url: "https://www.vidysea.com/erp" },
+      cta: { label: "Sign in to the ERP", url: staffSignInUrl(String(doc.email)) },
     });
     sendMail({ to: doc.email, subject: "Your Center ERP account is ready", html, text, entity: "User", entity_id: doc._id }).catch(() => {});
   }

@@ -80,7 +80,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
     data.register.map((r) => ({
-      Date: r.entry_date ? String(r.entry_date).slice(0, 10) : "",
+      Date: r.entry_date ? new Date(r.entry_date).toISOString().slice(0, 10) : "",
       Head: r.head, Subhead: r.subhead, Type: r.head_type ?? "",
       Amount: r.amount, Location: r.location, Batch: r.batch, "Job role": r.job_role,
       Trainer: r.trainer, Description: r.note, "Entered by": r.entered_by,
@@ -88,7 +88,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
       // export was fixed one cycle late for exactly this reason (QA-1959) - the producer changed
       // and the consumer did not, so the file and the screen disagreed about one number.
       "Paid to": r.vendor_payee ?? "—", "Voucher no": r.voucher_no ?? "—",
-      "Paid how": r.payment_mode ?? "—", "Pre-approved": r.pre_approved ?? "—",
+      "Paid how": r.payment_mode ?? "—", "Payment status": r.payment_status ?? "Not recorded",
+      "Paid on": r.paid_on ? new Date(r.paid_on).toISOString().slice(0, 10) : "—",
+      "Payment reference": r.payment_ref ?? "—",
+      "Requested amount": r.requested_amount ?? r.amount,
+      "Pre-approved": r.pre_approved ?? "—",
     })),
   ), "cost entry register");
 
