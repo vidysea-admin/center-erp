@@ -159,6 +159,12 @@ export async function ensureCostDeletionAuditEvent(input: {
       $push: { _audit_events: event },
     } as any,
   );
+  // The event and tombstone were the same atomic update. A recovery read may already acknowledge
+  // and collect the owner before this request runs another query, so the winning claimant must not
+  // turn successful completion into a false foreign-claim 500 merely because the owner is gone.
+  if (claim.modifiedCount === 1) {
+    return { eventId: event.event_id, actor: String(event.actor), claimed: true };
+  }
   const owner: any = await CostEntry.collection.findOne(
     { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, deletion_state: "Pending" },
     { projection: { _audit_events: 1, deletion_audit_event_id: 1 } },
@@ -166,6 +172,18 @@ export async function ensureCostDeletionAuditEvent(input: {
   const committedEventId = String(owner?.deletion_audit_event_id ?? "");
   const stored = (owner?._audit_events ?? []).find((candidate: any) =>
     String(candidate?.event_id ?? "") === committedEventId);
+  if (!owner) {
+    const completed: any = await AuditLog.collection.findOne({ _id: new Types.ObjectId(event.event_id) });
+    if (completed
+        && completed.entity === "CostEntry"
+        && sameAuditValue(completed.entity_id, costId)
+        && completed.field === "deleted"
+        && sameAuditValue(completed.old_value, event.old_value)
+        && completed.actor_type === "USER"
+        && completed.actor) {
+      return { eventId: event.event_id, actor: String(completed.actor), claimed: false };
+    }
+  }
   if (!stored
       || !committedEventId
       || stored.entity !== "CostEntry"
@@ -178,6 +196,28 @@ export async function ensureCostDeletionAuditEvent(input: {
     throw new Error(`Cost ${costId} has a foreign deletion-audit claim.`);
   }
   return { eventId: committedEventId, actor: String(stored.actor), claimed: claim.modifiedCount === 1 };
+}
+
+export async function costDeletionAuditIsDurable(input: {
+  costId: unknown;
+  eventId: string;
+  actor: unknown;
+  oldValue: { amount: unknown; note: unknown };
+}) {
+  const owner = await CostEntry.collection.findOne({ _id: new Types.ObjectId(String(input.costId)) }, { projection: { _id: 1 } });
+  if (owner) return false;
+  const written: any = await AuditLog.collection.findOne({ _id: new Types.ObjectId(input.eventId) });
+  const keys = written ? Object.keys(written).sort() : [];
+  return !!written
+    && written.entity === "CostEntry"
+    && sameAuditValue(written.entity_id, new Types.ObjectId(String(input.costId)))
+    && written.field === "deleted"
+    && sameAuditValue(written.old_value, input.oldValue)
+    && written.new_value === null
+    && sameAuditValue(written.actor, new Types.ObjectId(String(input.actor)))
+    && written.actor_type === "USER"
+    && written.created_at instanceof Date
+    && sameAuditValue(keys, ["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"]);
 }
 
 export async function settleFinanceAuditEvents(input: {

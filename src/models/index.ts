@@ -1258,7 +1258,7 @@ const VISIBLE_COST_ENTRY = {
     { reservation_state: { $exists: false } },
   ],
 };
-for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {
+for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments", "deleteMany"] as const) {
   CostEntrySchema.pre(op as any, function (this: any) {
     const current = this.getFilter();
     this.setQuery(Object.keys(current).length ? { $and: [current, VISIBLE_COST_ENTRY] } : VISIBLE_COST_ENTRY);

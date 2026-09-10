@@ -5,7 +5,7 @@ import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
-import { costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, settleFinanceAuditEvents } from "@/lib/approvals";
+import { costDeletionAuditIsDurable, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, settleFinanceAuditEvents } from "@/lib/approvals";
 import { Types } from "mongoose";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
@@ -50,6 +50,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const pauseBeforeWrite = isTestDb ? Math.min(Number(req.nextUrl.searchParams.get("_test_pause_before_write_ms")) || 0, 1000) : 0;
+  if (pauseBeforeWrite > 0) await new Promise((resolve) => setTimeout(resolve, pauseBeforeWrite));
   if (body.mark_paid === true) {
     if (doc.payment_status === "Paid") throw new HttpError(409, "This cost is already recorded as paid.");
     const paymentRef = String(body.payment_ref ?? "").trim();
@@ -65,10 +68,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       vendor_payee: payee, payment_mode: mode, payment_status: "Paid",
       paid_on: paidOn, payment_ref: paymentRef,
     };
-    Object.assign(doc, paymentPatch);
-    await doc.save({ validateModifiedOnly: true });
-    await auditDiff("CostEntry", doc._id, before, paymentPatch, user.id);
-    return NextResponse.json({ item: doc });
+    const updated = await CostEntry.findOneAndUpdate(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: paymentPatch },
+      { new: true, runValidators: true },
+    );
+    if (!updated) throw new HttpError(409, "This cost was deleted while the payment update was being prepared. Nothing changed.");
+    await auditDiff("CostEntry", updated._id, before, paymentPatch, user.id);
+    return NextResponse.json({ item: updated });
   }
   const patch: Record<string, unknown> = {};
   // QA-1828b: the new entry-side fields are editable by the same finance.approve holder who can
@@ -93,10 +100,20 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const before = doc.toObject();
   assertCostEntryValid({ ...before, ...patch }); // Rule 37 on the merged entry
   if (patch.category !== undefined) await assertActiveCostCategory(patch.category);
-  Object.assign(doc, patch);
-  await doc.save({ validateModifiedOnly: true });
-  await auditDiff("CostEntry", doc._id, before, patch, user.id);
-  return NextResponse.json({ item: doc });
+  const setPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+  const unsetPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value === undefined).map(([field]) => [field, 1]));
+  const update = {
+    ...(Object.keys(setPatch).length ? { $set: setPatch } : {}),
+    ...(Object.keys(unsetPatch).length ? { $unset: unsetPatch } : {}),
+  };
+  const updated = await CostEntry.findOneAndUpdate(
+    { _id: doc._id, deletion_state: { $exists: false } },
+    update,
+    { new: true, runValidators: true },
+  );
+  if (!updated) throw new HttpError(409, "This cost was deleted while the correction was being prepared. Nothing changed.");
+  await auditDiff("CostEntry", updated._id, before, patch, user.id);
+  return NextResponse.json({ item: updated });
 });
 
 export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -124,14 +141,24 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     throw new HttpError(409, "Another authorized user already committed this deletion. Its audit history is being finalized.");
   }
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const pauseAfterClaim = isTestDb ? Math.min(Number(req.nextUrl.searchParams.get("_test_pause_after_delete_claim_ms")) || 0, 1000) : 0;
+  if (pauseAfterClaim > 0) await new Promise((resolve) => setTimeout(resolve, pauseAfterClaim));
   const injectedFailure = isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "before"
     ? "before" as const
     : isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "after" ? "after" as const : undefined;
   await settleFinanceAuditEvents({ costIds: [doc._id], failure: injectedFailure }).catch(() => {});
   if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
+    if (await costDeletionAuditIsDurable({
+      costId: doc._id, eventId: claim.eventId, actor: claim.actor,
+      oldValue: { amount: doc.amount, note: doc.note },
+    })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
   }
   if (!(await garbageCollectSettledCostDeletion(doc._id))) {
+    if (await costDeletionAuditIsDurable({
+      costId: doc._id, eventId: claim.eventId, actor: claim.actor,
+      oldValue: { amount: doc.amount, note: doc.note },
+    })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
   }
   return NextResponse.json({ ok: true });
