@@ -9,6 +9,7 @@ import { mailUsers, mailUsersByRole } from "@/lib/mailer";
 import { redactMoneyInText } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
+import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -366,7 +367,10 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
-  ctx: { entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown; batch?: unknown },
+  ctx: {
+    entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown; batch?: unknown;
+    testPauseAfterCreateMs?: number;
+  },
 ): Promise<ApprovalOutcome> {
   const rule = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
   if (!rule) return null;
@@ -408,17 +412,24 @@ export async function requireApproval(
     approver_users: approverUsers,
   });
 
+  // Test-only ordered race: the request is durable, but its post-create cleanup fence has not
+  // run.  This proves that every queue path, not only Formula reservations, removes a request a
+  // force-delete races after its child cascade.
+  const testPause = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+    ? Math.max(0, Math.min(5_000, Number(ctx.testPauseAfterCreateMs ?? 0)))
+    : 0;
+  if (testPause) await new Promise((resolve) => setTimeout(resolve, testPause));
+
   // There is no cross-collection transaction on every supported deployment. Re-read the durable
-  // batch fence after the request write; if force-delete won the gap, delete only this newborn
-  // request before any notification/audit side effect and fail closed.
+  // batch fence after the request write with the final conditional Batch write; if force-delete
+  // won the gap, delete only this newborn request before any notification/audit side effect and
+  // fail closed.
   if (batchId) {
-    const live = await Batch.collection.findOne(
-      { _id: batchId, deletion_state: { $exists: false } },
-      { projection: { _id: 1 } },
-    );
-    if (!live) {
+    try {
+      await confirmBatchAcceptingFinanceWork(batchId);
+    } catch (error) {
       await ApprovalRequest.deleteOne({ _id: request._id, batch: batchId });
-      throw new HttpError(409, "This batch began deletion while the request was being queued. Nothing was left pending.");
+      throw error;
     }
   }
 

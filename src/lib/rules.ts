@@ -2648,6 +2648,24 @@ export async function assertBatchAcceptingFinanceWork(batchId: unknown) {
   }
 }
 
+// A read before a cross-collection insert is only an advisory check: force-delete can complete
+// its child cascade in the gap and leave the subsequent CostEntry orphaned.  Every batch-backed
+// finance materialisation therefore confirms the same live predicate with a conditional Batch
+// write AFTER its own insert.  On loss, its caller removes only the deterministic newborn row.
+export async function confirmBatchAcceptingFinanceWork(batchId: unknown) {
+  if (!batchId) return;
+  if (!Types.ObjectId.isValid(String(batchId))) {
+    throw new HttpError(409, "This batch is no longer available for a finance submission.");
+  }
+  const confirmed = await Batch.collection.updateOne(
+    { _id: new Types.ObjectId(String(batchId)), deletion_state: { $exists: false } },
+    { $currentDate: { updatedAt: true } },
+  );
+  if (confirmed.modifiedCount !== 1) {
+    throw new HttpError(409, "This batch began deletion while finance work was being materialized. Nothing was left pending.");
+  }
+}
+
 type CostEntryDraft = Record<string, any> & { _id: Types.ObjectId };
 const COST_ENTRY_IMMUTABLE_FIELDS = [
   "_id", "entry_date", "location", "batch", "trainer", "category", "amount",
@@ -2708,6 +2726,28 @@ export async function createCostEntryIdempotently(
   }
 }
 
+export async function createBatchScopedCostEntryIdempotently(
+  entry: CostEntryDraft,
+  options: { simulateAmbiguousAfterCreate?: boolean; acceptedReservationStates?: readonly string[]; pauseAfterCreateMs?: number } = {},
+) {
+  if (!entry.batch) return createCostEntryIdempotently(entry, options);
+  await assertBatchAcceptingFinanceWork(entry.batch);
+  const created = await createCostEntryIdempotently(entry, options);
+  if (options.pauseAfterCreateMs) {
+    await new Promise((resolve) => setTimeout(resolve, options.pauseAfterCreateMs));
+  }
+  try {
+    await confirmBatchAcceptingFinanceWork(entry.batch);
+  } catch (error) {
+    // The id is supplied by the writer (or an ApprovalRequest replay), so this cannot erase a
+    // neighbour's cost.  A concurrent cascade may already have removed it; either outcome is the
+    // intended no-orphan result.
+    await CostEntry.collection.deleteOne({ _id: entry._id, batch: new Types.ObjectId(String(entry.batch)) });
+    throw error;
+  }
+  return created;
+}
+
 export async function assertActiveCostCategory(categoryId: unknown) {
   if (!categoryId) throw new HttpError(400, "A cost head is required.");
   // Raw read is intentional: a staged head is hidden by schema middleware, but the write guard
@@ -2747,6 +2787,18 @@ async function persistFormulaReservation(
   } catch (error) {
     const existing = await readBackCostEntry(durableEntry);
     if (!existing) throw error;
+  }
+  if (durableEntry.batch) {
+    try {
+      await confirmBatchAcceptingFinanceWork(durableEntry.batch);
+    } catch (error) {
+      await CostEntry.collection.deleteOne({
+        _id: durableEntry._id,
+        batch: new Types.ObjectId(String(durableEntry.batch)),
+        reservation_kind: "Formula",
+      });
+      throw error;
+    }
   }
 }
 

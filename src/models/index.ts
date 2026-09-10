@@ -827,6 +827,15 @@ const CandidateSchema = new Schema({
   created_by: oid("User"),
   // 15/08 (Umesh): accepted unknown columns from bulk upload — see TrainerSchema note.
   custom_fields: { type: Schema.Types.Mixed, default: undefined },
+  // Force-delete is a durable protocol, not a best-effort deleteMany. A retry must use the
+  // first claimant's audit facts rather than minting another deletion story after a crash.
+  deletion_state: { type: String, enum: ["Deleting"], default: undefined, select: false },
+  deletion_started_at: { type: Date, default: undefined, select: false },
+  deletion_actor: { type: Schema.Types.ObjectId, ref: "User", default: undefined, select: false },
+  deletion_reason: { type: String, default: undefined, select: false },
+  deletion_recorded_work: { type: String, default: undefined, select: false },
+  deletion_requires_finance: { type: Boolean, default: undefined, select: false },
+  deletion_audit_event_id: { type: String, default: undefined, select: false },
 }, { timestamps: true });
 
 // -154 (QA-417): one portal ID belongs to at most one candidate, enforced by the DATABASE and not

@@ -3,8 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
-import { assertActiveCostCategory, assertCostEntryValid, createCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
-import { ApprovalRequest, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
+import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
+import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
 
@@ -284,10 +284,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         _audit_events: costEvents,
         entered_by: new Types.ObjectId(String(request.initiator)),
       };
-      const entry = await createCostEntryIdempotently(entryDraft, {
+      const entry = await createBatchScopedCostEntryIdempotently(entryDraft, {
         simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
           && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
         ...(stagedCategory ? { acceptedReservationStates: ["Pending", "Applied"] } : {}),
+        ...(p._test_pause_after_cost_create_ms && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+          ? { pauseAfterCreateMs: Math.min(5_000, Number(p._test_pause_after_cost_create_ms)) }
+          : {}),
       });
       if (stagedCategory) {
         if (!stagedCategory.published && p._test_fail_after_cost_before_publish === true
@@ -344,7 +347,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       await assertCostEntryValid({ ...p, amount: approvedAmount });
       await assertActiveCostCategory(p.category);
       const costId = new Types.ObjectId(String(request._id));
-      const cost = await createCostEntryIdempotently({
+      const cost = await createBatchScopedCostEntryIdempotently({
         _id: costId,
         entry_date: new Date(p.entry_date ?? request.createdAt),
         location: p.location ? new Types.ObjectId(String(p.location)) : undefined,
@@ -372,6 +375,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       }, {
         simulateAmbiguousAfterCreate: p._test_ambiguous_after_create === true
           && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? ""),
+        ...(p._test_pause_after_cost_create_ms && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+          ? { pauseAfterCreateMs: Math.min(5_000, Number(p._test_pause_after_cost_create_ms)) }
+          : {}),
       });
       appliedCostId = costId;
       effectApplied = true;
@@ -385,6 +391,22 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       throw new HttpError(400, "Approved request has no replay handler: " + request.action);
     }
   } catch (error) {
+    // A batch cascade may have deleted this Applying request between its final cost fence and this
+    // catch.  It is not a replay failure to reopen: the durable batch deletion won, so preserve the
+    // 409 and make an exact best-effort cleanup rather than turning the correct no-orphan outcome
+    // into a misleading rollback 500.
+    const replayBatchId = p.batch && Types.ObjectId.isValid(String(p.batch))
+      ? new Types.ObjectId(String(p.batch)) : null;
+    if (replayBatchId) {
+      const liveBatch = await Batch.collection.findOne(
+        { _id: replayBatchId, deletion_state: { $exists: false } }, { projection: { _id: 1 } },
+      );
+      if (!liveBatch) {
+        await ApprovalRequest.collection.deleteOne({ _id: request._id, batch: replayBatchId });
+        if (error instanceof HttpError) throw error;
+        throw new HttpError(409, "This batch began deletion while its approval was being applied. Nothing was left pending.");
+      }
+    }
     const deterministicId = new Types.ObjectId(String(request._id));
     const rawCost: any = RESUMABLE_COST_ACTIONS.has(request.action)
       ? await CostEntry.collection.findOne({ _id: deterministicId }) : null;

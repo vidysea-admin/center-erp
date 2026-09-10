@@ -631,6 +631,117 @@ for (const variant of ["ordinary", "mark_paid"]) {
   }
 }
 
+// Cycle 12: every batch-backed finance materialisation has to lose cleanly even when the force
+// delete already passed deleteMany.  These are ordered races (we observe the newborn row before
+// deleting), not timing guesses; raw reads prove no late cost/request survives the 409.
+{
+  const template = await rawBatches.findOne({});
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const makeBatch = async (suffix) => {
+    const batchId = new ObjectId();
+    await rawBatches.insertOne({
+      _id: batchId, code: `ZZ-C12-${suffix}-${stamp}`, status: "Planning", location: template.location,
+      program: template.program, target_size: 1, planned_start: new Date("2026-09-01"),
+      planned_end: new Date("2026-09-30"), createdAt: new Date(), updatedAt: new Date(),
+    });
+    return batchId;
+  };
+  const waitFor = async (read) => {
+    for (let i = 0; i < 100; i++) {
+      const value = await read();
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return null;
+  };
+  if (template?.location && template?.program && cat?._id) {
+    const directBatch = await makeBatch("DIRECT");
+    const directNote = `c12-direct-${stamp}`;
+    const directPromise = req(admin, "POST", "/api/costs", baseEntry({
+      batch: directBatch, category: cat._id, amount: 701, note: directNote,
+      _test_pause_after_cost_create_ms: 2500,
+    }));
+    const directNewborn = await waitFor(() => rawCosts.findOne({ batch: directBatch, note: directNote }));
+    const directDelete = await req(admin, "DELETE", `/api/batches/${directBatch}`, { reason: "cycle 12 direct post race" });
+    const directResult = await directPromise;
+    ok("batch materialization [precondition]: fixed direct cost reached its final batch fence after its row existed",
+      !!directNewborn && directDelete.status === 200,
+      JSON.stringify({ newborn: !!directNewborn, cascade: directDelete.status }));
+    ok("batch materialization: fixed direct post loses the post-cascade race with 409 and leaves no late cost",
+      directResult.status === 409 && !(await rawCosts.findOne({ batch: directBatch, note: directNote }))
+        && !(await rawBatches.findOne({ _id: directBatch })),
+      JSON.stringify({ post: directResult.status, cost: !!(await rawCosts.findOne({ batch: directBatch, note: directNote })), batch: !!(await rawBatches.findOne({ _id: directBatch })) }));
+
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const queuedBatch = await makeBatch("QUEUE");
+    const queuedNote = `c12-queued-${stamp}`;
+    const queuePromise = req(admin, "POST", "/api/costs", baseEntry({
+      batch: queuedBatch, category: cat._id, amount: 702, note: queuedNote,
+      _test_pause_after_approval_request_create_ms: 2500,
+    }));
+    const queuedNewborn = await waitFor(() => rawApprovals.findOne({ batch: queuedBatch, action: "cost.post" }));
+    const queueDelete = await req(admin, "DELETE", `/api/batches/${queuedBatch}`, { reason: "cycle 12 queue post-create race" });
+    const queueResult = await queuePromise;
+    ok("batch materialization [precondition]: queued cost paused after ApprovalRequest.create",
+      !!queuedNewborn && queueDelete.status === 200,
+      JSON.stringify({ newborn: !!queuedNewborn, cascade: queueDelete.status }));
+    ok("batch materialization: post-create approval fence returns 409 and leaves no request or cost orphan",
+      queueResult.status === 409 && !(await rawApprovals.findOne({ batch: queuedBatch }))
+        && !(await rawCosts.findOne({ batch: queuedBatch })),
+      JSON.stringify({ post: queueResult.status, request: !!(await rawApprovals.findOne({ batch: queuedBatch })), cost: !!(await rawCosts.findOne({ batch: queuedBatch })) }));
+
+    const replayBatch = await makeBatch("REPLAY");
+    const opsUser = await rawUsers.findOne({ email: "ops@vidysea.com" });
+    const replayId = new ObjectId();
+    await rawApprovals.insertOne({
+      _id: replayId, action: "cost.post", entity: "CostEntry", entity_id: replayId,
+      summary: `c12 applying replay ${stamp}`,
+      payload: { entry_date: "2026-09-07", location: template.location, batch: replayBatch, category: cat._id,
+        amount: 703, note: `c12-replay-${stamp}`, _test_pause_after_cost_create_ms: 2500 },
+      location: template.location, batch: replayBatch, initiator: opsUser?._id ?? new ObjectId(),
+      approver_role: "Admin", approver_users: [], status: "Pending", createdAt: new Date(), updatedAt: new Date(),
+    });
+    const replayPromise = req(admin, "POST", `/api/approvals/${replayId}`, { decision: "Approved", note: "cycle 12 replay race" });
+    const replayNewborn = await waitFor(() => rawCosts.findOne({ _id: replayId, batch: replayBatch }));
+    const replayDelete = await req(admin, "DELETE", `/api/batches/${replayBatch}`, { reason: "cycle 12 applying replay race" });
+    const replayResult = await replayPromise;
+    ok("batch materialization [precondition]: Applying replay created its deterministic cost before final fence",
+      !!replayNewborn && replayDelete.status === 200,
+      JSON.stringify({ newborn: !!replayNewborn, cascade: replayDelete.status }));
+    ok("batch materialization: Applying replay race returns 409 with neither request nor deterministic cost left behind",
+      replayResult.status === 409 && !(await rawApprovals.findOne({ _id: replayId }))
+        && !(await rawCosts.findOne({ _id: replayId })),
+      JSON.stringify({ replay: replayResult.status, request: !!(await rawApprovals.findOne({ _id: replayId })), cost: !!(await rawCosts.findOne({ _id: replayId })) }));
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+
+    for (const [label, crashParam] of [["before", "_test_crash_after_deletion_claim=1"], ["during", "_test_crash_during_deletion_cascade=1"]]) {
+      const crashBatch = await makeBatch(`CRASH-${label}`);
+      await rawCosts.insertOne({ _id: new ObjectId(), batch: crashBatch, location: template.location, category: cat._id,
+        amount: 704, note: `c12-crash-${label}-${stamp}`, payment_status: "Payment Pending", reservation_state: "Applied", createdAt: new Date(), updatedAt: new Date() });
+      const first = await req(admin, "DELETE", `/api/batches/${crashBatch}?${crashParam}`, { reason: `cycle 12 ${label} crash original reason` });
+      const claim = await rawBatches.findOne({ _id: crashBatch });
+      const retry = await req(admin, "DELETE", `/api/batches/${crashBatch}`, { reason: `different retry reason must not replace durable claim` });
+      const auditCount = claim?.deletion_audit_event_id
+        ? await rawAudits.countDocuments({ _id: new ObjectId(String(claim.deletion_audit_event_id)) }) : 0;
+      ok(`batch deletion recovery [${label}]: crash leaves one durable original claim and retry completes it exactly once`,
+        first.status === 500 && claim?.deletion_state === "Deleting" && retry.status === 200
+          && !(await rawBatches.findOne({ _id: crashBatch })) && !(await rawCosts.findOne({ batch: crashBatch }))
+          && auditCount === 1,
+        JSON.stringify({ first: first.status, state: claim?.deletion_state, retry: retry.status, auditCount,
+          batch: !!(await rawBatches.findOne({ _id: crashBatch })), cost: !!(await rawCosts.findOne({ batch: crashBatch })) }));
+      const audit = claim?.deletion_audit_event_id ? await rawAudits.findOne({ _id: new ObjectId(String(claim.deletion_audit_event_id)) }) : null;
+      ok(`batch deletion recovery [${label}]: retry preserves the original actor/reason audit input, not its new reason`,
+        String(audit?.new_value ?? "").includes(`cycle 12 ${label} crash original reason`)
+          && !String(audit?.new_value ?? "").includes("different retry reason"),
+        String(audit?.new_value ?? ""));
+    }
+  } else {
+    ok("batch materialization [precondition]: batch/category fixture exists", false,
+      JSON.stringify({ template: !!template, category: cat?._id }));
+  }
+}
+
 // ------------------------------------------------- item 6: pre-approved is a CONDITION
 {
   const capName = `ZZ Capped ${stamp}`;
