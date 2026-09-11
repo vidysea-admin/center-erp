@@ -2339,14 +2339,26 @@ for (const variant of ["ordinary", "mark_paid"]) {
     parked304.status === 202 && !!rid304, `got ${parked304.status} - without a parked request every arm below is vacuous`);
 
   if (rid304) {
-    const mail304 = ((await req(admin, "GET", "/api/test-email")).data?.log ?? [])
-      .filter((m) => String(m.entity_id) === String(rid304));
+    // READ THE MAIL LOG FROM THE DATABASE, NOT THROUGH `/api/test-email`. That endpoint returns the
+    // LAST TWENTY rows (test-email/route.ts:19, `.limit(20)`), and by this point in the wall the CI
+    // database holds 1,600+ of them - and `mailUsersByRole` writes one per active Admin, of which
+    // earlier suites have created many. My first version read through that endpoint and got an EMPTY
+    // list for both accounts, which is not "no mail was written": 14 rows addressed to these two
+    // admins existed the whole time. A cap returns true rows and hides that they are a subset - the
+    // same class as the `/api/approvals` 100-row cap and as a `grep | head -N`, both of which cost
+    // this project a wrong conclusion today.
+    const mail304 = (await rawDb.collection("maillogs")
+      .find({ entity_id: new ObjectId(String(rid304)) }).toArray());
     const forSilenced = mail304.filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase());
     const forNoisy = mail304.filter((m) => String(m.to ?? "").toLowerCase() === noisy.email.toLowerCase());
 
+    // `every()` on an EMPTY array is TRUE, so the first version of this arm passed while the two
+    // below it failed on the same empty list - a vacuous green sitting inside the very block written
+    // to prevent vacuous greens. It only surfaced because the other two arms existed. Require the
+    // rows to BE there before saying anything about their status.
     ok("QA-2461: a silenced account is never SENT the mail",
-      forSilenced.every((m) => m.status !== "sent"),
-      JSON.stringify(forSilenced.map((m) => ({ status: m.status, reason: m.reason }))));
+      forSilenced.length > 0 && forSilenced.every((m) => m.status !== "sent"),
+      `rows=${forSilenced.length} ${JSON.stringify(forSilenced.map((m) => ({ status: m.status, reason: m.reason })))}`);
 
     // SILENCE MUST BE LEGIBLE, NOT ABSENT. -109 records the cost of the other choice: the one case
     // where "did the mail go?" went unanswered was the case where it definitely had not. Filtering
@@ -2371,8 +2383,9 @@ for (const variant of ["ordinary", "mark_paid"]) {
     await req(admin, "PATCH", `/api/users/${silenced.id}`, { mail_enabled: true });
     const parkedBack = await req(ops, "POST", "/api/costs", baseEntry({ category: normalHeadId, amount: 641, note: `${s304}-back` }));
     const ridBack = parkedBack.data?.item?._id;
-    const mailBack = ((await req(admin, "GET", "/api/test-email")).data?.log ?? [])
-      .filter((m) => String(m.entity_id) === String(ridBack) && String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase());
+    const mailBack = ridBack ? (await rawDb.collection("maillogs")
+      .find({ entity_id: new ObjectId(String(ridBack)) }).toArray())
+      .filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase()) : [];
     ok("QA-2461: switching it back ON restores that account's mail - the toggle is not one-way",
       parkedBack.status === 202 && mailBack.length > 0 && !mailBack.some((m) => /mail off for this account/i.test(String(m.reason ?? ""))),
       JSON.stringify({ parked: parkedBack.status, rows: mailBack.length, reasons: mailBack.map((m) => m.reason) }));
