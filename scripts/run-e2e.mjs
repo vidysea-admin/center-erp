@@ -14,6 +14,12 @@ const SUITES = [
   "check-user-copy.mjs",
   // -112: structural pin — the trainer's daily-log strip must not be nested inside an Admin-only block.
   "check-home-structure.mjs",
+  // QA-2443: the THIRD no-server checker, and a different INSTRUMENT from the two above.
+  // check-user-copy scans source text and check-home-structure scans structure; neither can say
+  // whether a function WORKS. Two of QA-2427s three money-mask edits were deleted with this whole
+  // wall green, because the shapes they catch are reachable from no HTTP door. This one loads the
+  // real src/lib/permissions.ts through jiti and CALLS it with a synthetic row per shape.
+  "check-money-mask.mjs",
   // The original eight (audit era)
   "e2e.mjs",
   // QA-814(a) (maker on qa-219 cycle 3, pre-push — release number TBD at ship time): e2e-roles.mjs's

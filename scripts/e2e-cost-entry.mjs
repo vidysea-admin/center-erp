@@ -12,6 +12,9 @@
 // Its own file rather than e2e-roles.mjs: a concurrent session holds that file. One working tree,
 // two sessions — see the QA-1942/QA-609 family.
 import { requireLocalBase } from "./db-guard.mjs";
+// QA-2449: the shared bare-digit leak detector, so this pin and every future live check hunt the
+// same shape instead of each re-deriving a regex that a correct partial fix can blind.
+import { bareFigures } from "./e2e-lib.mjs";
 import { MongoClient, ObjectId } from "mongodb";
 import * as XLSX from "xlsx";
 import { readFileSync } from "node:fs";
@@ -251,6 +254,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
   const badMode = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, payment_mode: "by hand" }));
   ok("QA-1828b: payment mode is a vocabulary, not free text - an unlisted value is refused",
     badMode.status >= 400, `got ${badMode.status}`);
+
 
   // Ordinary ledger corrections are still supported. The cap guard below is intentionally scoped
   // only to rows whose pre-approval commitment was applied at post time.
@@ -1279,8 +1283,83 @@ for (const variant of ["ordinary", "mark_paid"]) {
             ok("QA-2442: ...and the grant-holder still sees the figure, so this is a MASK and not a deletion",
               !!richRow && /445599/.test(JSON.stringify(richRow)),
               `a reader WITH finance.view lost it too - that is over-redaction wearing a fix's clothes`);
+
+            // QA-2447 (checker, qa-2411 cycle 16; then reproduced ON PRODUCTION on -302) - THE
+            // THIRD AND FOURTH HOUSE OF THIS ONE STRING. The queue was taught to mask a typed
+            // figure and the BELL beside it was not: `src/lib/approvals.ts` built its notification
+            // and its mail subject with the PAYLOAD-DRIVEN redactor alone, which can only hunt
+            // figures the payload NAMES. A number a person types into a note is not a payload
+            // value, so an Admin with no finance.view read this in their alert inbox on the live
+            // system: `Cost entry Rs-- ... cash advance 445599 paid to vendor on 07-09-2026` - the
+            // masked figure and the raw one in one sentence. QA-1850's recorded lesson, verbatim:
+            // three consumers of a string fixed and the fourth missed.
+            //
+            // ASSERTED ON THE STORED STRING, not on one reader's copy, and that is deliberate. A
+            // Notification row HAS NO READER - it is written once and read by whoever holds the
+            // approver role - so the guarantee the product makes is about what was WRITTEN. Pinning
+            // one reader's view would leave the guarantee untested the day the targeting changes.
+            {
+              const notifs = ((await req(admin, "GET", "/api/notifications?status=all")).data?.items ?? [])
+                .filter((n) => String(n.entity_id) === String(rid2));
+              const mailRows = ((await req(admin, "GET", "/api/test-email")).data?.log ?? [])
+                .filter((m) => String(m.entity_id) === String(rid2));
+              ok("QA-2447 [precondition] the bell and the mail both wrote a row for this request",
+                notifs.length > 0 && mailRows.length > 0,
+                `notifications=${notifs.length} mail=${mailRows.length} - with either at zero the arms below assert nothing`);
+
+              // THE DETECTOR IS THE OTHER HALF OF THIS FINDING (QA-2449). The live probe that first
+              // looked here asserted on a rupee sign followed by digits, found none because the
+              // product had correctly masked THAT figure, and printed PASS while `445599` sat in the
+              // payload it had just written to disk. A leak detector keyed to a currency symbol is
+              // blind exactly where that symbol has been stripped. `bareFigures` hunts digit runs.
+              const notifFigures = notifs.flatMap((n) => bareFigures(String(n.message ?? "")));
+              const mailFigures = mailRows.flatMap((m) => bareFigures(String(m.subject ?? "")));
+              ok("QA-2447: the approval notification carries no figure a person typed",
+                notifFigures.length === 0,
+                `leaked ${JSON.stringify(notifFigures)} in: ${notifs.map((n) => String(n.message ?? "")).join(" | ").slice(0, 200)}`);
+              ok("QA-2447: ...and neither does the mail SUBJECT, which survives on a lock screen",
+                mailFigures.length === 0,
+                `leaked ${JSON.stringify(mailFigures)} in: ${mailRows.map((m) => String(m.subject ?? "")).join(" | ").slice(0, 200)}`);
+
+              // The two arms that stop `redact it all` and `write nothing at all` from passing the
+              // two above. Both of those show a reader zero figures, exactly like a correct fix.
+              const notifText = notifs.map((n) => String(n.message ?? "")).join(" ");
+              ok("QA-2447: ...and the sentence survives - the date and the person's name are not money",
+                /07-09-2026/.test(notifText) && /Prashant Kumar/.test(notifText),
+                `over-redacted -> date:${/07-09-2026/.test(notifText)} name:${/Prashant Kumar/.test(notifText)} | ${notifText.slice(0, 200)}`);
+              ok("QA-2447: ...and the alert still says what is waiting, so this is a MASK and not a deleted bell",
+                /Approval needed/.test(notifText) && notifText.length > 40,
+                `the bell went quiet instead of going blind: ${JSON.stringify(notifText.slice(0, 120))}`);
+            }
           }
         }
+
+        // QA-2450 (live checker, measured on production -302), AND THE SECOND PLACE THIS PIN HAS
+        // LIVED. The first version sat beside the QA-1828b payment-mode pin near the top of this
+        // file, and a senior review proved it could not fail: `cost.post` is switched OFF at
+        // line 167 for the direct-write assertions, so `requireApproval` returns null, the POST
+        // takes the straight-to-ledger branch, and Mongoose's own schema enum throws a 400 with
+        // the new door guard DELETED. It was the exact defect it was written to prevent - and
+        // this file already carries that lesson two hundred lines away, at the QA-2010 comment.
+        //
+        // Here the rule is ON - the request above parked with 202 - so this is the real
+        // production shape: a submitter whose cost PARKS. Asserted on the GUARANTEE and not on
+        // the status code: the refusal must leave NOTHING behind, because the defect was never
+        // the 400, it was the Pending request nobody could ever say yes to.
+        const qa2450 = `qa2450-${stamp}`;
+        const badModeParked = await req(ops, "POST", "/api/costs", baseEntry({
+          category: normal._id, payment_mode: "Bank Transfer", note: qa2450,
+        }));
+        ok("QA-2450: with the approval rule ON, the parking door refuses an unlisted payment mode",
+          badModeParked.status === 400,
+          `got ${badModeParked.status} - 202 means it parked a request that can only ever be rejected`);
+        const ledger2450 = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
+          .filter((c) => String(c.note ?? "").includes(qa2450));
+        const queued2450 = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+          .filter((a) => JSON.stringify(a).includes(qa2450));
+        ok("QA-2450: ...and it left nothing behind - no ledger row, and no Pending request to strand an approver",
+          ledger2450.length === 0 && queued2450.length === 0,
+          JSON.stringify({ ledger: ledger2450.length, parked: queued2450.length }));
       }      if (cost) {
         const missingRef = await req(admin, "PATCH", `/api/costs/${cost._id}`, { mark_paid: true, payment_mode: "UPI", vendor_payee: `Partial vendor ${stamp}` });
         ok("outgoing payment: Payment Done cannot be recorded without a reference", missingRef.status === 400, `got ${missingRef.status}`);

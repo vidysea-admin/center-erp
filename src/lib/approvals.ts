@@ -6,7 +6,7 @@ import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
 import { mailUsers, mailUsersByRole } from "@/lib/mailer";
-import { redactMoneyInText } from "@/lib/permissions";
+import { redactMoneyInText, redactFiguresInText } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
 import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
@@ -441,7 +441,32 @@ export async function requireApproval(
   // Redacted UNCONDITIONALLY rather than per-reader, because a Notification row has no reader: it
   // is written once and read by whoever holds the role. Anyone entitled to the figure can open the
   // request itself, where the mask is per-reader and they will see it.
-  const safeSummary = redactMoneyInText(ctx.summary, ctx.payload);
+  // QA-2447 (checker, cycle 16): the THIRD house of one leak, and the comment directly above this
+  // line already told the story - four cycles of hiding a figure from the approvals screen were
+  // undone by the bell beside it. The bell was then fixed with the PAYLOAD-DRIVEN redactor, which
+  // can only hunt figures the payload NAMES. A number a person TYPES into a note is not a payload
+  // value, so the bell and the mail carried it back out - to exactly the ungranted reader the queue
+  // (QA-2442) and the audit trail (QA-2427) had just been taught to blind.
+  //
+  // Same rule as both of those, in the one place left: on a money entity, take every figure.
+  // `redactMoneyInText` first so a DECLARED value is matched precisely (an invoice number with no
+  // rupee sign has nothing else to key on), then `redactFiguresInText` for the ones nobody declared.
+  //
+  // UNCONDITIONAL, AND THE COST OF THAT IS MEASURED RATHER THAN WAVED AT. It applies to every
+  // approval action, not only the money ones, for the same reason the line above is unconditional
+  // per-reader: `MONEY_ENTITIES` already contains `ApprovalRequest`, and `maskApprovalMoney` applies
+  // exactly this rule to every approval row on the queue regardless of action - so gating it on an
+  // ACTION LIST here would invent a third rule for one surface, and QA-1865 already recorded what a
+  // list of names costs (it needed a live-caught addition within hours of being written).
+  //
+  // What that takes from a NON-money alert, measured on the real summaries this codebase writes:
+  // `Complete batch AVP-GURU-RPLAVP-DST-07` loses nothing (two-digit groups survive); a batch code
+  // carrying a YEAR loses the year; `capacity 30` survives and `capacity 120` does not;
+  // `location.update` and `target.set` name changed FIELDS and carry no figures at all. The invoice
+  // number in `invoice.raise` is taken deliberately - `invoice_no` is money-class by this module's
+  // own INVOICE_MONEY_FIELDS rule. So the collateral is a room capacity of 100+ and a 3-digit run
+  // inside a batch code, on the bell only, for a reader who can open the request and see both.
+  const safeSummary = redactFiguresInText(redactMoneyInText(ctx.summary, ctx.payload));
   await Notification.create({
     type: "approval_pending",
     severity: "warning",

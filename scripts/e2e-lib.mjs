@@ -64,3 +64,50 @@ export const stamp = (p = "T") => p + Date.now().toString().slice(-7);
 export const phone = (prefix) => prefix + Date.now().toString().slice(-(10 - String(prefix).length)); // QA-141: fixtures are exactly 10 digits now
 // LOCAL calendar date (what the UI sends) — see e2e.mjs note on the IST-midnight window.
 export const today = () => { const n = new Date(); return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`; };
+
+// ---- QA-2449: a leak detector must not key on a symbol the fix is allowed to remove ----
+//
+// The live QA-2447 probe reported 12 passed / 0 failed while the leak sat in a file it had already
+// written to disk. It asserted on `₹` followed by digits. The product had correctly masked the
+// rupee-prefixed amount to `₹—`, so the regex matched nothing and printed PASS, while `445599` —
+// the figure a person had TYPED into the note — sat unmasked in the very same sentence.
+//
+// THE SHAPE IS THE INVERSE OF THE USUAL VACUOUS PASS, and that is why it is worth a shared helper.
+// Normally a false assertion passes because nothing exercised it. This one passed BECAUSE THE
+// PRODUCT HALF-WORKED: the fix removed exactly the token the detector was looking for, so a partial
+// repair read as a complete one. A detector keyed to a currency symbol is blind precisely where
+// that symbol has been stripped.
+//
+// So the rule is: hunt BARE DIGIT RUNS, the same shape `redactFiguresInText` itself uses, with the
+// date shapes it protects excluded first. This is deliberately an INDEPENDENT re-derivation and not
+// an import of the product function — a detector that shares code with the thing it measures agrees
+// with it by construction, including where both are wrong.
+//
+// `allowCodes` is for strings a test deliberately leaves whole (a UTR, a batch code). Pass them and
+// say why at the call site; every figure not named there is a finding.
+export function bareFigures(text, opts = {}) {
+  const s = String(text ?? "");
+  const allow = opts.allowCodes ?? [];
+  let t = s;
+  for (const c of allow) t = t.split(String(c)).join(" ");
+  // Park the same three date shapes the product protects, judged by value and not by shape —
+  // `4242-42-42` is a perfectly good date SHAPE and month 42 is not a month.
+  const realDate = (yy, mm, dd) => {
+    const y = Number(yy), mo = Number(mm), d = Number(dd);
+    return y >= 1900 && y <= 2199 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31;
+  };
+  t = t
+    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3}(?!\d))?)?(?:Z|[+-]\d{2}:\d{2})?/g,
+      (m, yy, mm, dd, hh, mi, ss) => (realDate(yy, mm, dd) && Number(hh) <= 23 && Number(mi) <= 59
+        && (ss === undefined || Number(ss) <= 59) ? " " : m))
+    .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g, (m, yy, mm, dd) => (realDate(yy, mm, dd) ? " " : m))
+    .replace(/(?<!\d)(\d{2})[-\/.](\d{2})[-\/.](\d{4})(?!\d)/g, (m, dd, mm, yy) => (realDate(yy, mm, dd) ? " " : m));
+  // Any run of digits and grouping separators holding three or more DIGITS. Two-digit groups
+  // survive, so a day, a month and a small count still read normally — 100 and up does not.
+  const hits = [];
+  for (const m of t.matchAll(/[\d][\d,.]*/g)) {
+    const digits = m[0].replace(/\D/g, "");
+    if (digits.length >= 3) hits.push(m[0]);
+  }
+  return hits;
+}

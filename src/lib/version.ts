@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-302";
+export const RELEASE = "2026.08.14-303";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,18 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-303 closes one gap in who can see a money figure, and one way a cost could get stuck. "  +
+  "The approval alert and the approval email now hide a figure typed into a cost note from a "  +
+  "reader who has not been granted finance visibility. The approvals screen and the audit trail "  +
+  "already hid it; the alert and the mail were built from a rule that could only hide figures "  +
+  "the system itself had recorded, so a number somebody typed into a note travelled past them. "  +
+  "The date, the person who asked, and the description of what is waiting are unchanged. "  +
+  "Separately, a cost submitted with a payment method this system does not use is now refused "  +
+  "at submission with a plain sentence, instead of being accepted and then waiting for an "  +
+  "approval that could not be given: the person who typed the value was told the cost was "  +
+  "submitted, and a different person was left with a request they could only reject.";
+
+const RELEASE_NOTE_ARCHIVE_302 =
   "-302 adds the missing Assessment Awaited stage between delivery and assessment, and separates "  +
   "it from active delivery everywhere the team works. An ended batch can be moved there, gets its "  +
   "own batch tab and Home count, stops appearing in hour-log reminders, keeps its assessment date "  +
@@ -1496,6 +1508,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_302 + " " +
   RELEASE_NOTE_ARCHIVE_301 + " " +
   RELEASE_NOTE_ARCHIVE_300 + " " +
   RELEASE_NOTE_ARCHIVE_299 + " " +

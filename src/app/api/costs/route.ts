@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { CostEntry, CostCategory } from "@/models";
+import { CostEntry, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
@@ -61,6 +61,25 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // dimension the caller supplied before creating a head, an approval request, or a ledger row.
   // The shared assertions preserve the project's existing scope semantics, including a Trainer's
   // explicit assignment being stronger than a stale location_scope for a batch.
+  // QA-2450 (live checker, measured on production -302). This door took `payment_mode` on trust
+  // while the two beside it did not - `PATCH /api/costs/[id]:76` checks the enum before recording a
+  // payment, and the `costcategory.create` replay checks it too. `cost.post` is this release own
+  // headline action and it was the one of the three with no guard.
+  //
+  // The cost of trusting it is not a bad string in a field: under -302 every cost PARKS, so the
+  // entry got a 202 and the schema then refused it on replay - the request could never be APPROVED
+  // by anybody, only rejected. The person who typed the value is told `submitted`; a DIFFERENT
+  // person is left with a row that cannot be said yes to.
+  //
+  // FIRST STATEMENT IN THE HANDLER, BEFORE THE SCOPE CHECKS AND BEFORE ANY WRITE. The first
+  // version of this guard sat beside `baseEntry`, which is after the new-head branch below -
+  // where an Admin proposing a head has already had a CostCategory CREATED and audited (:101).
+  // A 400 that leaves a head behind is a refusal that is not a refusal. Senior review raised it
+  // as an open question rather than a finding; it costs one line to answer properly.
+  if (body.payment_mode && !COST_PAYMENT_MODE.includes(String(body.payment_mode) as never)) {
+    throw new HttpError(400, "Choose how this payment was made.");
+  }
+
   if (body.location) assertLocationInScope(user, String(body.location));
   if (body.batch) await assertBatchInScope(user, String(body.batch));
   if (body.trainer) await assertTrainerInScope(user, String(body.trainer));
