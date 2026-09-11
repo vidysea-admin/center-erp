@@ -2536,12 +2536,21 @@ for (const variant of ["ordinary", "mark_paid"]) {
       //    the only thing standing between those two is `keys.length === 1`. If a later edit widens
       //    the door on "mail_enabled is present" rather than "mail_enabled is the ONLY key", this
       //    is the arm that goes red; arms 1-4 all stay green through that mistake.
+      //    Its "nothing moved" is measured against the state JUST BEFORE this arm, never against a
+      //    hardcoded value. The first version asserted `mail_enabled === false`, which is only true
+      //    if arm 4 above succeeded - so on a build where arm 4 fails this arm went red too, for a
+      //    reason that has nothing to do with what it tests. That is the cascading-failure shape
+      //    this suite charges elsewhere (the rendered-candidates abort guard), and it was found by
+      //    mutating arm 4 and watching this one fall over beside it rather than by reading.
+      const beforeSneak = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(target.id));
       const sneak2 = await req(selfer.cookie, "PATCH", `/api/users/${target.id}`, { mail_enabled: true, role: "Admin" });
       const sneak2Back = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
         .find((u) => String(u._id) === String(target.id));
       ok("QA-2481: ...but that grant is NOT a licence to send a privileged body about them - refused, and nothing moved",
-        sneak2.status >= 400 && sneak2Back?.role === "Location" && sneak2Back?.mail_enabled === false,
-        `status=${sneak2.status} roleNow=${sneak2Back?.role} theirMail=${sneak2Back?.mail_enabled}`);
+        sneak2.status >= 400 && sneak2Back?.role === "Location"
+          && sneak2Back?.mail_enabled === beforeSneak?.mail_enabled,
+        `status=${sneak2.status} roleNow=${sneak2Back?.role} mail ${beforeSneak?.mail_enabled}->${sneak2Back?.mail_enabled}`);
     }
   }
 

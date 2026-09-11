@@ -2,8 +2,9 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadOptions } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox } from "@/components/ui";
 import { usePerms } from "@/components/shell";
+import { Activity } from "@/components/activity";
 
 function CostsInner() {
   const sp = useSearchParams();
@@ -57,6 +58,19 @@ function CostsInner() {
   // firing the ledger fetch for a post-only user would just banner their own 403 at them.
   useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly]);
 
+  // QA-2483: the finance register's Edit lands here with ?edit=<id>. It opens the row in the form
+  // ONLY once the ledger has actually arrived and only for someone who may correct it - otherwise
+  // the deep link would either open an empty form (rows not loaded yet) or dangle a populated one
+  // in front of a reader the server will refuse. It runs once per id, so typing in the form is not
+  // undone by a later re-render.
+  const editParam = sp.get("edit");
+  const [deepLinked, setDeepLinked] = useState("");
+  useEffect(() => {
+    if (!editParam || deepLinked === editParam || !canApproveCosts || !costs.length) return;
+    const row = costs.find((c: any) => String(c._id) === String(editParam));
+    if (row) { setDeepLinked(editParam); openEdit(row); }
+  }, [editParam, deepLinked, canApproveCosts, costs]);
+
   async function addCost() {
     try {
       if (editId) {
@@ -90,10 +104,22 @@ function CostsInner() {
     });
   }
 
-  async function deleteCost() {
-    if (!editId || !window.confirm("Delete this cost entry? The amount disappears from every total.")) return;
-    try { await api(`/api/costs/${editId}`, { method: "DELETE" }); setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly); }
-    catch (e: any) { setError(e.message); }
+  // QA-2484: a prompt rather than a confirm, because the server now refuses a deletion that cannot
+  // say why and a confirm box has nowhere to put one. Cancel (null) is a real cancel and is silent;
+  // a blank answer is refused HERE as well so the person is told without a round trip - but the
+  // server is the rule and this is only the courtesy, which is the standing distinction on this
+  // screen (a disabled button is a courtesy, not a rule).
+  // QA-2483: takes the row, so the same function serves the form's Delete and the new per-row one.
+  async function deleteCost(row?: any) {
+    const id = row?._id ?? editId;
+    if (!id) return;
+    const reason = window.prompt("Why is this cost being removed? The amount disappears from every total, and this reason is kept on the record.");
+    if (reason === null) return;
+    if (!reason.trim()) { setError("A reason is needed to remove a cost entry — nothing was deleted."); return; }
+    try {
+      await api(`/api/costs/${id}`, { method: "DELETE", json: { reason: reason.trim() } });
+      setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
+    } catch (e: any) { setError(e.message); }
   }
 
   async function markPaymentDone() {
@@ -149,10 +175,15 @@ function CostsInner() {
                 </select>
               </Field>
               <Field label="Category" required>
-                <select className={inputCls} value={form.category ?? ""} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                  <option value="">Select…</option>
-                  <CostHeadOptions cats={cats} />
-                </select>
+                <CostHeadPicker cats={cats} value={form.category} onChange={(category) => {
+                  // QA-2482: a hidden field that still posts is worse than a visible one nobody
+                  // wanted. Moving off Other hides the naming box, so whatever was typed in it must
+                  // go too - otherwise the next Add silently creates a cost head the person can no
+                  // longer see they asked for.
+                  const next = { ...form, category };
+                  if (!showNewHeadBox(cats, category)) { delete next.new_subhead; delete next.new_head_parent; }
+                  setForm(next);
+                }} />
               </Field>
               <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
               {/* QA-1828b (CEO, 2026-09-05): the three the finance screen has been apologising for
@@ -190,6 +221,7 @@ function CostsInner() {
                 *"सिस्टम पूरा बंद हो जाएगा"* is about people giving up when the head they need is not
                 offered, and the usual workaround is to file it under something close and wrong,
                 which is worse than not filing it. Naming one parks the whole entry for review. */}
+            {showNewHeadBox(cats, form.category) && (<>
             <Field label="Cost head not in the list? Name the one you need">
               <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder={postOnly ? "e.g. Assessor travel — it goes for approval with this entry" : "e.g. Assessor travel — you can create heads, so this one is made straight away"}
                 onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
@@ -206,6 +238,7 @@ function CostsInner() {
                 </select>
               </Field>
             )}
+            </>)}
             <Field label="Description — what was this for?" required>
               <input className={inputCls + " mt-2"} value={form.note ?? ""} placeholder="e.g. emergency meal while travelling between centres — used this vendor because…"
                 onChange={(e) => setForm({ ...form, note: e.target.value })} />
@@ -216,6 +249,13 @@ function CostsInner() {
                 : "Pick at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
             </p>
           </Section>
+          {/* QA-2486: Manish, on the 2026-09-11 call - "kaunsi date me ye entry hui thi, ye edit hui
+              thi... ye audit edit Manish ji ne do din baad kari hai". Every one of those rows has
+              existed all along: the cost PATCH writes one AuditLog row per changed field with the
+              actor, and /api/audit/CostEntry/<id> serves them. No screen had ever asked. So this is
+              a missing CALL, not a missing feature - which is exactly why nothing ever went red
+              over it. Shown beside the entry being corrected, where the question is actually asked. */}
+          {editId && <Activity entity="CostEntry" id={editId} />}
           {/* QA-2295: this used to be the post-only ARM of a ternary, so a finance.view holder saw
               the ledger INSTEAD of their own submissions and never read why one was rejected.
               It is now unconditional - gated on having submitted anything, not on lacking a right -
@@ -267,6 +307,22 @@ function CostsInner() {
                       ? <span className="text-xs text-gray-500">{/from (AVPL [\w -]+)/.exec(r.note ?? "")![1]}</span>
                       : <span className="text-gray-400">—</span>),
                 },
+                // QA-2483: the affordance, not the right. Umesh: "cost and finance wali kisi bhi
+                // tables mai naa koi edit button hai and naa hi delete buttons", and Manish looking
+                // for it live on the call and not finding it. Until now the ONLY way to correct a
+                // cost was to know that clicking the row fills the form at the top of the page -
+                // an interaction with no label, no icon and nothing to discover.
+                // The column is omitted entirely rather than rendered empty for someone without the
+                // right, so the table does not grow a blank stripe for most of its readers.
+                ...(canApproveCosts ? [{
+                  key: "_act", label: "", minWidth: 150,
+                  render: (r: any) => (
+                    <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                      <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                      <Btn small kind="danger" onClick={() => deleteCost(r)}>Delete</Btn>
+                    </span>
+                  ),
+                }] : []),
               ]} empty="No cost entries." />
           </Section>
           )}

@@ -14,7 +14,7 @@ import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadabl
 import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
@@ -5748,6 +5748,13 @@ function CostsTab({ batchId, batch, error, setError }: any) {
   const [cats, setCats] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [suggest, setSuggest] = useState<any>(null);
+  // QA-2483: this tab is reached only by an Admin holding finance.view, and correcting a row is
+  // still the narrower finance.approve - the same split as /costs and /finance. Of the three cost
+  // tables this was the most inert: no row click, no buttons, nothing. A cost posted here against
+  // the wrong batch could only be repaired from a different screen.
+  const { can: canCostAct, loaded: costPermsReady } = usePerms();
+  const canApproveCosts = costPermsReady && canCostAct("finance.approve", "edit");
+  const [editId, setEditId] = useState("");
 
   const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
@@ -5794,8 +5801,39 @@ function CostsTab({ batchId, batch, error, setError }: any) {
     } catch (e: any) { setError(e.message); }
   }
 
+  function openEdit(r: any) {
+    if (!canApproveCosts) return;
+    setEditId(String(r._id));
+    setForm({
+      entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
+      category: r.category?._id ?? r.category ?? "", trainer: r.trainer?._id ?? r.trainer ?? "",
+      vendor_payee: r.vendor_payee ?? "", voucher_no: r.voucher_no ?? "", payment_mode: r.payment_mode ?? "",
+    });
+  }
+
+  // QA-2484: same bargain as the other two screens - the server refuses a deletion that cannot say
+  // why, and this asks for that reason rather than a yes/no box with nowhere to put one.
+  async function removeEntry(r: any) {
+    const reason = window.prompt("Why is this cost being removed? The amount disappears from this batch's total, and this reason is kept on the record.");
+    if (reason === null) return;
+    if (!reason.trim()) { setError("A reason is needed to remove a cost entry - nothing was deleted."); return; }
+    try {
+      await api(`/api/costs/${r._id}`, { method: "DELETE", json: { reason: reason.trim() } });
+      if (String(r._id) === editId) { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }
+      load();
+    } catch (e: any) { setError(e.message); }
+  }
+
   async function save() {
     try {
+      if (editId) {
+        // Blank means "not changing this", exactly as on /costs - the PATCH filters "" out, so an
+        // untouched field is not posted back empty.
+        const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
+        await api(`/api/costs/${editId}`, { method: "PATCH", json });
+        setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); load();
+        return;
+      }
       await api("/api/costs", { method: "POST", json: { ...form, batch: batchId, location: batch.location?._id ?? batch.location } });
       setForm({ entry_date: toInputDate(new Date()) }); load();
     } catch (e: any) { setError(e.message); }
@@ -5825,14 +5863,27 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           { key: "paid_on", label: "Payment date", render: (r: any) => r.paid_on ? fmtDate(r.paid_on) : "—", mobile: false },
           { key: "payment_ref", label: "Payment reference", render: (r: any) => r.payment_ref || "—", mobile: false },
           { key: "entered_by", label: "By", render: (r: any) => r.entered_by?.name, mobile: false },
+          ...(canApproveCosts ? [{
+            key: "_act", label: "", minWidth: 150,
+            render: (r: any) => (
+              <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                <Btn small kind="danger" onClick={() => removeEntry(r)}>Delete</Btn>
+              </span>
+            ),
+          }] : []),
         ]} empty="No costs recorded." />
       <div className="mt-3 grid gap-3 md:grid-cols-5">
         <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
         <Field label="Category" required>
-          <select className={inputCls} value={form.category ?? ""} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-            <option value="">Select…</option>
-            <CostHeadOptions cats={cats} />
-          </select>
+          <CostHeadPicker cats={cats} value={form.category} onChange={(category) => {
+            // QA-2482: same trap as /costs - hiding the naming box must also empty it, or the next
+            // Add Cost creates a head nobody can see they asked for. ARCHITECTURE section 3: one
+            // concept, two screens; the fix belongs on both or it belongs on neither.
+            const next = { ...form, category };
+            if (!showNewHeadBox(cats, category)) { delete next.new_subhead; delete next.new_head_parent; }
+            setForm(next);
+          }} />
         </Field>
         <Field label="Amount (₹)" required><input type="number" className={inputCls} value={form.amount ?? ""} onChange={(e) => setForm({ ...form, amount: +e.target.value })} /></Field>
         {/* QA-1828b: this is the SECOND cost form in the product, and it was left behind when the
@@ -5853,6 +5904,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             hardcoded three-field list while its own comment claimed it bound the property. So the
             batch form shipped without the one field this unit added LAST, which is exactly the
             case a real parity check exists for. */}
+        {showNewHeadBox(cats, form.category) && (<>
         <Field label="Cost head not in the list? Name the one you need">
           <input className={inputCls} value={form.new_subhead ?? ""} placeholder="leave blank if you picked a category above"
             onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
@@ -5869,11 +5921,15 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             </select>
           </Field>
         )}
+        </>)}
         <Field label="Description — what was this for?" required>
           <input className={inputCls} value={form.note ?? ""} placeholder="e.g. venue hire for the assessment day"
             onChange={(e) => setForm({ ...form, note: e.target.value })} />
         </Field>
-        <div className="flex items-end"><Btn onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>Add Cost</Btn></div>
+        <div className="flex items-end gap-2">
+          <Btn onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
+          {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
+        </div>
       </div>
     </Section>
   );

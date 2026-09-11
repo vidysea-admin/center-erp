@@ -134,6 +134,17 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
+  // QA-2484: a stated reason is required before ANY of this runs. Deliberately the first thing
+  // after the rights check and ahead of every load, barrier and claim below, so a request that
+  // cannot explain itself never reaches the staging update at all - QA-2457's lesson applied on
+  // purpose rather than by accident: the refusal that must come first is written first.
+  // Same shape as the batch force-delete (batches/[id] :89), which is the product's existing
+  // answer to this question; costs were the outlier.
+  let reason = "";
+  try { const body = await readJson(req); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
+  if (!reason) {
+    throw new HttpError(400, "Say why this cost is being removed. The amount disappears from every total, and the reason is the only part of that a reader cannot work out afterwards.");
+  }
   const tombstone = await loadDeletionTombstoneInScope(user, id);
   const doc = tombstone ?? await loadInScope(user, id);
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
@@ -164,6 +175,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     actor: user.id,
     expectedUpdatedAt: doc.updatedAt,
     oldValue: { amount: doc.amount, note: doc.note },
+    reason,
   });
   if (!claim.claimed && claim.actor !== String(user.id)) {
     throw new HttpError(409, "Another authorized user already committed this deletion. Its audit history is being finalized.");

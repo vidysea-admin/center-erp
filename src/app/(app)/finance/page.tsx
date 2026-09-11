@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, DataTable, ErrorBanner } from "@/components/ui";
+import { usePerms } from "@/components/shell";
 
 // QA-1830 — the finance dashboard. Manish sir's workbook and his HTML mock, as one screen fed by
 // one server function (`costRollup`), so the screen and the .xlsx cannot disagree about a figure.
@@ -22,6 +23,11 @@ const EMPTY: Filters = { from: "", to: "", location: "", program: "", category: 
 function FinanceInner() {
   const sp = useSearchParams();
   const router = useRouter();
+  // QA-2483: this screen is already behind finance.view - that is what the route demands - but
+  // CORRECTING a row is finance.approve, a separate key the Admin role deliberately does not carry.
+  // So the controls below are offered on the narrower right, not on the fact that you got here.
+  const { can, loaded: permsLoaded } = usePerms();
+  const canApproveCosts = permsLoaded && can("finance.approve", "edit");
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -33,6 +39,21 @@ function FinanceInner() {
   const f: Filters = { ...EMPTY };
   for (const k of Object.keys(EMPTY) as (keyof Filters)[]) f[k] = sp.get(k) ?? "";
   const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]).toString();
+
+  // QA-2483/QA-2484: the register is the list every total on this page is summed from, so a wrong
+  // row is read here far more often than on /costs - and until now this table could only be looked
+  // at. Editing hands off to the Costs form rather than growing a second cost form on a reporting
+  // screen: ARCHITECTURE section 3 already charges this product for one concept living on two
+  // screens, and a third copy of the cost form is how that bill grows.
+  const removeEntry = async (r: any) => {
+    const reason = window.prompt("Why is this cost being removed? The amount disappears from every total on this page, and this reason is kept on the record.");
+    if (reason === null) return;
+    if (!reason.trim()) { setError("A reason is needed to remove a cost entry - nothing was deleted."); return; }
+    try {
+      await api(`/api/costs/${r.id}`, { method: "DELETE", json: { reason: reason.trim() } });
+      await load();
+    } catch (e: any) { setError(e.message); }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -354,6 +375,17 @@ function FinanceInner() {
             { key: "requested_amount", label: "Requested", sortable: true, sortValue: (r: any) => r.requested_amount ?? r.amount, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? rupee(r.requested_amount) : <span className="text-gray-300">—</span> },
             { key: "pre_approved", label: "Pre-approved", minWidth: 160, render: (r: any) => r.pre_approved || <span className="text-gray-300">—</span> },
             { key: "entered_by", label: "Entered by", sortable: true, filterable: true, render: (r: any) => r.entered_by },
+            // QA-2483: omitted entirely rather than rendered blank for a finance.view-only reader,
+            // so an 18-column table does not grow a nineteenth empty one for most of its audience.
+            ...(canApproveCosts ? [{
+              key: "_act", label: "", minWidth: 150,
+              render: (r: any) => (
+                <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                  <Btn small kind="ghost" onClick={() => router.push(`${BASE_PATH}/costs?edit=${r.id}`)}>Edit</Btn>
+                  <Btn small kind="danger" onClick={() => removeEntry(r)}>Delete</Btn>
+                </span>
+              ),
+            }] : []),
           ]} />
       </Section>
     </div>

@@ -136,6 +136,12 @@ export async function ensureCostDeletionAuditEvent(input: {
   actor: unknown;
   expectedUpdatedAt: unknown;
   oldValue: { amount: unknown; note: unknown };
+  // QA-2484: WHY, alongside who/what/when. Manish asked for it directly on the 2026-09-11 call
+  // ("delete krte waqt reason ka ek daal dena chahiye"), and it rides in the SAME atomic update
+  // that stages the tombstone rather than being written beside it afterwards - a reason recorded
+  // after the row is gone is a reason that can be missing exactly when the delete half-failed,
+  // which is the case it exists for.
+  reason: string;
 }) {
   const costId = new Types.ObjectId(String(input.costId));
   const event = financeAuditEvent(`cost:${costId}:deleted`, {
@@ -143,6 +149,7 @@ export async function ensureCostDeletionAuditEvent(input: {
     entity_id: costId,
     field: "deleted",
     old_value: input.oldValue,
+    new_value: { deleted: true, reason: input.reason },
     actor: new Types.ObjectId(String(input.actor)),
   });
   const claim = await CostEntry.collection.updateOne(
@@ -364,6 +371,92 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
 
 // Returns null → proceed with the action.
 // Returns { request } → the action was parked for approval; the caller must NOT apply it.
+// QA-2485 (checker, 2026-09-11) is the finding this ANSWERS ONLY IN PART, and the gap is stated here
+// rather than left for a reader to discover: *"An APPROVED cost can be rewritten to any amount by one
+// PATCH - no re-approval, no bell, no mail. The two-person money control ends at the moment of
+// approval."* This function supplies the bell and the mail. It does NOT supply the re-approval, so a
+// single finance.approve holder can still rewrite an approved amount alone - now loudly instead of
+// silently, which is a mitigation and not a fix.
+//
+// Closing it properly means re-parking a correction that changes amount, category or batch, and that
+// is a FLOW change only Umesh can authorise: it puts a finance holder's own repair into the queue
+// they themselves clear. Raised to him rather than decided here.
+//
+// Manish, 2026-09-11 - "aur phir edit pe bhi un logon ko wo message jaayega". A correction
+// to an already-recorded cost is not a new approval and must NOT re-park: the people who would be
+// asked are the people who already decided it, and parking every correction puts a finance holder's
+// own repair into their own queue. He said MESSAGE, and a message is what this sends.
+//
+// WHO: the cost.post rule's audience - the named approvers if the rule names any, otherwise the
+// approver role - because that is already this system's answer to "who watches money". The rule is
+// read WITHOUT `enabled`, because who should hear about a correction does not depend on whether the
+// gate is currently switched on. With no rule row at all there is no defined money audience and
+// nothing is sent; that is requireApproval's own escape hatch ("no rule, nothing changes"), applied
+// here on purpose rather than by omission.
+//
+// WHAT: the fields that changed, never their values. The recipient opens the entry to see figures,
+// where the permission check actually lives - so a mail sitting in an inbox, on a lock screen or in
+// a forward carries no amount at all. `redactMoneyInText` still runs over it with the patch as the
+// payload, so if a value ever does reach this string it is taken out by the same rule -303 built.
+//
+// The actor is removed from the audience: telling somebody what they just did is noise, and noise
+// is how a real alert stops being read.
+export async function notifyCostCorrection(input: {
+  costId: unknown;
+  actor: SessionUser;
+  patch: Record<string, unknown>;
+  batchCode?: string | null;
+  location?: unknown;
+}): Promise<{ notified: number; reason?: string }> {
+  const fields = Object.keys(input.patch ?? {}).filter((f) => f !== "updatedAt");
+  if (!fields.length) return { notified: 0, reason: "nothing changed" };
+
+  const rule = await ApprovalRule.findOne({ action: "cost.post" }).lean<any>();
+  if (!rule) return { notified: 0, reason: "no cost.post rule is configured, so there is no defined money audience" };
+
+  const named = (rule.approver_users ?? []).map(String).filter(Boolean)
+    .filter((id: string) => String(id) !== String(input.actor.id));
+
+  const where = input.batchCode ? ` on batch ${input.batchCode}` : "";
+  const summary = redactMoneyInText(
+    `Cost entry${where} corrected by ${input.actor.name} - changed: ${fields.join(", ")}`,
+    input.patch,
+  );
+
+  await Notification.create({
+    type: "cost_corrected",
+    severity: "info",
+    message: summary,
+    entity: "CostEntry", entity_id: input.costId,
+    link: "/costs",
+    role_target: [rule.approver_role],
+    ...(named.length ? { user_target: named } : {}),
+    location: input.location,
+  });
+
+  // Fire-and-forget like every other mail door here: a notification must never fail the write it
+  // describes. The per-account mail switch (QA-2461) governs it, so a silenced account still gets
+  // the bell and no mail.
+  (named.length
+    ? mailUsers({
+        userIds: named,
+        subject: summary,
+        title: "A recorded cost was corrected",
+        lines: [summary, "Open the cost ledger to see the entry as it now stands."],
+        link: "/costs", entity: "CostEntry", entity_id: input.costId,
+      })
+    : mailUsersByRole({
+        roles: [rule.approver_role], location: input.location,
+        subject: summary,
+        title: "A recorded cost was corrected",
+        lines: [summary, "Open the cost ledger to see the entry as it now stands."],
+        link: "/costs", entity: "CostEntry", entity_id: input.costId,
+      })
+  ).catch(() => {});
+
+  return { notified: named.length || 1 };
+}
+
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,

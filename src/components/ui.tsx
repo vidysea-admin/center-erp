@@ -195,6 +195,82 @@ export function Field({ label, children, required }: { label: string; children: 
 // It lives HERE, once, because there are TWO cost forms (/costs and the batch Costs tab) and the
 // last thing this unit did was get charged for updating one of them and not the other (QA-1978).
 // A second copy of this grouping would be that fault again, in the fix for it.
+// QA-2487: Manish, on the 2026-09-11 call - "category me search bhi laga dijiye, kyunki bahut bada
+// ho jayega ye aage chal ke". He raised it on the same call where he created a new head FROM this
+// form, so the list grows by design (REQ-427), not by accident.
+//
+// A FILTER OVER THE EXISTING SELECT, not a combobox replacing it. The select carries real
+// CostCategory ids, the two-level optgroup, the "Head no longer listed" orphan group and the Other
+// row QA-2482 keys on; an input+datalist carries only strings and would have to resolve a typed
+// label back to an id - which breaks the moment two subheads share a name under different heads,
+// and a Head -> Subhead taxonomy is a machine for producing exactly that.
+export function CostHeadPicker({ cats, value, onChange, required }: {
+  cats: any[]; value: unknown; onChange: (id: string) => void; required?: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const all = cats ?? [];
+  const parentIdOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
+  const term = q.trim().toLowerCase();
+
+  let shown = all;
+  if (term) {
+    const hit = (c: any) => String(c?.name ?? "").toLowerCase().includes(term);
+    const matched = all.filter(hit);
+    // A matched SUBHEAD drags its parent head in with it. Without this the subhead lands in the
+    // "Head no longer listed" group and a correct search reads as a broken taxonomy.
+    const needed = new Set(matched.map((c: any) => String(c._id)));
+    for (const c of matched) { const pid = parentIdOf(c); if (pid) needed.add(pid); }
+    // ...and the row currently SELECTED is never filtered away. Hiding it blanks the select without
+    // clearing `value`, so the screen would stop showing the head the next save would post. Same
+    // hazard offerable() exists for on inactive rows (src/lib/client.ts:87).
+    if (value) needed.add(String(value));
+    shown = all.filter((c: any) => needed.has(String(c._id)));
+  }
+
+  return (
+    <>
+      <input className={inputCls + " mb-1"} value={q} onChange={(e) => setQ(e.target.value)}
+        placeholder="Type to narrow the list..." aria-label="Search cost heads" />
+      <select className={inputCls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} required={required}>
+        <option value="">Select...</option>
+        <CostHeadOptions cats={shown} />
+      </select>
+      {term && shown.length === 0 && (
+        <p className="mt-1 text-xs text-amber-700">No cost head matches &quot;{q}&quot;. Clear the search, or name the head you need below.</p>
+      )}
+    </>
+  );
+}
+
+// QA-2482: "Other" is an ordinary cost head that happens to mean "none of these fit", and nothing
+// connected it to the free-text box for naming a new head - the box simply sat under every entry.
+// Umesh: "ye other head and subhead ... tab hi aaye jab user other click krr rha hai", and on the
+// same day's call: "adars jab click ho tabhi aana chahiye".
+//
+// Matched on the head's NAME, because that is the word the CEO and the team actually use and Umesh
+// confirmed the row is already in the list ("list mai other tho aa hi rhaa thaa but usme ye link
+// nhi hai"). BOTH vocabularies are recognised because this project's two seed scripts disagree:
+// scripts/seed.mjs seeds "Other", scripts/reconcile-workbook.mjs seeds "Miscellaneous" (CH10) and
+// wipes the other list first. A deployment can genuinely have either.
+export const OTHER_HEAD_RE = /^(others?|miscellaneous|misc)$/i;
+
+export function hasOtherCostHead(cats: any[]): boolean {
+  return (cats ?? []).some((c: any) => OTHER_HEAD_RE.test(String(c?.name ?? "").trim()));
+}
+
+export function isOtherCostHead(cats: any[], id: unknown): boolean {
+  const picked = (cats ?? []).find((c: any) => String(c?._id) === String(id ?? ""));
+  return !!picked && OTHER_HEAD_RE.test(String(picked.name ?? "").trim());
+}
+
+// The caller asks THIS, not `isOtherCostHead`, so the naming box has somewhere to live when a
+// deployment has no Other head at all. Hiding it in that case would make naming a new head
+// impossible and would do it SILENTLY - the failure would look like a tidy form. Failing back to
+// today's always-visible behaviour is the wrong-but-loud direction.
+export function showNewHeadBox(cats: any[], id: unknown): boolean {
+  return !hasOtherCostHead(cats) || isOtherCostHead(cats, id);
+}
+
 export function CostHeadOptions({ cats }: { cats: any[] }) {
   const idOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
   const heads = cats.filter((c) => !idOf(c));
