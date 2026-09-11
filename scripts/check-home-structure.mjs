@@ -199,6 +199,27 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
           + ` | post-completion fields found: ${namedPresent.join(", ") || "(none)"}`);
   }
 
+  // QA-2435 (Umesh, on the live screen): the two batch-transition buttons sit side by side and must
+  // read the same way - ACTION then STATE. `Assessment done → Result Awaited` always did;
+  // the new one shipped as a bare `Assessment Awaited`, which names where the batch lands and not
+  // what the person is telling the system. The file's own -102 note says these carry "the client's
+  // words for these two steps", so the bare label contradicted the rule written directly above it.
+  //
+  // Pinned rather than just fixed, because a label is the easiest thing in this file to lose in a
+  // later edit and the cheapest to get wrong: -296 existed only to correct one sentence in -295.
+  // The STORED status stays `Assessment Awaited` - this asserts the button text, never the enum.
+  {
+    const row = b.slice(b.indexOf("transition("), b.indexOf("setExamHeldOpen(true)") + 400);
+    const labels = [...row.matchAll(/>([^<>{}]{6,60})<\/Btn>/g)].map((m) => m[1].trim())
+      .filter((t) => /Awaited/.test(t));
+    const bare = labels.filter((t) => !t.includes("→"));
+    ok("QA-2435: both batch-transition buttons name the ACTION and the state, not the state alone",
+      labels.length >= 2 && bare.length === 0,
+      labels.length < 2
+        ? `found ${labels.length} Awaited-transition button label(s) where 2 are expected - the region moved, so this pin is reading the wrong place`
+        : `bare state label(s): ${bare.join(" | ")} - a person pressing this is saying what HAPPENED, so the button says it`);
+  }
+
   // -224 (QA-880, recommended by the cycle-3 checker): the CLASS pin, not another instance pin.
   // Every instance above says "this one handler is fixed". This one says "no handler in this panel
   // may regress into the defect at all": inside CandidateResults, a catch that reports ONLY through

@@ -528,7 +528,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           if (window.confirm("Move this batch to Assessment Awaited? Daily hour-log reminders will stop, and you can record the assessment date when it is assigned.")) {
             transition("Assessment Awaited");
           }
-        }}>Assessment Awaited</Btn>
+        }}>Training done → Assessment Awaited</Btn>
       )}
       {["Active", "Assessment Awaited"].includes(b.status) && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → Result Awaited</Btn>}
       {/* -207 (Umesh, 23/08, with the screen open): "2 duplicate buttons fro similar functionlity
