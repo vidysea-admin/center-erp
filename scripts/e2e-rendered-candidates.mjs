@@ -145,6 +145,28 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     const p = new URL(url).pathname;
     return p.endsWith(`/erp${suffix(id)}`) || p.endsWith(suffix(id));
   };
+  const routeCleanupProbe = "__qa2420_route_cleanup";
+  const installFaultRoute = async (matcher, handler) => {
+    const guardedHandler = async (route) => {
+      if (new URL(route.request().url()).searchParams.has(routeCleanupProbe)) {
+        return route.fulfill({ status: 599, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 leaked route interceptor" }) });
+      }
+      return handler(route);
+    };
+    await page.route(matcher, guardedHandler);
+    return { matcher, handler: guardedHandler };
+  };
+  const removeFaultRoute = async (binding, path, label) => {
+    // Playwright matches function predicates by identity. Reconstructing `isPath(...)` here leaves
+    // the old handler installed and poisons every later fixture that reuses this endpoint.
+    await page.unroute(binding.matcher, binding.handler);
+    const probeUrl = `${BASE}${path}${path.includes("?") ? "&" : "?"}${routeCleanupProbe}=1`;
+    const restored = await page.evaluate(async (url) => {
+      const response = await fetch(url, { cache: "no-store" });
+      return { status: response.status, body: (await response.text()).slice(0, 180) };
+    }, probeUrl);
+    ok(`QA-2420 [route cleanup]: ${label} restores the real response`, restored.status === 200, JSON.stringify(restored));
+  };
   const openClosure = async (id) => {
     await page.goto(batchPath(id), { waitUntil: "domcontentloaded" });
     const closureTab = page.getByRole("button", { name: "Closure", exact: true });
@@ -188,7 +210,8 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   await openClosure(batch._id);
   // The Attendance mount itself is a child read. Its old promise swallowed a failed GET into
   // undefined, making this failure invisible to any future caller awaiting the mount's outcome.
-  await page.route(isPath(batch._id, attendancePath), async (route) => {
+  const attendanceFaultMatcher = isPath(batch._id, attendancePath);
+  const attendanceFault = await installFaultRoute(attendanceFaultMatcher, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 attendance mount failure" }) });
     }
@@ -199,7 +222,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   const attendanceMountFailure = await page.locator("body").innerText();
   ok("QA-2420: an Attendance mount GET failure is operator-visible instead of resolving as an empty successful load",
     /QA-2420 attendance mount failure/i.test(attendanceMountFailure), attendanceMountFailure.slice(0, 500));
-  await page.unroute(isPath(batch._id, attendancePath));
+  await removeFaultRoute(attendanceFault, attendancePath(batch._id), "Attendance mount fault");
   await openClosure(batch._id);
   const markButtons = page.getByRole("button", { name: "Mark Completed", exact: true });
   // Blockers are fetched independently of the closure form. Waiting for its actual refusal text
@@ -218,7 +241,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   const portalParentCan = "CAN_2420" + String(Date.now() + 1).slice(-6);
   const recoverMisfiled = page.getByRole("button", { name: /Move \d+ into the portal ID field/i }).first();
   await recoverMisfiled.waitFor({ timeout: 30000 });
-  await page.route(isPortalHealthPath, async (route) => {
+  const misfiledRecoveryFault = await installFaultRoute(isPortalHealthPath, async (route) => {
     if (route.request().method() === "POST") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 misfiled recovery POST failure" }) });
     }
@@ -234,7 +257,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   ok("QA-2420: a misfiled-ID recovery POST failure stays visible and leaves recovery retryable without false success",
     misfiledRecoveryFailure.errorVisible && misfiledRecoveryFailure.recoveryReenabled && misfiledRecoveryFailure.stillOffered,
     JSON.stringify(misfiledRecoveryFailure));
-  await page.unroute(isPortalHealthPath);
+  await removeFaultRoute(misfiledRecoveryFault, `${portalHealthPath}?batch=${batch._id}`, "misfiled recovery fault");
   const showPortalGaps = page.getByRole("button", { name: /show which/i }).first();
   await showPortalGaps.waitFor({ timeout: 30000 });
   await showPortalGaps.click();
@@ -242,7 +265,8 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   await portalDraft.waitFor({ timeout: 30000 });
   const portalSave = portalDraft.locator("xpath=following-sibling::button");
   await portalDraft.fill(portalCan);
-  await page.route(isPath(batch._id, portalPlanPath), async (route) => {
+  const portalChildFaultMatcher = isPath(batch._id, portalPlanPath);
+  const portalChildFault = await installFaultRoute(portalChildFaultMatcher, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal child read-back failure" }) });
     }
@@ -258,7 +282,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   ok("QA-2420: failed PortalIdGaps child read-back retains the typed ID and does not strand its shared coordinator",
     portalChildFailure.errorVisible && portalChildFailure.draftRetained === portalCan && portalChildFailure.saveReenabled,
     JSON.stringify(portalChildFailure));
-  await page.unroute(isPath(batch._id, portalPlanPath));
+  await removeFaultRoute(portalChildFault, portalPlanPath(batch._id), "portal child read-back fault");
 
   // The child-failure attempt reached its PATCH before its read-back was faulted. Before driving
   // the parent-refresh arm, prove by the two real child payloads that the independent fixture row
@@ -305,7 +329,8 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
         const portalParentSave = portalParentDraft.locator("xpath=following-sibling::button");
         await portalParentDraft.fill(portalParentCan);
         let portalParentGetObserved = false;
-        await page.route(isPath(batch._id, parentPath), async (route) => {
+        const portalParentFaultMatcher = isPath(batch._id, parentPath);
+        const portalParentFault = await installFaultRoute(portalParentFaultMatcher, async (route) => {
           if (route.request().method() === "GET") {
             portalParentGetObserved = true;
             return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 portal parent refresh failure" }) });
@@ -324,7 +349,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
           portalParentFailure.parentGetObserved && portalParentFailure.errorVisible
             && portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled,
           JSON.stringify(portalParentFailure));
-        await page.unroute(isPath(batch._id, parentPath));
+        await removeFaultRoute(portalParentFault, parentPath(batch._id), "portal parent-refresh fault");
       }
     }
   }
@@ -335,7 +360,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   let heldPutCount = 0;
   let releaseHeldPut;
   const heldPut = new Promise((resolve) => { releaseHeldPut = resolve; });
-  await page.route(putA, async (route) => {
+  const heldPutFault = await installFaultRoute(putA, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
     heldPutCount++;
     await heldPut;
@@ -358,7 +383,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   await page.getByRole("status").filter({ hasText: "Assessment information saved." }).waitFor({ timeout: 30000 }).catch(() => {});
   ok("QA-2420: the delayed Assessment Save reports success only after its write/read-back/parent refresh chain",
     /Assessment information saved\./i.test(await page.locator("body").innerText()), await page.locator("body").innerText().then((t) => t.slice(0, 300)));
-  await page.unroute(putA);
+  await removeFaultRoute(heldPutFault, closurePath(batch._id), "held Closure PUT");
 
   // A child result write starts first. It must acquire the SAME ref as Closure Save, so the Save
   // cannot begin a competing forced closure GET or strand the child's operation mid-refresh.
@@ -369,7 +394,8 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   let heldResultPutCount = 0;
   let releaseHeldResultPut;
   const heldResultPut = new Promise((resolve) => { releaseHeldResultPut = resolve; });
-  await page.route(isPath(batch._id, resultPath), async (route) => {
+  const heldResultFaultMatcher = isPath(batch._id, resultPath);
+  const heldResultFault = await installFaultRoute(heldResultFaultMatcher, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
     heldResultPutCount++;
     await heldResultPut;
@@ -396,10 +422,10 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
       && childFirstSettled.coordinatorCleared && childFirstSettled.childResult === "Fail"
       && childFirstSettled.closurePuts === 1,
     JSON.stringify({ ...childFirstLock, ...childFirstSettled }));
-  await page.unroute(isPath(batch._id, resultPath));
+  await removeFaultRoute(heldResultFault, resultPath(batch._id), "held candidate-result PUT");
 
   // A failed write must leave the typed value available for retry and must never announce success.
-  await page.route(putA, async (route) => {
+  const putFailureFault = await installFaultRoute(putA, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
     await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated PUT failure" }) });
   });
@@ -412,12 +438,12 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
       && await page.getByLabel("Mock test date").inputValue() === "2026-09-19"
       && !/Assessment information saved\./i.test(putFailureText),
     putFailureText.slice(0, 500));
-  await page.unroute(putA);
+  await removeFaultRoute(putFailureFault, closurePath(batch._id), "Closure PUT failure");
 
   // A successful PUT whose forced closure GET fails is not a successful save from the operator's
   // perspective. The date remains in the editor for an explicit reload/retry decision.
   let failReadback = true;
-  await page.route(putA, async (route) => {
+  const readbackFailureFault = await installFaultRoute(putA, async (route) => {
     if (route.request().method() === "GET" && failReadback) {
       failReadback = false;
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated read-back failure" }) });
@@ -432,13 +458,14 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
       && await page.getByLabel("Mock test date").inputValue() === "2026-09-19"
       && !/Assessment information saved\./i.test(readbackFailureText),
     readbackFailureText.slice(0, 500));
-  await page.unroute(putA);
+  await removeFaultRoute(readbackFailureFault, closurePath(batch._id), "Closure read-back failure");
 
   // The child must observe a failed parent load too. This route is installed only after the page
   // settled, so it cannot be satisfied by the initial detail GET.
   const putParentFailureDate = "2026-09-20";
   await page.getByLabel("Mock test date").fill(putParentFailureDate);
-  await page.route(isPath(batch._id, parentPath), async (route) => {
+  const assessmentParentFaultMatcher = isPath(batch._id, parentPath);
+  const assessmentParentFault = await installFaultRoute(assessmentParentFaultMatcher, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 simulated parent refresh failure" }) });
     }
@@ -450,7 +477,7 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   ok("QA-2420: parent-refresh failure is observable and suppresses the Assessment saved notice",
     /batch summary could not be refreshed/i.test(parentFailureText) && !/Assessment information saved\./i.test(parentFailureText),
     parentFailureText.slice(0, 500));
-  await page.unroute(isPath(batch._id, parentPath));
+  await removeFaultRoute(assessmentParentFault, parentPath(batch._id), "Assessment parent-refresh fault");
 
   // Certification's ordinary Save is independently usable too; it is not the neighbouring
   // certification completion transition and carries the same read-back contract.
@@ -512,12 +539,13 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   let heldOldPut;
   const oldPut = new Promise((resolve) => { heldOldPut = resolve; });
   let oldParentLoads = 0;
-  await page.route(putA, async (route) => {
+  const oldPutFault = await installFaultRoute(putA, async (route) => {
     if (route.request().method() !== "PUT") return route.continue();
     await oldPut;
     await route.continue().catch(() => {});
   });
-  await page.route(isPath(batch._id, parentPath), async (route) => {
+  const oldParentFaultMatcher = isPath(batch._id, parentPath);
+  const oldParentFault = await installFaultRoute(oldParentFaultMatcher, async (route) => {
     if (route.request().method() === "GET") oldParentLoads++;
     return route.continue();
   });
@@ -527,6 +555,11 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   // This is an actual Next client-router transition, not page.goto() (which destroys the old
   // component and aborts the held fetch before its stale-response guards can be exercised).
   await page.getByRole("link", { name: "Batches", exact: true }).click();
+  await page.waitForURL((u) => u.pathname.endsWith("/batches"), { timeout: 30000 });
+  const listTransition = {
+    url: page.url(),
+    oldClosureUnmounted: await page.getByLabel("Certificate distribution date").count() === 0,
+  };
   const switchRow = page.getByRole("row", { name: new RegExp(closureSwitchBatch.code) }).first();
   await switchRow.waitFor({ timeout: 30000 });
   await switchRow.click();
@@ -541,47 +574,81 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   const switchedText = await page.locator("body").innerText();
   ok("QA-2420: a held A PUT completes after real client navigation, while B stays unchanged and A cannot repaint it",
     page.url().includes(String(closureSwitchBatch._id))
+      && listTransition.oldClosureUnmounted
       && String(completedOldWrite.data?.closure?.certificate_distribution_date ?? "").includes("2026-09-23")
       && !bClosure.data?.closure?.certificate_distribution_date
       && !/Certification information saved\./i.test(switchedText)
       && oldParentLoads === 0,
-    JSON.stringify({ url: page.url(), oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
-  await page.unroute(putA);
-  await page.unroute(isPath(batch._id, parentPath));
+    JSON.stringify({ url: page.url(), listTransition, oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
+  await removeFaultRoute(oldPutFault, closurePath(batch._id), "A-to-B held Closure PUT");
+  await removeFaultRoute(oldParentFault, parentPath(batch._id), "A-to-B stale parent observer");
 
   // Ordinary certification completion (not the Admin force escape hatch) writes its own closure
   // read-back before asking the parent to refresh. Make that final parent fetch fail: the local
   // completion projection must still freeze the mounted candidate result and certificate controls
   // immediately, rather than letting a stale Active parent prop reopen one writable paint.
   await openClosure(certCompletionBatch._id);
+  const ordinaryResultPath = resultPath(certCompletionBatch._id);
+  const ordinaryResultResponsePromise = page.waitForResponse((response) =>
+    isPath(certCompletionBatch._id, resultPath)(response.url()) && response.request().method() === "GET", { timeout: 30000 }).catch(() => null);
   await page.getByRole("button", { name: "Start per-candidate marking", exact: true }).click();
-  const ordinaryFail = page.getByRole("button", { name: "Fail", exact: true }).first();
-  await ordinaryFail.waitFor({ timeout: 30000 });
-  await ordinaryFail.click();
+  const ordinaryResultResponse = await ordinaryResultResponsePromise;
+  const ordinaryFailControls = page.getByRole("button", { name: "Fail", exact: true });
+  const ordinaryInitialResults = await req(admin, "GET", ordinaryResultPath);
+  const ordinaryStart = {
+    responseStatus: ordinaryResultResponse?.status() ?? null,
+    apiStatus: ordinaryInitialResults.status,
+    apiItems: ordinaryInitialResults.data?.items?.length ?? null,
+    failControls: await ordinaryFailControls.count(),
+  };
+  const ordinaryResultControlReady = ordinaryStart.responseStatus === 200 && ordinaryStart.apiStatus === 200
+    && ordinaryStart.apiItems === 1 && ordinaryStart.failControls === 1;
+  ok("QA-2420 [precondition]: ordinary-completion result GET, item count, and Fail control agree before marking",
+    ordinaryResultControlReady, JSON.stringify(ordinaryStart));
+  const ordinaryFail = ordinaryFailControls.first();
+  if (ordinaryResultControlReady) await ordinaryFail.click();
   // The completion-plan fetch is intentionally separate from a result refresh. Reopen this real
   // route after the child write so its unmarked precondition is freshly derived before pressing
   // the ordinary Assessment completion door.
-  await openClosure(certCompletionBatch._id);
-  await page.getByRole("button", { name: "Fail", exact: true }).first().waitFor({ timeout: 30000 });
+  if (ordinaryResultControlReady) await openClosure(certCompletionBatch._id);
+  const ordinaryPersistedResults = await req(admin, "GET", ordinaryResultPath);
+  const ordinaryPersistedFailCount = (ordinaryPersistedResults.data?.items ?? [])
+    .filter((item) => item?.result?.result === "Fail").length;
   const ordinaryMarks = page.getByRole("button", { name: "Mark Completed", exact: true });
-  await page.waitForFunction(() => {
+  if (ordinaryResultControlReady) await page.waitForFunction(() => {
     const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
     return !!buttons[0] && !buttons[0].disabled;
   }, undefined, { timeout: 30000 }).catch(() => {});
-  await ordinaryMarks.first().click();
-  await page.getByRole("status").filter({ hasText: "Assessment marked completed." }).waitFor({ timeout: 30000 }).catch(() => {});
-  await page.waitForFunction(() => {
+  const ordinaryAssessmentControls = {
+    resultStatus: ordinaryPersistedResults.status,
+    persistedFailCount: ordinaryPersistedFailCount,
+    markControls: await ordinaryMarks.count(),
+    assessmentEnabled: await ordinaryMarks.first().isEnabled().catch(() => false),
+  };
+  const ordinaryAssessmentReady = ordinaryResultControlReady && ordinaryAssessmentControls.resultStatus === 200
+    && ordinaryAssessmentControls.persistedFailCount === 1 && ordinaryAssessmentControls.markControls === 2
+    && ordinaryAssessmentControls.assessmentEnabled;
+  ok("QA-2420 [precondition]: ordinary-completion persisted Fail count and both transition controls agree",
+    ordinaryAssessmentReady, JSON.stringify(ordinaryAssessmentControls));
+  if (ordinaryAssessmentReady) await ordinaryMarks.first().click();
+  if (ordinaryAssessmentReady) await page.getByRole("status").filter({ hasText: "Assessment marked completed." }).waitFor({ timeout: 30000 }).catch(() => {});
+  if (ordinaryAssessmentReady) await page.waitForFunction(() => {
     const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
     return !!buttons[1] && !buttons[1].disabled;
   }, undefined, { timeout: 30000 }).catch(() => {});
-  await page.route(isPath(certCompletionBatch._id, parentPath), async (route) => {
+  const ordinaryParentFaultMatcher = isPath(certCompletionBatch._id, parentPath);
+  const ordinaryParentFault = ordinaryAssessmentReady ? await installFaultRoute(ordinaryParentFaultMatcher, async (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "QA-2420 ordinary certification parent refresh failure" }) });
     }
     return route.continue();
-  });
-  await ordinaryMarks.nth(1).click();
-  await page.getByRole("alert").filter({ hasText: "batch summary could not be refreshed" }).waitFor({ timeout: 30000 }).catch(() => {});
+  }) : null;
+  const ordinaryCertificationEnabled = ordinaryAssessmentReady
+    && await ordinaryMarks.nth(1).isEnabled().catch(() => false);
+  ok("QA-2420 [precondition]: ordinary Certification control is enabled after persisted Assessment completion",
+    ordinaryCertificationEnabled, JSON.stringify({ ordinaryAssessmentReady, markControls: await ordinaryMarks.count(), certificationEnabled: ordinaryCertificationEnabled }));
+  if (ordinaryCertificationEnabled) await ordinaryMarks.nth(1).click();
+  if (ordinaryCertificationEnabled) await page.getByRole("alert").filter({ hasText: "batch summary could not be refreshed" }).waitFor({ timeout: 30000 }).catch(() => {});
   const ordinaryClosure = await req(admin, "GET", closurePath(certCompletionBatch._id));
   const ordinaryFreeze = {
     ordinaryCertificationPersisted: ordinaryClosure.data?.closure?.certification_status,
@@ -591,12 +658,12 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
     bulkCertificateInputDisabled: await page.locator('input[type="file"][multiple]').isDisabled(),
   };
   ok("QA-2420: ordinary certification completion freezes candidate result/certificate controls immediately even when the parent refresh fails",
-    ordinaryFreeze.ordinaryCertificationPersisted === "Completed"
+    ordinaryCertificationEnabled && ordinaryFreeze.ordinaryCertificationPersisted === "Completed"
       && ordinaryFreeze.parentRefreshFailureVisible
       && ordinaryFreeze.resultButtonDisabled && ordinaryFreeze.candidateIdDisabled
       && ordinaryFreeze.bulkCertificateInputDisabled,
     JSON.stringify(ordinaryFreeze));
-  await page.unroute(isPath(certCompletionBatch._id, parentPath));
+  if (ordinaryParentFault) await removeFaultRoute(ordinaryParentFault, parentPath(certCompletionBatch._id), "ordinary completion parent-refresh fault");
 }
 
 // QA-1248: wait for the list to have SETTLED, not for a stopwatch. The page fetches limit=2000

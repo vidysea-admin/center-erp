@@ -162,16 +162,40 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     // QA-1265. This pin has now been wrong four times (QA-961, QA-962, QA-982, QA-983); the fifth
     // was not a hole, it was an invariant that had outlived one of its own terms.
     const POST_COMPLETION_WRITABLE = ["certificate_distribution_date", "sidh_uploaded_on"];
-    const wrongGate = inputs.filter((t) => {
-      const expected = POST_COMPLETION_WRITABLE.includes(nameOf(t)) ? /disabled=\{!mayMarkTab\}/ : /disabled=\{closed\}/;
-      return !expected.test(t);
-    });
+    // QA-2426 / QA-2428 (two checkers, from opposite sides of a branch divergence, same day): this
+    // pin demanded the LITERAL tokens `closed` and `!mayMarkTab`, so when QA-2420 gave the closure
+    // inputs a saving gate (`closed || closureBusy`) no page could satisfy both this pin and
+    // QA-2420's own - the wall was deterministically red for as long as the release shipped, and
+    // neither unit could go green without the other going red. That is the FIFTH time this pin has
+    // been wrong (QA-961, QA-962, QA-982, QA-983, QA-1265) and every time for the same reason: it
+    // spelled out the gate that happened to be true the day it was written, while its own sentence
+    // says "the gate its own Save carries".
+    //
+    // So the expected gate is now DERIVED from the Save controls in this very region. The region has
+    // two of them - the ordinary Save and the post-completion Save - and they are told apart by
+    // which one mentions `mayMarkTab`, not by their order. A field and its Save can no longer drift
+    // apart in either direction, and nobody has to come back and edit this line again.
+    const gateOf = (re) => {
+      const m = [...region.matchAll(/<Btn[^>]*?disabled=\{([^}]*)\}/g)].map((x) => x[1].trim());
+      return m.find(re) ?? null;
+    };
+    const postGate = gateOf((g) => /mayMarkTab/.test(g));
+    const ordinaryGate = gateOf((g) => /\bclosed\b/.test(g) && !/mayMarkTab/.test(g));
+    const norm = (g) => String(g).replace(/\s+/g, "");
+    const carries = (tag, gate) => gate !== null && norm(tag).includes("disabled={" + norm(gate) + "}");
+    // If either Save cannot be found, the pin has lost its own reference point and must FAIL rather
+    // than pass vacuously - a derived expectation with nothing to derive from is not an expectation.
+    const gatesFound = ordinaryGate !== null && postGate !== null;
+    const wrongGate = !gatesFound ? inputs : inputs.filter((t) =>
+      !carries(t, POST_COMPLETION_WRITABLE.includes(nameOf(t)) ? postGate : ordinaryGate));
     // The exception must not become a way to have no fields at all: both named fields have to BE here.
     const namedPresent = POST_COMPLETION_WRITABLE.filter((f) => inputs.some((t) => nameOf(t) === f));
-    ok("-250 (QA-833/QA-961/QA-1265): EVERY input in the closure cards carries the gate its own Save carries",
-      region.length > 0 && inputs.length >= 6 && wrongGate.length === 0 && namedPresent.length === POST_COMPLETION_WRITABLE.length,
+    ok("-250 (QA-833/QA-961/QA-1265/QA-2426): EVERY input in the closure cards carries the gate its own Save carries",
+      region.length > 0 && gatesFound && inputs.length >= 6 && wrongGate.length === 0 && namedPresent.length === POST_COMPLETION_WRITABLE.length,
       region.length === 0 ? "could not locate the closure cards"
+        : !gatesFound ? `could not read both Save gates from the region (ordinary=${ordinaryGate}, post-completion=${postGate}) - the pin has no reference point to derive from`
         : `${inputs.length} inputs, ${wrongGate.length} with the wrong gate: ${wrongGate.map(nameOf).join(", ") || "(none)"}`
+          + ` | expected ordinary \`${ordinaryGate}\`, post-completion \`${postGate}\``
           + ` | post-completion fields found: ${namedPresent.join(", ") || "(none)"}`);
   }
 

@@ -3725,6 +3725,15 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
     setBlockers(null);
     setBlockersFailed(false);
     void load([], batchId);
+    return () => {
+      // A client-router hop can unmount ClosureTab before the held write resolves. Invalidate the
+      // coordinator in the cleanup itself; otherwise that old continuation still considers A
+      // current and can call A's captured parent `onChanged()` after the user is already on B.
+      latestClosureLoad.current += 1;
+      closureSaveSequence.current += 1;
+      closureSaveInFlight.current = null;
+      if (activeClosureBatchId.current === batchId) activeClosureBatchId.current = "";
+    };
   }, [batchId]);
 
   // ---- -223: the four dates nobody ever sent ----
