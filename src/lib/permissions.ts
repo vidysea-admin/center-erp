@@ -72,6 +72,13 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   // per-user Special rights. Every use is confirmed in the UI and audited.
   { key: "pipeline.bypass", label: "Bypass pipeline steps (set any status directly)", group: "Admin" },
   { key: "users.manage", label: "Create/approve users & assign rights", group: "Admin" },
+  // QA-2479 (Umesh, 2026-09-11): *"jo jo apne admin account mai jaakr off krna chaahe, and admin ye
+  // right and access kisi aur user ya role ko dena chahee unko"*. Two halves, and only the second is
+  // a right: turning off YOUR OWN mail needs no permission at all - it is your inbox, the same
+  // reasoning as self-service password change (QA-1829a). This key governs turning it off for
+  // SOMEBODY ELSE, and it exists as a key rather than a hardcoded Admin check precisely so it can be
+  // granted to another user or role from the matrix, which is what was asked for.
+  { key: "users.mail_toggle", label: "Turn another account's emails off or on (anyone may silence their own)", group: "Admin" },
   { key: "defaults.manage", label: "Edit planning defaults & master lists", group: "Admin" },
   // 2026-08-25 (Umesh, feedback-inbox): Admin's course (Program) dropdown had no delete option at
   // all. Unlike the master-lists philosophy elsewhere (job-roles/schemes/cost-categories are

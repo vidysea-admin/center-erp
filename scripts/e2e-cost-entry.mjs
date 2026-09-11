@@ -2469,6 +2469,68 @@ for (const variant of ["ordinary", "mark_paid"]) {
       `trail did not explain itself: ${flat304.slice(0, 240)}`);
   }
 
+
+  // ---- QA-2479: whose inbox it is, not what role you hold ----
+  //
+  // Umesh: "jo jo apne admin account mai jaakr off krna chaahe, and admin ye right and access kisi
+  // aur user ya role ko dena chahee unko". Two halves: your OWN mail needs no permission, and the
+  // right to silence SOMEBODY ELSE is grantable to any user or role.
+  {
+    const loc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
+    const mkUser = async (tag, role) => {
+      const email = `zz.mt.${tag}.${stamp}@vidysea-test.local`;
+      const made = await req(admin, "POST", "/api/users", {
+        name: `MT ${tag} ${stamp}`, email, password: PW, role, can_edit: true,
+        location_scope: role === "Location" ? [loc] : [],
+      });
+      return { id: made.data?.item?._id ?? made.data?._id, email, status: made.status, cookie: await login(email, PW) };
+    };
+    const selfer = await mkUser("self", "Location");   // holds NO users.manage
+    const target = await mkUser("target", "Location");
+    ok("QA-2479 [precondition] two ordinary (non-Admin) accounts exist and can sign in",
+      selfer.status === 201 && target.status === 201 && !!selfer.cookie && !!target.cookie,
+      JSON.stringify({ a: selfer.status, b: target.status, signedIn: !!selfer.cookie }));
+
+    if (selfer.cookie && target.cookie) {
+      // 1. YOUR OWN inbox, with no users.manage and no grant at all.
+      const own = await req(selfer.cookie, "PATCH", `/api/users/${selfer.id}`, { mail_enabled: false });
+      const ownBack = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(selfer.id));
+      ok("QA-2479: anyone may silence their OWN mail without users.manage and without any grant",
+        own.status === 200 && ownBack?.mail_enabled === false,
+        `status=${own.status} readBack=${ownBack?.mail_enabled}`);
+
+      // 2. SOMEBODY ELSE'S, without the right - must be refused. Without this arm the exemption
+      //    above is indistinguishable from "this route no longer checks anything".
+      const other = await req(selfer.cookie, "PATCH", `/api/users/${target.id}`, { mail_enabled: false });
+      const otherBack = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(target.id));
+      ok("QA-2479: ...but silencing SOMEBODY ELSE without the right is refused, and changes nothing",
+        other.status === 403 && otherBack?.mail_enabled !== false,
+        `status=${other.status} theirMail=${otherBack?.mail_enabled}`);
+
+      // 3. THE ESCALATION ARM. A body carrying mail_enabled AND a privileged field is not a
+      //    self-service mail change; if the exemption keyed on "mail_enabled is present" instead of
+      //    "mail_enabled is the ONLY key", this is how a Location user would have made themselves
+      //    an Admin.
+      const sneak = await req(selfer.cookie, "PATCH", `/api/users/${selfer.id}`, { mail_enabled: true, role: "Admin" });
+      const sneakBack = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(selfer.id));
+      ok("QA-2479: ...and mail_enabled bundled with a privileged field is NOT self-service - no escalation",
+        sneak.status >= 400 && sneakBack?.role === "Location",
+        `status=${sneak.status} roleNow=${sneakBack?.role}`);
+
+      // 4. GRANTABLE, which is the half that was actually asked for.
+      await req(admin, "PATCH", `/api/users/${selfer.id}`, { extra_permissions: ["users.mail_toggle"] });
+      const granted = await req(selfer.cookie, "PATCH", `/api/users/${target.id}`, { mail_enabled: false });
+      const grantedBack = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(target.id));
+      ok("QA-2479: ...and once GRANTED users.mail_toggle, that same non-Admin can silence another account",
+        granted.status === 200 && grantedBack?.mail_enabled === false,
+        `status=${granted.status} theirMail=${grantedBack?.mail_enabled}`);
+    }
+  }
+
   await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 }
 

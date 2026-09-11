@@ -61,12 +61,30 @@ async function enforceAdminFloor(docId: unknown, restore: Record<string, unknown
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requirePerm(user, "users.manage"); // togglable (2026-08-11)
-  requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const { id } = await ctx.params;
+
+  // QA-2479: `users.manage` gates this whole route, so without this exemption "anyone may silence
+  // their own mail" was unreachable for anybody who does not administer users - and granting
+  // `users.mail_toggle` to a Location or Trainer account would have done nothing, because they
+  // would still 403 at the door. That is the half of Umesh's ask about giving the right to another
+  // user or role.
+  //
+  // THE EXEMPTION IS AS NARROW AS IT CAN BE MADE, and each condition is load-bearing: the body must
+  // carry `mail_enabled` and NOTHING ELSE, and the target must be the caller's own row. A body of
+  // `{mail_enabled, role}` is not a self-service mail change, it is a privilege escalation wearing
+  // one, and it takes the ordinary path. `requireEdit` still applies below, so a view-only account
+  // cannot use this either.
+  const bodyPeek = await readJson(req);
+  const keys = Object.keys(bodyPeek ?? {});
+  const selfMailOnly = keys.length === 1 && keys[0] === "mail_enabled" && String(id) === String(user.id);
+  if (!selfMailOnly) await requirePerm(user, "users.manage"); // togglable (2026-08-11)
+  requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
-  const body = await readJson(req);
+  // QA-2479: the body is read ONCE, above, because the gate now has to inspect it. A request body
+  // is a stream and reading it twice hands the second reader an empty object - which here would
+  // have meant every PATCH silently applying nothing while returning 200.
+  const body = bodyPeek;
 
   // Privilege escalation guards (security review 2026-08-11): users.manage is a GRANTABLE
   // right, so a non-Admin holder must never be able to raise anyone's privileges — role,
@@ -80,13 +98,31 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // it inherits the same gate as `active` - only an Admin flips it, the self-edit refusal applies,
   // and the change is audited like every other privileged field. A toggle that silences somebody
   // should be at least as hard to reach as one that deactivates them.
-  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions", "password", "email"];
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions", "password", "email"];
   const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined || body.drop === true;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
   }
   if (changingPriv && String(doc._id) === String(user.id)) {
     throw new HttpError(400, "You cannot change your own role, rights or account status.");
+  }
+
+  // QA-2479: `mail_enabled` was briefly a PRIV_FIELD, which got BOTH halves of Umesh's ask wrong -
+  // it meant only an Admin could set it, and the self-edit refusal above meant an Admin could not
+  // silence their OWN mail, which is the first thing anyone actually wants to do. His words: "jo jo
+  // apne admin account mai jaakr off krna chaahe, and admin ye right kisi aur user ya role ko dena
+  // chahee unko".
+  //
+  // So it is gated on WHOSE inbox it is, not on a role. Your own needs no permission - it is your
+  // mail, the same reasoning as self-service password change. Somebody else's needs
+  // `users.mail_toggle`, which is a KEY rather than a hardcoded Admin check so it can be granted to
+  // any user or role from the matrix. Admin holds it by default like every key outside
+  // NO_ADMIN_BYPASS.
+  //
+  // It stays MAIL-ONLY either way: a silenced account still receives every in-app alert, so this can
+  // quiet somebody's inbox and can never hide work from them.
+  if (body.mail_enabled !== undefined && String(doc._id) !== String(user.id)) {
+    await requirePerm(user, "users.mail_toggle");
   }
 
   // 15/08 (Umesh): DROP a user — soft by design. "Logs me history rahegi, inka banaya data
