@@ -1160,6 +1160,20 @@ for (const variant of ["ordinary", "mark_paid"]) {
       below.status === 202, `got ${below.status}`);
   }
 
+  // QA-2427: an Admin with NO finance grant at all. The audit routes are open to any signed-in
+  // reader by design (the trail answers "kaunsa admin, kya kiya"); what must not travel with it
+  // is the money. Built here rather than reused from the policy block below, because that one is
+  // created after this pin runs.
+  const makeAuditReader = async (tag) => {
+    const email = `zz.audit.${tag}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", {
+      name: `Audit reader ${tag}`, email, password: PW, role: "Admin", can_edit: true, location_scope: [],
+    });
+    return { made, cookie: await login(email, PW) };
+  };
+  const adminUserId = ((await req(admin, "GET", "/api/users")).data?.items ?? [])
+    .find((u) => String(u.email) === "admin@vidysea.com")?._id;
+
   const normal = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
     .find((c) => !c.pre_approved);
   ok("partial approval [precondition]: a normal cost head exists", !!normal, "none");
@@ -1182,7 +1196,40 @@ for (const variant of ["ordinary", "mark_paid"]) {
       ok("partial approval: ledger uses Rs 800 and preserves the original Rs 1,000 request",
         !!cost && cost.amount === 800 && cost.requested_amount === 1000 && cost.payment_status === "Payment Pending",
         JSON.stringify(cost ? { amount: cost.amount, requested: cost.requested_amount, status: cost.payment_status } : null));
-      if (cost) {
+
+      // QA-2427 (checker, cycle 14): the sanctioned figure was masked on the QUEUE and published
+      // in the AUDIT TRAIL of the same decision. GET /api/audit/ApprovalRequest/<id> and
+      // /api/audit/by-user/<id> returned `new_value.approved_amount` raw to a reader with no
+      // finance.view - an ungranted Admin, and ops/spoc/viewer for an in-scope request - on the
+      // release whose whole purpose is that only three people see money. Masking one surface and
+      // leaving the trail of the same act open is this module's tenth money door and its oldest
+      // shape: a new money FIELD added to a record that was already readable.
+      {
+        const blind = await makeAuditReader(`audit.${stamp}`);
+        ok("QA-2427 [precondition] a reader WITHOUT finance.view exists and can read the audit trail",
+          !!blind.cookie, `made=${blind.made.status}`);
+        const hunt = (rows) => {
+          const flat = JSON.stringify(rows ?? []);
+          return {
+            key: /"(approved_amount|requested_amount)"/.test(flat),
+            figure: /\b(800|1,?000|1000)\b/.test(flat),
+          };
+        };
+        if (blind.cookie) {
+          const byEntity = await req(blind.cookie, "GET", `/api/audit/ApprovalRequest/${requestId}`);
+          const byUser = await req(blind.cookie, "GET", `/api/audit/by-user/${adminUserId}`);
+          const e = hunt(byEntity.data?.items), u = hunt(byUser.data?.items);
+          ok("QA-2427 [precondition] that reader really reaches the audit trail of this decision",
+            byEntity.status === 200 && (byEntity.data?.items ?? []).length > 0,
+            `status=${byEntity.status} rows=${(byEntity.data?.items ?? []).length} - if it reads nothing the pin below proves nothing`);
+          ok("QA-2427: the audit trail does not hand the SANCTIONED amount to a reader without finance.view",
+            !e.key && !e.figure,
+            `GET /api/audit/ApprovalRequest/${requestId} still carries ${e.key ? "an amount KEY" : ""}${e.key && e.figure ? " and " : ""}${e.figure ? "the figure itself" : ""}`);
+          ok("QA-2427: nor does the by-user trail of the approver who sanctioned it",
+            byUser.status !== 200 || (!u.key && !u.figure),
+            `GET /api/audit/by-user/${adminUserId} status=${byUser.status} key=${u.key} figure=${u.figure}`);
+        }
+      }      if (cost) {
         const missingRef = await req(admin, "PATCH", `/api/costs/${cost._id}`, { mark_paid: true, payment_mode: "UPI", vendor_payee: `Partial vendor ${stamp}` });
         ok("outgoing payment: Payment Done cannot be recorded without a reference", missingRef.status === 400, `got ${missingRef.status}`);
         const paid = await req(admin, "PATCH", `/api/costs/${cost._id}`, {
