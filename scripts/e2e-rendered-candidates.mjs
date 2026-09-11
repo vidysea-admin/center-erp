@@ -339,15 +339,37 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
         });
         await portalParentSave.click();
         await page.getByText(/portal ID status, but the batch summary could not be refreshed/i).waitFor({ timeout: 30000 }).catch(() => {});
+        // QA-2423 (checker, cycle 7) and the crash it became. This arm demanded a RETAINED DRAFT on
+        // the misfiled row - but the child write SUCCEEDED here; only the parent summary refresh was
+        // faulted. A saved ID is no longer a gap, so the row correctly leaves the list, and
+        // `inputValue()` on a locator that no longer resolves does not return "" - it THROWS after
+        // 30s, uncaught, and takes all ~5,800 wall assertions with it. Two separate defects in one
+        // line: the wrong expectation, and a DOM read that can kill the suite.
+        //
+        // What the contract actually promises when a parent refresh fails is that NOTHING IS LOST
+        // and the operator is told. So persistence is asserted where it truly lives - the server -
+        // and the DOM is only asked what it can safely answer.
+        const domSafe = async (fn, fallback) => { try { return await fn(); } catch { return fallback; } };
+        const rowStillPresent = await domSafe(() => portalParentDraft.count(), 0) === 1;
+        const storedAfter = await req(admin, "GET", `${portalHealthPath}?batch=${batch._id}`);
+        const stillMisfiled = (storedAfter.data?.misfiled ?? [])
+          .filter((row) => String(row?.candidate) === String(misfiledCand._id)).length;
         const portalParentFailure = {
           parentGetObserved: portalParentGetObserved,
           errorVisible: /portal ID status, but the batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
-          draftRetained: await portalParentDraft.inputValue(),
-          saveReenabled: await portalParentSave.isEnabled(),
+          rowStillPresent,
+          draftRetained: rowStillPresent ? await domSafe(() => portalParentDraft.inputValue(), null) : null,
+          saveReenabled: rowStillPresent ? await domSafe(() => portalParentSave.isEnabled(), false) : null,
+          stillMisfiledOnServer: stillMisfiled,
         };
-        ok("QA-2420: failed PortalIdGaps parent refresh observes the parent GET and retains the exact row's draft for retry",
-          portalParentFailure.parentGetObserved && portalParentFailure.errorVisible
-            && portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled,
+        // The ID must have PERSISTED (the child write was never faulted), and the operator must have
+        // been told the summary is stale. If the row is still on screen it must still hold the typed
+        // value and be retryable - a row that stayed but went blank is the real data loss, and that
+        // is the case the old assertion could never distinguish from a row that correctly left.
+        const nothingLost = portalParentFailure.stillMisfiledOnServer === 0
+          && (!rowStillPresent || (portalParentFailure.draftRetained === portalParentCan && portalParentFailure.saveReenabled === true));
+        ok("QA-2420/QA-2423: a failed parent refresh loses nothing - the ID persisted, the operator is told, and any row left on screen is still retryable",
+          portalParentFailure.parentGetObserved && portalParentFailure.errorVisible && nothingLost,
           JSON.stringify(portalParentFailure));
         await removeFaultRoute(portalParentFault, parentPath(batch._id), "portal parent-refresh fault");
       }
