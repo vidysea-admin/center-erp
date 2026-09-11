@@ -1229,6 +1229,58 @@ for (const variant of ["ordinary", "mark_paid"]) {
             byUser.status !== 200 || (!u.key && !u.figure),
             `GET /api/audit/by-user/${adminUserId} status=${byUser.status} key=${u.key} figure=${u.figure}`);
         }
+
+        // QA-2442 (checker, cycle 15) - the MIRROR of QA-2427, one cycle later, on the surface this
+        // release changed. The queue handed a reader with approvals.decide and no finance.view the
+        // figures people TYPED into notes - `Cost entry ₹— ... cash advance 445599 paid to vendor` -
+        // the masked figure sitting in the same sentence as the raw one, while the AUDIT TRAIL of
+        // that same record masked both.
+        //
+        // THREE ARMS, NOT ONE, and that is the whole point. A mask repaired and a mask over-applied
+        // show the blind reader exactly the same thing: no figures. One assertion cannot tell them
+        // apart, so `redact everything for everyone` would pass a leak test forever. This asserts the
+        // leak is gone, that the SENTENCE survives, and that the grant-holder still sees the number.
+        // The third arm is what makes the first one mean anything.
+        {
+          const blindQ = await makeAuditReader(`queue.${stamp}`);
+          const typed = `cash advance 445599 paid to vendor INV-2026-0456 on 07-09-2026 by Prashant Kumar`;
+          const parked2 = await req(admin, "POST", "/api/costs", baseEntry({ category: normal._id, amount: 500, note: typed }));
+          const rid2 = parked2.data?.item?._id;
+          ok("QA-2442 [precondition] a second cost parks with a figure TYPED into its note",
+            parked2.status === 202 && !!rid2 && !!blindQ.cookie,
+            `parked=${parked2.status} reader=${!!blindQ.cookie} - without both, every arm below is vacuous`);
+          if (rid2 && blindQ.cookie) {
+            await req(admin, "POST", `/api/approvals/${rid2}`, { decision: "Rejected", note: `only 33221 is supported` });
+            const row = ((await req(blindQ.cookie, "GET", "/api/approvals?status=all")).data?.items ?? [])
+              .find((r) => String(r._id) === String(rid2));
+            const flat = JSON.stringify(row ?? {});
+            const has = (re) => re.test(flat);
+            ok("QA-2442 [precondition] the blind reader actually reaches that row", !!row,
+              `no row for ${rid2} - the arms below would all pass on an empty object`);
+
+            ok("QA-2442: a reader without finance.view gets none of the figures the queue was asked to hide",
+              !!row && !has(/445599/) && !has(/33221/) && !has(/\b500\b/),
+              `still present -> typed:${has(/445599/)} decision:${has(/33221/)} amount:${has(/\b500\b/)}`);
+
+            // The OPPOSITE failure. `redact everything` also passes the arm above, and it destroys the
+            // sentence - QA-1851 measured an approver's mail turned into `chairs delivered on the —th,
+            // —% advance`. A date and a person's name are not money and must survive. The VOUCHER
+            // deliberately does not: `invoice_no` is money-class by this module's own
+            // INVOICE_MONEY_FIELDS rule, so it is asserted as REDACTED rather than quietly ignored.
+            ok("QA-2442: ...and the sentence survives - a date and a person's name are not money",
+              !!row && has(/07-09-2026/) && has(/Prashant Kumar/),
+              `over-redacted -> date:${has(/07-09-2026/)} name:${has(/Prashant Kumar/)} | ${String(row?.summary ?? "").slice(0, 120)}`);
+            ok("QA-2442: ...while the voucher IS hidden, because invoice_no is money by this module's own rule",
+              !!row && !has(/INV-2026-0456/),
+              `the voucher survived for a reader without finance.view: ${String(row?.summary ?? "").slice(0, 120)}`);
+
+            const richRow = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
+              .find((r) => String(r._id) === String(rid2));
+            ok("QA-2442: ...and the grant-holder still sees the figure, so this is a MASK and not a deletion",
+              !!richRow && /445599/.test(JSON.stringify(richRow)),
+              `a reader WITH finance.view lost it too - that is over-redaction wearing a fix's clothes`);
+          }
+        }
       }      if (cost) {
         const missingRef = await req(admin, "PATCH", `/api/costs/${cost._id}`, { mark_paid: true, payment_mode: "UPI", vendor_payee: `Partial vendor ${stamp}` });
         ok("outgoing payment: Payment Done cannot be recorded without a reference", missingRef.status === 400, `got ${missingRef.status}`);
