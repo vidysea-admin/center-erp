@@ -94,6 +94,46 @@ if (admin && subjectId) {
       failedSwitchCopy.replace(/\s+/g, " ").slice(0, 220));
     await failedCtx.close();
 
+
+    // ---- QA-2451 (S1, live checker on -302): the deletion that the browser is REQUIRED to throw away ----
+    //
+    // The browser arm below has asserted "opening the invitation clears the old Admin session before
+    // submit" for several releases, and it passes, and it CANNOT SEE THIS DEFECT. A local wall runs over
+    // http, so Auth.js issues the UNPREFIXED `authjs.session-token`, and a bare cookie deletion is
+    // perfectly valid for that name. Production runs over https, where the cookie is
+    // `__Secure-authjs.session-token` - and a cookie whose NAME carries the `__Secure-` prefix may only
+    // be set by a Set-Cookie that bears `Secure`. `res.cookies.delete()` emits no `Secure`, so the
+    // browser discarded the deletion, the previous Admin session survived the switch in 3 of 4 measured
+    // production runs, and the invited person reached /erp inside it WITHOUT ENTERING A PASSWORD.
+    //
+    // So this pin asserts the emitted HEADER rather than the resulting jar, which makes the production
+    // shape reachable over http: send the prefixed cookie name, read what comes back. Two arms, because
+    // "emit Secure always" would also pass the first one and would break every local sign-out - the
+    // unprefixed name must NOT be marked Secure, or a wall over http could never clear it.
+    {
+      const hit = async (cookieName) => {
+        const r = await fetch(`${BASE}/login?email=${encodeURIComponent(EMAIL)}&switch=1`, {
+          headers: { cookie: `${cookieName}=not-a-real-token` }, redirect: "manual",
+        });
+        const all = typeof r.headers.getSetCookie === "function" ? r.headers.getSetCookie() : [];
+        return all.filter((c) => c.startsWith(`${cookieName}=`));
+      };
+      const secured = await hit("__Secure-authjs.session-token");
+      const plain = await hit("authjs.session-token");
+
+      ok("QA-2451 [precondition] the switch navigation answers with a Set-Cookie for each session-token name it was sent",
+        secured.length > 0 && plain.length > 0,
+        `secure=${secured.length} plain=${plain.length} - with either at zero the two arms below assert nothing`);
+
+      const expiresIt = (c) => /max-age=0/i.test(c) || /expires=thu, 01 jan 1970/i.test(c);
+      ok("QA-2451: the __Secure- session cookie is expired WITH the Secure attribute, so the browser can accept the deletion",
+        secured.length > 0 && secured.every((c) => /;\s*secure/i.test(c)) && secured.some(expiresIt),
+        `emitted: ${JSON.stringify(secured)} - without Secure a __Secure- cookie deletion is discarded and the old session lives on`);
+
+      ok("QA-2451: ...and the UNPREFIXED name is not marked Secure, so a plain-http sign-out still clears",
+        plain.length > 0 && plain.every((c) => !/;\s*secure/i.test(c)) && plain.some(expiresIt),
+        `emitted: ${JSON.stringify(plain)} - marking this Secure would make every http session unclearable`);
+    }
     const switchCtx = await switchBrowser.newContext({ viewport: { width: 1280, height: 900 } });
     const switchPage = await switchCtx.newPage();
     await switchPage.goto(BASE + "/login", { waitUntil: "networkidle" });

@@ -14,7 +14,37 @@ export async function proxy(req: NextRequest) {
   if (pathname === "/login" && req.nextUrl.searchParams.get("switch") === "1" && req.nextUrl.searchParams.get("email")) {
     const res = NextResponse.next();
     for (const { name } of req.cookies.getAll()) {
-      if (/^(?:__Secure-)?authjs\.session-token(?:\.\d+)?$/.test(name)) res.cookies.delete(name);
+      if (/^(?:__Secure-)?authjs\.session-token(?:\.\d+)?$/.test(name)) {
+        // QA-2451 (S1, live checker on -302, read off the wire in a visible browser). This used to
+        // be `res.cookies.delete(name)`, which emits
+        //     Set-Cookie: __Secure-authjs.session-token=; Path=/; Expires=Thu, 01 Jan 1970 ...
+        // with NO `Secure` attribute. A cookie whose NAME carries the `__Secure-` prefix may only be
+        // set by a Set-Cookie that bears `Secure`; the browser is REQUIRED to reject one that does
+        // not. So the deletion was correct in the source, present in the response, and inert in the
+        // jar: the old privileged session survived the switch in 3 of 4 production runs - including
+        // one where the checker issued no requests at all - and the invited person then reached /erp
+        // WITHOUT ENTERING A PASSWORD, inside the previous Admin's account (role=Admin, GET
+        // /api/users 200). The `signOut()` fallback four lines above is a race, and it won once.
+        // The comment above already said a client fetch must not be the only boundary. It was.
+        //
+        // AND THE WALL COULD NOT HAVE SEEN IT. `e2e-password.mjs` has asserted "opening the
+        // invitation clears the old Admin session before submit" for several releases and it passes,
+        // because a local wall runs over http, where Auth.js issues the UNPREFIXED
+        // `authjs.session-token` - for which a bare deletion is perfectly valid. The defect lives
+        // only in the shape production uses. That is why the pin beside that arm asserts the emitted
+        // HEADER for the prefixed name, which can be exercised over http.
+        //
+        // Expire it with the attributes it was ISSUED with rather than asking for a delete: `Secure`
+        // exactly when the name demands it, so the local unprefixed cookie keeps working unchanged.
+        res.cookies.set(name, "", {
+          httpOnly: true,
+          sameSite: "lax",
+          path: "/",
+          secure: name.startsWith("__Secure-"),
+          expires: new Date(0),
+          maxAge: 0,
+        });
+      }
     }
     res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
     res.headers.set("Pragma", "no-cache");
