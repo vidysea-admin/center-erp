@@ -2396,10 +2396,24 @@ for (const variant of ["ordinary", "mark_paid"]) {
     ok("QA-2462: a cost on an ACTIVE batch still parks for approval - the queue was narrowed, not removed",
       onActive.status === 202, `got ${onActive.status}`);
 
-    const onFinished = await req(ops, "POST", "/api/costs", baseEntry({
+    // QA-2469 (peer checker, pre-push): THE ARM THAT CLOSES THE ESCALATION, and it has to come
+    // first because without it the two below describe a money door anyone can reach.
+    // `/api/batches/[id]/transition` needs only `requireEdit` + `batches.manage` with NO role check,
+    // and Operations holds batches.manage, closure.manage and costs.manage by default - so an
+    // Operations user could walk a batch Active->Closing->Completed across no enabled gate and then
+    // post against it. Of nine approval actions on live -303 exactly two are ON and `cost.post` is
+    // one of them, so that would have routed around THE money control, not one of several.
+    const opsOnFinished = await req(ops, "POST", "/api/costs", baseEntry({
+      category: normalHeadId, batch: finished._id, amount: 644, note: `${s304}-ops-finished`,
+    }));
+    ok("QA-2469: an OPERATIONS user posting to a finished batch STILL PARKS - the recording path is Admin-only",
+      opsOnFinished.status === 202,
+      `got ${opsOnFinished.status} - 201 means walking a batch to Completed is a no-approval money door`);
+
+    const onFinished = await req(admin, "POST", "/api/costs", baseEntry({
       category: normalHeadId, batch: finished._id, amount: 643, note: `${s304}-finished`,
     }));
-    ok("QA-2462: a cost on a FINISHED batch is recorded straight away, not queued",
+    ok("QA-2462: an ADMIN's cost on a FINISHED batch is recorded straight away, not queued",
       onFinished.status === 201, `got ${onFinished.status} - 202 means Manish's historical rows still need two approvers`);
 
     // Recorded is not enough: it has to REACH the places money is actually read from.

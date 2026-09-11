@@ -196,7 +196,25 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const terminalBatch = body.batch
     ? await Batch.findById(String(body.batch)).select("status code").lean<any>()
     : null;
-  const alreadyFinished = !!terminalBatch && ["Completed", "Closed"].includes(String(terminalBatch.status));
+  //
+  // QA-2469 (peer checker, PRE-PUSH) - AND THIS GATE IS WHY THE FIRST VERSION WAS UNSAFE. Gating on
+  // the BATCH'S STATE alone was not enough, because reaching that state needs nobody in particular:
+  // `/api/batches/[id]/transition` requires only `requireEdit` + `batches.manage` and carries NO
+  // role check (unlike `/complete`, which has `requireRole(user, "Admin")`), and the default matrix
+  // gives Operations `batches.manage`, `closure.manage` AND `costs.manage`. `Active->Closing` and
+  // `Closing->Completed` both exist, and `batch.complete`'s approval rule is OFF in production - so
+  // the whole chain crosses no enabled gate. The peer then measured the thing that makes it matter:
+  // of nine approval actions on live -303, exactly TWO are ON, and `cost.post` is one of them. It is
+  // not one control among many, it is THE money control - and a state-only gate routed around it.
+  //
+  // So the recording path is ADMIN-ONLY. That matches what Umesh already decided out loud about who
+  // may touch money ("only admin"), it serves the actual need - Manish is an Admin entering his own
+  // historical rows - and it closes the escalation completely, because the missing role check on
+  // the transition door stops mattering once the COST door has one. An Operations user posting
+  // against a finished batch still parks, exactly as before.
+  const alreadyFinished = !!terminalBatch
+    && ["Completed", "Closed"].includes(String(terminalBatch.status))
+    && String(user.role) === "Admin";
 
   const parked = (pre.applied || alreadyFinished) ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
