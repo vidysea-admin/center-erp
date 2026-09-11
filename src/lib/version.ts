@@ -167,7 +167,14 @@ export const RELEASE_NOTE_CURRENT =
   "Separately, a cost submitted with a payment method this system does not use is now refused "  +
   "at submission with a plain sentence, instead of being accepted and then waiting for an "  +
   "approval that could not be given: the person who typed the value was told the cost was "  +
-  "submitted, and a different person was left with a request they could only reject.";
+  "submitted, and a different person was left with a request they could only reject. "  +
+  "This release also repairs the account switch on an invitation link. -302 said that opening "  +
+  "a welcome link signs out a different account already open in that browser. The server did "  +
+  "send that sign-out, but it sent it in a form a secure browser is required to ignore, so on "  +
+  "the live site the old session often survived and the invited person could reach the app "  +
+  "inside it without typing a password. The sign-out is now sent in a form the browser accepts. "  +
+  "The other two halves of that -302 claim were checked on the live site and were already true: "  +
+  "the invitation carries and locks the intended email, and a wrong password is refused.";
 
 const RELEASE_NOTE_ARCHIVE_302 =
   "-302 adds the missing Assessment Awaited stage between delivery and assessment, and separates "  +
