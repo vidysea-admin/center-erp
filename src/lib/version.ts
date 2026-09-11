@@ -158,10 +158,13 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-304 does three things, and two of them are about not disturbing people. An administrator can "  +
-  "now turn emails off for a single account and on again at any time, so an account being used for "  +
+  "-304 does three things, and two of them are about not disturbing people. Emails can now be "  +
+  "turned off for a single account and on again at any time, so an account being used for "  +
   "testing stops filling a real person's inbox; that account still sees every alert inside the "  +
-  "app, because this silences the mailbox and not the person. Second, a cost recorded against a "  +
+  "app, because this silences the mailbox and not the person. Turning your own emails off needs "  +
+  "no permission at all, the same way changing your own password does not; turning off somebody "  +
+  "else's needs a right that an administrator already holds and can grant to any other user or "  +
+  "role. Second, a cost recorded against a "  +
   "batch that is already completed or closed is now written straight to the ledger instead of "  +
   "waiting for approval - that money was spent and invoiced before the entry was made, so the "  +
   "approval had nothing left to decide. The entry says on its own record that it skipped the queue "  +
