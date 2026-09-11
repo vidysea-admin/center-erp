@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-304";
+export const RELEASE = "2026.08.14-305";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,31 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-305 is about correcting a cost after it has been recorded, which the screens did not really "  +
+  "allow. Every list of costs - the ledger, the finance register, and a batch's own costs tab - now "  +
+  "carries an Edit and a Delete control on the row, for a person who has been granted the right to "  +
+  "decide money. Before this, the only way to correct an entry was to know that clicking a row "  +
+  "loaded it into the form higher up the page, and on two of those three lists clicking did nothing "  +
+  "at all. "  +
+  "Removing a cost now asks why, and refuses without an answer. The reason is written into the "  +
+  "record before the entry is removed, so the history can say what was taken out and on what "  +
+  "grounds rather than only that something was. A cost entry also shows its own history on the "  +
+  "screen now: when it was created, every correction since, and who made each one. Those records "  +
+  "were always being written; no screen had ever shown them. "  +
+  "When a recorded cost is corrected, the people who approve money are told, in the app and by "  +
+  "email, subject to the per-account email switch from -304. The message names which fields changed "  +
+  "and does not carry the amounts, so a figure does not travel into an inbox; the entry itself is "  +
+  "where values are read, behind the usual permission. It tells them a change happened. It does not "  +
+  "ask them to approve it again - a correction by an authorised person still takes effect "  +
+  "immediately, exactly as before. "  +
+  "Two smaller things on the cost form. The box for naming a cost head that is not in the list now "  +
+  "appears only when Other is chosen, instead of sitting under every entry, and switching to a "  +
+  "different head clears anything typed into it, so a name left behind cannot create a head nobody "  +
+  "asked for. And the cost head list can be searched by typing, which matters because that list is "  +
+  "meant to grow - naming a new head is a normal part of posting a cost. The description stays "  +
+  "required on every entry, unchanged."
+
+const RELEASE_NOTE_ARCHIVE_304 =
   "-304 does three things, and two of them are about not disturbing people. Emails can now be "  +
   "turned off for a single account and on again at any time, so an account being used for "  +
   "testing stops filling a real person's inbox; that account still sees every alert inside the "  +
@@ -1535,6 +1560,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_304 + " " +
   RELEASE_NOTE_ARCHIVE_303 + " " +
   RELEASE_NOTE_ARCHIVE_302 + " " +
   RELEASE_NOTE_ARCHIVE_301 + " " +

@@ -1459,9 +1459,27 @@ for (const variant of ["ordinary", "mark_paid"]) {
     q.status === 202, `got ${q.status} ${JSON.stringify(q.data).slice(0, 120)}`);
   const ownUnknownHead = ((await req(ops, "GET", "/api/approvals?mine=1")).data?.items ?? [])
     .find((r) => String(r._id) === String(q.data?.item?._id));
+  // QA-2488: this required the summary to contain the proposed head name VERBATIM, and that name
+  // embeds `Date.now().toString(36)`. Base 36 mixes letters and digits, so some clock values give it
+  // a run of 3+ consecutive digits - and -303 deliberately redacts every such run on an approval for
+  // a reader without finance.view, which `ops` is. So the pin passed or failed on the millisecond the
+  // suite happened to start. Measured over 200,000 consecutive second-values: 10,901 carry such a
+  // run, 5.5%. It went red on the cycle-18 wall and green on the one an hour earlier, with identical
+  // product code; the only difference between the two runs was the clock.
+  //
+  // THE REPAIR IS NOT TO ASSERT LESS. The redaction is a DECIDED contract - -303's own public note
+  // discloses that a number typed into the text is hidden along with the money - so it is asserted AS
+  // the contract, keyed on the input. The un-redactable part of the name must always survive, and the
+  // full name must survive exactly when there was no digit run to take. Both arms are now green on
+  // every clock value and red if the masker's behaviour ever changes in either direction.
+  const stampHasDigitRun = /\d{3,}/.test(proposed);
+  const summaryText = String(ownUnknownHead?.summary ?? "");
   ok("My submissions: an unknown-head proposal is returned beside ordinary cost.post requests",
-    ownUnknownHead?.action === "costcategory.create" && String(ownUnknownHead.summary ?? "").includes(proposed),
+    ownUnknownHead?.action === "costcategory.create" && summaryText.includes("ZZ Proposed"),
     JSON.stringify(ownUnknownHead ? { action: ownUnknownHead.action, summary: ownUnknownHead.summary } : null));
+  ok("QA-2488: ...and the masker treats that head name EXACTLY as -303 says - every 3+ digit run taken, nothing else",
+    stampHasDigitRun ? !summaryText.includes(proposed) : summaryText.includes(proposed),
+    `proposed=${proposed} hasDigitRun=${stampHasDigitRun} summary=${summaryText.slice(0, 130)}`);
 
   // NOTHING may have been written yet - not the head, not the entry. "The whole entry parks" is
   // the claim (Umesh, D8), and a queue that half-writes is worse than no queue.
