@@ -2528,6 +2528,20 @@ for (const variant of ["ordinary", "mark_paid"]) {
       ok("QA-2479: ...and once GRANTED users.mail_toggle, that same non-Admin can silence another account",
         granted.status === 200 && grantedBack?.mail_enabled === false,
         `status=${granted.status} theirMail=${grantedBack?.mail_enabled}`);
+
+      // 5. QA-2481: THE ARM THAT GUARDS THE WIDENING ITSELF, and it is not arm 3 repeated. Arm 3
+      //    fires on the caller's OWN row and BEFORE any grant, so it exercises the old door. This
+      //    one fires on SOMEBODY ELSE'S row and AFTER the grant - the exact path QA-2481 opened.
+      //    The right to silence a person is not a right to send a privileged body about them, and
+      //    the only thing standing between those two is `keys.length === 1`. If a later edit widens
+      //    the door on "mail_enabled is present" rather than "mail_enabled is the ONLY key", this
+      //    is the arm that goes red; arms 1-4 all stay green through that mistake.
+      const sneak2 = await req(selfer.cookie, "PATCH", `/api/users/${target.id}`, { mail_enabled: true, role: "Admin" });
+      const sneak2Back = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+        .find((u) => String(u._id) === String(target.id));
+      ok("QA-2481: ...but that grant is NOT a licence to send a privileged body about them - refused, and nothing moved",
+        sneak2.status >= 400 && sneak2Back?.role === "Location" && sneak2Back?.mail_enabled === false,
+        `status=${sneak2.status} roleNow=${sneak2Back?.role} theirMail=${sneak2Back?.mail_enabled}`);
     }
   }
 

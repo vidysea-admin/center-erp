@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidateIdentity, readJson } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { hasPermission, requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
 import { emailError } from "@/lib/validate";
@@ -76,8 +76,21 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // cannot use this either.
   const bodyPeek = await readJson(req);
   const keys = Object.keys(bodyPeek ?? {});
-  const selfMailOnly = keys.length === 1 && keys[0] === "mail_enabled" && String(id) === String(user.id);
-  if (!selfMailOnly) await requirePerm(user, "users.manage"); // togglable (2026-08-11)
+  const mailOnly = keys.length === 1 && keys[0] === "mail_enabled";
+  const selfMailOnly = mailOnly && String(id) === String(user.id);
+  // QA-2481 (cycle 18 wall, S2): the paragraph above described a fix this line did not implement.
+  // `selfMailOnly` requires the target to be YOU, so the OTHER half of the ask - "admin ye right
+  // kisi aur user ya role ko dena chahee unko" - was still dead: a Location account holding a
+  // freshly granted `users.mail_toggle` got 403 at this door and never reached the rule that was
+  // supposed to admit it. A granted right that does nothing is worse than an ungranted one,
+  // because the grant screen says it worked. Found by its own pin, not by reading.
+  //
+  // So a MAIL-ONLY body on somebody else's row is admitted here by `users.mail_toggle` alone. This
+  // is the door, not the rule: `requirePerm(user, "users.mail_toggle")` below is still what
+  // enforces it, and it is deliberately not removed - if this widening is ever wrong, the request
+  // is refused there instead of proceeding.
+  const mayToggleOthers = mailOnly && !selfMailOnly && await hasPermission(user, "users.mail_toggle");
+  if (!selfMailOnly && !mayToggleOthers) await requirePerm(user, "users.manage"); // togglable (2026-08-11)
   requireEdit(user); // Rule 39: a view-only holder of a granted right still may not write
   const doc = await User.findById(id);
   if (!doc) throw new HttpError(404, "User not found");
