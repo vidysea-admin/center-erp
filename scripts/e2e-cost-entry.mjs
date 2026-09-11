@@ -1644,7 +1644,22 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const nm = `ZZ Half ${stamp}`;
     const before = (await catList()).length;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 777, new_subhead: nm, payment_mode: "by hand" }));
+    // QA-2450 (-303) BROKE THIS FIXTURE, AND IT WAS RIGHT TO. It used to park with
+    // `payment_mode: "by hand"`, which POST /api/costs now refuses at the door - so nothing parked
+    // and this pin said so itself: "nothing parked (status 400) - this pin measured nothing". That
+    // is the failure behaving correctly; the fixture was standing on the very hole QA-2450 closes.
+    //
+    // AND THE OLD FIXTURE WAS WEAKER THAN ITS NAME EVEN BEFORE THAT. An unusable payment_mode is
+    // refused at approvals/[id]/route.ts:104 - BEFORE `decideApproval`, so nothing was ever written
+    // and the three arms below were asserting "no half-write" on a path where no write could occur.
+    // It could not have failed.
+    //
+    // `_test_fail_after_head` is the real shape: CI-db-gated, it throws AFTER the staged cost head
+    // exists and before the ledger row - which is exactly the half-write QA-1975 was filed for
+    // (a head invented, no money recorded, and the request left permanently Approved).
+    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+      amount: 777, new_subhead: nm, payment_mode: "Cash", _test_fail_after_head: true,
+    }));
     if (parked.data?.item?._id) {
       await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", note: "pin" });
       const headMade = (await catList()).some((c) => c.name === nm);

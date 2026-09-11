@@ -163,7 +163,10 @@ export const RELEASE_NOTE_CURRENT =
   "reader who has not been granted finance visibility. The approvals screen and the audit trail "  +
   "already hid it; the alert and the mail were built from a rule that could only hide figures "  +
   "the system itself had recorded, so a number somebody typed into a note travelled past them. "  +
-  "The date, the person who asked, and the description of what is waiting are unchanged. "  +
+  "The date and the person who asked are unchanged. A number written inside the description "  +
+  "itself may be hidden along with the money: the rule takes every figure on an approval, so a "  +
+  "room capacity or a count typed into the text is hidden too. That is deliberate - on a record "  +
+  "whose subject is money, guessing which figure is the secret is how the last four leaks began. "  +
   "Separately, a cost submitted with a payment method this system does not use is now refused "  +
   "at submission with a plain sentence, instead of being accepted and then waiting for an "  +
   "approval that could not be given: the person who typed the value was told the cost was "  +

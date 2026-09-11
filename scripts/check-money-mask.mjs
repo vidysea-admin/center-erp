@@ -154,6 +154,27 @@ const has = (o, s) => JSON.stringify(o).includes(s);
     !redactFiguresInText("ref 424242-01-02").includes("424242"), redactFiguresInText("ref 424242-01-02"));
   ok("the grant-holder loses nothing",
     has(maskApprovalMoney({ summary: "cash advance " + FIG, payload: { amount: 1 }, approved_amount: 8000 }, true), FIG));
+
+  // QA-2456 (peer checker, -303): the five arms above are dates, a name, a voucher, an ISO stamp
+  // and dd/mm - and NOT ONE of them is a plain count or a batch code. So the collateral this rule
+  // genuinely does take was the one thing this suite could not see move, and it was measured by
+  // hand instead. Measured by hand is how a release note ends up contradicting its own code
+  // comment, which is exactly what happened: the note said "the description is unchanged" while
+  // the comment two files away listed what changes.
+  //
+  // ASSERTED AS IT IS, NOT AS ONE MIGHT WISH IT. This is deliberate collateral, not a defect -
+  // on a record whose subject is money, guessing which figure is the secret is how the last four
+  // leaks began. Pinning it here means a future widening or narrowing of the rule has to come past
+  // an assertion rather than past somebody's memory.
+  const coll = (t) => String(maskApprovalMoney({ summary: t, payload: { amount: 1 } }, false).summary);
+  ok("QA-2456: a three-digit COUNT inside the description is taken too - deliberate, and now pinned",
+    !coll("capacity 120 seats confirmed").includes("120"), coll("capacity 120 seats confirmed"));
+  ok("QA-2456: ...and a batch code carrying a 3-digit run loses that run",
+    !coll("Complete batch RPLAVP-2026-01").includes("2026"), coll("Complete batch RPLAVP-2026-01"));
+  ok("QA-2456: ...while a two-digit count and a short code survive, so the rule is not total erasure",
+    coll("Complete batch AVP-GURU-RPLAVP-DST-07 with 30 seats").includes("DST-07")
+      && coll("Complete batch AVP-GURU-RPLAVP-DST-07 with 30 seats").includes("30"),
+    coll("Complete batch AVP-GURU-RPLAVP-DST-07 with 30 seats"));
 }
 
 // ---------------------------------------------------------------------------
