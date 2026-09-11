@@ -2347,8 +2347,21 @@ for (const variant of ["ordinary", "mark_paid"]) {
     // admins existed the whole time. A cap returns true rows and hides that they are a subset - the
     // same class as the `/api/approvals` 100-row cap and as a `grep | head -N`, both of which cost
     // this project a wrong conclusion today.
-    const mail304 = (await rawDb.collection("maillogs")
-      .find({ entity_id: new ObjectId(String(rid304)) }).toArray());
+    // AND WAIT FOR THEM, because the mail is FIRE-AND-FORGET. `requireApproval` calls
+    // `mailUsers(...)/mailUsersByRole(...)` with a bare `.catch(() => {})` and never awaits it, so
+    // the 202 returns BEFORE any MailLog row exists. My first two versions read the log immediately
+    // and got an empty list both times - once through a 20-row cap, and once, after fixing that,
+    // through this race. Both printed `rows=0`, which reads as "no mail was written" and meant "I
+    // looked too early": the rows were all there seconds later. Poll instead of assuming.
+    const waitForMail = async (id) => {
+      for (let i = 0; i < 60; i++) {
+        const rows = await rawDb.collection("maillogs").find({ entity_id: new ObjectId(String(id)) }).toArray();
+        if (rows.length) return rows;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      return [];
+    };
+    const mail304 = await waitForMail(rid304);
     const forSilenced = mail304.filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase());
     const forNoisy = mail304.filter((m) => String(m.to ?? "").toLowerCase() === noisy.email.toLowerCase());
 
@@ -2383,9 +2396,9 @@ for (const variant of ["ordinary", "mark_paid"]) {
     await req(admin, "PATCH", `/api/users/${silenced.id}`, { mail_enabled: true });
     const parkedBack = await req(ops, "POST", "/api/costs", baseEntry({ category: normalHeadId, amount: 641, note: `${s304}-back` }));
     const ridBack = parkedBack.data?.item?._id;
-    const mailBack = ridBack ? (await rawDb.collection("maillogs")
-      .find({ entity_id: new ObjectId(String(ridBack)) }).toArray())
-      .filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase()) : [];
+    const mailBack = ridBack
+      ? (await waitForMail(ridBack)).filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase())
+      : [];
     ok("QA-2461: switching it back ON restores that account's mail - the toggle is not one-way",
       parkedBack.status === 202 && mailBack.length > 0 && !mailBack.some((m) => /mail off for this account/i.test(String(m.reason ?? ""))),
       JSON.stringify({ parked: parkedBack.status, rows: mailBack.length, reasons: mailBack.map((m) => m.reason) }));

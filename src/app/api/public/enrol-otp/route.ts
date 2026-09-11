@@ -87,10 +87,27 @@ export const POST = apiHandler(async (req: NextRequest) => {
         : "SMS codes are not switched on yet — please register by email, or ask the centre." });
     }
 
-    rateLimit("otp-req:" + clientKey(req), 5, 60 * 60_000); // 5 email codes/hour/IP (unchanged)
+    // QA-2478: the limiter used to run HERE, one line above the validation, so a request the route
+    // was about to REJECT still consumed one of the caller's five codes per hour. A student who
+    // mistypes their email twice has three codes left instead of five, is told nothing about it, and
+    // then hits "too many attempts" while having received fewer codes than the limit allows. The
+    // budget exists to cap CODES SENT; a 400 sends none, so it must not be charged for one.
+    //
+    // Order matters and the new order is the safe one: validation is a pure string check with no I/O
+    // and no cost, so running it first cannot be abused - a flood of malformed requests still does no
+    // work and still reaches no mailbox. The limiter now guards exactly what it was written to guard,
+    // the requests that actually mint and send a code.
+    //
+    // Found by a peer checker chasing why `QA-142: OTP request lands` is red on every wall: the suite
+    // spends SIX email requests against a budget of five, and the sixth is the one the assertion
+    // reads. One of the six is the deliberately-invalid `email: "nope"` at e2e-roles.mjs:753 - a
+    // request whose whole purpose is to be refused. So the same defect was making a permanently-red
+    // assertion AND quietly shortening real students' allowance; it was visible in the wall for
+    // weeks as "a standing baseline failure" and nobody asked why.
     const email = String(body.email ?? "").trim().toLowerCase();
     const eErr = emailError(email);
     if (eErr) throw new HttpError(400, eErr);
+    rateLimit("otp-req:" + clientKey(req), 5, 60 * 60_000); // 5 email codes/hour/IP (unchanged)
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
     const token = crypto.randomBytes(16).toString("hex");
     // One live challenge per email — a new request burns the old one.

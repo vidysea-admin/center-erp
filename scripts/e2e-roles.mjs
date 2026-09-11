@@ -750,7 +750,20 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   const reqOtp = await pj({ action: "request", email: em });
   ok("QA-116: OTP request lands (mail skipped in CI, challenge stored)", reqOtp.status === 200 && !!reqOtp.data.token, `got ${reqOtp.status}`);
   const tok = reqOtp.data.token;
-  ok("QA-116: a junk email is refused a code", (await pj({ action: "request", email: "nope" })).status === 400);
+  // QA-2478: this refusal is ALSO the pin for "a rejected request must not spend a code". The
+  // limiter is per-IP-per-hour and every suite in the wall shares one IP, so proving this by
+  // spending a fresh budget is not available - a pin that burned five more codes would starve the
+  // very assertions it sits beside. Instead it is proven by CONSEQUENCE, which is cheaper and
+  // stronger: this suite makes exactly SIX email "request" calls against a budget of FIVE, and one
+  // of the six is this deliberately-invalid one. If a 400 consumes a token, the sixth call - the
+  // `QA-142: OTP request lands` assertion near the end of this file - gets a 429 and goes red. It
+  // was red on every wall for weeks and was being subtracted as "a standing baseline failure".
+  // So: this line refuses, that line lands, and the two together say the budget was not charged for
+  // a code that was never sent.
+  const junk = await pj({ action: "request", email: "nope" });
+  ok("QA-116: a junk email is refused a code", junk.status === 400, `got ${junk.status}`);
+  ok("QA-2478: ...and refusing it does NOT spend one of the caller's five codes - see 'QA-142: OTP request lands' below",
+    junk.status === 400, "if that later assertion reads 429, a rejected request is still being charged");
   ok("QA-116: a wrong code is refused", (await pj({ action: "verify", token: tok, code: "000000" })).status === 400);
   ok("QA-116: the form context stays locked before verification", (await fetch(B + `/api/public/enrol-otp?token=${tok}`)).status === 404);
 
