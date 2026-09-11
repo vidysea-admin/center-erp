@@ -4,7 +4,9 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } f
 import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
-import { audit, auditDiff } from "@/lib/audit";
+import { auditDiff } from "@/lib/audit";
+import { costDeletionAuditIsDurable, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, settleFinanceAuditEvents } from "@/lib/approvals";
+import { Types } from "mongoose";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -27,14 +29,42 @@ async function loadInScope(user: Awaited<ReturnType<typeof requireUser>>, id: st
   return doc;
 }
 
+async function loadDeletionTombstoneInScope(user: Awaited<ReturnType<typeof requireUser>>, id: string) {
+  if (!Types.ObjectId.isValid(id)) return null;
+  const doc: any = await CostEntry.collection.findOne({ _id: new Types.ObjectId(id), deletion_state: "Pending" });
+  if (!doc) return null;
+  if (isScoped(user) && (!doc.location || !user.location_scope.map(String).includes(String(doc.location)))) {
+    throw new HttpError(403, "Out of scope");
+  }
+  return doc;
+}
+
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
+  if (await loadDeletionTombstoneInScope(user, id)) {
+    throw new HttpError(409, "This cost has already been deleted and its audit history is being finalized.");
+  }
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const patchBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_patch_load") ?? "").slice(0, 100) : "";
+  if (patchBarrier) {
+    await CostEntry.collection.updateOne(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: { _test_patch_loaded_barrier: patchBarrier } } as any,
+    );
+    for (let i = 0; i < 100; i++) {
+      const held: any = await CostEntry.collection.findOne(
+        { _id: doc._id }, { projection: { _test_patch_loaded_barrier: 1 } },
+      );
+      if (held?._test_patch_loaded_barrier !== patchBarrier) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
   if (body.mark_paid === true) {
     if (doc.payment_status === "Paid") throw new HttpError(409, "This cost is already recorded as paid.");
     const paymentRef = String(body.payment_ref ?? "").trim();
@@ -50,10 +80,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       vendor_payee: payee, payment_mode: mode, payment_status: "Paid",
       paid_on: paidOn, payment_ref: paymentRef,
     };
-    Object.assign(doc, paymentPatch);
-    await doc.save({ validateModifiedOnly: true });
-    await auditDiff("CostEntry", doc._id, before, paymentPatch, user.id);
-    return NextResponse.json({ item: doc });
+    const updated = await CostEntry.findOneAndUpdate(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: paymentPatch },
+      { new: true, runValidators: true },
+    );
+    if (!updated) throw new HttpError(409, "This cost was deleted while the payment update was being prepared. Nothing changed.");
+    await auditDiff("CostEntry", updated._id, before, paymentPatch, user.id);
+    return NextResponse.json({ item: updated });
   }
   const patch: Record<string, unknown> = {};
   // QA-1828b: the new entry-side fields are editable by the same finance.approve holder who can
@@ -78,25 +112,81 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const before = doc.toObject();
   assertCostEntryValid({ ...before, ...patch }); // Rule 37 on the merged entry
   if (patch.category !== undefined) await assertActiveCostCategory(patch.category);
-  Object.assign(doc, patch);
-  await doc.save({ validateModifiedOnly: true });
-  await auditDiff("CostEntry", doc._id, before, patch, user.id);
-  return NextResponse.json({ item: doc });
+  const setPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+  const unsetPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value === undefined).map(([field]) => [field, 1]));
+  const update = {
+    ...(Object.keys(setPatch).length ? { $set: setPatch } : {}),
+    ...(Object.keys(unsetPatch).length ? { $unset: unsetPatch } : {}),
+  };
+  const updated = await CostEntry.findOneAndUpdate(
+    { _id: doc._id, deletion_state: { $exists: false } },
+    update,
+    { new: true, runValidators: true },
+  );
+  if (!updated) throw new HttpError(409, "This cost was deleted while the correction was being prepared. Nothing changed.");
+  await auditDiff("CostEntry", updated._id, before, patch, user.id);
+  return NextResponse.json({ item: updated });
 });
 
-export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   await requireFinance(user, "approve");
   requireEdit(user);
   const { id } = await ctx.params;
-  const doc = await loadInScope(user, id);
+  const tombstone = await loadDeletionTombstoneInScope(user, id);
+  const doc = tombstone ?? await loadInScope(user, id);
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+  const deleteBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_delete_load") ?? "").slice(0, 100) : "";
+  if (deleteBarrier) {
+    await CostEntry.collection.updateOne(
+      { _id: doc._id, deletion_state: { $exists: false } },
+      { $set: { _test_delete_loaded_barrier: deleteBarrier } } as any,
+    );
+    for (let i = 0; i < 100; i++) {
+      const held: any = await CostEntry.collection.findOne(
+        { _id: doc._id }, { projection: { _test_delete_loaded_barrier: 1 } },
+      );
+      if (held?._test_delete_loaded_barrier !== deleteBarrier) break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
   // Deleting an applied row would free the visible ledger amount without returning the atomic
   // reservation, allowing the same commitment to be spent again. Preserve the original record.
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     throw new HttpError(409, "A pre-approved cost cannot be deleted after its commitment has been applied.");
   }
-  await doc.deleteOne();
-  await audit({ entity: "CostEntry", entityId: doc._id, field: "deleted", oldValue: { amount: doc.amount, note: doc.note }, actor: user.id });
+  // Both creation and deletion are durable owner-backed events. Stage the deletion event before
+  // the irreversible remove, then fail closed until every event is confirmed in AuditLog. A crash
+  // or outage can therefore resume from this CostEntry instead of losing the deletion history.
+  const claim = await ensureCostDeletionAuditEvent({
+    costId: doc._id,
+    actor: user.id,
+    expectedUpdatedAt: doc.updatedAt,
+    oldValue: { amount: doc.amount, note: doc.note },
+  });
+  if (!claim.claimed && claim.actor !== String(user.id)) {
+    throw new HttpError(409, "Another authorized user already committed this deletion. Its audit history is being finalized.");
+  }
+  const pauseAfterClaim = isTestDb ? Math.min(Number(req.nextUrl.searchParams.get("_test_pause_after_delete_claim_ms")) || 0, 1000) : 0;
+  if (pauseAfterClaim > 0) await new Promise((resolve) => setTimeout(resolve, pauseAfterClaim));
+  const injectedFailure = isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "before"
+    ? "before" as const
+    : isTestDb && req.nextUrl.searchParams.get("_test_fail_audit") === "after" ? "after" as const : undefined;
+  await settleFinanceAuditEvents({ costIds: [doc._id], failure: injectedFailure }).catch(() => {});
+  if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
+    if (await costDeletionAuditIsDurable({
+      costId: doc._id, eventId: claim.eventId, actor: claim.actor,
+      oldValue: { amount: doc.amount, note: doc.note },
+    })) return NextResponse.json({ ok: true });
+    throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
+  }
+  if (!(await garbageCollectSettledCostDeletion(doc._id))) {
+    if (await costDeletionAuditIsDurable({
+      costId: doc._id, eventId: claim.eventId, actor: claim.actor,
+      oldValue: { amount: doc.amount, note: doc.note },
+    })) return NextResponse.json({ ok: true });
+    throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
+  }
   return NextResponse.json({ ok: true });
 });

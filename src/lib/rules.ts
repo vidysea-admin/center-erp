@@ -2630,6 +2630,42 @@ export type PreApproval = {
   reservation?: PreApprovalReservation;
 };
 
+// Batch force-delete claims this durable marker before cascading children. Formula reservations
+// cannot atomically join a Batch write, so they check it before persisting and again before they
+// can apply or park a liability. A missing batch is also a closed fence: never recreate work for a
+// batch that has already been physically removed.
+export async function assertBatchAcceptingFinanceWork(batchId: unknown) {
+  if (!batchId) return;
+  if (!Types.ObjectId.isValid(String(batchId))) {
+    throw new HttpError(409, "This batch is no longer available for a finance submission.");
+  }
+  const live = await Batch.collection.findOne(
+    { _id: new Types.ObjectId(String(batchId)), deletion_state: { $exists: false } },
+    { projection: { _id: 1 } },
+  );
+  if (!live) {
+    throw new HttpError(409, "This batch is being deleted or no longer exists, so no cost can be posted or queued for it.");
+  }
+}
+
+// A read before a cross-collection insert is only an advisory check: force-delete can complete
+// its child cascade in the gap and leave the subsequent CostEntry orphaned.  Every batch-backed
+// finance materialisation therefore confirms the same live predicate with a conditional Batch
+// write AFTER its own insert.  On loss, its caller removes only the deterministic newborn row.
+export async function confirmBatchAcceptingFinanceWork(batchId: unknown) {
+  if (!batchId) return;
+  if (!Types.ObjectId.isValid(String(batchId))) {
+    throw new HttpError(409, "This batch is no longer available for a finance submission.");
+  }
+  const confirmed = await Batch.collection.updateOne(
+    { _id: new Types.ObjectId(String(batchId)), deletion_state: { $exists: false } },
+    { $currentDate: { updatedAt: true } },
+  );
+  if (confirmed.modifiedCount !== 1) {
+    throw new HttpError(409, "This batch began deletion while finance work was being materialized. Nothing was left pending.");
+  }
+}
+
 type CostEntryDraft = Record<string, any> & { _id: Types.ObjectId };
 const COST_ENTRY_IMMUTABLE_FIELDS = [
   "_id", "entry_date", "location", "batch", "trainer", "category", "amount",
@@ -2690,6 +2726,28 @@ export async function createCostEntryIdempotently(
   }
 }
 
+export async function createBatchScopedCostEntryIdempotently(
+  entry: CostEntryDraft,
+  options: { simulateAmbiguousAfterCreate?: boolean; acceptedReservationStates?: readonly string[]; pauseAfterCreateMs?: number } = {},
+) {
+  if (!entry.batch) return createCostEntryIdempotently(entry, options);
+  await assertBatchAcceptingFinanceWork(entry.batch);
+  const created = await createCostEntryIdempotently(entry, options);
+  if (options.pauseAfterCreateMs) {
+    await new Promise((resolve) => setTimeout(resolve, options.pauseAfterCreateMs));
+  }
+  try {
+    await confirmBatchAcceptingFinanceWork(entry.batch);
+  } catch (error) {
+    // The id is supplied by the writer (or an ApprovalRequest replay), so this cannot erase a
+    // neighbour's cost.  A concurrent cascade may already have removed it; either outcome is the
+    // intended no-orphan result.
+    await CostEntry.collection.deleteOne({ _id: entry._id, batch: new Types.ObjectId(String(entry.batch)) });
+    throw error;
+  }
+  return created;
+}
+
 export async function assertActiveCostCategory(categoryId: unknown) {
   if (!categoryId) throw new HttpError(400, "A cost head is required.");
   // Raw read is intentional: a staged head is hidden by schema middleware, but the write guard
@@ -2730,6 +2788,18 @@ async function persistFormulaReservation(
     const existing = await readBackCostEntry(durableEntry);
     if (!existing) throw error;
   }
+  if (durableEntry.batch) {
+    try {
+      await confirmBatchAcceptingFinanceWork(durableEntry.batch);
+    } catch (error) {
+      await CostEntry.collection.deleteOne({
+        _id: durableEntry._id,
+        batch: new Types.ObjectId(String(durableEntry.batch)),
+        reservation_kind: "Formula",
+      });
+      throw error;
+    }
+  }
 }
 
 async function cancelFormulaReservation(reservation: PreApprovalReservation, reason: string) {
@@ -2762,6 +2832,7 @@ export async function evaluatePreApproval(
       entry: CostEntryDraft;
       expiresInMs?: number;
       pauseAfterPersistMs?: number;
+      waitForBatchDeletionFenceMs?: number;
       simulateAmbiguousAfterCreate?: boolean;
     };
   } = {},
@@ -2812,6 +2883,7 @@ export async function evaluatePreApproval(
   if (unit === "Per billable passed") {
     let reservation: PreApprovalReservation | undefined;
     if (context.reservation) {
+      await assertBatchAcceptingFinanceWork(context.batch);
       const expiresAt = new Date(Date.now() + Math.max(50, context.reservation.expiresInMs ?? 60_000));
       const pendingEntry: CostEntryDraft = {
         ...context.reservation.entry,
@@ -2829,12 +2901,31 @@ export async function evaluatePreApproval(
       if (context.reservation.pauseAfterPersistMs) {
         await new Promise((resolve) => setTimeout(resolve, context.reservation!.pauseAfterPersistMs));
       }
+      // Test-only deterministic interleaving: the E2E waits until the Pending row exists, starts
+      // the real force-delete, then lets this owner observe its durable fence. Production never
+      // supplies this option and has no polling path.
+      if (context.reservation.waitForBatchDeletionFenceMs) {
+        const until = Date.now() + context.reservation.waitForBatchDeletionFenceMs;
+        while (Date.now() < until) {
+          const batch = await Batch.collection.findOne(
+            { _id: new Types.ObjectId(String(context.batch)) },
+            { projection: { deletion_state: 1 } },
+          );
+          if (!batch || batch.deletion_state) break;
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      }
     }
 
     const cancelled = async (reason: string): Promise<PreApproval> => {
       if (reservation) await cancelFormulaReservation(reservation, reason);
       return { applied: false, basis, reason, ...(reservation ? { reservation } : {}) };
     };
+
+    // The write above may have raced the deletion claim. Stop before either the direct
+    // Pending->Applied transition or the later approval queue; the force-delete cascade owns any
+    // row already present and a caller must never leave a post-delete orphan behind it.
+    await assertBatchAcceptingFinanceWork(context.batch);
 
     if (!context.batch) {
       return cancelled(`pre-approved on "${src.name}" at ${cap} per billable passed, but this entry has no batch whose result can be checked`);
@@ -2894,6 +2985,7 @@ export async function evaluatePreApproval(
     const available = Math.max(0, totalCap - committed);
     if (Number(amount) <= available) {
       if (reservation) {
+        await assertBatchAcceptingFinanceWork(context.batch);
         let applied;
         try {
           applied = await collection.updateOne(

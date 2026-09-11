@@ -978,13 +978,13 @@ function Approvals({ error, setError }: any) {
 
       <Section title={`Requests — ${items.length}`} actions={
         <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
-          {["Pending", "Approved", "Rejected", "all"].map((s) => <option key={s}>{s}</option>)}
+          {["Pending", "Applying", "Approved", "Rejected", "all"].map((s) => <option key={s}>{s}</option>)}
         </select>
       }>
         {items.length === 0 ? <p className="text-sm text-gray-400">Nothing waiting.</p> : (
           <ul className="space-y-2">
             {items.map((r) => (
-              <li key={r._id} className="rounded-lg border px-4 py-3">
+              <li key={r._id} id={`approval-request-${r._id}`} data-approval-request-id={r._id} className="rounded-lg border px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium">{r.summary}</div>

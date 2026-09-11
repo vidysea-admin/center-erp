@@ -1,7 +1,7 @@
 // Approval matrix (RPL M24). Ships as an engine with every action switched OFF: with no
 // enabled rule, `requireApproval` returns null and the caller proceeds exactly as before —
 // zero behaviour change until an Admin turns an action on.
-import { ApprovalRequest, ApprovalRule, AuditLog, CostEntry, Notification } from "@/models";
+import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostEntry, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit } from "@/lib/audit";
@@ -9,6 +9,7 @@ import { mailUsers, mailUsersByRole } from "@/lib/mailer";
 import { redactMoneyInText } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
+import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -36,7 +37,7 @@ export type FinanceAuditEvent = {
   old_value?: unknown;
   new_value?: unknown;
   actor: Types.ObjectId;
-  actor_type: "User";
+  actor_type: "USER";
 };
 
 export function financeAuditEvent(
@@ -46,13 +47,23 @@ export function financeAuditEvent(
   return {
     ...input,
     event_id: createHash("sha256").update(`finance-audit-v1:${key}`).digest("hex").slice(0, 24),
-    actor_type: "User",
+    actor_type: "USER",
   };
 }
 
 function sameAuditValue(a: unknown, b: unknown) {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+
+// Existing production costs pre-date reservation_state and are visible liabilities by model
+// contract. Their deletion audit must be recoverable exactly like a newer Applied row, while
+// Pending/Cancelled fencing rows remain ineligible.
+const COST_AUDIT_OWNER_ELIGIBLE = {
+  $or: [
+    { reservation_state: "Applied" },
+    { reservation_state: { $exists: false } },
+  ],
+};
 
 async function deliverOwnerEvents(
   collection: any,
@@ -64,7 +75,12 @@ async function deliverOwnerEvents(
   if (!owner) return;
   const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
   for (const event of owner._audit_events ?? []) {
-    if (!event?.event_id || delivered.has(String(event.event_id))) continue;
+    if (!event?.event_id) {
+      // A malformed owner is still undelivered. Returning success here would let it consume the
+      // drain budget forever while the query keeps selecting it on every later read.
+      throw new Error(`Audit owner ${ownerId} contains an event without an event_id.`);
+    }
+    if (delivered.has(String(event.event_id))) continue;
     const eventId = new Types.ObjectId(String(event.event_id));
     const durable = {
       _id: eventId,
@@ -77,18 +93,31 @@ async function deliverOwnerEvents(
       old_value: event.old_value ?? null,
       new_value: event.new_value ?? null,
       actor: new Types.ObjectId(String(event.actor)),
-      actor_type: event.actor_type ?? "User",
+      actor_type: "USER",
     };
     if (failure === "before") throw new Error("test-only audit delivery failure before insert");
-    const now = new Date();
-    await AuditLog.collection.updateOne(
-      { _id: eventId },
-      { $setOnInsert: { ...durable, createdAt: now, updatedAt: now } },
-      { upsert: true },
-    );
+    try {
+      await AuditLog.collection.updateOne(
+        { _id: eventId },
+        { $setOnInsert: { ...durable, created_at: new Date() } },
+        { upsert: true },
+      );
+    } catch (error: any) {
+      // Two readers may drain the same owner concurrently. A duplicate-key from two racing
+      // upserts is ambiguous until the deterministic occupant is read and compared below.
+      if (error?.code !== 11000) throw error;
+    }
     const written: any = await AuditLog.collection.findOne({ _id: eventId });
-    if (!written || !["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
-      .every((field) => sameAuditValue(written[field], (durable as any)[field]))) {
+    const canonicalKeys = ["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"];
+    const writtenKeys = written ? Object.keys(written).sort() : [];
+    if (!written
+        || written.actor_type !== "USER"
+        || !(written.created_at instanceof Date)
+        || written.createdAt !== undefined
+        || written.updatedAt !== undefined
+        || !sameAuditValue(writtenKeys, canonicalKeys)
+        || !["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
+          .every((field) => sameAuditValue(written[field], (durable as any)[field]))) {
       throw new Error(`Audit event ${event.event_id} exists with different immutable details.`);
     }
     if (failure === "after") throw new Error("test-only audit delivery failure after insert");
@@ -99,6 +128,101 @@ async function deliverOwnerEvents(
   }
 }
 
+// The deletion row must be recoverable before the CostEntry owner can disappear. Claim one
+// deterministic owner-backed event first; concurrent or later authorized deleters reuse the
+// original claimant's event rather than appending a second audit identity.
+export async function ensureCostDeletionAuditEvent(input: {
+  costId: unknown;
+  actor: unknown;
+  expectedUpdatedAt: unknown;
+  oldValue: { amount: unknown; note: unknown };
+}) {
+  const costId = new Types.ObjectId(String(input.costId));
+  const event = financeAuditEvent(`cost:${costId}:deleted`, {
+    entity: "CostEntry",
+    entity_id: costId,
+    field: "deleted",
+    old_value: input.oldValue,
+    actor: new Types.ObjectId(String(input.actor)),
+  });
+  const claim = await CostEntry.collection.updateOne(
+    {
+      _id: costId,
+      ...COST_AUDIT_OWNER_ELIGIBLE,
+      deletion_state: { $exists: false },
+      updatedAt: input.expectedUpdatedAt,
+      amount: input.oldValue.amount,
+      note: input.oldValue.note,
+      "_audit_events.event_id": { $ne: event.event_id },
+    },
+    // `_audit_events` is deliberately Mixed and hidden from the public model; the native driver
+    // accepts this shape, while Mongoose's generic collection type cannot express the field.
+    {
+      $set: { deletion_state: "Pending", deletion_audit_event_id: event.event_id },
+      $push: { _audit_events: event },
+    } as any,
+  );
+  // The event and tombstone were the same atomic update. A recovery read may already acknowledge
+  // and collect the owner before this request runs another query, so the winning claimant must not
+  // turn successful completion into a false foreign-claim 500 merely because the owner is gone.
+  if (claim.modifiedCount === 1) {
+    return { eventId: event.event_id, actor: String(event.actor), claimed: true };
+  }
+  const owner: any = await CostEntry.collection.findOne(
+    { _id: costId, ...COST_AUDIT_OWNER_ELIGIBLE, deletion_state: "Pending" },
+    { projection: { _audit_events: 1, deletion_audit_event_id: 1 } },
+  );
+  const committedEventId = String(owner?.deletion_audit_event_id ?? "");
+  const stored = (owner?._audit_events ?? []).find((candidate: any) =>
+    String(candidate?.event_id ?? "") === committedEventId);
+  if (!owner) {
+    const completed: any = await AuditLog.collection.findOne({ _id: new Types.ObjectId(event.event_id) });
+    if (completed
+        && completed.entity === "CostEntry"
+        && sameAuditValue(completed.entity_id, costId)
+        && completed.field === "deleted"
+        && sameAuditValue(completed.old_value, event.old_value)
+        && completed.actor_type === "USER"
+        && completed.actor) {
+      return { eventId: event.event_id, actor: String(completed.actor), claimed: false };
+    }
+  }
+  if (!stored
+      || !committedEventId
+      || stored.entity !== "CostEntry"
+      || !sameAuditValue(stored.entity_id, costId)
+      || stored.field !== "deleted"
+      || !sameAuditValue(stored.old_value, event.old_value)
+      || stored.actor_type !== "USER"
+      || !stored.actor
+      || (claim.modifiedCount === 1 && committedEventId !== event.event_id)) {
+    throw new HttpError(409, `Cost ${costId} changed while its deletion was being prepared. Refresh and retry.`);
+  }
+  return { eventId: committedEventId, actor: String(stored.actor), claimed: claim.modifiedCount === 1 };
+}
+
+export async function costDeletionAuditIsDurable(input: {
+  costId: unknown;
+  eventId: string;
+  actor: unknown;
+  oldValue: { amount: unknown; note: unknown };
+}) {
+  const owner = await CostEntry.collection.findOne({ _id: new Types.ObjectId(String(input.costId)) }, { projection: { _id: 1 } });
+  if (owner) return false;
+  const written: any = await AuditLog.collection.findOne({ _id: new Types.ObjectId(input.eventId) });
+  const keys = written ? Object.keys(written).sort() : [];
+  return !!written
+    && written.entity === "CostEntry"
+    && sameAuditValue(written.entity_id, new Types.ObjectId(String(input.costId)))
+    && written.field === "deleted"
+    && sameAuditValue(written.old_value, input.oldValue)
+    && written.new_value === null
+    && sameAuditValue(written.actor, new Types.ObjectId(String(input.actor)))
+    && written.actor_type === "USER"
+    && written.created_at instanceof Date
+    && sameAuditValue(keys, ["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"]);
+}
+
 export async function settleFinanceAuditEvents(input: {
   costIds?: unknown[];
   approvalIds?: unknown[];
@@ -106,7 +230,7 @@ export async function settleFinanceAuditEvents(input: {
 }) {
   let failure = input.failure;
   for (const id of input.costIds ?? []) {
-    await deliverOwnerEvents(CostEntry.collection, new Types.ObjectId(String(id)), { reservation_state: "Applied" }, failure);
+    await deliverOwnerEvents(CostEntry.collection, new Types.ObjectId(String(id)), COST_AUDIT_OWNER_ELIGIBLE, failure);
     failure = undefined;
   }
   for (const id of input.approvalIds ?? []) {
@@ -114,6 +238,59 @@ export async function settleFinanceAuditEvents(input: {
     failure = undefined;
   }
 }
+
+async function ownerFinanceAuditOutboxIsSettled(collection: any, id: unknown) {
+  const owner: any = await collection.findOne(
+    { _id: new Types.ObjectId(String(id)) },
+    { projection: { _audit_events: 1, _audit_delivered_event_ids: 1 } },
+  );
+  if (!owner) return false;
+  const delivered = new Set((owner._audit_delivered_event_ids ?? []).map(String));
+  return (owner._audit_events ?? []).every((event: any) =>
+    !!event?.event_id && delivered.has(String(event.event_id)));
+}
+
+export async function costFinanceAuditOutboxIsSettled(id: unknown) {
+  return ownerFinanceAuditOutboxIsSettled(CostEntry.collection, id);
+}
+
+// Physical removal is garbage collection, not the business decision. The decision committed when
+// the hidden tombstone and immutable event were claimed atomically; this CAS only removes an owner
+// whose complete outbox, including that deletion event, is already acknowledged.
+export async function garbageCollectSettledCostDeletion(id: unknown) {
+  const ownerId = new Types.ObjectId(String(id));
+  const owner: any = await CostEntry.collection.findOne(
+    { _id: ownerId, deletion_state: "Pending" },
+    { projection: { deletion_audit_event_id: 1, _audit_delivered_event_ids: 1 } },
+  );
+  const eventId = String(owner?.deletion_audit_event_id ?? "");
+  if (!eventId || !(owner?._audit_delivered_event_ids ?? []).map(String).includes(eventId)) return false;
+  const removed = await CostEntry.collection.deleteOne({
+    _id: ownerId,
+    deletion_state: "Pending",
+    deletion_audit_event_id: eventId,
+    _audit_delivered_event_ids: eventId,
+    $expr: {
+      $eq: [
+        {
+          $size: {
+            $setDifference: [
+              { $map: { input: { $ifNull: ["$_audit_events", []] }, as: "event", in: "$$event.event_id" } },
+              { $ifNull: ["$_audit_delivered_event_ids", []] },
+            ],
+          },
+        },
+        0,
+      ],
+    },
+  });
+  return removed.deletedCount === 1;
+}
+
+const drainGlobal = globalThis as typeof globalThis & {
+  __financeAuditDrainCursor?: { cost?: string; approval?: string };
+};
+const financeAuditDrainCursor = drainGlobal.__financeAuditDrainCursor ??= {};
 
 // Recovery does not depend on another write. Every normal finance ledger/approval list read calls
 // this bounded drain; deterministic AuditLog ids make retries after either acknowledgement window
@@ -134,14 +311,55 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
       ],
     },
   };
-  const costs = await CostEntry.collection.find({
-    reservation_state: "Applied", "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
-  }, { projection: { _id: 1 } }).limit(limit).toArray();
-  const approvals = await ApprovalRequest.collection.find({
-    status: { $in: ["Approved", "Rejected"] }, "_audit_events.0": { $exists: true }, ...hasUndeliveredEvent,
-  }, { projection: { _id: 1 } }).limit(limit).toArray();
-  for (const owner of costs) await settleFinanceAuditEvents({ costIds: [owner._id] }).catch(() => {});
-  for (const owner of approvals) await settleFinanceAuditEvents({ approvalIds: [owner._id] }).catch(() => {});
+  async function drainOwners(collection: any, eligible: Record<string, unknown>, kind: "cost" | "approval") {
+    const remembered = financeAuditDrainCursor[kind];
+    let after = remembered && Types.ObjectId.isValid(remembered) ? new Types.ObjectId(remembered) : undefined;
+    let deliveredOwners = 0;
+    let attemptedOwners = 0;
+    const maxAttempts = Math.max(limit * 2, 100);
+    // Success and attempt budgets are separate. A poison owner consumes an attempt but not a
+    // delivery slot; the remembered cursor makes the next bounded read continue after it instead
+    // of rescanning the same first pages forever. Costs and approvals rotate independently.
+    while (deliveredOwners < limit && attemptedOwners < maxAttempts) {
+      const take = Math.min(limit, maxAttempts - attemptedOwners);
+      const page = await collection.find({
+        $and: [
+          eligible,
+          { "_audit_events.0": { $exists: true } },
+          kind === "cost" ? { $or: [hasUndeliveredEvent, { deletion_state: "Pending" }] } : hasUndeliveredEvent,
+          ...(after ? [{ _id: { $gt: after } }] : []),
+        ],
+      }, { projection: { _id: 1 } }).sort({ _id: 1 }).limit(take).toArray();
+      if (!page.length) {
+        delete financeAuditDrainCursor[kind];
+        break;
+      }
+      for (const owner of page) {
+        attemptedOwners++;
+        after = owner._id;
+        financeAuditDrainCursor[kind] = String(owner._id);
+        try {
+          if (kind === "cost") await settleFinanceAuditEvents({ costIds: [owner._id] });
+          else await settleFinanceAuditEvents({ approvalIds: [owner._id] });
+          if (!(await ownerFinanceAuditOutboxIsSettled(collection, owner._id))) {
+            throw new Error(`Audit owner ${owner._id} remains unsettled after delivery.`);
+          }
+          if (kind === "cost") await garbageCollectSettledCostDeletion(owner._id);
+          deliveredOwners++;
+          if (deliveredOwners >= limit) break;
+        } catch {
+          // This owner stays durable for reconciliation; continue to later ids in the same read.
+        }
+      }
+      if (page.length < take) {
+        delete financeAuditDrainCursor[kind];
+        break;
+      }
+    }
+  }
+
+  await drainOwners(CostEntry.collection, COST_AUDIT_OWNER_ELIGIBLE, "cost");
+  await drainOwners(ApprovalRequest.collection, { status: { $in: ["Approved", "Rejected"] } }, "approval");
 }
 
 // Returns null → proceed with the action.
@@ -149,10 +367,24 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
-  ctx: { entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown },
+  ctx: {
+    entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown; batch?: unknown;
+    testPauseAfterCreateMs?: number;
+  },
 ): Promise<ApprovalOutcome> {
   const rule = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
   if (!rule) return null;
+
+  const batchId = ctx.batch ? new Types.ObjectId(String(ctx.batch)) : undefined;
+  if (batchId) {
+    const live = await Batch.collection.findOne(
+      { _id: batchId, deletion_state: { $exists: false } },
+      { projection: { _id: 1 } },
+    );
+    if (!live) {
+      throw new HttpError(409, "This batch is being deleted or no longer exists, so this request cannot be queued.");
+    }
+  }
 
   // QA-1826 (S1, filed 2026-09-05 on the CEO's own words): this line used to read
   //   `if (user.role === rule.approver_role && user.role === "Admin") return null;`
@@ -174,11 +406,32 @@ export async function requireApproval(
     action,
     entity: ctx.entity, entity_id: ctx.entity_id,
     summary: ctx.summary, payload: ctx.payload,
-    location: ctx.location,
+    location: ctx.location, batch: batchId,
     initiator: user.id,
     approver_role: rule.approver_role,
     approver_users: approverUsers,
   });
+
+  // Test-only ordered race: the request is durable, but its post-create cleanup fence has not
+  // run.  This proves that every queue path, not only Formula reservations, removes a request a
+  // force-delete races after its child cascade.
+  const testPause = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+    ? Math.max(0, Math.min(5_000, Number(ctx.testPauseAfterCreateMs ?? 0)))
+    : 0;
+  if (testPause) await new Promise((resolve) => setTimeout(resolve, testPause));
+
+  // There is no cross-collection transaction on every supported deployment. Re-read the durable
+  // batch fence after the request write with the final conditional Batch write; if force-delete
+  // won the gap, delete only this newborn request before any notification/audit side effect and
+  // fail closed.
+  if (batchId) {
+    try {
+      await confirmBatchAcceptingFinanceWork(batchId);
+    } catch (error) {
+      await ApprovalRequest.deleteOne({ _id: request._id, batch: batchId });
+      throw error;
+    }
+  }
 
   // Senior review of QA-1825 cycles 2-4: the queue was masked and then the SAME figure was
   // broadcast around it. This notification goes to `role_target: [approver_role]` — every user of

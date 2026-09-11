@@ -14,6 +14,88 @@
 import { requireLocalBase } from "./db-guard.mjs";
 import { MongoClient, ObjectId } from "mongodb";
 import * as XLSX from "xlsx";
+import { readFileSync } from "node:fs";
+
+// This is deliberately a source-level runtime mutant, not a second Next build. The focused
+// suite drives the compiled route, whereas this mode extracts the exact private helper below,
+// replaces only its post-persist conditional fence, and executes both versions against the same
+// in-memory collection. It therefore remains runnable when a disposable Next build cannot fetch
+// Google Fonts or start a server. The expected mutant result is non-zero: a Pending Formula row
+// survives after its simulated Batch confirmation rejects.
+if (process.env.FORMULA_POST_PERSIST_MUTANT === "1") {
+  const rulesSource = readFileSync(new URL("../src/lib/rules.ts", import.meta.url), "utf8");
+  const helperStart = rulesSource.indexOf("async function persistFormulaReservation(");
+  const helperEnd = rulesSource.indexOf("\nasync function cancelFormulaReservation(", helperStart);
+  const helper = helperStart >= 0 && helperEnd > helperStart ? rulesSource.slice(helperStart, helperEnd) : "";
+  const postPersistStart = helper.indexOf("  if (durableEntry.batch) {");
+  const braceEnd = (text, opening) => {
+    let depth = 0, quote = "", escaped = false;
+    for (let i = opening; i < text.length; i++) {
+      const char = text[i];
+      if (quote) {
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === quote) quote = "";
+        continue;
+      }
+      if (char === "'" || char === '"' || char === "`") { quote = char; continue; }
+      if (char === "{") depth++;
+      if (char === "}" && --depth === 0) return i;
+    }
+    return -1;
+  };
+  const postPersistEnd = postPersistStart < 0 ? -1 : braceEnd(helper, helper.indexOf("{", postPersistStart));
+  const toExecutable = (candidate) => candidate
+    .replace("entry: CostEntryDraft,", "entry,")
+    .replace("options: { simulateAmbiguousAfterCreate?: boolean } = {},", "options = {},")
+    .replace(") as CostEntryDraft;", ");");
+  const execute = async (candidate) => {
+    const rows = new Map();
+    let confirmations = 0;
+    function Entry() { this.validateSync = () => null; }
+    Entry.collection = {
+      insertOne: async (row) => { rows.set(String(row._id), row); },
+      deleteOne: async (filter) => {
+        const row = rows.get(String(filter._id));
+        const matches = !!row && String(row.batch) === String(filter.batch)
+          && row.reservation_kind === filter.reservation_kind;
+        if (matches) rows.delete(String(filter._id));
+        return { deletedCount: matches ? 1 : 0 };
+      },
+    };
+    const Types = { ObjectId: class { constructor(value) { this.value = String(value); } toString() { return this.value; } } };
+    const makePersist = new Function("CostEntry", "readBackCostEntry", "Types", "confirmBatchAcceptingFinanceWork",
+      `${toExecutable(candidate)}\nreturn persistFormulaReservation;`);
+    const persist = makePersist(Entry, async () => null, Types, async () => {
+      confirmations++;
+      throw new Error("simulated post-persist Batch deletion fence");
+    });
+    let thrown = null;
+    try {
+      await persist({ _id: "formula-post-persist-mutant", batch: "batch-being-deleted", reservation_kind: "Formula" });
+    } catch (error) {
+      thrown = error;
+    }
+    return { confirmations, thrown, stranded: rows.has("formula-post-persist-mutant") };
+  };
+  if (!helper || postPersistStart < 0 || postPersistEnd < 0
+      || (helper.match(/await confirmBatchAcceptingFinanceWork\(durableEntry\.batch\);/g) ?? []).length !== 1) {
+    console.error("FAIL formula post-persist mutant setup: the exact helper/fence could not be uniquely located");
+    process.exit(2);
+  }
+  const normal = await execute(helper);
+  const mutant = await execute(helper.slice(0, postPersistStart) + helper.slice(postPersistEnd + 1));
+  const normalProtected = normal.confirmations === 1 && !!normal.thrown && !normal.stranded;
+  const mutantFailsGuarantee = mutant.confirmations === 0 && !mutant.thrown && mutant.stranded;
+  console.log(`formula post-persist normal: confirmation=${normal.confirmations} thrown=${!!normal.thrown} stranded=${normal.stranded}`);
+  console.error(`formula post-persist mutant: confirmation=${mutant.confirmations} thrown=${!!mutant.thrown} stranded=${mutant.stranded}`);
+  if (!normalProtected || !mutantFailsGuarantee) {
+    console.error("FAIL formula post-persist mutant: harness did not distinguish the real confirmation from its removal");
+    process.exit(2);
+  }
+  console.error("FAIL formula post-persist mutant: removed final conditional confirmation leaves a Formula reservation stranded");
+  process.exit(1);
+}
 // QA-1966: never write through a BASE_URL nobody checked. This suite creates cost heads, posts
 // money and decides approvals; run against a non-local address it would do all three on production.
 const BASE = requireLocalBase("e2e-cost-entry", process.env.BASE_URL || "http://localhost:3000/erp");
@@ -48,6 +130,13 @@ const rawCosts = rawDb.collection("costentries");
 const rawCategories = rawDb.collection("costcategories");
 const rawApprovals = rawDb.collection("approvalrequests");
 const rawAudits = rawDb.collection("auditlogs");
+const rawUsers = rawDb.collection("users");
+const rawBatches = rawDb.collection("batches");
+
+const batchDeletionFields = [
+  "deletion_state", "deletion_started_at", "deletion_actor", "deletion_reason",
+  "deletion_recorded_work", "deletion_requires_finance", "deletion_audit_event_id",
+];
 
 const PW = "CiOnly@123";
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
@@ -204,18 +293,613 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       window === "before" ? beforeCount === 0 : beforeCount === 1,
       `audit rows before recovery=${beforeCount}`);
 
-    const ordinaryRead = await req(admin, "GET", "/api/costs");
+    const concurrentReads = await Promise.all(Array.from({ length: 8 }, () => req(admin, "GET", "/api/costs")));
     const recovered = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    const recoveredRow = eventId ? await rawAudits.findOne({ _id: new ObjectId(String(eventId)) }) : null;
     const ownerAfter = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
     await req(admin, "GET", "/api/costs");
     const afterSecondRead = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
     ok(`durable audit ${window}: a subsequent ordinary ledger read delivers and acknowledges the pending event`,
-      ordinaryRead.status === 200 && recovered === 1
+      concurrentReads.every((r) => r.status === 200) && recovered === 1
         && (ownerAfter?._audit_delivered_event_ids ?? []).includes(String(eventId)),
-      JSON.stringify({ read: ordinaryRead.status, recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
+      JSON.stringify({ reads: concurrentReads.map((r) => r.status), recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
     ok(`durable audit ${window}: repeated recovery remains exactly one AuditLog row`,
       afterSecondRead === 1,
       `audit rows after second read=${afterSecondRead}`);
+    const auditKeys = recoveredRow ? Object.keys(recoveredRow).sort() : [];
+    ok(`durable audit ${window}: raw AuditLog uses the canonical contract exactly`,
+      recoveredRow?.actor_type === "USER" && recoveredRow?.created_at instanceof Date
+        && recoveredRow?.createdAt === undefined && recoveredRow?.updatedAt === undefined
+        && JSON.stringify(auditKeys) === JSON.stringify(["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"]),
+      JSON.stringify({ actor_type: recoveredRow?.actor_type, keys: auditKeys }));
+  }
+}
+
+// Deleting the business owner before its creation event is confirmed would erase recovery. A
+// foreign deterministic AuditLog occupant must preserve the now-hidden tombstone. Once the
+// occupant clears, an ordinary read must deliver both immutable owner events exactly once and
+// garbage-collect the tombstone without ever returning a live row beside a final deleted audit.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const note = `audit-delete-${stamp}`;
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, amount: 613, note, _test_fail_audit_before_insert: true,
+  }));
+  const costId = made.data?.item?._id;
+  const owner = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
+  const eventId = owner?._audit_events?.[0]?.event_id;
+  if (costId && eventId) {
+    const eventObjectId = new ObjectId(String(eventId));
+    const foreign = {
+      _id: eventObjectId,
+      entity: "ForeignAuditOccupant", entity_id: new ObjectId(), field: null,
+      old_value: null, new_value: null, actor: new ObjectId(), actor_type: "USER",
+      created_at: new Date(),
+    };
+    await rawAudits.insertOne(foreign);
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}`);
+    const preserved = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionEvent = (preserved?._audit_events ?? []).find((event) => event?.field === "deleted");
+    const occupant = await rawAudits.findOne({ _id: eventObjectId });
+    const hidden = (await req(admin, "GET", "/api/costs")).data?.items ?? [];
+    ok("audit-owner delete: a foreign deterministic occupant preserves a hidden tombstone with both owner events",
+      refused.status === 409 && preserved?.deletion_state === "Pending" && !!deletionEvent
+        && occupant?.entity === foreign.entity && !hidden.some((c) => String(c._id) === String(costId))
+        && !(preserved?._audit_delivered_event_ids ?? []).includes(String(eventId)),
+      JSON.stringify({ status: refused.status, state: preserved?.deletion_state, deletionEvent: deletionEvent?.event_id, occupant: occupant?.entity, visible: hidden.some((c) => String(c._id) === String(costId)), delivered: preserved?._audit_delivered_event_ids }));
+
+    await rawAudits.deleteOne({ _id: eventObjectId, entity: foreign.entity });
+    const drain = await req(admin, "GET", "/api/costs");
+    const deliveredCreation = await rawAudits.findOne({ _id: eventObjectId });
+    const deliveredDeletion = deletionEvent?.event_id
+      ? await rawAudits.findOne({ _id: new ObjectId(String(deletionEvent.event_id)) }) : null;
+    const ownerAfterDrain = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const visibleAfterDrain = (drain.data?.items ?? []).some((c) => String(c._id) === String(costId));
+    ok("audit-owner delete: a later ordinary read delivers creation plus deletion exactly once and collects the tombstone",
+      drain.status === 200 && deliveredCreation?.entity === "CostEntry" && deliveredDeletion?.field === "deleted"
+        && await rawAudits.countDocuments({ _id: eventObjectId }) === 1
+        && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) === 1
+        && !ownerAfterDrain && !visibleAfterDrain,
+      JSON.stringify({ drain: drain.status, creation: deliveredCreation?.entity, deletion: deliveredDeletion?.field, owner: !!ownerAfterDrain, visible: visibleAfterDrain }));
+  } else {
+    ok("audit-owner delete [precondition]: pending creation owner exists", false, JSON.stringify({ status: made.status, costId, eventId }));
+  }
+}
+
+// One poison page must not monopolise every future drain. The valid owner is deliberately the
+// 101st id, after one full page of missing/empty ids: the exact silent-success branch that used
+// to consume all 100 delivery-budget slots without settling any owner.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const actor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  const poisonIds = Array.from({ length: 100 }, () => new ObjectId());
+  const validOwnerId = new ObjectId();
+  const validEventId = new ObjectId();
+  const ownerBase = (id, event) => ({
+    _id: id, entry_date: new Date("2026-09-07"), location: new ObjectId(String(anyLoc)),
+    category: new ObjectId(String(cat?._id)), amount: 1, note: `drain-page-${stamp}`,
+    reservation_state: "Applied", entered_by: actor?._id,
+    _audit_events: [event], createdAt: new Date(), updatedAt: new Date(),
+  });
+  if (cat?._id && actor?._id) {
+    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, i % 2 === 0 ? {} : { event_id: "" })));
+    await rawCosts.insertOne(ownerBase(validOwnerId, {
+      event_id: validEventId.toHexString(), entity: "CostEntry", entity_id: validOwnerId, field: null,
+      old_value: null, new_value: "valid after poison page", actor: actor._id, actor_type: "USER",
+    }));
+    const drained = await req(admin, "GET", "/api/costs");
+    const validAudit = await rawAudits.findOne({ _id: validEventId });
+    const validOwner = await rawCosts.findOne({ _id: validOwnerId });
+    ok("audit drain pagination: 100 missing/empty-id owners cannot consume the budget or starve the later valid owner",
+      drained.status === 200 && validAudit?.new_value === "valid after poison page"
+        && (validOwner?._audit_delivered_event_ids ?? []).includes(validEventId.toHexString()),
+      JSON.stringify({ status: drained.status, validAudit: validAudit?.new_value, delivered: validOwner?._audit_delivered_event_ids }));
+    await rawCosts.deleteMany({ _id: { $in: [...poisonIds, validOwnerId] } });
+    await rawAudits.deleteOne({ _id: validEventId });
+  } else {
+    ok("audit drain pagination [precondition]: category and actor exist", false, JSON.stringify({ category: cat?._id, actor: actor?._id }));
+  }
+}
+
+// A request may contain more poison than one hard attempt budget. The first read must stop at the
+// bound instead of synchronously walking the whole collection, but it must still drain approvals
+// independently. The rotating cursor lets the next read reach the valid cost instead of rescanning.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const actor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  const poisonIds = Array.from({ length: 250 }, () => new ObjectId());
+  const validOwnerId = new ObjectId();
+  const validEventId = new ObjectId();
+  const approvalId = new ObjectId();
+  const approvalEventId = new ObjectId();
+  const ownerBase = (id, event) => ({
+    _id: id, entry_date: new Date("2026-09-07"), location: new ObjectId(String(anyLoc)),
+    category: new ObjectId(String(cat?._id)), amount: 1, note: `bounded-drain-${stamp}`,
+    reservation_state: "Applied", entered_by: actor?._id,
+    _audit_events: [event], createdAt: new Date(), updatedAt: new Date(),
+  });
+  if (cat?._id && actor?._id) {
+    await rawCosts.insertMany(poisonIds.map((id, i) => ownerBase(id, i % 2 === 0 ? {} : { event_id: "" })));
+    await rawCosts.insertOne(ownerBase(validOwnerId, {
+      event_id: validEventId.toHexString(), entity: "CostEntry", entity_id: validOwnerId, field: null,
+      old_value: null, new_value: "valid beyond hard poison bound", actor: actor._id, actor_type: "USER",
+    }));
+    await rawApprovals.insertOne({
+      _id: approvalId, action: "cost.post", summary: `approval drain independent ${stamp}`,
+      payload: {}, initiator: actor._id, approver_role: "Admin", status: "Approved",
+      _audit_events: [{
+        event_id: approvalEventId.toHexString(), entity: "ApprovalRequest", entity_id: approvalId,
+        field: "status", old_value: "Applying", new_value: "Approved", actor: actor._id, actor_type: "USER",
+      }], createdAt: new Date(), updatedAt: new Date(),
+    });
+    const first = await req(admin, "GET", "/api/costs");
+    const validAfterFirst = await rawAudits.countDocuments({ _id: validEventId });
+    const approvalAfterFirst = await rawAudits.countDocuments({ _id: approvalEventId });
+    ok("bounded audit drain: a read stops before a valid owner beyond 200 poison attempts",
+      first.status === 200 && validAfterFirst === 0,
+      JSON.stringify({ status: first.status, validAfterFirst }));
+    ok("bounded audit drain: poisoned costs do not starve the independently bounded approval owner",
+      approvalAfterFirst === 1,
+      `approval audit rows after first read=${approvalAfterFirst}`);
+
+    const second = await req(admin, "GET", "/api/costs");
+    const validOwner = await rawCosts.findOne({ _id: validOwnerId });
+    ok("bounded audit drain: the next read resumes after poison and delivers the later valid cost exactly once",
+      second.status === 200 && await rawAudits.countDocuments({ _id: validEventId }) === 1
+        && (validOwner?._audit_delivered_event_ids ?? []).includes(validEventId.toHexString()),
+      JSON.stringify({ status: second.status, delivered: validOwner?._audit_delivered_event_ids }));
+    await rawCosts.deleteMany({ _id: { $in: [...poisonIds, validOwnerId] } });
+    await rawAudits.deleteMany({ _id: { $in: [validEventId, approvalEventId] } });
+    await rawApprovals.deleteOne({ _id: approvalId });
+  } else {
+    ok("bounded audit drain [precondition]: category and actor exist", false, JSON.stringify({ category: cat?._id, actor: actor?._id }));
+  }
+}
+
+// The logical deletion claim and immutable event are atomic. Both delivery failure windows must
+// hide and freeze the row, retain the owner until acknowledgement, then recover exactly once and
+// garbage-collect without requiring a second DELETE.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  for (const window of ["before", "after"]) {
+    const original = { amount: window === "before" ? 614 : 615, note: `delete-audit-${window}-${stamp}` };
+    const made = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, ...original }));
+    const costId = made.data?.item?._id;
+    if (!costId) {
+      ok(`deletion audit ${window} [precondition]: an ordinary cost exists`, false, `status=${made.status}`);
+      continue;
+    }
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=${window}`);
+    const ownerAfterRefusal = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionEvent = (ownerAfterRefusal?._audit_events ?? []).find((event) => event?.field === "deleted");
+    const deletionEventId = deletionEvent?.event_id ? new ObjectId(String(deletionEvent.event_id)) : null;
+    const auditBeforeRecovery = deletionEventId ? await rawAudits.countDocuments({ _id: deletionEventId }) : -1;
+    ok(`deletion audit ${window}: failure preserves a hidden tombstone and immutable deletion snapshot`,
+      refused.status === 409 && ownerAfterRefusal?.deletion_state === "Pending" && !!deletionEventId
+        && deletionEvent?.old_value?.amount === original.amount && deletionEvent?.old_value?.note === original.note
+        && auditBeforeRecovery === (window === "after" ? 1 : 0),
+      JSON.stringify({ status: refused.status, state: ownerAfterRefusal?.deletion_state, event: deletionEvent, auditBeforeRecovery }));
+
+    const patched = await req(admin, "PATCH", `/api/costs/${costId}`, {
+      amount: original.amount + 1000, note: `must-not-change-${window}-${stamp}`,
+    });
+    const ownerAfterPatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    ok(`deletion audit ${window}: PATCH after the logical delete claim is refused and cannot mutate the snapshot`,
+      patched.status === 409 && ownerAfterPatch?.amount === original.amount && ownerAfterPatch?.note === original.note
+        && (ownerAfterPatch?._audit_events ?? []).filter((event) => event?.field === "deleted").length === 1,
+      JSON.stringify({ status: patched.status, amount: ownerAfterPatch?.amount, note: ownerAfterPatch?.note }));
+
+    const drain = await req(admin, "GET", "/api/costs");
+    const deletionAudit = deletionEventId ? await rawAudits.findOne({ _id: deletionEventId }) : null;
+    const remains = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const visible = (drain.data?.items ?? []).some((c) => String(c._id) === String(costId));
+    ok(`deletion audit ${window}: ordinary read publishes once, never returns the deleted row, and garbage-collects only after ack`,
+      drain.status === 200 && deletionAudit?.field === "deleted"
+        && deletionAudit?.old_value?.amount === original.amount && deletionAudit?.old_value?.note === original.note
+        && await rawAudits.countDocuments({ _id: deletionEventId }) === 1 && !remains && !visible,
+      JSON.stringify({ drain: drain.status, audit: deletionAudit, remains: !!remains, visible }));
+    await req(admin, "GET", "/api/costs");
+    const repeatDelete = await req(admin, "DELETE", `/api/costs/${costId}`);
+    ok(`deletion audit ${window}: repeated recovery/delete cannot duplicate or resurrect the committed deletion`,
+      repeatDelete.status === 404 && await rawAudits.countDocuments({ _id: deletionEventId }) === 1,
+      `delete=${repeatDelete.status} auditCount=${await rawAudits.countDocuments({ _id: deletionEventId })}`);
+  }
+}
+
+// The dangerous PATCH race starts before the delete claim. A delayed PATCH must not be able to
+// save by `_id` after DELETE has atomically hidden and snapshotted the row.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const original = { amount: 616, note: `patch-delete-race-${stamp}` };
+  const made = await req(admin, "POST", "/api/costs", baseEntry({ category: cat?._id, ...original }));
+  const costId = made.data?.item?._id;
+  if (costId) {
+    const barrier = `patch-first-${stamp}`;
+    const patchPromise = req(admin, "PATCH", `/api/costs/${costId}?_test_wait_after_patch_load=${barrier}`, {
+      amount: 1616, note: `late-patch-${stamp}`,
+    });
+    let barrierSeen = false;
+    for (let i = 0; i < 100 && !barrierSeen; i++) {
+      const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+      barrierSeen = row?._test_patch_loaded_barrier === barrier;
+      if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const deleteResult = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`);
+    const tombstoneBeforePatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_patch_loaded_barrier: "" } });
+    const patchResult = await patchPromise;
+    const tombstoneAfterPatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    const deletionEvent = (tombstoneAfterPatch?._audit_events ?? []).find((event) => event?.field === "deleted");
+    ok("PATCH/delete race [precondition]: the route barrier proves PATCH loaded before DELETE claimed the tombstone",
+      barrierSeen && deleteResult.status === 409 && tombstoneBeforePatch?.deletion_state === "Pending",
+      JSON.stringify({ barrierSeen, delete: deleteResult.status, state: tombstoneBeforePatch?.deletion_state }));
+    ok("PATCH/delete race: the late PATCH loses the write CAS and cannot change the committed deletion snapshot",
+      patchResult.status === 409 && tombstoneAfterPatch?.amount === original.amount && tombstoneAfterPatch?.note === original.note
+        && deletionEvent?.old_value?.amount === original.amount && deletionEvent?.old_value?.note === original.note,
+      JSON.stringify({ patch: patchResult.status, amount: tombstoneAfterPatch?.amount, note: tombstoneAfterPatch?.note, snapshot: deletionEvent?.old_value }));
+    await req(admin, "GET", "/api/costs");
+  } else {
+    ok("PATCH/delete race [precondition]: an ordinary cost exists", false, `status=${made.status}`);
+  }
+}
+
+// Reverse the interleaving: DELETE loads first, then a correction or Payment Done wins. updatedAt
+// is part of the tombstone claim CAS, so neither kind of successful PATCH can be followed by a
+// stale deletion snapshot; the loser is an explicit 409, not a generic handler 500.
+for (const variant of ["ordinary", "mark_paid"]) {
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const original = { amount: variant === "ordinary" ? 616.1 : 616.2, note: `delete-loads-${variant}-${stamp}` };
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, ...original, vendor_payee: `before-${variant}-${stamp}`, payment_mode: "Cash",
+  }));
+  const costId = made.data?.item?._id;
+  if (!costId) {
+    ok(`DELETE-loads/${variant} [precondition]: an ordinary cost exists`, false, `status=${made.status}`);
+    continue;
+  }
+  const barrier = `delete-first-${variant}-${stamp}`;
+  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`);
+  let barrierSeen = false;
+  for (let i = 0; i < 100 && !barrierSeen; i++) {
+    const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+    barrierSeen = row?._test_delete_loaded_barrier === barrier;
+    if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const patchBody = variant === "ordinary"
+    ? { amount: original.amount + 100, note: `patch-won-${variant}-${stamp}` }
+    : { mark_paid: true, paid_on: "2026-09-08", payment_ref: `RACE-${stamp}`, vendor_payee: `paid-${stamp}`, payment_mode: "UPI" };
+  const patchResult = await req(admin, "PATCH", `/api/costs/${costId}`, patchBody);
+  await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_delete_loaded_barrier: "" } });
+  const deleteResult = await deletePromise;
+  const after = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
+  const deletionAudits = await rawAudits.countDocuments({
+    entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted",
+  });
+  ok(`DELETE-loads/${variant} [precondition]: route barrier proves DELETE loaded before the PATCH won`,
+    barrierSeen && patchResult.status === 200,
+    JSON.stringify({ barrierSeen, patch: patchResult.status }));
+  ok(`DELETE-loads/${variant}: stale tombstone claim loses with 409 and writes no deletion event/audit`,
+    deleteResult.status === 409 && after?.deletion_state === undefined && deletionAudits === 0
+      && (variant === "ordinary"
+        ? after?.amount === patchBody.amount && after?.note === patchBody.note
+        : after?.payment_status === "Paid" && after?.payment_ref === patchBody.payment_ref),
+    JSON.stringify({ delete: deleteResult.status, state: after?.deletion_state, audits: deletionAudits, amount: after?.amount, note: after?.note, payment: after?.payment_status, ref: after?.payment_ref }));
+  await req(admin, "DELETE", `/api/costs/${costId}`);
+}
+
+// The winning DELETE must stay successful if an ordinary recovery read acknowledges and collects
+// its tombstone while the claimant is paused after the atomic claim.
+{
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const made = await req(admin, "POST", "/api/costs", baseEntry({
+    category: cat?._id, amount: 617, note: `delete-get-race-${stamp}`,
+  }));
+  const costId = made.data?.item?._id;
+  if (costId) {
+    let deleteSettled = false;
+    const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_pause_after_delete_claim_ms=700`)
+      .finally(() => { deleteSettled = true; });
+    let tombstone = null;
+    for (let i = 0; i < 30 && !tombstone; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      tombstone = await rawCosts.findOne({ _id: new ObjectId(String(costId)), deletion_state: "Pending" });
+    }
+    const claimantStillPaused = !deleteSettled;
+    const recovery = await req(admin, "GET", "/api/costs");
+    const deleteResult = await deletePromise;
+    const deletionAudits = await rawAudits.find({
+      entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted",
+    }).toArray();
+    ok("DELETE/GET race [precondition]: recovery observed the committed tombstone while its claimant was paused",
+      !!tombstone && claimantStillPaused && recovery.status === 200,
+      JSON.stringify({ tombstone: !!tombstone, claimantStillPaused, recovery: recovery.status }));
+    ok("DELETE/GET race: recovery may acknowledge and collect first without turning the claimant into a false 500",
+      deleteResult.status === 200 && deletionAudits.length === 1
+        && !(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })),
+      JSON.stringify({ delete: deleteResult.status, audits: deletionAudits.length, remains: !!(await rawCosts.findOne({ _id: new ObjectId(String(costId)) })) }));
+  } else {
+    ok("DELETE/GET race [precondition]: an ordinary cost exists", false, `status=${made.status}`);
+  }
+}
+
+// Batch force-delete is a second physical delete door. It may erase ordinary carried costs, but a
+// hidden unacknowledged tombstone is still the audit outbox owner and must survive that cascade.
+{
+  const template = await rawBatches.findOne({});
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const batchId = new ObjectId();
+  if (template?.location && template?.program && cat?._id) {
+    await rawBatches.insertOne({
+      _id: batchId, code: `ZZ-CASCADE-${stamp}`, status: "Planning",
+      location: template.location, program: template.program, target_size: 1,
+      planned_start: new Date("2026-09-01"), planned_end: new Date("2026-09-30"),
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const doomed = await req(admin, "POST", "/api/costs", baseEntry({
+      category: cat._id, batch: batchId, amount: 618, note: `cascade-tombstone-${stamp}`,
+    }));
+    const ordinary = await req(admin, "POST", "/api/costs", baseEntry({
+      category: cat._id, batch: batchId, amount: 619, note: `cascade-visible-${stamp}`,
+    }));
+    const doomedId = doomed.data?.item?._id;
+    const ordinaryId = ordinary.data?.item?._id;
+    if (doomedId && ordinaryId) {
+      const formulaHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
+        name: `ZZ Cascade Formula ${stamp}`, pre_approved: true,
+        pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
+        pre_approved_min_billable: 0, pre_approved_basis: "cycle 10 cascade race",
+      });
+      await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+      const formulaNote = `cascade-formula-pending-${stamp}`;
+      const formulaPromise = req(ops, "POST", "/api/costs", {
+        entry_date: "2026-09-07", batch: batchId, category: formulaHead.data?.item?._id,
+        amount: 1, note: formulaNote, _test_formula_wait_for_batch_deletion_fence_ms: 3000,
+      });
+      let formulaPendingBeforeCascade = null;
+      for (let i = 0; i < 100 && !formulaPendingBeforeCascade; i++) {
+        formulaPendingBeforeCascade = await rawCosts.findOne({
+          batch: batchId, note: formulaNote, reservation_state: "Pending",
+        });
+        if (!formulaPendingBeforeCascade) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      // Claim only after the formula POST has passed its initial recovery drain; otherwise that
+      // POST would correctly acknowledge and collect the tombstone before the cascade attack.
+      const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
+      // The formula has persisted and is waiting only for the force-delete's durable marker. The
+      // deletion route pauses after claiming it, so this is an ordered race, not a sleep guess:
+      // pre-fix code would cancel and queue a request during this window.
+      const cascadePromise = req(admin, "DELETE", `/api/batches/${batchId}?_test_pause_after_deletion_fence_ms=2000`, { reason: "cycle 11 formula deletion-fence attack" });
+      let sawDeletionFence = false;
+      for (let i = 0; i < 100 && !sawDeletionFence; i++) {
+        const fence = await rawBatches.findOne({ _id: batchId }, { projection: { deletion_state: 1 } });
+        sawDeletionFence = fence?.deletion_state === "Deleting";
+        if (!sawDeletionFence) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const formulaResult = await formulaPromise;
+      const cascade = await cascadePromise;
+      await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+      const tombstoneAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) });
+      const ordinaryAfterCascade = await rawCosts.findOne({ _id: new ObjectId(String(ordinaryId)) });
+      const formulaAfterCascade = await rawCosts.findOne({ batch: batchId, note: formulaNote });
+      const formulaApprovalsAfterCascade = await rawApprovals.find({ batch: batchId, action: "cost.post" }).toArray();
+      const deletionEvent = (tombstoneAfterCascade?._audit_events ?? []).find((event) => event?.field === "deleted");
+      const auditBeforeRecovery = deletionEvent?.event_id
+        ? await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent.event_id)) }) : -1;
+      ok("batch cascade [precondition]: force-delete ran while a tombstone and a live Formula Pending reservation both existed",
+        claimed.status === 409 && !!formulaPendingBeforeCascade && sawDeletionFence && cascade.status === 200
+          && tombstoneAfterCascade?.deletion_state === "Pending",
+        JSON.stringify({ claimed: claimed.status, formulaPending: !!formulaPendingBeforeCascade, sawDeletionFence, cascade: cascade.status, state: tombstoneAfterCascade?.deletion_state }));
+      ok("batch deletion fence: a Formula POST paused at its durable reservation returns 409 and leaves no cost or approval orphan",
+        formulaResult.status === 409 && !ordinaryAfterCascade && !formulaAfterCascade
+          && formulaApprovalsAfterCascade.length === 0 && !!tombstoneAfterCascade && auditBeforeRecovery === 0,
+        JSON.stringify({ formulaResult: formulaResult.status, ordinary: !!ordinaryAfterCascade, formula: !!formulaAfterCascade, approvals: formulaApprovalsAfterCascade.length, tombstone: !!tombstoneAfterCascade, auditBeforeRecovery }));
+      await req(admin, "GET", "/api/costs");
+      ok("batch cascade: later audit acknowledgement collects the surviving tombstone exactly once",
+        !!deletionEvent?.event_id && !(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))
+          && await rawAudits.countDocuments({ _id: new ObjectId(String(deletionEvent?.event_id)) }) === 1,
+        `remains=${!!(await rawCosts.findOne({ _id: new ObjectId(String(doomedId)) }))}`);
+    } else {
+      ok("batch cascade [precondition]: two carried costs exist", false,
+        JSON.stringify({ doomed: doomed.status, ordinary: ordinary.status }));
+    }
+    await rawBatches.deleteOne({ _id: batchId });
+    await rawCosts.deleteMany({ batch: batchId });
+  } else {
+    ok("batch cascade [precondition]: batch/category fixture exists", false,
+      JSON.stringify({ batch: !!template, category: cat?._id }));
+  }
+}
+
+// Cycle 12: every batch-backed finance materialisation has to lose cleanly even when the force
+// delete already passed deleteMany.  These are ordered races (we observe the newborn row before
+// deleting), not timing guesses; raw reads prove no late cost/request survives the 409.
+{
+  const template = await rawBatches.findOne({});
+  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  const makeBatch = async (suffix) => {
+    const batchId = new ObjectId();
+    await rawBatches.insertOne({
+      _id: batchId, code: `ZZ-C12-${suffix}-${stamp}`, status: "Planning", location: template.location,
+      program: template.program, target_size: 1, planned_start: new Date("2026-09-01"),
+      planned_end: new Date("2026-09-30"), createdAt: new Date(), updatedAt: new Date(),
+    });
+    return batchId;
+  };
+  const waitFor = async (read) => {
+    for (let i = 0; i < 100; i++) {
+      const value = await read();
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return null;
+  };
+  if (template?.location && template?.program && cat?._id) {
+    const directBatch = await makeBatch("DIRECT");
+    const directNote = `c12-direct-${stamp}`;
+    const directPromise = req(admin, "POST", "/api/costs", baseEntry({
+      batch: directBatch, category: cat._id, amount: 701, note: directNote,
+      _test_pause_after_cost_create_ms: 2500,
+    }));
+    const directNewborn = await waitFor(() => rawCosts.findOne({ batch: directBatch, note: directNote }));
+    const directDelete = await req(admin, "DELETE", `/api/batches/${directBatch}`, { reason: "cycle 12 direct post race" });
+    const directResult = await directPromise;
+    ok("batch materialization [precondition]: fixed direct cost reached its final batch fence after its row existed",
+      !!directNewborn && directDelete.status === 200,
+      JSON.stringify({ newborn: !!directNewborn, cascade: directDelete.status }));
+    ok("batch materialization: fixed direct post loses the post-cascade race with 409 and leaves no late cost",
+      directResult.status === 409 && !(await rawCosts.findOne({ batch: directBatch, note: directNote }))
+        && !(await rawBatches.findOne({ _id: directBatch })),
+      JSON.stringify({ post: directResult.status, cost: !!(await rawCosts.findOne({ batch: directBatch, note: directNote })), batch: !!(await rawBatches.findOne({ _id: directBatch })) }));
+
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const queuedBatch = await makeBatch("QUEUE");
+    const queuedNote = `c12-queued-${stamp}`;
+    const queuePromise = req(admin, "POST", "/api/costs", baseEntry({
+      batch: queuedBatch, category: cat._id, amount: 702, note: queuedNote,
+      _test_pause_after_approval_request_create_ms: 2500,
+    }));
+    const queuedNewborn = await waitFor(() => rawApprovals.findOne({ batch: queuedBatch, action: "cost.post" }));
+    const queueDelete = await req(admin, "DELETE", `/api/batches/${queuedBatch}`, { reason: "cycle 12 queue post-create race" });
+    const queueResult = await queuePromise;
+    ok("batch materialization [precondition]: queued cost paused after ApprovalRequest.create",
+      !!queuedNewborn && queueDelete.status === 200,
+      JSON.stringify({ newborn: !!queuedNewborn, cascade: queueDelete.status }));
+    ok("batch materialization: post-create approval fence returns 409 and leaves no request or cost orphan",
+      queueResult.status === 409 && !(await rawApprovals.findOne({ batch: queuedBatch }))
+        && !(await rawCosts.findOne({ batch: queuedBatch })),
+      JSON.stringify({ post: queueResult.status, request: !!(await rawApprovals.findOne({ batch: queuedBatch })), cost: !!(await rawCosts.findOne({ batch: queuedBatch })) }));
+
+    const replayBatch = await makeBatch("REPLAY");
+    const opsUser = await rawUsers.findOne({ email: "ops@vidysea.com" });
+    const replayId = new ObjectId();
+    await rawApprovals.insertOne({
+      _id: replayId, action: "cost.post", entity: "CostEntry", entity_id: replayId,
+      summary: `c12 applying replay ${stamp}`,
+      payload: { entry_date: "2026-09-07", location: template.location, batch: replayBatch, category: cat._id,
+        amount: 703, note: `c12-replay-${stamp}`, _test_pause_after_cost_create_ms: 2500 },
+      location: template.location, batch: replayBatch, initiator: opsUser?._id ?? new ObjectId(),
+      approver_role: "Admin", approver_users: [], status: "Pending", createdAt: new Date(), updatedAt: new Date(),
+    });
+    const replayPromise = req(admin, "POST", `/api/approvals/${replayId}`, { decision: "Approved", note: "cycle 12 replay race" });
+    const replayNewborn = await waitFor(() => rawCosts.findOne({ _id: replayId, batch: replayBatch }));
+    const replayDelete = await req(admin, "DELETE", `/api/batches/${replayBatch}`, { reason: "cycle 12 applying replay race" });
+    const replayResult = await replayPromise;
+    ok("batch materialization [precondition]: Applying replay created its deterministic cost before final fence",
+      !!replayNewborn && replayDelete.status === 200,
+      JSON.stringify({ newborn: !!replayNewborn, cascade: replayDelete.status }));
+    ok("batch materialization: Applying replay race returns 409 with neither request nor deterministic cost left behind",
+      replayResult.status === 409 && !(await rawApprovals.findOne({ _id: replayId }))
+        && !(await rawCosts.findOne({ _id: replayId })),
+      JSON.stringify({ replay: replayResult.status, request: !!(await rawApprovals.findOne({ _id: replayId })), cost: !!(await rawCosts.findOne({ _id: replayId })) }));
+
+    // The staged head belongs to the Applying replay, not to the Batch cascade. Observe it first,
+    // then its deterministic newborn CostEntry, before deleting the Batch. This forces the replay
+    // through the final batch fence rather than merely proving a request was removed before it ran.
+    const headReplayBatch = await makeBatch("HEAD-REPLAY");
+    const headReplayId = new ObjectId();
+    const headReplayName = `ZZ C13 Deleted Batch Head ${stamp}`;
+    await rawApprovals.insertOne({
+      _id: headReplayId, action: "costcategory.create", entity: "CostCategory", entity_id: headReplayId,
+      summary: `c13 staged-head applying replay ${stamp}`,
+      payload: {
+        entry_date: "2026-09-07", location: template.location, batch: headReplayBatch,
+        amount: 703, new_subhead: headReplayName, note: `c13-head-replay-${stamp}`,
+        _test_pause_after_cost_create_ms: 2500,
+      },
+      location: template.location, batch: headReplayBatch, initiator: opsUser?._id ?? new ObjectId(),
+      approver_role: "Admin", approver_users: [], status: "Pending", createdAt: new Date(), updatedAt: new Date(),
+    });
+    const headReplayPromise = req(admin, "POST", `/api/approvals/${headReplayId}`, { decision: "Approved", note: "cycle 13 staged-head replay race" });
+    const stagedHead = await waitFor(() => rawCategories.findOne({
+      _id: headReplayId, active: false, staged_by_approval: headReplayId, name: headReplayName,
+    }));
+    const stagedHeadCost = await waitFor(() => rawCosts.findOne({
+      _id: headReplayId, batch: headReplayBatch, category: headReplayId,
+      approval_request: headReplayId, reservation_kind: "ApprovalHead", reservation_state: "Pending",
+    }));
+    const headReplayDelete = await req(admin, "DELETE", `/api/batches/${headReplayBatch}`, { reason: "cycle 13 staged head applying replay race" });
+    const headReplayResult = await headReplayPromise;
+    const [headReplayRequestAfter, headReplayCostAfter, headReplayCategoryAfter] = await Promise.all([
+      rawApprovals.findOne({ _id: headReplayId }),
+      rawCosts.findOne({ _id: headReplayId }),
+      rawCategories.findOne({ _id: headReplayId }),
+    ]);
+    ok("batch materialization [precondition]: staged cost head and its Pending deterministic cost both existed before the cascade",
+      !!stagedHead && !!stagedHeadCost && headReplayDelete.status === 200,
+      JSON.stringify({ stagedHead: !!stagedHead, stagedCost: !!stagedHeadCost, cascade: headReplayDelete.status }));
+    ok("batch materialization: deleted-batch staged-head replay returns 409 and compensates only its inactive head before removing request/cost",
+      headReplayResult.status === 409 && !headReplayRequestAfter && !headReplayCostAfter && !headReplayCategoryAfter,
+      JSON.stringify({ replay: headReplayResult.status, request: !!headReplayRequestAfter, cost: !!headReplayCostAfter, category: !!headReplayCategoryAfter }));
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+
+    for (const [label, crashParam] of [["before", "_test_crash_after_deletion_claim=1"], ["during", "_test_crash_during_deletion_cascade=1"]]) {
+      const crashBatch = await makeBatch(`CRASH-${label}`);
+      await rawCosts.insertOne({ _id: new ObjectId(), batch: crashBatch, location: template.location, category: cat._id,
+        amount: 704, note: `c12-crash-${label}-${stamp}`, payment_status: "Payment Pending", reservation_state: "Applied", createdAt: new Date(), updatedAt: new Date() });
+      const first = await req(admin, "DELETE", `/api/batches/${crashBatch}?${crashParam}`, { reason: `cycle 12 ${label} crash original reason` });
+      const claim = await rawBatches.findOne({ _id: crashBatch });
+      const retry = await req(admin, "DELETE", `/api/batches/${crashBatch}`, { reason: `different retry reason must not replace durable claim` });
+      const auditCount = claim?.deletion_audit_event_id
+        ? await rawAudits.countDocuments({ _id: new ObjectId(String(claim.deletion_audit_event_id)) }) : 0;
+      ok(`batch deletion recovery [${label}]: crash leaves one durable original claim and retry completes it exactly once`,
+        first.status === 500 && claim?.deletion_state === "Deleting" && retry.status === 200
+          && !(await rawBatches.findOne({ _id: crashBatch })) && !(await rawCosts.findOne({ batch: crashBatch }))
+          && auditCount === 1,
+        JSON.stringify({ first: first.status, state: claim?.deletion_state, retry: retry.status, auditCount,
+          batch: !!(await rawBatches.findOne({ _id: crashBatch })), cost: !!(await rawCosts.findOne({ batch: crashBatch })) }));
+      const audit = claim?.deletion_audit_event_id ? await rawAudits.findOne({ _id: new ObjectId(String(claim.deletion_audit_event_id)) }) : null;
+      ok(`batch deletion recovery [${label}]: retry preserves the original actor/reason audit input, not its new reason`,
+        String(audit?.new_value ?? "").includes(`cycle 12 ${label} crash original reason`)
+          && !String(audit?.new_value ?? "").includes("different retry reason"),
+        String(audit?.new_value ?? ""));
+    }
+  } else {
+    ok("batch materialization [precondition]: batch/category fixture exists", false,
+      JSON.stringify({ template: !!template, category: cat?._id }));
+  }
+}
+
+// Cycle 13: force-delete recovery is Batch-owned, and its seven durable fields must never become
+// accidental Candidate attributes or leak from an ordinary Batch list while a crash claim is live.
+{
+  const source = readFileSync(new URL("../src/models/index.ts", import.meta.url), "utf8");
+  const candidateSchema = source.slice(source.indexOf("const CandidateSchema"), source.indexOf("// ---------- Batch ----------"));
+  const batchSchema = source.slice(source.indexOf("const BatchSchema"), source.indexOf("// ---------- BatchMember"));
+  ok("batch deletion schema ownership: all seven durable recovery fields belong only to BatchSchema and are select:false",
+    batchDeletionFields.every((field) => new RegExp(`${field}:\\s*\\{[^}]*select:\\s*false`).test(batchSchema))
+      && batchDeletionFields.every((field) => !candidateSchema.includes(field)),
+    JSON.stringify({ candidateHas: batchDeletionFields.filter((field) => candidateSchema.includes(field)), batchHas: batchDeletionFields.filter((field) => batchSchema.includes(field)) }));
+
+  const template = await rawBatches.findOne({});
+  const crashActor = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  if (template?.location && template?.program && crashActor?._id) {
+    const crashBatch = new ObjectId();
+    await rawBatches.insertOne({
+      _id: crashBatch, code: `ZZ-C13-PRIVATE-${stamp}`, status: "Planning", location: template.location,
+      program: template.program, target_size: 1, planned_start: new Date("2026-09-01"),
+      createdAt: new Date(), updatedAt: new Date(), deletion_state: "Deleting", deletion_started_at: new Date(),
+      deletion_actor: crashActor._id, deletion_reason: `c13 privacy ${stamp}`,
+      deletion_recorded_work: "0 members, 0 finance rows", deletion_requires_finance: false,
+      deletion_audit_event_id: new ObjectId().toHexString(),
+    });
+    const ordinaryList = (await req(admin, "GET", "/api/batches?limit=2000")).data?.items ?? [];
+    const stranded = ordinaryList.find((batch) => String(batch._id) === String(crashBatch));
+    ok("batch deletion list privacy: an ordinary GET keeps a crash-stranded Batch listable without its seven private recovery fields",
+      !!stranded && batchDeletionFields.every((field) => !(field in stranded)),
+      JSON.stringify({ found: !!stranded, leaked: batchDeletionFields.filter((field) => field in (stranded ?? {})) }));
+    await rawBatches.deleteOne({ _id: crashBatch });
+  } else {
+    ok("batch deletion list privacy [precondition]: Batch and Admin fixture exist", false,
+      JSON.stringify({ batch: !!template, admin: !!crashActor }));
   }
 }
 
@@ -722,6 +1406,38 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       .filter((c) => String(c.approval_request) === String(requestId));
     ok("approval race: exactly one CostEntry exists for the approval request",
       rows.length === 1, JSON.stringify(rows.map((c) => c._id)));
+
+    // Deletion has a separate race: the logical tombstone claim fixes both actor and snapshot.
+    // Exactly one caller may own it; the other cannot republish a different actor even if both
+    // loaded the visible row before either request reached the compare-and-swap.
+    const ruleOff = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    const deleteRace = normal ? await req(admin, "POST", "/api/costs", baseEntry({
+      category: normal._id, amount: 655, note: `delete race ${stamp}`,
+    })) : { status: 0, data: {} };
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const deleteCostId = deleteRace.data?.item?._id;
+    if (ruleOff.status === 200 && deleteRace.status === 201 && deleteCostId) {
+      const deleters = [
+        { cookie: admin, actor: String((await rawUsers.findOne({ email: "admin@vidysea.com" }))?._id) },
+        { cookie: peer, actor: String(made.data.item._id) },
+      ];
+      const deletions = await Promise.all(deleters.map((entry) => req(entry.cookie, "DELETE", `/api/costs/${deleteCostId}`)));
+      const winner = deletions.findIndex((result) => result.status === 200);
+      const loser = winner === 0 ? 1 : 0;
+      const deletionAudits = await rawAudits.find({
+        entity: "CostEntry", entity_id: new ObjectId(String(deleteCostId)), field: "deleted",
+      }).toArray();
+      ok("deletion race: exactly one authorized caller commits and the other cannot replace its claim",
+        winner >= 0 && [404, 409].includes(deletions[loser]?.status) && deletionAudits.length === 1,
+        JSON.stringify({ statuses: deletions.map((r) => r.status), audits: deletionAudits.length }));
+      ok("deletion race: the durable audit actor is the caller whose logical deletion won",
+        winner >= 0 && String(deletionAudits[0]?.actor) === deleters[winner].actor
+          && !(await rawCosts.findOne({ _id: new ObjectId(String(deleteCostId)) })),
+        JSON.stringify({ winner, expectedActor: winner >= 0 ? deleters[winner].actor : null, actualActor: deletionAudits[0]?.actor, remains: !!(await rawCosts.findOne({ _id: new ObjectId(String(deleteCostId)) })) }));
+    } else {
+      ok("deletion race [precondition]: a direct cost exists for two authorized deleters", false,
+        JSON.stringify({ ruleOff: ruleOff.status, made: deleteRace.status, costId: deleteCostId }));
+    }
   }
 }
 
@@ -896,14 +1612,42 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       const rawHead = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
       const rawCost = await rawCosts.findOne({ _id: new ObjectId(String(requestId)) });
       const rawRequest = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      const decisionSnapshot = (row) => JSON.stringify({
+        approved_amount: { present: Object.prototype.hasOwnProperty.call(row ?? {}, "approved_amount"), value: row?.approved_amount },
+        decision_note: { present: Object.prototype.hasOwnProperty.call(row ?? {}, "decision_note"), value: row?.decision_note },
+        decision_map_to_category: {
+          present: Object.prototype.hasOwnProperty.call(row ?? {}, "decision_map_to_category"),
+          value: row?.decision_map_to_category === undefined ? undefined : String(row.decision_map_to_category),
+        },
+      });
+      const immutableDecision = decisionSnapshot(rawRequest);
+      const snapshotMutants = [
+        { ...rawRequest, approved_amount: 1 },
+        { ...rawRequest, decision_note: "changed note" },
+        { ...rawRequest, decision_map_to_category: new ObjectId() },
+      ].map(decisionSnapshot);
+      ok("Applying saga immutability [instrument]: the raw snapshot distinguishes amount, note and category-map mutations independently",
+        snapshotMutants.every((mutant) => mutant !== immutableDecision) && new Set(snapshotMutants).size === 3,
+        JSON.stringify({ immutableDecision, snapshotMutants }));
+      const opsUser = await rawUsers.findOne({ email: "ops@vidysea.com" });
+      const fillerIds = Array.from({ length: 101 }, () => new ObjectId());
+      if (opsUser?._id) {
+        await rawApprovals.insertMany(fillerIds.map((id, i) => ({
+          _id: id, action: "cost.post", summary: `newer pending filler ${i}`,
+          payload: { amount: i + 1 }, initiator: opsUser._id, approver_role: "Admin",
+          status: "Pending", createdAt: new Date(Date.now() + i + 1000), updatedAt: new Date(),
+        })));
+      }
       const defaultQueue = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
+      const applyingOnly = (await req(admin, "GET", "/api/approvals?status=Applying")).data?.items ?? [];
       ok("Applying saga [precondition]: injected interruption landed after head publication and before cost visibility",
         interrupted.status === 500 && rawHead?.active === true && !rawHead?.staged_by_approval
           && rawCost?.reservation_state === "Pending" && rawRequest?.status === "Applying",
         JSON.stringify({ status: interrupted.status, head: rawHead && { active: rawHead.active, owner: rawHead.staged_by_approval }, cost: rawCost?.reservation_state, request: rawRequest?.status }));
       ok("Applying saga: the default Pending queue still returns an interrupted Applying request",
-        defaultQueue.some((r) => String(r._id) === String(requestId) && r.status === "Applying"),
-        JSON.stringify(defaultQueue.filter((r) => String(r._id) === String(requestId)).map((r) => r.status)));
+        defaultQueue[0]?.status === "Applying" && defaultQueue.some((r) => String(r._id) === String(requestId))
+          && applyingOnly.some((r) => String(r._id) === String(requestId)),
+        JSON.stringify({ first: defaultQueue[0]?.status, found: defaultQueue.filter((r) => String(r._id) === String(requestId)).map((r) => r.status), applyingOnly: applyingOnly.length }));
 
       let browser, context;
       try {
@@ -920,22 +1664,44 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
           await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
         }
         await page.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
-        await page.waitForFunction((s) => document.body.innerText.includes(s), nm, { timeout: 30000 }).catch(() => {});
-        const text = await page.locator("body").innerText();
+        const exactRow = page.locator(`#approval-request-${requestId}`);
+        await exactRow.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+        const text = await exactRow.innerText().catch(() => "");
         ok("Applying saga UI: the approver sees the interrupted row and a Resume apply control",
-          text.includes(nm) && text.includes("Applying") && text.includes("Resume apply"),
+          await exactRow.count() === 1 && text.includes(nm) && text.includes("Applying") && text.includes("Resume apply"),
           text.slice(0, 400));
       } finally {
         try { await context?.close(); } catch {}
         try { await browser?.close(); } catch {}
       }
 
-      const changedDecision = await req(admin, "POST", `/api/approvals/${requestId}`, {
-        decision: "Approved", approved_amount: 1, note: "attempt to change an applying decision",
+      await rawApprovals.deleteMany({ _id: { $in: fillerIds } });
+
+      const changedAmount = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", approved_amount: 1, note: "publish interruption",
       });
+      const afterAmountAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
       ok("Applying saga: retry cannot change the already-claimed sanctioned amount",
-        changedDecision.status === 409 && (await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) }))?.status === "Applying",
-        `got ${changedDecision.status}`);
+        changedAmount.status === 409 && afterAmountAttack?.status === "Applying"
+          && decisionSnapshot(afterAmountAttack) === immutableDecision,
+        `got ${changedAmount.status} before=${immutableDecision} after=${decisionSnapshot(afterAmountAttack)}`);
+      const changedNote = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", note: "changed note",
+      });
+      const afterNoteAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      ok("Applying saga: retry cannot change the already-claimed decision note",
+        changedNote.status === 409 && afterNoteAttack?.status === "Applying"
+          && decisionSnapshot(afterNoteAttack) === immutableDecision,
+        `got ${changedNote.status} before=${immutableDecision} after=${decisionSnapshot(afterNoteAttack)}`);
+      const mapTarget = (await catList()).find((c) => c.active !== false && String(c._id) !== String(requestId));
+      const changedMap = await req(admin, "POST", `/api/approvals/${requestId}`, {
+        decision: "Approved", map_to_category: mapTarget?._id,
+      });
+      const afterMapAttack = await rawApprovals.findOne({ _id: new ObjectId(String(requestId)) });
+      ok("Applying saga: retry cannot change the already-claimed category mapping",
+        !!mapTarget && changedMap.status === 409
+          && afterMapAttack?.status === "Applying" && decisionSnapshot(afterMapAttack) === immutableDecision,
+        `target=${mapTarget?._id} got ${changedMap.status} before=${immutableDecision} after=${decisionSnapshot(afterMapAttack)}`);
       await rawApprovals.updateOne(
         { _id: new ObjectId(String(requestId)), status: "Applying" },
         { $unset: { "payload._test_fail_after_publish_before_cost_apply": "" } },

@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
+import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
+import { createHash } from "crypto";
+import { Types } from "mongoose";
 
 // The fields this door may write. ONE list, because two consumers now read it: the assignment loop
 // in PATCH, and the closed-batch test right above it. A second hand-written copy of these names is
@@ -55,7 +57,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   // moving the check past the carried-work count and branching on which right applies.
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const batch = await Batch.findById(id).select("code status location program").lean<any>();
+  const batch = await Batch.findById(id).select("code status location program +deletion_state +deletion_actor +deletion_reason +deletion_recorded_work +deletion_requires_finance +deletion_audit_event_id").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
 
   const [members, results, costs, logs, closures, govtRows, invoices] = await Promise.all([
@@ -70,7 +72,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const carried = { members, results, costs, logs, closures, govt_rows: govtRows, invoices };
   const total = Object.values(carried).reduce((a, n) => a + n, 0);
   const breakdown = Object.entries(carried).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace("_", " ")}`).join(", ");
-  if (total > 0) {
+  if (total > 0 || batch.deletion_state === "Deleting") {
     // 2026-08-25 (Umesh, feedback-inbox): a batch created by mistake (e.g. for a test) and then
     // populated with data could only be Cancelled, never removed. batches.delete_with_data is a
     // SEPARATE, narrower-grantable right from batches.delete — holding it ALONE is sufficient for
@@ -83,9 +85,8 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
         `${batch.code} carries recorded work (${breakdown}). ` +
         `A batch with history is cancelled, never deleted — use the Cancel transition instead.`);
     }
-    let reason = "";
-    try { const body = await readJson(req); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
-    if (!reason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
+    let suppliedReason = "";
+    try { const body = await readJson(req); suppliedReason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
     // QA-1864 (checker on qa-1826/1827, found by live probe): this branch runs `CostEntry.deleteMany`
     // and `Invoice.deleteMany` behind `batches.delete_with_data` — a key that is NOT in
     // NO_ADMIN_BYPASS, so an Admin with `finance.view: null` erased ₹42,500 of ledger and got a
@@ -111,20 +112,81 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
       CostEntry.countDocuments({ batch: id }),
       Invoice.countDocuments({ batch: id }),
     ])).reduce((a, n) => a + n, 0);
-    if (moneyNow > 0) {
+    if (moneyNow > 0 || batch.deletion_requires_finance) {
       await requireFinance(user, "approve");
     }
+    // The deletion claim carries the actor, reason, original scope and deterministic audit id.
+    // A process may die after this commit and before or during the cascade; a later authorized
+    // retry resumes THESE facts rather than creating a second deletion/audit story.
+    let deletion = batch;
+    if (batch.deletion_state !== "Deleting") {
+      if (!suppliedReason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
+      const auditEventId = createHash("sha256").update(`batch-force-delete-v1:${batch._id}`).digest("hex").slice(0, 24);
+      const claimed = await Batch.collection.updateOne(
+        { _id: batch._id, deletion_state: { $exists: false } },
+        {
+          $set: {
+            deletion_state: "Deleting", deletion_started_at: new Date(), deletion_actor: new Types.ObjectId(String(user.id)),
+            deletion_reason: suppliedReason, deletion_recorded_work: breakdown,
+            deletion_requires_finance: moneyNow > 0, deletion_audit_event_id: auditEventId,
+          },
+        },
+      );
+      if (claimed.modifiedCount !== 1) {
+        deletion = await Batch.collection.findOne({ _id: batch._id });
+        if (deletion?.deletion_state !== "Deleting") {
+          throw new HttpError(409, "This batch changed while force-delete was being prepared. Refresh before trying again.");
+        }
+      } else {
+        deletion = await Batch.collection.findOne({ _id: batch._id });
+      }
+    }
+    if (!deletion?.deletion_actor || !deletion.deletion_reason || !deletion.deletion_audit_event_id) {
+      throw new HttpError(409, "This batch has an incomplete deletion claim and remains protected for reconciliation.");
+    }
+    const testFencePause = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+      ? Math.max(0, Math.min(5_000, Number(req.nextUrl.searchParams.get("_test_pause_after_deletion_fence_ms") ?? 0)))
+      : 0;
+    if (testFencePause) await new Promise((resolve) => setTimeout(resolve, testFencePause));
+    const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
+    if (isTestDb && req.nextUrl.searchParams.get("_test_crash_after_deletion_claim") === "1") {
+      throw new Error("test-only crash after durable batch deletion claim");
+    }
+    await BatchMember.deleteMany({ batch: id });
+    if (isTestDb && req.nextUrl.searchParams.get("_test_crash_during_deletion_cascade") === "1") {
+      throw new Error("test-only crash during batch deletion cascade");
+    }
     await Promise.all([
-      BatchMember.deleteMany({ batch: id }),
       CandidateResult.deleteMany({ batch: id }),
       CostEntry.deleteMany({ batch: id }),
       DailyLog.deleteMany({ batch: id }),
       Closure.deleteMany({ batch: id }),
       GovtAttendanceRow.deleteMany({ batch: id }),
       Invoice.deleteMany({ batch: id }),
+      ApprovalRequest.deleteMany({ batch: id }),
     ]);
-    await Batch.deleteOne({ _id: id });
-    await audit({ entity: "Batch", entityId: id, field: "delete", newValue: `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${breakdown}) — reason: ${reason}`, actor: user.id });
+    // Persist the original claim's one audit identity before physical removal.  `$setOnInsert`
+    // makes a retry after an acknowledgement crash exactly-once, and the batch stays protected if
+    // this write fails rather than becoming an unaudited disappearance.
+    const auditId = new Types.ObjectId(String(deletion.deletion_audit_event_id));
+    const auditValue = `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${deletion.deletion_recorded_work ?? breakdown}) — reason: ${deletion.deletion_reason}`;
+    await AuditLog.collection.updateOne(
+      { _id: auditId },
+      {
+        $setOnInsert: {
+          entity: "Batch", entity_id: batch._id, field: "delete", old_value: null, new_value: auditValue,
+          actor: deletion.deletion_actor, actor_type: "USER", created_at: new Date(),
+        },
+      },
+      { upsert: true },
+    );
+    const removed = await Batch.collection.deleteOne({
+      _id: batch._id, deletion_state: "Deleting", deletion_actor: deletion.deletion_actor,
+      deletion_reason: deletion.deletion_reason, deletion_audit_event_id: deletion.deletion_audit_event_id,
+    });
+    if (removed.deletedCount !== 1) {
+      throw new HttpError(409, "This batch deletion claim changed before finalization. It remains protected for reconciliation.");
+    }
     return NextResponse.json({ deleted: batch.code, forced: true, carried });
   }
 

@@ -905,6 +905,16 @@ const BatchSchema = new Schema({
   drive_folder_url: String,
   // 15/08 (Umesh): accepted unknown columns from bulk upload — see TrainerSchema note.
   custom_fields: { type: Schema.Types.Mixed, default: undefined },
+  // Force-delete is a durable Batch protocol, not a best-effort deleteMany. A retry must use the
+  // first claimant's audit facts rather than minting another deletion story after a crash. These
+  // recovery fields are private even while the stranded Batch remains listable to its operators.
+  deletion_state: { type: String, enum: ["Deleting"], default: undefined, select: false },
+  deletion_started_at: { type: Date, default: undefined, select: false },
+  deletion_actor: { type: Schema.Types.ObjectId, ref: "User", default: undefined, select: false },
+  deletion_reason: { type: String, default: undefined, select: false },
+  deletion_recorded_work: { type: String, default: undefined, select: false },
+  deletion_requires_finance: { type: Boolean, default: undefined, select: false },
+  deletion_audit_event_id: { type: String, default: undefined, select: false },
 }, { timestamps: true });
 
 // ---------- BatchMember (the roster) ----------
@@ -1234,6 +1244,10 @@ const CostEntrySchema = new Schema({
   // the confirmed cost and an ordinary later finance read drains this marker idempotently.
   _audit_events: { type: [Schema.Types.Mixed], default: undefined, select: false },
   _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
+  // A delete commits logically before its audit is published. The hidden tombstone keeps the
+  // outbox owner recoverable until acknowledgement; only then may raw garbage collection remove it.
+  deletion_state: { type: String, enum: ["Pending"], default: undefined, select: false },
+  deletion_audit_event_id: { type: String, default: undefined, select: false },
   entered_by: oid("User", true),
 }, { timestamps: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
@@ -1248,6 +1262,7 @@ CostEntrySchema.index({ reservation_state: 1, reservation_expires_at: 1 });
 // report author has to remember. Internal recovery deliberately uses `CostEntry.collection`, which
 // bypasses this middleware and can see Pending/Cancelled rows.
 const VISIBLE_COST_ENTRY = {
+  deletion_state: { $exists: false },
   $or: [
     { reservation_state: "Applied" },
     { reservation_state: { $exists: false } },
@@ -1259,6 +1274,14 @@ for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as co
     this.setQuery(Object.keys(current).length ? { $and: [current, VISIBLE_COST_ENTRY] } : VISIBLE_COST_ENTRY);
   });
 }
+// A batch force-delete must cascade its hidden Formula Pending/Cancelled reservation rows too;
+// those are batch-owned fencing rows, not audit durability owners. Only a logically deleted cost's
+// tombstone survives generic deletion until its outbox acknowledgement permits raw GC.
+CostEntrySchema.pre("deleteMany", function (this: any) {
+  const current = this.getFilter();
+  const withoutDeletionTombstones = { deletion_state: { $exists: false } };
+  this.setQuery(Object.keys(current).length ? { $and: [current, withoutDeletionTombstones] } : withoutDeletionTombstones);
+});
 CostEntrySchema.pre("aggregate", function (this: any) {
   this.pipeline().unshift({ $match: VISIBLE_COST_ENTRY });
 });
@@ -1426,6 +1449,10 @@ const ApprovalRequestSchema = new Schema({
   summary: { type: String, required: true },   // human-readable "what is being asked"
   payload: Schema.Types.Mixed,                 // replayed verbatim once approved
   location: oid("Location"),
+  // A batch-backed request must be removed with that batch. Keeping this outside the replay payload
+  // makes the force-delete fence/cascade an indexed relationship rather than a best-effort search
+  // through arbitrary historical payload shapes.
+  batch: oid("Batch"),
   initiator: oid("User", true),
   approver_role: { type: String, enum: USER_ROLE, required: true },
   // Snapshotted at PARK time, deliberately: who was entitled to decide this request is a fact about
@@ -1445,6 +1472,7 @@ const ApprovalRequestSchema = new Schema({
   _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
 }, { timestamps: true });
 ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
+ApprovalRequestSchema.index({ batch: 1, status: 1 });
 
 // ---------- Notification (RPL M22) ----------
 export const NOTIFICATION_STATUS = ["New", "Acknowledged", "Resolved"] as const;

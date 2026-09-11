@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory } from "@/models";
-import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
+import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
@@ -44,6 +44,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   await flushPendingFinanceAuditEvents().catch(() => {});
   const body = await readJson(req);
+  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   assertCostEntryValid(body); // Rule 37
   // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
   // of writing the ledger — the CostEntry is created only by the approval replay. Admin (as
@@ -107,6 +108,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       summary: `New cost head "${proposed}" for a ₹${body.amount} entry by ${user.name} — ${body.note}`,
       payload: { ...body, new_subhead: proposed },
       location: body.location || undefined,
+      batch: body.batch || undefined,
+      ...(isTestDb && Number(body._test_pause_after_approval_request_create_ms) > 0
+        ? { testPauseAfterCreateMs: Number(body._test_pause_after_approval_request_create_ms) }
+        : {}),
     });
     // If nobody has enabled the rule there is no approver, and silently writing an unreviewed head
     // would be the opposite of what was asked. Say so instead of inventing one.
@@ -138,7 +143,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
     _audit_events: [createdEvent(costEntryId)],
     entered_by: new Types.ObjectId(String(user.id)),
   };
-  const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   const auditFailure = isTestDb && body._test_fail_audit_before_insert === true
     ? "before" as const
     : isTestDb && body._test_fail_audit_after_insert === true ? "after" as const : undefined;
@@ -148,6 +152,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       entry: baseEntry,
       ...(isTestDb && Number(body._test_formula_ttl_ms) > 0 ? { expiresInMs: Number(body._test_formula_ttl_ms) } : {}),
       ...(isTestDb && Number(body._test_formula_pause_after_reserve_ms) > 0 ? { pauseAfterPersistMs: Number(body._test_formula_pause_after_reserve_ms) } : {}),
+      ...(isTestDb && Number(body._test_formula_wait_for_batch_deletion_fence_ms) > 0 ? { waitForBatchDeletionFenceMs: Number(body._test_formula_wait_for_batch_deletion_fence_ms) } : {}),
       simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
     },
   });
@@ -157,6 +162,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${pre.basis ? ` · pre-approved basis: ${pre.basis}` : ""}`,
     payload: { ...body, _pre_approved_basis: pre.basis },
     location: body.location || undefined,
+    batch: body.batch || undefined,
+    ...(isTestDb && Number(body._test_pause_after_approval_request_create_ms) > 0
+      ? { testPauseAfterCreateMs: Number(body._test_pause_after_approval_request_create_ms) }
+      : {}),
   });
   if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
   if (pre.applied && pre.reservation?.state === "Applied") {
@@ -181,8 +190,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     pre_approved_unit: pre.applied ? "Fixed amount" : undefined,
     reservation_state: "Applied",
   };
-  const doc = await createCostEntryIdempotently(entry, {
+  const doc = await createBatchScopedCostEntryIdempotently(entry, {
     simulateAmbiguousAfterCreate: isTestDb && body._test_ambiguous_after_create === true,
+    ...(isTestDb && Number(body._test_pause_after_cost_create_ms) > 0
+      ? { pauseAfterCreateMs: Math.min(5_000, Number(body._test_pause_after_cost_create_ms)) }
+      : {}),
   });
   await settleFinanceAuditEvents({ costIds: [doc._id], failure: auditFailure }).catch(() => {});
   const confirmed = await CostEntry.findById(doc._id);
