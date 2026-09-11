@@ -576,32 +576,50 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   await page.waitForFunction(() => /Saving closure information/i.test(document.body.innerText), undefined, { timeout: 15000 }).catch(() => {});
   // This is an actual Next client-router transition, not page.goto() (which destroys the old
   // component and aborts the held fetch before its stale-response guards can be exercised).
-  await page.getByRole("link", { name: "Batches", exact: true }).click();
-  await page.waitForURL((u) => u.pathname.endsWith("/batches"), { timeout: 30000 });
-  const listTransition = {
-    url: page.url(),
-    oldClosureUnmounted: await page.getByLabel("Certificate distribution date").count() === 0,
-  };
-  const switchRow = page.getByRole("row", { name: new RegExp(closureSwitchBatch.code) }).first();
-  await switchRow.waitFor({ timeout: 30000 });
-  await switchRow.click();
-  await page.waitForURL((u) => u.pathname.endsWith(`/batches/${closureSwitchBatch._id}`), { timeout: 30000 });
-  const closureTabB = page.getByRole("button", { name: "Closure", exact: true });
-  await closureTabB.click();
-  await page.getByLabel("Mock test date").waitFor({ timeout: 30000 });
-  heldOldPut();
-  await page.waitForTimeout(600);
-  const completedOldWrite = await req(admin, "GET", closurePath(batch._id));
-  const bClosure = await req(admin, "GET", closurePath(closureSwitchBatch._id));
-  const switchedText = await page.locator("body").innerText();
-  ok("QA-2420: a held A PUT completes after real client navigation, while B stays unchanged and A cannot repaint it",
-    page.url().includes(String(closureSwitchBatch._id))
-      && listTransition.oldClosureUnmounted
-      && String(completedOldWrite.data?.closure?.certificate_distribution_date ?? "").includes("2026-09-23")
-      && !bClosure.data?.closure?.certificate_distribution_date
-      && !/Certification information saved\./i.test(switchedText)
-      && oldParentLoads === 0,
-    JSON.stringify({ url: page.url(), listTransition, oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
+  // CRASH CLASS, second instance. QA-2423 fixed one unguarded Playwright wait at line ~345; this
+  // arm is a chain of a dozen more - click, waitForURL, waitFor, click, waitFor - and any one of
+  // them throws uncaught on a timeout. When the batches list did not show the row (`waitFor` on
+  // `getByRole("row", ...)`), the TimeoutError killed the process and all ~5,700 assertions in the
+  // run reported nothing. The harness says it plainly: "1 SUITE CRASHED and contributed NO counts,
+  // so the numbers above are NOT a pass."
+  //
+  // A test that cannot reach its own precondition must SAY SO and let the rest of the wall count.
+  // Losing one arm is a finding; losing the wall is losing the ability to see any finding at all.
+  let routerHopReached = true;
+  let routerHopError = null;
+  try {    await page.getByRole("link", { name: "Batches", exact: true }).click();
+    await page.waitForURL((u) => u.pathname.endsWith("/batches"), { timeout: 30000 });
+    const listTransition = {
+      url: page.url(),
+      oldClosureUnmounted: await page.getByLabel("Certificate distribution date").count() === 0,
+    };
+    const switchRow = page.getByRole("row", { name: new RegExp(closureSwitchBatch.code) }).first();
+    await switchRow.waitFor({ timeout: 30000 });
+    await switchRow.click();
+    await page.waitForURL((u) => u.pathname.endsWith(`/batches/${closureSwitchBatch._id}`), { timeout: 30000 });
+    const closureTabB = page.getByRole("button", { name: "Closure", exact: true });
+    await closureTabB.click();
+    await page.getByLabel("Mock test date").waitFor({ timeout: 30000 });
+    heldOldPut();
+    await page.waitForTimeout(600);
+    const completedOldWrite = await req(admin, "GET", closurePath(batch._id));
+    const bClosure = await req(admin, "GET", closurePath(closureSwitchBatch._id));
+    const switchedText = await page.locator("body").innerText();
+    ok("QA-2420: a held A PUT completes after real client navigation, while B stays unchanged and A cannot repaint it",
+      page.url().includes(String(closureSwitchBatch._id))
+        && listTransition.oldClosureUnmounted
+        && String(completedOldWrite.data?.closure?.certificate_distribution_date ?? "").includes("2026-09-23")
+        && !bClosure.data?.closure?.certificate_distribution_date
+        && !/Certification information saved\./i.test(switchedText)
+        && oldParentLoads === 0,
+      JSON.stringify({ url: page.url(), listTransition, oldParentLoads, aDate: completedOldWrite.data?.closure?.certificate_distribution_date, bDate: bClosure.data?.closure?.certificate_distribution_date, text: switchedText.slice(0, 350) }));
+  } catch (e) {
+    routerHopReached = false;
+    routerHopError = String((e && e.message) || e).replace(/\s+/g, " ").slice(0, 200);
+  }
+  ok("QA-2420 [precondition] the A->B client-router hop could be driven at all",
+    routerHopReached,
+    `the navigation chain did not complete: ${routerHopError} - this arm proves nothing, and it must not take the rest of the wall with it`);
   await removeFaultRoute(oldPutFault, closurePath(batch._id), "A-to-B held Closure PUT");
   await removeFaultRoute(oldParentFault, parentPath(batch._id), "A-to-B stale parent observer");
 
