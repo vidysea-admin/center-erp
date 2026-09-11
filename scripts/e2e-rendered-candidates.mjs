@@ -37,8 +37,8 @@ import { tmpdir } from "node:os";
 import { join as pjoin } from "node:path";
 import { ok, req, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
-// QA-2429, THIRD instance in this one file, and the reason this is a FILE-level guard rather than a
-// fourth patched await. QA-2423 guarded a vanished-row read at :345; QA-2429 guarded a router-hop
+// QA-2441, THIRD instance in this one file, and the reason this is a FILE-level guard rather than a
+// fourth patched await. QA-2423 guarded a vanished-row read at :345; QA-2441 guarded a router-hop
 // chain at :586; this crash was a `Fail` control click at :696 - the SAME control a peer had
 // already guarded through its other use at :565. Guarding them one at a time is losing a race with
 // whoever writes the next await.
@@ -53,7 +53,7 @@ import { ok, req, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD 
 // the isolated copy open.
 let crashGuardBrowser = null;
 const onFatal = async (e) => {
-  ok("QA-2429: the rendered-candidates journey ran to its end without an uncaught error", false,
+  ok("QA-2441: the rendered-candidates journey ran to its end without an uncaught error", false,
     `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 240)} - every arm after this point did not run`);
   try { if (crashGuardBrowser) await crashGuardBrowser.close(); } catch { /* nothing left to close */ }
   finish();
@@ -134,7 +134,7 @@ await req(admin, "POST", `/api/batches/${certCompletionBatch._id}/transition`, {
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  crashGuardBrowser = browser;   // QA-2429: so a fatal path can still tear the browser down
+  crashGuardBrowser = browser;   // QA-2441: so a fatal path can still tear the browser down
 } catch (e) {
   // Not a skip. A missing browser means this suite verified NOTHING, and it says so in red.
   ok("[precondition] chromium launches from the `playwright` devDependency", false,

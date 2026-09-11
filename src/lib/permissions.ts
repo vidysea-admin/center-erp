@@ -447,7 +447,18 @@ export function redactFiguresInText(text: string): string {
         && (ss === undefined || Number(ss) <= 59)
         ? `@@D${enc(kept.push(m) - 1)}D@@` : m))
     .replace(/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g,
-      (m, yy, mm, dd) => (plausibleDate(yy, mm, dd) ? `@@D${enc(kept.push(m) - 1)}D@@` : m));
+      (m, yy, mm, dd) => (plausibleDate(yy, mm, dd) ? `@@D${enc(kept.push(m) - 1)}D@@` : m))
+    // QA-2442 (maker, measured): the two rules above protect only the ISO shape a MACHINE writes.
+    // This masker now also runs over text a PERSON typed - a cost note, an approver's reason - and
+    // people write `07-09-2026`, not `2026-09-07`. Measured on the queue: "paid on 07-09-2026"
+    // came back "paid on 07-09-—", the year eaten, on the same surface whose job is to tell an
+    // ungranted reader WHEN something happened while hiding HOW MUCH.
+    //
+    // This is the QA-1851 direction of failure - over-redaction shreds the sentence and hides the
+    // reason as effectively as the leak hid nothing - so the day/month/year shape gets the same
+    // protection the ISO one already has, judged by the SAME plausibleDate, never by shape alone.
+    .replace(/(?<!\d)(\d{2})([-\/.])(\d{2})([-\/.])(\d{4})(?!\d)/g,
+      (m, dd, _s1, mm, _s2, yy) => (plausibleDate(yy, mm, dd) ? `@@D${enc(kept.push(m) - 1)}D@@` : m));
   // Then: any run of digits and separators holding three or more digits. Two-digit groups survive,
   // so a day, a month and a small count still read normally; 100 and up does not.
   // QA-1867 (checker, cycle 1 FAIL): this rule was described as "any run of three or more digits"
@@ -678,7 +689,15 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
   // top level rather than inside payload, so the generic payload stripper cannot see it.
   for (const f of DECISION_MONEY_FIELDS) delete out[f];   // QA-2427: one list, both maskers
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    out.payload = stripMoneyKeys(payload as Record<string, unknown>);
+    const stripped = stripMoneyKeys(payload as Record<string, unknown>);
+    // QA-2442, second half. Stripping the money KEYS out of the payload leaves its free-text ones
+    // alone, so `payload.note` still carried the figure after the summary had been cleaned - the
+    // leak was not closed, it was moved one level deeper. That is QA-1850's exact lesson, and the
+    // audit masker already walks the payload for this reason; the queue did not.
+    for (const k of Object.keys(stripped)) {
+      if (typeof stripped[k] === "string") stripped[k] = redactFiguresInText(stripped[k] as string);
+    }
+    out.payload = stripped;
   }
   // QA-2356 (checker, qa-2295 cycle 1): this used to redact `summary` and nothing else, so the
   // moment a second free-text field appeared on the row the money walked straight back out. That
@@ -691,6 +710,18 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
     if (typeof out[k] === "string") {
       out[k] = redactMoneyInText(out[k], payload);
       if (approvedAmount !== undefined) out[k] = redactMoneyInText(out[k], { amount: approvedAmount });
+      // QA-2442 (checker, cycle 15) - the exact MIRROR of QA-2427, found one cycle later on the
+      // surface this release changed. `redactMoneyInText` is PAYLOAD-DRIVEN: it can only hunt the
+      // figures the payload names. A number a person TYPES into a note is not a payload value, so
+      // the queue rendered `Cost entry ₹— (Operations Lead) — cash advance 445599 paid to vendor`
+      // to a reader with approvals.decide and no finance.view - the masked ₹— sitting in the same
+      // sentence as the raw figure - while the AUDIT TRAIL of the same record masked both.
+      //
+      // QA-1865 already decided this for the trail: on a money entity, take EVERY figure, because a
+      // payload-driven redaction cannot see a number nobody declared. An ApprovalRequest is a money
+      // entity. The two maskers now apply the same rule instead of one knowing something the other
+      // does not - which is the whole shape of QA-2427 and of this.
+      out[k] = redactFiguresInText(out[k]);
     }
   }
   return out as T;

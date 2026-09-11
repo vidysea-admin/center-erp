@@ -3342,8 +3342,23 @@ for (const file of walk(root)) {
   const parkers = permsForDates.split("\n")
     .filter((l) => l.includes(".replace(/(?<!\\d)"))
     .map((l) => l.slice(l.indexOf(".replace(/") + ".replace(".length, l.lastIndexOf("/g") + 2));
-  if (parkers.length !== 2) {
-    bad.push(`lib/permissions.ts: redactFiguresInText should park dates with exactly TWO \`(?<!\\d)\`-anchored patterns (the full datetime, then the bare date) — found ${parkers.length}. QA-1870's guard against a figure whose tail completes a date shape, or QA-1873's two-pass split that keeps a valid date when its time is garbage, has been changed.`);
+  // QA-2442 (maker, measured): this said 'exactly TWO' and went red the day a THIRD anchored
+  // parker was added - for the day-month-year shape a PERSON types, after this masker started
+  // running over free text a person wrote. The pin spelled out the shape that happened to be true
+  // the day it was written, while its own sentence is about dates being parked with anchored,
+  // bounded patterns. That is the -250 pin's defect (QA-2426), in a second place.
+  //
+  // The property is: at least the two machine shapes, every parker anchored and bounded, and the
+  // list never silently EMPTY. A fourth legitimate parker should not need this line edited again;
+  // a parker that loses its anchor still fails, because that is checked per-parker below.
+  // ...and 'at least two' was too loose, which a mutant showed within a minute of writing it:
+  // removing one of the MACHINE parkers while a third was present still passed. Count was never
+  // the property. The two machine shapes are named directly, so a fourth parker needs no edit here
+  // and losing either machine shape still fails.
+  const hasIsoDateTime = parkers.some((x) => x.includes("T(\\d{2}):(\\d{2})"));
+  const hasIsoDate     = parkers.some((x) => x.includes("(\\d{4})-(\\d{2})-(\\d{2})(?!"));
+  if (parkers.length < 2 || !hasIsoDateTime || !hasIsoDate) {
+    bad.push(`lib/permissions.ts: redactFiguresInText should park dates with AT LEAST the two machine-written shapes \`(?<!\\d)\`-anchored patterns (the full datetime, then the bare date) — found ${parkers.length}. QA-1870's guard against a figure whose tail completes a date shape, or QA-1873's two-pass split that keeps a valid date when its time is garbage, has been changed.`);
   }
   for (const p of parkers) {
     const noClasses = p.replace(/\[[^\]]*\]/g, "C");
