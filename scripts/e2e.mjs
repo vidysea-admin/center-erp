@@ -954,7 +954,13 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const completedRow = rAudit.find((a) => a.field === "completed_by_admin");
     const nvText = String(completedRow?.new_value ?? completedRow?.newValue ?? "");
     ok("QA-732: …the audit row carries an IST wall-clock, not the raw UTC instant",
-      /Completed by Admin at \d{1,2} \w{3} \d{4}, \d{2}:\d{2} (am|pm) IST/.test(nvText),
+      // QA-2476: `\w{3}` cannot match a FOUR-letter month, and en-IN renders September as `Sept`.
+      // It consumed `Sep`, then demanded a space where the `t` stands. Measured across all twelve
+      // months through the route's own formatter: Jan-Aug and Oct-Dec match, Sept alone fails - so
+      // this pin was DEAD for one month a year and would have repaired itself on 1 October with
+      // nothing fixed. Its eleven sibling arms prove the product is correct, including the one
+      // asserting this is the same stamp the audit row carries. The string was right; the pin was not.
+      /Completed by Admin at \d{1,2} \w{3,4} \d{4}, \d{2}:\d{2} (am|pm) IST/.test(nvText),
       nvText.slice(0, 120));
     // The blocked candidates come from `mkBatch`'s own `noCan` roster, named `D112 9<i> <stamp>`.
     const rrosterCands = (await req("GET", `/api/batches/${rb._id}/members`)).data.items ?? [];
@@ -975,7 +981,13 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     //     what a screen would render. Two different surfaces, and only one of them was watched.
     ok("QA-732 (-256): the forced press HANDS BACK its IST wall-clock, not only writes it to the audit row",
       typeof forced.data?.completed_at_ist === "string"
-        && /^\d{2} \w{3} \d{4}, \d{2}:\d{2} (am|pm)$/.test(String(forced.data.completed_at_ist)),
+        // QA-2476: the same four-letter-month bug AND an independent one - it opened with a
+        // two-digit day while the route formats `day: "numeric"`, so the 1st to the 9th of EVERY
+        // month could not match either. Between them this arm was unable to pass on 127 of 336
+        // days, about 38% of the calendar - and it had been absorbed into the 'known-red baseline'
+        // BY NAME, which is worse than a silent gap: a real regression in October would have been
+        // subtracted along with the artefact.
+        && /^\d{1,2} \w{3,4} \d{4}, \d{2}:\d{2} (am|pm)$/.test(String(forced.data.completed_at_ist)),
       JSON.stringify({ completed_at_ist: forced.data?.completed_at_ist ?? null }));
     // ...and it is the SAME instant the audit row recorded. Two stamps of "now" taken in two places
     // is how a record ends up disagreeing with itself about when a thing happened.

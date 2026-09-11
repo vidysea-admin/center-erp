@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-303";
+export const RELEASE = "2026.08.14-304";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,20 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-304 does three things, and two of them are about not disturbing people. An administrator can "  +
+  "now turn emails off for a single account and on again at any time, so an account being used for "  +
+  "testing stops filling a real person's inbox; that account still sees every alert inside the "  +
+  "app, because this silences the mailbox and not the person. Second, a cost recorded against a "  +
+  "batch that is already completed or closed is now written straight to the ledger instead of "  +
+  "waiting for approval - that money was spent and invoiced before the entry was made, so the "  +
+  "approval had nothing left to decide. The entry says on its own record that it skipped the queue "  +
+  "and why. A cost on a batch that is still running is unchanged and still needs approval, and "  +
+  "only an administrator can record one this way. Third, a correction for anyone registering by "  +
+  "email: the limit of five codes an hour was being charged for requests the system had already "  +
+  "rejected, so mistyping your address twice left you with three codes instead of five and nothing "  +
+  "said so. A rejected request no longer costs a code.";
+
+const RELEASE_NOTE_ARCHIVE_303 =
   "-303 closes one gap in who can see a money figure, and one way a cost could get stuck. "  +
   "The approval alert and the approval email now hide a figure typed into a cost note from a "  +
   "reader who has not been granted finance visibility. The approvals screen and the audit trail "  +
@@ -1518,6 +1532,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_303 + " " +
   RELEASE_NOTE_ARCHIVE_302 + " " +
   RELEASE_NOTE_ARCHIVE_301 + " " +
   RELEASE_NOTE_ARCHIVE_300 + " " +

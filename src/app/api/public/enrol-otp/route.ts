@@ -53,9 +53,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // allowance, so a student who tried email first is not locked out of SMS, and the toll-fraud
     // gates below are the ones that actually protect the money.
     if (body.phone && !body.email) {
-      rateLimit("otp-sms:" + clientKey(req), 5, 60 * 60_000); // 5 SMS codes/hour/IP
+      // QA-2478, second half - the SAME defect on the SMS channel, and fixing only the email one
+      // would have left the identical bug behind a door marked "not switched on yet". `phoneError`
+      // is the same kind of pure string check `emailError` is, so the same reasoning applies: a
+      // refused request sends no SMS and must not be charged for one.
+      //
+      // LATENT RATHER THAN LIVE, and worth saying which: SMS is not configured on production -
+      // `configured: false`, all four EnableX credentials absent, all five templates unset - so
+      // nobody is being charged a code today. It is fixed now anyway because `src/lib/sms.ts` says
+      // switching SMS on is "one env line, no code", which means this defect would otherwise arrive
+      // through a change with no code review attached to it.
       const pErr = phoneError(body.phone);
       if (pErr) throw new HttpError(400, pErr);
+      rateLimit("otp-sms:" + clientKey(req), 5, 60 * 60_000); // 5 SMS codes/hour/IP
       const phone = canonicalPhone(body.phone)!;
       const gate = phoneChallengeGate(phone);
       if (!gate.ok) {
