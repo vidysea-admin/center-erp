@@ -493,7 +493,24 @@ function Users({ error, setError }: any) {
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
           // QA-2461: visible in the LIST, not only inside the row - a silenced account nobody can spot
           // from the table is how one quietly stays silenced after testing ends.
-          { key: "mail_enabled", label: "Emails", filterText: (r: any) => (r.mail_enabled === false ? "Off" : "On"), render: (r: any) => (r.mail_enabled === false ? "Off" : "On") },
+          // QA-2479: a CONTROL, not a read-out, and it sends ONLY `mail_enabled`. The edit form
+          // beside it posts the whole form object - role, can_edit, active - so using it on your own
+          // row trips the self-edit refusal and 400s. That would have shipped a toggle nobody can
+          // apply to themselves, which is the first thing anyone wants to do with it. One key in the
+          // body is also what the route's narrow exemption requires, so this is the only shape that
+          // works for a granted non-Admin too.
+          { key: "mail_enabled", label: "Emails",
+            filterText: (r: any) => (r.mail_enabled === false ? "Off" : "On"),
+            render: (r: any) => (
+              <button type="button"
+                className={`rounded px-2 py-0.5 text-xs ${r.mail_enabled === false ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700"}`}
+                title={r.mail_enabled === false ? "This account is not being emailed. Click to start again." : "Stop emailing this account. They still see alerts in the app."}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { mail_enabled: r.mail_enabled === false } }); load(); }
+                  catch (err: any) { setError(err.message); }
+                }}>{r.mail_enabled === false ? "Off" : "On"}</button>
+            ) },
           {
             // QA-073: name the rights, not just a count — the cell says which, on hover too.
             key: "extra_permissions", label: "Special rights", mobile: false,
