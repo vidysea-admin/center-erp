@@ -303,12 +303,33 @@ export async function requireFinance(user: SessionUser, level: "view" | "approve
 // written as "on EVERY route that emits them" and still be checkable.
 export const INVOICE_MONEY_FIELDS = ["amount", "invoice_no", "raised_on", "paid_on", "received_amount", "receipt_ref"] as const;
 
+// QA-2427 (checker, qa-2411 release-302 cycle 14): the TENTH money door, and it opened the way
+// every previous one did - a new money FIELD was added to a record that was already readable.
+// `approved_amount` is the amount an approver actually sanctioned; `requested_amount` is what
+// the raiser asked for. Neither is an invoice field, so `INVOICE_MONEY_FIELDS` never saw them,
+// and `maskApprovalMoney` deleted `approved_amount` by hand at the queue - which fixed the
+// QUEUE and left the AUDIT TRAIL of the same decision open. GET /api/audit/ApprovalRequest/<id>
+// returned the sanctioned figure to an ungranted Admin and to ops/spoc/viewer in scope, on the
+// exact release whose purpose is that only three people see money.
+//
+// One list, read by the queue masker AND the audit masker, so the two cannot drift again.
+export const DECISION_MONEY_FIELDS = ["approved_amount", "requested_amount"] as const;
+
+// ...and the list is only half the guard, because a list is an enumeration and this file's own
+// history says the next field will be added by someone who never reads this line. A money
+// figure on a money entity is a NUMBER in a field whose name says amount, so that shape is
+// refused structurally - the field added tomorrow is covered without anyone remembering.
+export function looksLikeMoneyField(field: unknown): boolean {
+  return typeof field === "string" && /(^|_)(amount|amt)$/i.test(field);
+}
+
 // A masked field is OMITTED, never zeroed. A quieter control than a 403 needs to be unmistakable:
 // a client that renders `amount ?? 0` would otherwise print a confident ₹0, which is worse than
 // showing nothing because it looks like an answer.
 function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
   const out: Record<string, unknown> = { ...obj };
   for (const f of INVOICE_MONEY_FIELDS) delete out[f];
+  for (const f of DECISION_MONEY_FIELDS) delete out[f];   // QA-2427
   // QA-1863 (checker on qa-1826/1827): stripping the money KEYS left the free-text ones alone, so
   // `payload.note` shipped raw beside a summary that had been correctly redacted — the figure
   // removed from the sentence the product writes and left in the sentence the user typed, in the
@@ -508,7 +529,7 @@ export function maskCostCategoryMoneyList<T>(docs: T[], canSeeMoney: boolean): T
 // PATCH). Both are covered.
 export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSeeMoney: boolean): T {
   if (canSeeMoney) return row;
-  const MONEY = new Set<string>(INVOICE_MONEY_FIELDS as readonly string[]);
+  const MONEY = new Set<string>([...INVOICE_MONEY_FIELDS, ...DECISION_MONEY_FIELDS] as readonly string[]);
   const scrub = (v: unknown, field: string): unknown => {
     if (MONEY.has(field)) return undefined;                       // the field ITSELF is money
     if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -560,6 +581,13 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
     if (typeof v === "string") {
       if (row.entity === "ApprovalRequest") return redactFiguresInText(redactMoneyInText(v));
       if (MONEY_ENTITIES.has(row.entity)) return redactFiguresInText(v);
+    }
+    // QA-2427: a NUMBER fell straight through to `return v`. Every branch above this one handles an
+    // object or a string, so `auditDiff`'s one-row-per-changed-field shape - which is how a money
+    // figure most naturally arrives here - was the one shape nothing covered. On a money entity, a
+    // number in an amount-named field is money by construction.
+    if (typeof v === "number" && MONEY_ENTITIES.has(row.entity) && looksLikeMoneyField(field)) {
+      return undefined;
     }
     return v;
   };
@@ -648,7 +676,7 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
   const approvedAmount = out.approved_amount;
   // Partial sanction is a money fact just like the requested amount. It lives at the request's
   // top level rather than inside payload, so the generic payload stripper cannot see it.
-  delete out.approved_amount;
+  for (const f of DECISION_MONEY_FIELDS) delete out[f];   // QA-2427: one list, both maskers
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {
     out.payload = stripMoneyKeys(payload as Record<string, unknown>);
   }
