@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { CostEntry, CostCategory, COST_PAYMENT_MODE } from "@/models";
+import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
@@ -176,7 +176,29 @@ export const POST = apiHandler(async (req: NextRequest) => {
     },
   });
 
-  const parked = pre.applied ? null : await requireApproval("cost.post", user, {
+  // QA-2462 (Manish, 2026-09-11 walkthrough): a cost on a batch that is ALREADY FINISHED is a
+  // historical record, not a decision. His words: *"अब जैसे कम्प्लीटेड बैच है, तो कम्प्लीटेड बैच में
+  // कोई अप्रूवल की नीड है ही नहीं ना, क्यूँकि हमने वह सारा इनवॉइस रेज़ कर दिया है... तो जो हो चुका वह
+  // हो चुका।"* The money was spent and invoiced months ago; routing it through an approval queue
+  // asks two people to decide something that cannot be undecided, and mails every Admin per row.
+  // He is entering four completed batches this week; under -303 every one of those rows would have
+  // parked.
+  //
+  // THIS IS A RECORDING PATH, NOT A BYPASS, and the difference has to be VISIBLE rather than
+  // asserted - the audit row below says why the queue was skipped, so the trail answers the
+  // question an auditor actually asks. It applies ONLY to a batch that is already terminal when the
+  // cost arrives; nothing here lets a request move a batch and post against it in one breath.
+  //
+  // DISCLOSED RATHER THAN HANDLED: `batch.complete` is itself an approval-gated action whose rule
+  // QA-1977 measured OFF on production. So today a batch can be completed without review and then
+  // used as a no-approval cost door. That hole pre-dates this change and this change makes it
+  // REACHABLE - it is named in the manifest and put to Umesh rather than quietly relied upon.
+  const terminalBatch = body.batch
+    ? await Batch.findById(String(body.batch)).select("status code").lean<any>()
+    : null;
+  const alreadyFinished = !!terminalBatch && ["Completed", "Closed"].includes(String(terminalBatch.status));
+
+  const parked = (pre.applied || alreadyFinished) ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
     summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${pre.basis ? ` · pre-approved basis: ${pre.basis}` : ""}`,
     payload: { ...body, _pre_approved_basis: pre.basis },
@@ -201,7 +223,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const entry = {
     ...baseEntry,
     _id: ledgerEntryId,
-    _audit_events: [createdEvent(ledgerEntryId)],
+    // QA-2462: when the queue was skipped because the batch was already finished, the audit row
+    // SAYS SO and names the batch and its state. A recording path that leaves the same trail as an
+    // approved one is indistinguishable from a bypass, and the person who will one day ask "who
+    // approved this?" deserves the real answer - that nobody did, and why.
+    _audit_events: [createdEvent(
+      ledgerEntryId,
+      alreadyFinished
+        ? `recorded without approval: batch ${terminalBatch?.code ?? String(body.batch)} was already ${terminalBatch?.status} when this cost was entered`
+        : "created",
+    )],
     // The decision as it was AT POST TIME, with the sentence it was made against. A later edit to the
     // head must never rewrite what was approved today.
     pre_approved_applied: pre.applied,

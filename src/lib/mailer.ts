@@ -98,6 +98,10 @@ export type MailAttempt = {
   text: string;
   entity?: string;
   entity_id?: unknown;
+  // QA-2461: set when the RECIPIENT has been silenced by an Admin. It is a reason string rather
+  // than a boolean so the MailLog row says WHY, and it is handled at this one door rather than by
+  // filtering the recipient out of the query upstream - see the note in sendMail.
+  suppress?: string;
 };
 
 // The one door out. Resolves to the MailLog outcome; never rejects.
@@ -116,6 +120,12 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
   };
   try {
     if (!m.to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.to)) return await log("skipped", { reason: "no valid recipient address" });
+    // QA-2461: the per-account switch, honoured HERE and not by dropping the recipient from the
+    // query that found them. Filtering upstream would have been one line shorter and would have
+    // written NO MailLog row at all - and -109 already records what that costs: the one case where
+    // "did the mail go?" went unanswered was the case where it definitely had not. A silenced
+    // account leaves a row saying so, so the answer stays legible instead of merely absent.
+    if (m.suppress) return await log("skipped", { reason: m.suppress });
     // QA-129: name the real reason — "not configured" would be a lie in a suppressed test env.
     const shape = testEnvironmentShape();
     if (shape) return await log("skipped", { reason: `test environment (${shape}) — mail suppressed by default` });
@@ -138,12 +148,18 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
 // fallback; this one exists because a money approval addressed to a role reaches everyone holding
 // it, which is the thing the CEO's instruction rules out. Same eligibility rules (active, not
 // dropped, not Pending) so a named-but-disabled account is still skipped rather than silently mailed.
+// QA-2461: ONE place decides what a silenced recipient means, so the two mail doors below
+// cannot drift apart. They are the only two exits mail has; a per-call-site check would have
+// meant the next feature that mails somebody quietly ignores the switch.
+const suppressFor = (u: { mail_enabled?: unknown }) =>
+  (u?.mail_enabled === false ? "mail off for this account (admin toggle)" : undefined);
+
 export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown }) {
   const ids = (opts.userIds ?? []).filter(Boolean);
   if (!ids.length) return 0;
   const users = await User.find({
     _id: { $in: ids }, active: true, dropped: { $ne: true }, approval_status: { $ne: "Pending" },
-  }).select("email").lean<any[]>();
+  }).select("email mail_enabled").lean<any[]>();
   const { html, text } = renderMail({
     title: opts.title, lines: opts.lines,
     cta: opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined,
@@ -153,7 +169,7 @@ export async function mailUsers(opts: { userIds: unknown[]; subject: string; tit
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id });
+    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) });
   }
   return seen.size;
 }
@@ -162,7 +178,7 @@ export async function mailUsersByRole(opts: { roles: string[]; location?: unknow
   const users = await User.find({
     role: { $in: opts.roles }, active: true, dropped: { $ne: true },
     approval_status: { $ne: "Pending" },
-  }).select("email role location_scope").lean<any[]>();
+  }).select("email role location_scope mail_enabled").lean<any[]>();
   const eligible = users.filter((u) => {
     if (!opts.location) return true;
     const scope = (u.location_scope ?? []).map(String);
@@ -177,7 +193,7 @@ export async function mailUsersByRole(opts: { roles: string[]; location?: unknow
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id });
+    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) });
   }
   return seen.size;
 }

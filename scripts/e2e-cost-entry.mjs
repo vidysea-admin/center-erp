@@ -2300,6 +2300,130 @@ for (const variant of ["ordinary", "mark_paid"]) {
   }
 }
 
+
+// ---- QA-2461: the per-account mail switch, and QA-2462: a finished batch records rather than parks ----
+//
+// Both need the cost.post approval rule ON, so it is turned on here and put back below.
+{
+  await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+  const s304 = `qa304-${stamp}`;
+  const normalHeadId = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false)?._id;
+  ok("QA-2461/2462 [precondition] an ordinary (not pre-approved) cost head exists to post against",
+    !!normalHeadId, "none - every arm below would post against nothing");
+
+  // Two Admins in the approver role: one SILENCED, one left alone. The second is what makes the
+  // first mean anything - "this account got no mail" and "the mail stopped working entirely" look
+  // identical with one recipient, and the whole point of a per-account switch is that it is PER
+  // ACCOUNT.
+  const mkAdmin = async (tag) => {
+    const email = `zz.mail.${tag}.${stamp}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", {
+      name: `Mail ${tag} ${stamp}`, email, password: PW, role: "Admin", can_edit: true, location_scope: [],
+    });
+    return { id: made.data?.item?._id ?? made.data?._id, email, status: made.status };
+  };
+  const silenced = await mkAdmin("off");
+  const noisy = await mkAdmin("on");
+  const off = silenced.id ? await req(admin, "PATCH", `/api/users/${silenced.id}`, { mail_enabled: false }) : { status: 0 };
+  const readBack = ((await req(admin, "GET", "/api/users?limit=500")).data?.items ?? [])
+    .find((u) => String(u._id) === String(silenced.id));
+
+  ok("QA-2461 [precondition] two approver-role Admins exist and one is silenced, read back from the server",
+    silenced.status === 201 && noisy.status === 201 && off.status === 200 && readBack?.mail_enabled === false,
+    JSON.stringify({ made: silenced.status, other: noisy.status, patch: off.status, readBack: readBack?.mail_enabled }));
+
+  const parked304 = await req(ops, "POST", "/api/costs", baseEntry({ category: normalHeadId, amount: 640, note: s304 }));
+  const rid304 = parked304.data?.item?._id;
+  ok("QA-2461 [precondition] a cost parked, so the bell and the mail both fired for the approver role",
+    parked304.status === 202 && !!rid304, `got ${parked304.status} - without a parked request every arm below is vacuous`);
+
+  if (rid304) {
+    const mail304 = ((await req(admin, "GET", "/api/test-email")).data?.log ?? [])
+      .filter((m) => String(m.entity_id) === String(rid304));
+    const forSilenced = mail304.filter((m) => String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase());
+    const forNoisy = mail304.filter((m) => String(m.to ?? "").toLowerCase() === noisy.email.toLowerCase());
+
+    ok("QA-2461: a silenced account is never SENT the mail",
+      forSilenced.every((m) => m.status !== "sent"),
+      JSON.stringify(forSilenced.map((m) => ({ status: m.status, reason: m.reason }))));
+
+    // SILENCE MUST BE LEGIBLE, NOT ABSENT. -109 records the cost of the other choice: the one case
+    // where "did the mail go?" went unanswered was the case where it definitely had not. Filtering
+    // the recipient out of the query upstream would have been shorter and would have left no row.
+    ok("QA-2461: ...and the reason is ON THE RECORD - a skipped row naming the toggle, not silence",
+      forSilenced.length > 0 && forSilenced.some((m) => /mail off for this account/i.test(String(m.reason ?? ""))),
+      JSON.stringify(forSilenced.map((m) => ({ status: m.status, reason: m.reason }))));
+
+    // The arm that stops "the toggle works" from being indistinguishable from "mail is broken".
+    ok("QA-2461: ...while the account that was NOT silenced still has its own mail row for the same request",
+      forNoisy.length > 0 && !forNoisy.some((m) => /mail off for this account/i.test(String(m.reason ?? ""))),
+      JSON.stringify({ rows: forNoisy.length, reasons: forNoisy.map((m) => m.reason) }));
+
+    // The switch governs MAIL, not whether the person is told. A silenced Admin must still see it
+    // in the bell - otherwise this quietly became "hide the work from them".
+    const bell304 = ((await req(admin, "GET", "/api/notifications?status=all")).data?.items ?? [])
+      .filter((n) => String(n.entity_id) === String(rid304));
+    ok("QA-2461: ...and the in-app alert still exists, because this silences the INBOX and not the person",
+      bell304.length > 0, `notifications for this request: ${bell304.length}`);
+
+    // And it reverses, which is the half Umesh actually asked for: "admin chahe to toggle on kar dega".
+    await req(admin, "PATCH", `/api/users/${silenced.id}`, { mail_enabled: true });
+    const parkedBack = await req(ops, "POST", "/api/costs", baseEntry({ category: normalHeadId, amount: 641, note: `${s304}-back` }));
+    const ridBack = parkedBack.data?.item?._id;
+    const mailBack = ((await req(admin, "GET", "/api/test-email")).data?.log ?? [])
+      .filter((m) => String(m.entity_id) === String(ridBack) && String(m.to ?? "").toLowerCase() === silenced.email.toLowerCase());
+    ok("QA-2461: switching it back ON restores that account's mail - the toggle is not one-way",
+      parkedBack.status === 202 && mailBack.length > 0 && !mailBack.some((m) => /mail off for this account/i.test(String(m.reason ?? ""))),
+      JSON.stringify({ parked: parkedBack.status, rows: mailBack.length, reasons: mailBack.map((m) => m.reason) }));
+  }
+
+  // ---- QA-2462: a cost on a batch that is ALREADY FINISHED is recorded, not queued ----
+  const batches304 = (await req(admin, "GET", "/api/batches?limit=500")).data?.items ?? [];
+  const finished = batches304.find((b) => ["Completed", "Closed"].includes(String(b.status)));
+  const active304 = batches304.find((b) => String(b.status) === "Active");
+  ok("QA-2462 [precondition] a finished batch and an Active batch both exist to compare",
+    !!finished && !!active304,
+    JSON.stringify({ finished: finished?.code, finishedStatus: finished?.status, active: active304?.code }));
+
+  if (finished && active304) {
+    // THE ARM THAT STOPS THIS BECOMING "NOTHING NEEDS APPROVAL ANY MORE". If the Active batch also
+    // stopped parking, the change would have removed the queue rather than narrowed it - and every
+    // other arm here would still be green.
+    const onActive = await req(ops, "POST", "/api/costs", baseEntry({
+      category: normalHeadId, batch: active304._id, amount: 642, note: `${s304}-active`,
+    }));
+    ok("QA-2462: a cost on an ACTIVE batch still parks for approval - the queue was narrowed, not removed",
+      onActive.status === 202, `got ${onActive.status}`);
+
+    const onFinished = await req(ops, "POST", "/api/costs", baseEntry({
+      category: normalHeadId, batch: finished._id, amount: 643, note: `${s304}-finished`,
+    }));
+    ok("QA-2462: a cost on a FINISHED batch is recorded straight away, not queued",
+      onFinished.status === 201, `got ${onFinished.status} - 202 means Manish's historical rows still need two approvers`);
+
+    // Recorded is not enough: it has to REACH the places money is actually read from.
+    const costId304 = onFinished.data?.item?._id;
+    const ledger304 = ((await req(admin, "GET", "/api/costs?limit=500")).data?.items ?? [])
+      .find((c) => String(c._id) === String(costId304));
+    const reg304 = ((await req(admin, "GET", "/api/reports/costs")).data?.register ?? [])
+      .find((r) => String(r.id) === String(costId304));
+    ok("QA-2462: ...and it reaches the ledger AND the finance register, which is where it is read",
+      !!ledger304 && ledger304.amount === 643 && !!reg304,
+      JSON.stringify({ ledger: !!ledger304, amount: ledger304?.amount, register: !!reg304 }));
+
+    // A recording path that leaves the same trail as an approved one is indistinguishable from a
+    // bypass. The audit row must say nobody approved this, and why.
+    const trail304 = (await req(admin, "GET", `/api/audit/CostEntry/${costId304}`)).data?.items ?? [];
+    const flat304 = JSON.stringify(trail304);
+    ok("QA-2462: ...and the audit trail SAYS the queue was skipped and names the batch state",
+      /recorded without approval/i.test(flat304) && new RegExp(String(finished.status), "i").test(flat304),
+      `trail did not explain itself: ${flat304.slice(0, 240)}`);
+  }
+
+  await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+}
+
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });

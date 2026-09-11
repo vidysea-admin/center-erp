@@ -394,7 +394,7 @@ function Users({ error, setError }: any) {
 
   function open(u?: any) {
     setEdit(u ?? null);
-    setForm(u ? { ...u, location_scope: (u.location_scope ?? []).map((l: any) => l._id ?? l), password: "" } : { role: "Location", can_edit: false, active: true, location_scope: [] });
+    setForm(u ? { ...u, location_scope: (u.location_scope ?? []).map((l: any) => l._id ?? l), password: "" } : { role: "Location", can_edit: false, active: true, mail_enabled: true, location_scope: [] });
     setDrawer(true);
   }
   // QA-141 rider (-72): in-flight guard against double-submit.
@@ -491,6 +491,9 @@ function Users({ error, setError }: any) {
           { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
           { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
+          // QA-2461: visible in the LIST, not only inside the row - a silenced account nobody can spot
+          // from the table is how one quietly stays silenced after testing ends.
+          { key: "mail_enabled", label: "Emails", filterText: (r: any) => (r.mail_enabled === false ? "Off" : "On"), render: (r: any) => (r.mail_enabled === false ? "Off" : "On") },
           {
             // QA-073: name the rights, not just a count — the cell says which, on hover too.
             key: "extra_permissions", label: "Special rights", mobile: false,
@@ -604,6 +607,11 @@ function Users({ error, setError }: any) {
           )}
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={!!form.can_edit} onChange={(e) => set("can_edit", e.target.checked)} /> Can edit (off = view only)</label>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
+          {/* QA-2461 (Umesh, 2026-09-11): testing on the live system mails every Admin on every parked
+              cost, and real people were being disturbed at their inbox during a working day. Worded for
+              what it does to the PERSON - the alert still reaches them, only the email stops. */}
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.mail_enabled ?? true} onChange={(e) => set("mail_enabled", e.target.checked)} /> Send this account emails</label>
+          <p className="-mt-1 pl-6 text-[11px] text-gray-500">Turn this off while testing so this person is not emailed. They still see alerts in the app, and you can turn it back on at any time.</p>
           {/* 2026-08-11 (CEO): "किसी को special देने तो admin दे पाएगा" */}
           {edit && <SpecialGrants form={form} set={set} />}
           {edit && <RevokedRights form={form} set={set} />}

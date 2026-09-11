@@ -1701,6 +1701,17 @@ const UserSchema = new Schema({
   // their names, but the login dies and the email is renamed to dropped.<ts>.<email> so
   // the unique index frees up ("drop karke naya create kar sakte hain"). dropped_email
   // keeps the original address for display.
+  // QA-2461 (Umesh, 2026-09-11): a PER-ACCOUNT mail switch, because the only one that existed was
+  // all-or-nothing. Testing on production mails every holder of the approver role - `mailUsersByRole`
+  // reaches Karunn, Shubhi and every Admin on every parked cost - and the global `email_enabled` in
+  // Defaults would have silenced the invitation mails those same people still need. His words:
+  // "jin accounts mein testing kar rahe hain wahan abhi mail off kar de, aur admin chahe to toggle
+  // on kar dega jab everything looks right, and they can toggle it off too."
+  //
+  // DEFAULT TRUE, so every account that exists today is unchanged, and this is MAIL ONLY - the
+  // in-app alert still reaches a silenced account, because the point is to stop disturbing someone
+  // at their inbox, not to stop telling them.
+  mail_enabled: { type: Boolean, default: true },
   dropped: { type: Boolean, default: false },
   dropped_email: String,
 }, { timestamps: true });

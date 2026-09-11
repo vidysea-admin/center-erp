@@ -76,7 +76,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // only {"password":"…"} skipped the Admin check below and rewrote the hash further down —
   // any non-Admin holding the GRANTABLE users.manage right could reset the Admin's password
   // and take over the account. Credentials ARE privileges; they belong in this list.
-  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions", "password", "email"];
+  // QA-2461: `mail_enabled` is PRIVILEGED. It decides whether a real person's inbox is reached, so
+  // it inherits the same gate as `active` - only an Admin flips it, the self-edit refusal applies,
+  // and the change is audited like every other privileged field. A toggle that silences somebody
+  // should be at least as hard to reach as one that deactivates them.
+  const PRIV_FIELDS = ["role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions", "password", "email"];
   const changingPriv = PRIV_FIELDS.some((f) => body[f] !== undefined) || body.approval !== undefined || body.drop === true;
   if (changingPriv && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may change roles, rights or account status.");
@@ -195,7 +199,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     const eErr = emailError(body.email);
     if (eErr) throw new HttpError(400, eErr);
   }
-  for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "extra_permissions", "revoked_permissions"]) {
+  for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }
   // QA-1829b: this was `if (body.password)`, which treats an EMPTY string as "no field sent" and
