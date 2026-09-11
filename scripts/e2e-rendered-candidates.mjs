@@ -37,6 +37,30 @@ import { tmpdir } from "node:os";
 import { join as pjoin } from "node:path";
 import { ok, req, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
+// QA-2429, THIRD instance in this one file, and the reason this is a FILE-level guard rather than a
+// fourth patched await. QA-2423 guarded a vanished-row read at :345; QA-2429 guarded a router-hop
+// chain at :586; this crash was a `Fail` control click at :696 - the SAME control a peer had
+// already guarded through its other use at :565. Guarding them one at a time is losing a race with
+// whoever writes the next await.
+//
+// What a crash costs is not the arm, it is the WALL. The harness says it outright: "1 SUITE(S)
+// CRASHED and contributed NO counts, so the numbers above are NOT a pass" - about 5,700 assertions
+// report nothing. So an uncaught throw becomes a failed assertion and the suite still reports its
+// count: the run stays readable and the failure keeps its own message.
+//
+// Copied from e2e-password.mjs:374, which already does this - the nearest existing pattern rather
+// than a new one. The browser is closed on the way out so a crashed run leaves no chromium holding
+// the isolated copy open.
+let crashGuardBrowser = null;
+const onFatal = async (e) => {
+  ok("QA-2429: the rendered-candidates journey ran to its end without an uncaught error", false,
+    `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 240)} - every arm after this point did not run`);
+  try { if (crashGuardBrowser) await crashGuardBrowser.close(); } catch { /* nothing left to close */ }
+  finish();
+};
+process.on("uncaughtException", onFatal);
+process.on("unhandledRejection", onFatal);
+
 const JOURNEY_TAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited",
   "Certified", "Dropout", "Failed", "Absent at Assessment"];
 const STORED = ["Assigned", "Enrolled", "Completed", "Failed"];
@@ -110,6 +134,7 @@ await req(admin, "POST", `/api/batches/${certCompletionBatch._id}/transition`, {
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
+  crashGuardBrowser = browser;   // QA-2429: so a fatal path can still tear the browser down
 } catch (e) {
   // Not a skip. A missing browser means this suite verified NOTHING, and it says so in red.
   ok("[precondition] chromium launches from the `playwright` devDependency", false,
