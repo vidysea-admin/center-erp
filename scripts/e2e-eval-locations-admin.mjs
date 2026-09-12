@@ -332,12 +332,30 @@ if (enroll) {
   await req(enroll, "PATCH", `/api/costs/${cost._id}`, { amount: 1 }, 403);
   await req(enroll, "DELETE", `/api/costs/${cost._id}`, undefined, 403);
 }
-// [best] delete removes the entry from every total.
-await req(admin, "DELETE", `/api/costs/${cost._id}`, undefined, 200);
+// [worst] -305 (QA-2484): removing a cost now REQUIRES a reason. This suite still spoke the old
+// contract and went red on the -305 wall - three failures that were a STALE CALLER, not a
+// regression. Recording that plainly because "known red" is how a real one gets subtracted.
+//
+// AND THE 400 IS ASSERTED WITH ITS GUARANTEE, not on its own. A status code alone would read
+// identically whether the guard refuses the delete or merely complains while letting it through -
+// and this repo has the scar for exactly that (CLAUDE.md: fixing a refusing guard and DELETING it
+// have the same pass count; only an assertion standing on the GUARANTEE can tell them apart). So
+// the row is re-read afterwards and must still be there. This arm goes red if the reason check is
+// ever removed, which is the whole point of writing it here rather than beside the happy path.
+await req(admin, "DELETE", `/api/costs/${cost._id}`, {}, 400);
+const refused = (await req(admin, "GET", `/api/costs?location=${loc._id}`, undefined, 200)).data.items ?? [];
+ok("QA-2484: a cost DELETE carrying no reason is refused AND the entry is still there",
+  refused.some((c) => String(c._id) === String(cost._id)),
+  `${refused.length} rows left, entry present=${refused.some((c) => String(c._id) === String(cost._id))}`);
+
+// [best] delete removes the entry from every total - now with the reason -305 requires.
+await req(admin, "DELETE", `/api/costs/${cost._id}`, { reason: "e2e-eval-locations-admin: removing the fixture cost entry" }, 200);
 const costs2 = (await req(admin, "GET", `/api/costs?location=${loc._id}`, undefined, 200)).data.items ?? [];
 ok("[best] deleted cost entry is gone", !costs2.some((c) => String(c._id) === String(cost._id)), `${costs2.length} rows left`);
-// [worst] deleting it twice is a clean 404, not a crash.
-await req(admin, "DELETE", `/api/costs/${cost._id}`, undefined, 404);
+// [worst] deleting it twice is a clean 404, not a crash. The reason rides along so this arm tests
+// the SECOND delete rather than tripping over the reason gate on its way - QA-2457's shape, where a
+// guard refusing earlier than the thing under test leaves the assertion unable to fail honestly.
+await req(admin, "DELETE", `/api/costs/${cost._id}`, { reason: "e2e: the second delete must be a clean 404" }, 404);
 
 
 // ---- 2026-08-13 list-UX cycle: KPI deep-link + manual-entry parity ----

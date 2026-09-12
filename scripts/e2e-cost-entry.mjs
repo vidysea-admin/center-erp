@@ -142,6 +142,21 @@ const batchDeletionFields = [
 ];
 
 const PW = "CiOnly@123";
+
+// -305 (QA-2484) made a REASON mandatory on DELETE /api/costs/[id], and it is checked before every
+// load, barrier and claim in that route. This suite has twelve delete call sites and -305 updated
+// NONE of them - caught on the _w310 wall when the sibling suite e2e-eval-locations-admin went red
+// with three stale-caller failures. The same change would have gone red here.
+//
+// THE HALF THAT IS NOT ABOUT GOING RED. Several of these sites deliberately provoke a refusal for
+// some OTHER cause - a failed audit window, a duplicate delete, a concurrency barrier. Without a
+// reason those sites still "pass", because they still get a 4xx: just a 400 from the reason gate
+// instead of the refusal they were written to prove. That is QA-2457's exact shape - a guard
+// refusing EARLIER than the thing under test, leaving an assertion that can no longer fail
+// honestly - and unlike a red it announces nothing. So every site carries a reason, including the
+// ones that expect to be refused, so each arm reaches the mechanism it names.
+const DEL_REASON = "e2e-cost-entry: removing a fixture cost entry (-305 requires a reason)";
+
 const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);
@@ -263,7 +278,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
     ok("cost correction: a normal (not pre-approved) row remains mutable",
       corrected.status === 200 && corrected.data?.item?.amount === 501,
       `got ${corrected.status} ${JSON.stringify(corrected.data?.error ?? "")}`);
-    const removed = await req(admin, "DELETE", `/api/costs/${madeId}`);
+    const removed = await req(admin, "DELETE", `/api/costs/${madeId}`, { reason: DEL_REASON });
     const afterDelete = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
       .find((c) => String(c._id) === String(madeId));
     ok("cost correction: a normal (not pre-approved) row remains deletable",
@@ -342,7 +357,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       created_at: new Date(),
     };
     await rawAudits.insertOne(foreign);
-    const refused = await req(admin, "DELETE", `/api/costs/${costId}`);
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}`, { reason: DEL_REASON });
     const preserved = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     const deletionEvent = (preserved?._audit_events ?? []).find((event) => event?.field === "deleted");
     const occupant = await rawAudits.findOne({ _id: eventObjectId });
@@ -477,7 +492,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       ok(`deletion audit ${window} [precondition]: an ordinary cost exists`, false, `status=${made.status}`);
       continue;
     }
-    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=${window}`);
+    const refused = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=${window}`, { reason: DEL_REASON });
     const ownerAfterRefusal = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     const deletionEvent = (ownerAfterRefusal?._audit_events ?? []).find((event) => event?.field === "deleted");
     const deletionEventId = deletionEvent?.event_id ? new ObjectId(String(deletionEvent.event_id)) : null;
@@ -507,7 +522,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
         && await rawAudits.countDocuments({ _id: deletionEventId }) === 1 && !remains && !visible,
       JSON.stringify({ drain: drain.status, audit: deletionAudit, remains: !!remains, visible }));
     await req(admin, "GET", "/api/costs");
-    const repeatDelete = await req(admin, "DELETE", `/api/costs/${costId}`);
+    const repeatDelete = await req(admin, "DELETE", `/api/costs/${costId}`, { reason: DEL_REASON });
     ok(`deletion audit ${window}: repeated recovery/delete cannot duplicate or resurrect the committed deletion`,
       repeatDelete.status === 404 && await rawAudits.countDocuments({ _id: deletionEventId }) === 1,
       `delete=${repeatDelete.status} auditCount=${await rawAudits.countDocuments({ _id: deletionEventId })}`);
@@ -533,7 +548,7 @@ const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc,
       barrierSeen = row?._test_patch_loaded_barrier === barrier;
       if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    const deleteResult = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`);
+    const deleteResult = await req(admin, "DELETE", `/api/costs/${costId}?_test_fail_audit=before`, { reason: DEL_REASON });
     const tombstoneBeforePatch = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_patch_loaded_barrier: "" } });
     const patchResult = await patchPromise;
@@ -568,7 +583,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     continue;
   }
   const barrier = `delete-first-${variant}-${stamp}`;
-  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`);
+  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`, { reason: DEL_REASON });
   let barrierSeen = false;
   for (let i = 0; i < 100 && !barrierSeen; i++) {
     const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
@@ -594,7 +609,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         ? after?.amount === patchBody.amount && after?.note === patchBody.note
         : after?.payment_status === "Paid" && after?.payment_ref === patchBody.payment_ref),
     JSON.stringify({ delete: deleteResult.status, state: after?.deletion_state, audits: deletionAudits, amount: after?.amount, note: after?.note, payment: after?.payment_status, ref: after?.payment_ref }));
-  await req(admin, "DELETE", `/api/costs/${costId}`);
+  await req(admin, "DELETE", `/api/costs/${costId}`, { reason: DEL_REASON });
 }
 
 // The winning DELETE must stay successful if an ordinary recovery read acknowledges and collects
@@ -608,7 +623,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   const costId = made.data?.item?._id;
   if (costId) {
     let deleteSettled = false;
-    const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_pause_after_delete_claim_ms=700`)
+    const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_pause_after_delete_claim_ms=700`, { reason: DEL_REASON })
       .finally(() => { deleteSettled = true; });
     let tombstone = null;
     for (let i = 0; i < 30 && !tombstone; i++) {
@@ -676,7 +691,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
       }
       // Claim only after the formula POST has passed its initial recovery drain; otherwise that
       // POST would correctly acknowledge and collect the tombstone before the cascade attack.
-      const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`);
+      const claimed = await req(admin, "DELETE", `/api/costs/${doomedId}?_test_fail_audit=before`, { reason: DEL_REASON });
       // The formula has persisted and is waiting only for the force-delete's durable marker. The
       // deletion route pauses after claiming it, so this is an ordered race, not a sleep guess:
       // pre-fix code would cancel and queue a request during this window.
@@ -934,7 +949,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
       JSON.stringify(insideBack ? { a: insideBack.pre_approved_applied, b: insideBack.pre_approved_basis } : null));
     if (insideId) {
       const correctedFixed = await req(admin, "PATCH", `/api/costs/${insideId}`, { amount: 800, note: "fixed-cap correction remains editable" });
-      const removedFixed = await req(admin, "DELETE", `/api/costs/${insideId}`);
+      const removedFixed = await req(admin, "DELETE", `/api/costs/${insideId}`, { reason: DEL_REASON });
       const fixedAfterDelete = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
         .find((c) => String(c._id) === String(insideId));
       ok("fixed pre-approval: a non-cumulative row remains correctable",
@@ -1019,7 +1034,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         const amountEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { amount: (50 * billable) - 1 });
         const batchEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { batch: otherBatch?._id ?? "000000000000000000000001" });
         const categoryEdit = await req(admin, "PATCH", `/api/costs/${withinId}`, { category: otherCategory?._id ?? "000000000000000000000002" });
-        const deleted = await req(admin, "DELETE", `/api/costs/${withinId}`);
+        const deleted = await req(admin, "DELETE", `/api/costs/${withinId}`, { reason: DEL_REASON });
         ok("formula reservation: an applied amount cannot be resized to release capacity",
           amountEdit.status === 409, `got ${amountEdit.status}`);
         ok("formula reservation: an applied row cannot move its capacity to another batch",
@@ -1617,7 +1632,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         { cookie: admin, actor: String((await rawUsers.findOne({ email: "admin@vidysea.com" }))?._id) },
         { cookie: peer, actor: String(made.data.item._id) },
       ];
-      const deletions = await Promise.all(deleters.map((entry) => req(entry.cookie, "DELETE", `/api/costs/${deleteCostId}`)));
+      const deletions = await Promise.all(deleters.map((entry) => req(entry.cookie, "DELETE", `/api/costs/${deleteCostId}`, { reason: DEL_REASON })));
       const winner = deletions.findIndex((result) => result.status === 200);
       const loser = winner === 0 ? 1 : 0;
       const deletionAudits = await rawAudits.find({
