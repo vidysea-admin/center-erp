@@ -231,7 +231,7 @@ function fnBody(src, name) {
   return "";
 }
 
-let passed = 0, failed = 0;
+let passed = 0, failed = 0, skipped = 0;
 const hits = [];
 // -153 (QA-372): the structural/copy split used to be a REGEX over the rendered message, so every
 // new structural check had to REMEMBER to enrol in it - and -151's control-character scan and
@@ -1528,10 +1528,23 @@ for (const file of walk(root)) {
 {
   const relLine = fs.readFileSync(path.join(root, "lib/version.ts"), "utf-8").match(/export const RELEASE = "([^"]+)"/);
   const rel = relLine ? relLine[1] : "";
-  const chPath = path.resolve(root, "..", "..", "qa", "CHANGELOG.jsonl");
+  // QA-2537: the ledger lives in the ROOT repo, two levels up. Inside an isolated wall copy that
+  // path does not exist - so this gate, which is entry #1 of the wall and a push gate, SKIPPED on
+  // every wall run this project has ever done, and scored the skip as a PASS. _w319 printed
+  // "364 passed, 0 failed"; the same command in the real tree printed "363 passed, 1 failed" - the
+  // SAME TOTAL of 364, which is why nothing ever looked wrong. An assertion that cannot run, wearing
+  // a pass. The isolation recipe (a git-archive copy, mandatory for every wall) is what disarmed it,
+  // so the gate was reliably dead in precisely the run it exists to guard.
+  //
+  // Two repairs, because either alone leaves a hole: the caller may now HAND US the real ledger via
+  // CHANGELOG_PATH so the gate actually runs inside a copy, and a genuine skip is counted as a SKIP
+  // rather than a pass so it can never again be invisible in the total.
+  const chPath = process.env.CHANGELOG_PATH
+    ? path.resolve(process.env.CHANGELOG_PATH)
+    : path.resolve(root, "..", "..", "qa", "CHANGELOG.jsonl");
   if (!rel || !fs.existsSync(chPath)) {
-    passed++;
-    if (rel) console.log("  ·   CHANGELOG gate skipped — qa/CHANGELOG.jsonl is in the root repo and is not present here");
+    skipped++;
+    if (rel) console.log(`  ·   CHANGELOG gate SKIPPED — no ledger at ${chPath}. This is NOT a pass: the release-row gate did not run. Set CHANGELOG_PATH to the root repo's qa/CHANGELOG.jsonl.`);
   } else {
     const ch = fs.readFileSync(chPath, "utf-8");
     // QA-1012 (2026-08-24): this was a raw substring match on `"release":"<rel>"` — with NO space
@@ -5276,5 +5289,5 @@ for (const file of walk(root)) {
 
 
 
-console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed`);
+console.log(`\ncheck-user-copy: ${passed} passed, ${failed} failed${skipped ? `, ${skipped} SKIPPED (did not run - NOT a pass)` : ""}`);
 process.exit(failed ? 1 : 0);
