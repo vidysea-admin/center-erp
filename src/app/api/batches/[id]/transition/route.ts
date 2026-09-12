@@ -63,11 +63,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
   }
 
-  // -235: this row hardcoded `oldValue: undefined`, so the ONE audit entry that records a status move
-  // rendered as `null → "Completed"` on the Activity tab and never said what it moved FROM. It became
-  // load-bearing here: restoring a mistakenly-cancelled batch has to be able to answer "cancelled from
-  // what?", and the Activity tab was the only place that could ever have known. Read before the write,
-  // because transitionBatch saves the new status onto the same document.
+  // QA-2492: this read no longer feeds a status audit row - that row now lives INSIDE transitionBatch
+  // (rules.ts, at the `batch.save()` where the status actually changes), because three other callers
+  // of the same function never wrote one and a batch could change state with nothing naming who did
+  // it. The row's -235 history moved with it: it once hardcoded `oldValue: undefined` and rendered
+  // "null → Completed", and restoring a mistakenly-cancelled batch has to answer "cancelled from
+  // what?". `from` inside transitionBatch is read off the same document the arms mutate, so it cannot
+  // race this separate findById the way this copy could.
+  // What `before` is still for, and the only thing it is for, is the exam_held status guard below.
   const before = await Batch.findById(id).select("status").lean<any>();
   // QA-2261 (cycle 2, found by the checker): the `target !== "Closing"` refusal above constrains
   // WHERE the caller is going and says nothing about where the batch IS. So `exam_held` could be
@@ -121,6 +124,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     enrollment_override: enrollment_override === true,
     actor: user.id,
   });
-  await audit({ entity: "Batch", entityId: batch._id, field: "status", newValue: target, oldValue: before?.status, actor: user.id });
+  // QA-2492: the status row that stood here is GONE, not moved to another line of this file - it is
+  // written by transitionBatch itself now, with the identical field/oldValue/newValue/actor shape, so
+  // the Activity tab reads the same and every caller gets one instead of only this one. Removing it
+  // rather than keeping both is the deliberate half of the fix: two rows per move would make the
+  // trail count each transition twice, and a duplicate on ONE of four callers is a worse record than
+  // either a single row everywhere or none.
   return NextResponse.json({ item: batch });
 });

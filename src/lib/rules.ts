@@ -1105,6 +1105,12 @@ export async function transitionBatch(batchId: string, target: string, opts: {
   // -112 (QA-219): completion can now DERIVE from the rows (deriveCompletion), so a hand press of
   // "Mark Completed" may arrive after the batch already got there. Same status = already done,
   // not a refusal.
+  // QA-2492: no status row on this path, deliberately - nothing moved, so there is nothing to
+  // record as a move. It IS a behaviour delta and it is disclosed rather than hidden: the caller's
+  // row this change removes fired unconditionally, so a repeat press through /transition on an
+  // already-Completed batch used to leave "status: Completed -> Completed" on the Activity tab. That
+  // row recorded a PRESS, not a change, and a trail that says a batch changed status when it did not
+  // is the reading that cost this project a root-cause in the first place.
   if (from === target && ["Closing", "Completed"].includes(target)) return batch;
 
   const fail = (msg: string) => { throw new HttpError(409, msg); };
@@ -1412,6 +1418,47 @@ export async function transitionBatch(batchId: string, target: string, opts: {
 
   batch.status = target as any;
   await batch.save();
+  // QA-2492 (S2, filed by a checker root-causing Manish's 2026-09-12 mail - a batch that appeared to
+  // change state on its own). Until this line, a Batch status move was audited at ONE CALLER,
+  // transition/route.ts:124, and the three other call sites into this same function wrote nothing:
+  // approvals/[id]/route.ts :150/:154 drive Cancelled and Completed off an approval decision and
+  // `grep 'entity: "Batch"'` over that whole file returns ZERO, on success and on failure alike;
+  // complete/route.ts :334/:339 walks Active -> Closing -> Completed and leaves only its
+  // `completed_by_admin` row AFTER the second rung, so a ladder that died on the first left a batch
+  // sitting in Closing with nothing on its Activity tab naming who put it there. That is precisely
+  // the question the mail asked, and the trail could not answer it.
+  //
+  // So the row is written HERE, where the status actually changes, rather than at each caller. A
+  // rule every caller must remember is the guard-that-cannot-fire shape - audit.ts:16 moved its
+  // masking down into audit() for the same reason, after a direct caller leaked a live tc_password -
+  // and this one had already been forgotten by three callers out of four. transition/route.ts's copy
+  // is REMOVED in the same change rather than left to duplicate this row.
+  //
+  // `from` is read off the document at the top of this function, before any arm touches it, so it
+  // cannot race the way the route's separate findById could. -235 is why it is carried at all: the
+  // row used to hardcode `oldValue: undefined` and rendered "null -> Completed", and restoring a
+  // mistakenly-cancelled batch has to be able to answer "cancelled from WHAT?".
+  //
+  // The actor expression is activateFromEvidence's (:1067), unchanged - the existing precedent in
+  // this file for a transition with no logged-in actor, and three rows inside this very function
+  // already use it. A SYSTEM move records actor null + actorType "SYSTEM", which activity.tsx:30
+  // renders as the word SYSTEM (`a.actor?.name ?? a.actor_type`) rather than the blank a null actor
+  // on a USER row would have shown - a row that names nobody is worse than no row, because it looks
+  // answered. CAVEAT: the approvals route HAS a human (the approver) and simply does not forward
+  // one, so its rows say SYSTEM until `actor: user.id` is added THERE. That is honest about what
+  // this function knows and weaker than what happened; the approver's name is one hop away on the
+  // ApprovalRequest. Deliberately not fixed from here - it is that route's one-line change.
+  //
+  // Ordered save -> audit -> deriveTrainerStatus, the same order activateFromEvidence uses, and the
+  // order earns its place in one direction: deriveTrainerStatus does its own DB writes and can
+  // throw, so with the audit downstream of it a Rule 12 failure would commit a status change and
+  // lose its row - QA-2492 again, arriving from the other side. And the await is bare, NOT wrapped
+  // in try/catch: every other audit() call in this file is bare, and swallowing this one would
+  // reinstate the exact defect being fixed, a status change with no trail, this time by design.
+  await audit({
+    entity: "Batch", entityId: batch._id, field: "status", oldValue: from, newValue: target,
+    actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+  });
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
   return batch;
 }

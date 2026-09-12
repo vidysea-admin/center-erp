@@ -146,12 +146,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       });
       effectApplied = true;
       break;
+    // QA-2492: transitionBatch now audits its own status change, so these two finally leave a trail -
+    // this whole file used to grep ZERO for entity: "Batch", on success and on failure alike. But the
+    // audit can only name whoever it is HANDED, and neither call forwarded one, so an approval-driven
+    // cancel or complete would have recorded actor_type SYSTEM. That is true about what transitionBatch
+    // knows and WEAKER THAN WHAT HAPPENED: there is a human here, the approver, sitting in `user` since
+    // line 16. "A batch was cancelled by the system" and "Karunn approved the cancellation" are not the
+    // same sentence, and the second one is the entire reason this row exists.
     case "batch.cancel":
-      await transitionBatch(String(request.entity_id), "Cancelled", { isAdmin: true, reason: p.reason });
+      await transitionBatch(String(request.entity_id), "Cancelled", { isAdmin: true, reason: p.reason, actor: user.id });
       effectApplied = true;
       break;
     case "batch.complete":
-      await transitionBatch(String(request.entity_id), "Completed", { isAdmin: true });
+      await transitionBatch(String(request.entity_id), "Completed", { isAdmin: true, actor: user.id });
       effectApplied = true;
       break;
     case "invoice.raise":
