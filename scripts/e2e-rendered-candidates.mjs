@@ -159,7 +159,32 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
 // QA-2420 — Closure Save is an EDIT, not a lifecycle transition. These are browser assertions
 // because the bug was what an operator could press/observe while React and the network raced; an
 // API-only test cannot prove any of the disabled state, local error, or stale-navigation contract.
-{
+//
+// QA-2509 (S2) — CONTAINED IN ITS OWN try/catch, AND THIS IS THE MOST IMPORTANT LINE IN THE FILE.
+// This block drives a real browser through a long journey and it has thrown on EVERY recent wall
+// (_w310 through _w314, five for five: `locator.isDisabled: Timeout 30000ms`). The file-level
+// QA-2441 guard caught each throw, recorded ONE failed assertion, and called finish() — which ends
+// the SUITE. So everything below this block stopped running, and nobody noticed, because a suite
+// that reports a count does not register as a crashed suite.
+//
+// WHAT THAT COST, measured rather than feared: `grep -c "renders rows for the"` over the wall logs
+// of _w310/_w311/_w312/_w313/_w314 returns **0, on all five**. That string is THE INVARIANT at
+// :801 — "the screen renders rows for the N it announces" — the assertion QA-1145 exists for and
+// the reason this entire suite was written. It has not executed once. Its sibling at :803, the
+// "does not tell a centre with candidates to add or import" arm, likewise: 0 of 5.
+//
+// So for at least five releases the suite named after that defect has been reporting 59 green
+// while the defect it guards was unguarded. A red arm says "this broke". A skipped arm says
+// nothing at all, and is indistinguishable from a green one in a TOTAL — which is this project's
+// oldest lesson (an assertion that cannot fail) arriving from the other side: an assertion that
+// cannot RUN.
+//
+// The containment is the fix, not the cure. QA-2420 is a STALLED, human-owned unit and the throw
+// itself is still real and still reported as a failure below — nothing is swallowed, nothing is
+// made green. What changes is only the BLAST RADIUS: one fragile browser journey can no longer
+// take 34 unrelated assertions down with it.
+let qa2420Fatal = null;
+try {
   const batchPath = (id) => `${BASE}/batches/${id}`;
   const closurePath = (id) => `/api/batches/${id}/closure`;
   const parentPath = (id) => `/api/batches/${id}`;
@@ -729,7 +754,16 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
       && ordinaryFreeze.bulkCertificateInputDisabled,
     JSON.stringify(ordinaryFreeze));
   if (ordinaryParentFault) await removeFaultRoute(ordinaryParentFault, parentPath(certCompletionBatch._id), "ordinary completion parent-refresh fault");
+} catch (e) {
+  // Recorded as a real FAILURE, never swallowed — the throw is still this suite's problem and still
+  // shows up red. The only thing that changed is that it stops here instead of ending the run.
+  qa2420Fatal = e;
 }
+ok("QA-2509: the QA-2420 browser journey completed without an uncaught error",
+  qa2420Fatal === null,
+  qa2420Fatal
+    ? `ABORTED: ${String(qa2420Fatal?.message ?? qa2420Fatal).replace(/\s+/g, " ").slice(0, 220)} — CONTAINED: every assertion after this point still ran (before QA-2509 they did not)`
+    : "");
 
 // QA-1248: wait for the list to have SETTLED, not for a stopwatch. The page fetches limit=2000
 // client-side; a fixed sleep on a slow runner produces "announced>0, rows=0" - which is the live
