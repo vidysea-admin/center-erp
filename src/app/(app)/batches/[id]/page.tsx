@@ -5926,7 +5926,11 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           <input className={inputCls} value={form.note ?? ""} placeholder="e.g. venue hire for the assessment day"
             onChange={(e) => setForm({ ...form, note: e.target.value })} />
         </Field>
-        <div className="flex items-end gap-2">
+        {/* QA-2494: same shape as costs/page.tsx:207 in a md:grid-cols-5 grid (:5876) - the action
+            buttons shared ONE grid cell with no flex-wrap, and Btn is whitespace-nowrap. It carries
+            two buttons today so it has not overflowed YET, which is the reason to fix it in the same
+            change rather than wait for the third one to be added. */}
+        <div className="flex flex-wrap items-end gap-2 md:col-span-5">
           <Btn onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
           {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
         </div>

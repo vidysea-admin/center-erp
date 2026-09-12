@@ -204,11 +204,43 @@ function CostsInner() {
                   <Field label="Payment reference"><input className={inputCls} value={form.payment_ref ?? ""} onChange={(e) => setForm({ ...form, payment_ref: e.target.value })} /></Field>
                 </>
               )}
-              <div className="flex items-end gap-2">
+              {/* QA-2494 (Umesh, 12/09, looking at live -304): "Mark payment done" was rendering
+                  OUTSIDE this card, and it took the whole app with it - the sidebar clipped mid-word
+                  and a horizontal scrollbar across the window. One form row was dragging the entire
+                  page into horizontal scroll.
+
+                  WHY IT HID FOR A RELEASE. This is a `md:grid-cols-6` grid (:157) and every Field is
+                  one cell, so the buttons were sharing ONE cell - about a sixth of the width, ~250px.
+                  Three of these four buttons and both extra date fields (:201-206) are gated on
+                  `editId`, so ADD mode puts one button in that cell and fits; only EDIT puts four
+                  there. `Btn` is `whitespace-nowrap` (ui.tsx:174) and this row had no `flex-wrap`, so
+                  ~390px of unshrinkable content had nowhere to go but out. -305 is what makes this
+                  urgent rather than obscure: it puts an Edit control on every cost row on three
+                  screens, so the form that was reachable only by an undiscoverable row-click becomes
+                  the normal way to correct a cost.
+
+                  THE SAME LESSON IS ALREADY WRITTEN ONE LEVEL UP, in this component's own header:
+                  ui.tsx:1244 (QA-120) - "a Section whose actions carry two buttons pushed the whole
+                  card 124px past a phone screen; now the actions drop to a second line instead". The
+                  header was taught to wrap; the form body never was. 124px then, ~140px now.
+
+                  So: `md:col-span-6` gives the actions their own full-width row (where form actions
+                  belong anyway) and deletes the 250px cage. `flex-wrap` is the GUARANTEE rather than
+                  the layout - col-span fixes this window, flex-wrap fixes every narrower one and the
+                  next button somebody adds here.
+
+                  And the grouping, decided by Umesh the same day: a red destructive Delete sat
+                  immediately beside the primary Save, while an ordinary frequent action was stranded
+                  at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
+              <div className="flex flex-wrap items-end gap-2 md:col-span-6">
                 <Btn onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
-                {editId && canApproveCosts && <Btn kind="danger" onClick={deleteCost}>Delete</Btn>}
-                {editId && canApproveCosts && form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
+                {editId && canApproveCosts && (
+                  <span className="flex flex-wrap items-end gap-2 md:ml-auto">
+                    {form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
+                    <Btn kind="danger" onClick={deleteCost}>Delete</Btn>
+                  </span>
+                )}
               </div>
             </div>
             {/* The description was rendered ONLY when editing, so the person posting the cost - the

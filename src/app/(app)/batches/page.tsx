@@ -127,7 +127,6 @@ function BatchesInner() {
   // "Closed" (Rule 52) included so settled batches can be isolated and counted (audit find).
   const BATCH_STATUSES = ["Planning", "Ready", "Active", "Assessment Awaited", "Closing", "Completed", "Closed", "Cancelled"];
   const trainerScoped = role === "Trainer" && mineFilter === "mine" ? items.filter((b) => b.is_mine) : items;
-  const statusCount = (s: string) => trainerScoped.filter((b) => b.status === s).length;
   // QA-027 (-71): the client spec wanted Trainer Required / Candidate Shortage /
   // Infrastructure Pending as REPORTABLE states. They stay computed (no enum fork) but are
   // FILTERABLE now — a Planning batch joins its Preparation-board row by centre×role.
@@ -142,17 +141,54 @@ function BatchesInner() {
     }
     return cats;
   };
-  const blockCount = (c: string) => trainerScoped.filter((b) => b.status === "Planning" && blockersOf(b).has(c)).length;
-  const statusShown = fStatus ? trainerScoped.filter((b) => b.status === fStatus) : trainerScoped;
   // -86: "no attendance yet" = no day-wise log AND no matched portal import.
   // A-12: `attendance_days` may now be null (never logged) as well as 0 (logged, no days). Neither
   // is "attendance on record", so the test is unchanged in meaning — spelled out because `null > 0`
   // being false is the kind of accident that stops being true when someone rewrites the comparison.
   const noAttendance = (b: any) => !((b.attendance_days ?? 0) > 0) && !b.portal_as_of;
-  const shown = fBlock === "no-attendance"
-    ? statusShown.filter((b) => noAttendance(b) && ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"].includes(b.status))
-    : fBlock ? statusShown.filter((b) => b.status === "Planning" && blockersOf(b).has(fBlock)) : statusShown;
-  const noAttendanceCount = trainerScoped.filter((b) => noAttendance(b) && ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"].includes(b.status)).length;
+  const ATTENDANCE_SCOPE = ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"];
+  const BLOCK_LABELS: Record<string, string> = {
+    trainer: "Trainer required", candidates: "Candidate shortage",
+    infrastructure: "Infrastructure pending", "no-attendance": "No attendance yet",
+  };
+
+  // QA-2493 (S2) - Manish 12/09, and Umesh reproduced it on his own screen before we read the mail.
+  // These two pill rows are ANDed, and a blocker is a property of PLANNING batches only - blockCount
+  // has always said so itself. So "Completed" + "Trainer required" asked for a batch that is Planning
+  // and Completed at once and got, correctly, nothing - while BOTH pills advertised a non-zero count,
+  // because each count was computed as if the other filter did not exist. The table then rendered
+  // "No batches - plan the first one", the message for an EMPTY SYSTEM, on a system holding twenty
+  // batches. Both readers reported it as lost data; the four rows were in the browser the whole time.
+  //
+  // Umesh's own repro names the mechanism exactly: "reload krke first time direct click par dikh rha
+  // hai" - fBlock is useState(""), so the first click after a reload has no stale blocker to AND, and
+  // only SWITCHING between the rows reveals it. That is why it read as intermittent. A peer checker
+  // then measured the three states in a real browser: 20 rows, 4 with Completed, 0 with both.
+  //
+  // Three things are fixed together and the middle one is the real invariant:
+  //   1. the rows can no longer contradict - choosing one clears an incompatible other;
+  //   2. EVERY PILL'S COUNT EQUALS THE NUMBER OF ROWS CLICKING IT PRODUCES, because both counts are
+  //      now measured under the other filter - a pill can never again promise rows it cannot show;
+  //   3. an emptied table names the filters that emptied it instead of claiming the system is empty.
+  // The `no-attendance` branch was always written this way - it names the statuses it applies to -
+  // which is why it alone never produced this symptom. It is the model the other three now follow.
+  const matchesStatus = (b: any, s: string) => !s || b.status === s;
+  const matchesBlock = (b: any, c: string) =>
+    !c ? true
+      : c === "no-attendance" ? (noAttendance(b) && ATTENDANCE_SCOPE.includes(b.status))
+        : (b.status === "Planning" && blockersOf(b).has(c));
+  // Which (blocker, status) pairs are a narrower SEARCH rather than a contradiction.
+  const blockAllows = (c: string, st: string) =>
+    !c || !st || (c === "no-attendance" ? ATTENDANCE_SCOPE.includes(st) : st === "Planning");
+
+  const shown = trainerScoped.filter((b) => matchesStatus(b, fStatus) && matchesBlock(b, fBlock));
+  const statusCount = (s: string) => trainerScoped.filter((b) => matchesStatus(b, s) && matchesBlock(b, fBlock)).length;
+  const blockCount = (c: string) => trainerScoped.filter((b) => matchesStatus(b, fStatus) && matchesBlock(b, c)).length;
+  // The blocker ROW's visibility is measured UNFILTERED, deliberately. Hiding the row when the
+  // current status zeroes every blocker would hide the very pill doing the emptying - this same
+  // defect, reintroduced one layer up, and invisible instead of merely confusing.
+  const blockRowExists = Object.keys(BLOCK_LABELS).some((c) => trainerScoped.some((b) => matchesBlock(b, c)));
+  const filterNote = [fStatus ? statusLabel(fStatus) : "", fBlock ? BLOCK_LABELS[fBlock] : ""].filter(Boolean).join(" + ");
 
   useEffect(() => {
     if (form.location) api(`/api/locations/${form.location}/rooms`).then((d) => {
@@ -359,21 +395,32 @@ function BatchesInner() {
                 { value: "all", label: "Guest faculty — other batches at my centre", count: items.length },
               ]} />
           )}
-          <FilterPills active={fStatus} onChange={(v) => setFStatus(v === fStatus ? "" : v)}
-            options={[{ value: "", label: "All", count: trainerScoped.length },
+          <FilterPills active={fStatus} onChange={(v) => {
+            const next = v === fStatus ? "" : v;
+            setFStatus(next);
+            // QA-2493: never leave the two rows asking for a batch that cannot exist.
+            if (!blockAllows(fBlock, next)) setFBlock("");
+          }}
+            options={[{ value: "", label: "All", count: statusCount("") },
               // -102: filter VALUE stays the stored enum; only the pill's wording is the
               // client's ("Closing" → "Result Awaited"), so deep links keep working.
               ...BATCH_STATUSES.map((s) => ({ value: s, label: statusLabel(s), count: statusCount(s) }))]} />
           {/* QA-027 (-71): the spec's blocker states, filterable — computed, never an enum. */}
-          {(blockCount("trainer") + blockCount("candidates") + blockCount("infrastructure") + blockCount("other") + noAttendanceCount) > 0 && (
-            <FilterPills active={fBlock} onChange={(v) => setFBlock(v === fBlock ? "" : v)}
-              options={[
-                { value: "trainer", label: "Trainer required", count: blockCount("trainer") },
-                { value: "candidates", label: "Candidate shortage", count: blockCount("candidates") },
-                { value: "infrastructure", label: "Infrastructure pending", count: blockCount("infrastructure") },
-                // -86 (Umesh): which running/finished batches still have NO attendance on record
-                { value: "no-attendance", label: "No attendance yet", count: noAttendanceCount },
-              ].filter((o) => o.count > 0)} />
+          {blockRowExists && (
+            <FilterPills active={fBlock} onChange={(v) => {
+              const next = v === fBlock ? "" : v;
+              setFBlock(next);
+              // QA-2493: a blocker is a Planning fact (bar no-attendance, which carries its own
+              // scope), so an incompatible status beside it is a contradiction, not a search.
+              if (!blockAllows(next, fStatus)) setFStatus("");
+            }}
+              options={Object.entries(BLOCK_LABELS)
+                // -86 (Umesh): "No attendance yet" = which running/finished batches still have NO
+                // attendance on record. It keeps its own status scope; see matchesBlock.
+                .map(([value, label]) => ({ value, label, count: blockCount(value) }))
+                // QA-2493: the ACTIVE pill stays on screen at zero. A filter you cannot see is a
+                // filter you cannot clear, which is how an empty table starts looking like lost data.
+                .filter((o) => o.count > 0 || o.value === fBlock)} />
           )}
           <DataTable rows={shown} storageKey="batches" onRowClick={(r) => router.push(`/batches/${r._id}`)}
             cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
@@ -495,7 +542,9 @@ function BatchesInner() {
               { key: "created_by", label: "Entered by", mobile: false, filterable: true,
                 sortValue: (r: any) => r.created_by?.name ?? "", filterText: (r: any) => r.created_by?.name ?? "(seed/import)",
                 render: (r: any) => r.created_by?.name ?? <span className="text-gray-400">(seed/import)</span> },
-            ]} empty="No batches — plan the first one." />
+            ]} empty={filterNote
+              ? `No batches match ${filterNote}. Clear a filter above to see the rest — nothing has been removed.`
+              : "No batches — plan the first one."} />
         </>
       )}
 
