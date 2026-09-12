@@ -43,13 +43,37 @@ export async function audit(opts: {
 //
 // Exported and consumed by BOTH, so the two cannot drift apart again - the same shape as
 // QA-2495's shared snapshot type. A second definition of a word is how one of them goes wrong.
+// QA-2510: A STORED DATE AND WHAT AN `<input type="date">` POSTS ARE NEVER JSON-EQUAL, so before
+// this the word "changed" was wrong about `entry_date` on EVERY save of EVERY cost entry - including
+// a row created through the form and saved again without touching a single control. The money
+// approvers were told "changed: entry_date" for a correction that did not happen. Found by a checker
+// driving the real product; an earlier peer probe reported the opposite because it posted an
+// API-shaped payload whose date happened to round-trip, which is exactly why "I sent a request" and
+// "a person used the screen" are different measurements.
+//
+// THE COMPARISON THAT IS ACTUALLY RIGHT is not "do these look the same" and not "are these the same
+// calendar day in some timezone" - both of those are guesses about a display. It is:
+//
+//     WOULD SAVING THIS VALUE STORE WHAT IS ALREADY STORED?
+//
+// Mongoose casts the posted "YYYY-MM-DD" with `new Date(...)`, so constructing the same Date and
+// comparing instants answers that exactly, and it cannot drift with the server's timezone, the
+// browser's, or IST - none of which appear in it. A real date edit still produces a different
+// instant and is still reported as changed.
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+function sameStoredValue(before: unknown, after: unknown): boolean {
+  if (before instanceof Date && typeof after === "string" && DATE_ONLY.test(after)) {
+    const wouldStore = new Date(after).getTime();
+    return !Number.isNaN(wouldStore) && before.getTime() === wouldStore;
+  }
+  return JSON.stringify(before ?? null) === JSON.stringify(after ?? null);
+}
+
 export function changedFields(
   before: Record<string, unknown> | null | undefined,
   after: Record<string, unknown>,
 ): string[] {
-  return Object.keys(after).filter(
-    (key) => JSON.stringify(before?.[key] ?? null) !== JSON.stringify(after[key] ?? null),
-  );
+  return Object.keys(after).filter((key) => !sameStoredValue(before?.[key], after[key]));
 }
 
 export async function auditDiff(
