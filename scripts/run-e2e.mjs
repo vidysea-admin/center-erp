@@ -480,11 +480,25 @@ for (const suite of SUITES) {
   const r = spawnSync(process.execPath, [path.join(dir, suite)], { encoding: "utf-8", env: process.env, maxBuffer: 32 * 1024 * 1024 });
   process.stdout.write(r.stdout ?? "");
   if (r.stderr) process.stderr.write(r.stderr);
-  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed\s*$/m);
+  // QA-2540: the `\s*$` anchor used to end this pattern, so ANY trailing text on the summary line
+  // made the match fail and the suite was recorded `crashed, 0 passed, 0 failed` - its real passes
+  // erased from TOTAL. check-user-copy gained a ", N SKIPPED (...)" suffix in QA-2537 and became
+  // exactly that: entry #1 of this runner reporting CRASHED with 363 real passes gone. It is live in
+  // CI, not latent, because nothing in .github/ sets CHANGELOG_PATH and `qa/` is not even in the repo
+  // Actions checks out - so the skip fires on every CI run.
+  //
+  // I wrote "latent - the wall exports CHANGELOG_PATH" while auditing a release about unchecked
+  // coverage claims. That sentence was true of ONE caller and I left it standing for all of them.
+  //
+  // So the anchor goes and the suffix is CAPTURED instead. A suite that reports skips now keeps its
+  // real numbers AND says how many assertions did not run - "did not run" must never again be
+  // reachable only by reading prose the summary line contradicts.
+  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED)?/m);
   results.push({
     suite,
     passed: m ? Number(m[1]) : 0,
     failed: m ? Number(m[2]) : 0,
+    skipped: m && m[3] ? Number(m[3]) : 0,
     crashed: !m || r.status === null, // no final count = the suite died before finishing
     exit: r.status,
   });
@@ -509,6 +523,17 @@ let totalLine = `\nTOTAL: ${totalPass} passed, ${totalFail} failed across ${resu
 if (crashedSuites.length) {
   totalLine += `\n!! ${crashedSuites.length} SUITE(S) CRASHED and contributed NO counts, so the numbers above are NOT a pass: ` +
     crashedSuites.map((r) => r.suite).join(", ");
+}
+// QA-2540: the argument QA-354 makes for crashes, made for SKIPS. A skipped assertion contributes
+// to neither total, so a run with a dead gate reads exactly like a run with a live one - which is
+// how the CHANGELOG push gate stayed dead for the entire life of the isolation recipe. The TOTAL
+// line is what gets quoted into manifests, commit messages and release notes, so it is the line
+// that has to refuse to look clean.
+const skippedSuites = results.filter((r) => (r.skipped ?? 0) > 0);
+if (skippedSuites.length) {
+  const n = skippedSuites.reduce((a, r) => a + (r.skipped ?? 0), 0);
+  totalLine += String.fromCharCode(10) + "!! " + n + " assertion(s) SKIPPED - they did not run, and a skip is not a pass: " +
+    skippedSuites.map((r) => r.suite + " (" + r.skipped + ")").join(", ");
 }
 if (quietFailures.length) {
   totalLine += `\n!! ${quietFailures.length} suite(s) reported no failures but exited non-zero: ` +
