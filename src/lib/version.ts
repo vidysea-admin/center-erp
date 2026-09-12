@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-308";
+export const RELEASE = "2026.08.14-309";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,28 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-309 changes no software. Like the release before it, it corrects a sentence in the "  +
+  "note published with the previous release - and it is the same sentence slot getting "  +
+  "it wrong again, which is the part worth saying out loud. "  +
+  "The previous note said that whether a release note is true is established by people "  +
+  "reading it, and that this is how the errors it was correcting had been found. Neither "  +
+  "half holds. The errors were found by automated review agents, not by a person. And "  +
+  "they were not found the same way: one came from reading the note, and the other from "  +
+  "reading the records the note was describing, which is a different check entirely. "  +
+  "Saying they were found the same way made the account neater than what happened, and "  +
+  "the paragraph it sat in was complaining about exactly that. "  +
+  "What is actually the case: what runs automatically before a release goes out tests the "  +
+  "note's shape - that it names this release, that it is not a copy of an older one. "  +
+  "Whether it is TRUE is established afterwards, by review, sometimes by reading the note "  +
+  "and sometimes by going and reading the thing it describes. "  +
+  "This keeps happening in the same place: the paragraph explaining why these notes avoid "  +
+  "counts is the one that has kept claiming more than was checked. The rule we started "  +
+  "with was to "  +
+  "take the figures out. That was not sufficient: a sentence can say how many, or say "  +
+  "only, or every, or both, without using a single figure, and each one still needs "  +
+  "someone to go and look. That is the rule we are carrying forward.";
+
+const RELEASE_NOTE_ARCHIVE_308 =
   "-308 changes no software. It corrects the note published with the previous release, "  +
   "and the correction is worth reading because of where the mistakes were. "  +
   "The previous note said that a release note is the only thing here published without "  +
@@ -1633,6 +1655,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_308 + " " +
   RELEASE_NOTE_ARCHIVE_307 + " " +
   RELEASE_NOTE_ARCHIVE_306 + " " +
   RELEASE_NOTE_ARCHIVE_305 + " " +
