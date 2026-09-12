@@ -17,8 +17,13 @@ export default function PnlPage() {
   return <Suspense><PnlInner /></Suspense>;
 }
 
-type Filters = { from: string; to: string; location: string; program: string; scheme: string };
-const EMPTY: Filters = { from: "", to: "", location: "", program: "", scheme: "" };
+// Manish K, mail 2026-09-12 item 2: "Under Finance and Revenue & P&L, please add Batch Code as a
+// reporting/filtering parameter... including the relevant revenue, cost, and P&L details."
+// The SERVER side of this has existed the whole time - PnlFilters carries `batch` (rules.ts:6366)
+// and pnl/route.ts:25 already reads it off the query string. Only the control was missing, so the
+// report could be filtered batch-wise by anyone who hand-edited a URL and by nobody else.
+type Filters = { from: string; to: string; location: string; program: string; scheme: string; batch: string };
+const EMPTY: Filters = { from: "", to: "", location: "", program: "", scheme: "", batch: "" };
 
 function PnlInner() {
   const sp = useSearchParams();
@@ -26,7 +31,7 @@ function PnlInner() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [lists, setLists] = useState<{ locations: any[]; programs: any[]; schemes: any[] }>({ locations: [], programs: [], schemes: [] });
+  const [lists, setLists] = useState<{ locations: any[]; programs: any[]; schemes: any[]; batches: any[] }>({ locations: [], programs: [], schemes: [], batches: [] });
 
   // Filters and the open card both live in the URL. A P&L figure is opened in order to send it to
   // somebody, and a link that carries neither the filter nor the card is a link to a different
@@ -49,10 +54,11 @@ function PnlInner() {
   useEffect(() => {
     (async () => {
       try {
-        const [l, p, s] = await Promise.all([
+        const [l, p, s, b] = await Promise.all([
           api("/api/locations?limit=500"), api("/api/programs?limit=500"), api("/api/master-lists/schemes"),
+          api("/api/batches?limit=2000"),
         ]);
-        setLists({ locations: l.items ?? [], programs: p.items ?? [], schemes: s.items ?? [] });
+        setLists({ locations: l.items ?? [], programs: p.items ?? [], schemes: s.items ?? [], batches: b.items ?? [] });
       } catch { /* the filters are a convenience; the report still loads without them */ }
     })();
   }, []);
@@ -171,6 +177,17 @@ function PnlInner() {
           <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.program} onChange={(e) => set("program", e.target.value)}>
             <option value="">All job roles</option>
             {lists.programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+          </select>
+        </label>
+        {/* Manish's item 2: the batch-wise view he asked for. Sorted by code so the list reads the
+            way he says them out loud, and it carries the batch CODE rather than the portal id -
+            THREE of the four Completed batches on production have no govt_batch_id at all. */}
+        <label className="text-xs text-gray-600">Batch
+          <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.batch} onChange={(e) => set("batch", e.target.value)}>
+            <option value="">All batches</option>
+            {[...lists.batches].sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? ""))).map((b: any) => (
+              <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>
+            ))}
           </select>
         </label>
         <label className="text-xs text-gray-600">Scheme

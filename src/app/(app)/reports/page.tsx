@@ -249,6 +249,27 @@ function ReportsInner() {
     // three this report can actually attribute to a single batch (REPORT_LABELS.batch_scoped);
     // Target/Approved/Pending/Not-approved stay exactly as they were, no Batch ID column at all,
     // because those figures belong to the centre x role, not to any one batch under it.
+    // Manish K, mail 2026-09-12 item 2: "Under Finance and Revenue & P&L, please add Batch Code as a
+    // reporting/filtering parameter... to view the financial statistics batch-wise within each
+    // location." The Batch ID column below is NOT that, and the difference is not cosmetic: it reads
+    // `govt_batch_id`, the client's PORTAL id, while he asked for the BATCH CODE - the string he and
+    // the centre actually say out loud (MUZ-CHAR-RPLHSL-SPIT-01). THREE of the four Completed batches
+    // on production carry no govt_batch_id at all, so filtering his way through that column would
+    // have matched them under "(blank)" - the report would have looked like it answered him while
+    // hiding half the batches he was asking about.
+    //
+    // No API work: reportRollup (rules.ts) already emits batch as { _id, code, govt_batch_id, status },
+    // so the code was on the wire the whole time and only the column was missing. Both columns stay -
+    // the portal id is still the one SIDH wants and BatchIdCell is where it is typed in.
+    ...(L[drill]?.batch_scoped ? [{
+      key: "batch_code", label: "Batch Code", minWidth: 200, sortable: true, filterable: true,
+      hint: "The batch's own code - the one the centre and the client use in conversation. Filter or sort by it to read one batch's revenue, cost and margin.",
+      sortValue: (r: any) => r.batch?.code ?? "",
+      filterText: (r: any) => r.batch?.code ?? "(no batch)",
+      render: (r: any) => r.batch
+        ? <Link href={`/batches/${r.batch._id}`} className="font-medium text-blue-700 hover:underline">{r.batch.code}</Link>
+        : <span className="text-[11px] text-gray-400">no batch</span>,
+    }] : []),
     ...(L[drill]?.batch_scoped ? [{
       key: "batch_id", label: "Batch ID", minWidth: 170, sortable: true, filterable: true,
       hint: "The client's own portal/scheme Batch ID for this batch. Blank ones can be typed in right here.",
