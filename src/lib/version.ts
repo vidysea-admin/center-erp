@@ -177,8 +177,8 @@ export const RELEASE_NOTE_CURRENT =
   "made it, rather than reading as though the system did it on its own. "  +
   "THIRD, and this one is about the tests rather than the product: one browser test could "  +
   "fail in a way that stopped the rest of its file from running at all, and it had been doing "  +
-  "so. Only sixty-three of that file's one hundred and eighty-one checks were running; the "  +
-  "other hundred and eighteen sat behind the failure, for several releases, "  +
+  "so. Only sixty-two of that file's one hundred and eighty-one checks were running; the "  +
+  "other hundred and nineteen sat behind the failure, for several releases, "  +
   "including the one written to catch a list that announces a count and then shows nothing. "  +
   "That failure is still reported as a failure; what changed is that it no longer takes the "  +
   "other checks with it. The checks for the two screen fixes in -305 are added to that file "  +

@@ -180,8 +180,11 @@ function PnlInner() {
           </select>
         </label>
         {/* Manish's item 2: the batch-wise view he asked for. Sorted by code so the list reads the
-            way he says them out loud, and it carries the batch CODE rather than the portal id -
-            THREE of the four Completed batches on production have no govt_batch_id at all. */}
+            way he says them out loud, and it carries the batch CODE rather than the portal id,
+            because a batch with no portal id collapses to a single "(blank)" token in that other
+            column and cannot be picked out at all. (QA-2524: this said "THREE of the four Completed
+            batches" until a checker pointed out the count came from chat and sits in no census on
+            disk - retracted from the public note, and it had to be retracted here too.) */}
         <label className="text-xs text-gray-600">Batch
           <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.batch} onChange={(e) => set("batch", e.target.value)}>
             <option value="">All batches</option>

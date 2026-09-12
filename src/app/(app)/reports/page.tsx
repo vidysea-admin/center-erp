@@ -253,10 +253,16 @@ function ReportsInner() {
     // reporting/filtering parameter... to view the financial statistics batch-wise within each
     // location." The Batch ID column below is NOT that, and the difference is not cosmetic: it reads
     // `govt_batch_id`, the client's PORTAL id, while he asked for the BATCH CODE - the string he and
-    // the centre actually say out loud (MUZ-CHAR-RPLHSL-SPIT-01). THREE of the four Completed batches
-    // on production carry no govt_batch_id at all, so filtering his way through that column would
-    // have matched them under "(blank)" - the report would have looked like it answered him while
-    // hiding half the batches he was asking about.
+    // the centre actually say out loud (MUZ-CHAR-RPLHSL-SPIT-01). And the old column cannot tell
+    // those batches apart: its filterText falls back to "(blank)" and its sortValue to "", so every
+    // batch without a portal id collapses to ONE identical token. Filtering his way through it would
+    // have looked like an answer while grouping them all together.
+    //
+    // QA-2524: this comment used to assert "THREE of the four Completed batches have no portal id",
+    // a count I took from a peer in chat and that exists in no census on disk. It was retracted from
+    // the public release note and left standing HERE and in finance/pnl - QA-2088's lesson word for
+    // word: correcting an over-claim everywhere you can SEE it does not correct the copy you forgot
+    // you had written. The sentence now rests on a code fact any checker can re-derive instead.
     //
     // No API work: reportRollup (rules.ts) already emits batch as { _id, code, govt_batch_id, status },
     // so the code was on the wire the whole time and only the column was missing. Both columns stay -
