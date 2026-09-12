@@ -33,6 +33,25 @@ export async function audit(opts: {
 }
 
 // Diff two plain objects and audit each changed field.
+// QA-2506/QA-2508: THE ONE DEFINITION OF "CHANGED", because there were two and they disagreed inside a
+// single request. `auditDiff` compared before-vs-after and wrote a row only for a field that really
+// moved. `notifyCostCorrection` (approvals.ts) took `Object.keys(patch)` - WHAT WAS SENT - and the
+// cost form posts its whole payload every time. So editing only the date told the money approvers
+// that the amount had changed: a false alarm on the one control this project treats as load-bearing,
+// and the -305 public release note quoted that wrong half as a feature ("the message names which
+// fields changed"). Measured before it shipped: 5 fields named, 2 actually changed.
+//
+// Exported and consumed by BOTH, so the two cannot drift apart again - the same shape as
+// QA-2495's shared snapshot type. A second definition of a word is how one of them goes wrong.
+export function changedFields(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown>,
+): string[] {
+  return Object.keys(after).filter(
+    (key) => JSON.stringify(before?.[key] ?? null) !== JSON.stringify(after[key] ?? null),
+  );
+}
+
 export async function auditDiff(
   entity: string,
   entityId: unknown,
@@ -41,14 +60,10 @@ export async function auditDiff(
   actor?: string | null,
   actorType: ActorType = "USER",
 ) {
-  for (const key of Object.keys(after)) {
-    const oldV = before?.[key];
-    const newV = after[key];
-    if (JSON.stringify(oldV ?? null) !== JSON.stringify(newV ?? null)) {
-      // No maskSensitive here any more — audit() masks on the way in, so this had become the
-      // SECOND copy of the same decision. Two masking sites is how one of them stops matching.
-      await audit({ entity, entityId, field: key, oldValue: oldV, newValue: newV, actor, actorType });
-    }
+  for (const key of changedFields(before, after)) {
+    // No maskSensitive here any more — audit() masks on the way in, so this had become the
+    // SECOND copy of the same decision. Two masking sites is how one of them stops matching.
+    await audit({ entity, entityId, field: key, oldValue: before?.[key], newValue: after[key], actor, actorType });
   }
 }
 

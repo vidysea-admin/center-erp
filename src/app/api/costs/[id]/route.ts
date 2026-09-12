@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
-import { CostEntry, COST_PAYMENT_MODE } from "@/models";
+import { Batch, CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
-import { costDeletionAuditIsDurable, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, settleFinanceAuditEvents } from "@/lib/approvals";
+import { costDeletionAuditIsDurable, costDeletionSnapshot, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, settleFinanceAuditEvents } from "@/lib/approvals";
 import { Types } from "mongoose";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
@@ -141,7 +141,15 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     costId: updated._id,
     actor: user,
     patch,
-    batchCode: (updated as any)?.batch ? String((updated as any).batch) : null,
+    before,
+    // QA-2507 (checker, cycle 2): this passed String(updated.batch) - the raw ObjectId - into a
+    // parameter literally named batchCode, so the alert and the mail SUBJECT read "Cost entry on
+    // batch 6aa4b851...". An approver cannot recognise a batch by its ObjectId; the code is the
+    // only form of it they have ever seen. The parameter name said what was wanted and the call
+    // site handed it the nearest value instead.
+    batchCode: (updated as any)?.batch
+      ? ((await Batch.findById((updated as any).batch).select("code").lean<any>())?.code ?? null)
+      : null,
     location: (updated as any)?.location ?? null,
   }).catch(() => { /* notification is a courtesy on top of a committed correction, never a gate */ });
   return NextResponse.json({ item: updated });
@@ -186,6 +194,13 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (doc.pre_approved_applied && doc.pre_approved_unit === "Per billable passed") {
     throw new HttpError(409, "A pre-approved cost cannot be deleted after its commitment has been applied.");
   }
+  // QA-2495: the snapshot is built ONCE, here, and the SAME object is handed to the writer and to
+  // both of its verifier calls below. It used to be three separate `{ amount: doc.amount, note:
+  // doc.note }` literals - harmless while it was two fields, and a QA-2497 waiting to happen at
+  // twelve: the verifier compares with JSON.stringify, so three literals are three chances for the
+  // key order or one field to drift apart and turn a delete that fully succeeded into a 409. One
+  // object, read from `doc` before anything is staged, cannot disagree with itself.
+  const oldValue = costDeletionSnapshot(doc);
   // Both creation and deletion are durable owner-backed events. Stage the deletion event before
   // the irreversible remove, then fail closed until every event is confirmed in AuditLog. A crash
   // or outage can therefore resume from this CostEntry instead of losing the deletion history.
@@ -193,7 +208,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     costId: doc._id,
     actor: user.id,
     expectedUpdatedAt: doc.updatedAt,
-    oldValue: { amount: doc.amount, note: doc.note },
+    oldValue,
     reason,
   });
   if (!claim.claimed && claim.actor !== String(user.id)) {
@@ -208,14 +223,14 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
     if (await costDeletionAuditIsDurable({
       costId: doc._id, eventId: claim.eventId, actor: claim.actor,
-      oldValue: { amount: doc.amount, note: doc.note }, reason,
+      oldValue, reason,
     })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
   }
   if (!(await garbageCollectSettledCostDeletion(doc._id))) {
     if (await costDeletionAuditIsDurable({
       costId: doc._id, eventId: claim.eventId, actor: claim.actor,
-      oldValue: { amount: doc.amount, note: doc.note }, reason,
+      oldValue, reason,
     })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
   }

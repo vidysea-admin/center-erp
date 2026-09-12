@@ -4,7 +4,7 @@
 import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostEntry, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
-import { audit } from "@/lib/audit";
+import { audit, changedFields } from "@/lib/audit";
 import { mailUsers, mailUsersByRole } from "@/lib/mailer";
 import { redactMoneyInText, redactFiguresInText } from "@/lib/permissions";
 import { createHash } from "crypto";
@@ -128,6 +128,59 @@ async function deliverOwnerEvents(
   }
 }
 
+// QA-2495 (S2) - THE TOMBSTONE IS THE ONLY COPY, AND IT KEPT TWO OF THE TWELVE FIELDS THE FORM
+// COLLECTS.
+//
+// A cost delete is a hard delete with a real cascade and no undo anywhere in the product, so
+// whatever is not in this object is gone with the document. Until now it was `{ amount, note }`:
+// the trail answered "how much and what for" and could NOT answer "against which centre, which
+// batch, which trainer, on what date, paid how" - which is exactly the list a person re-entering
+// the row by hand has to reconstruct. Not hypothetical: three CostEntry "deleted" rows written in
+// production on 11 Sept 19:42 carry that two-field shape and those ten fields are unrecoverable.
+// -305 puts the Delete control on /costs, the finance register AND the batch Costs tab at once
+// (QA-2483), so the blast radius triples in one release - hence widened BEFORE it ships.
+//
+// ONE literal, built ONCE, handed to the writer and to its verifier. That is not tidiness, it is
+// the QA-2497 lesson made structural: the two functions are a contract, and the way that contract
+// broke last time was somebody widening one end of it alone. A shared type means a widening that
+// reaches only one end now fails to compile.
+//
+// AND undefined IS NORMALIZED TO null, which is load-bearing twice over:
+//  - `sameAuditValue` is JSON.stringify, so KEY ORDER is part of the comparison. A fixed literal
+//    pins it; two hand-written object literals at two call sites would not.
+//  - JSON.stringify DROPS an undefined key, while the driver writes it as null - the same asymmetry
+//    `deliverOwnerEvents` already normalizes sixty lines above, for the same reason. Left alone, a
+//    cost with no `note` (the common shape for a sheet-imported row) would be STORED as
+//    `{...,"note":null}` and COMPARED against `{...}`, never match, and take the reuse-path 409.
+//    That trap was already latent on the two-field snapshot; at twelve mostly-optional fields it
+//    would have been the normal case rather than the edge one.
+export type CostDeletionSnapshot = {
+  entry_date: unknown; location: unknown; batch: unknown; trainer: unknown; category: unknown;
+  amount: unknown; vendor_payee: unknown; voucher_no: unknown; payment_mode: unknown;
+  paid_on: unknown; payment_ref: unknown; note: unknown;
+};
+
+export function costDeletionSnapshot(doc: any): CostDeletionSnapshot {
+  const keep = (value: unknown) => (value === undefined ? null : value);
+  // Field order follows the live Costs form top to bottom, so a reader of the audit row and a
+  // person retyping the entry are looking at the same sequence. `note` is the form's Description
+  // (models/index.ts CostEntrySchema says so explicitly) and stays last where the form puts it.
+  return {
+    entry_date: keep(doc?.entry_date),
+    location: keep(doc?.location),
+    batch: keep(doc?.batch),
+    trainer: keep(doc?.trainer),
+    category: keep(doc?.category),
+    amount: keep(doc?.amount),
+    vendor_payee: keep(doc?.vendor_payee),
+    voucher_no: keep(doc?.voucher_no),
+    payment_mode: keep(doc?.payment_mode),
+    paid_on: keep(doc?.paid_on),
+    payment_ref: keep(doc?.payment_ref),
+    note: keep(doc?.note),
+  };
+}
+
 // The deletion row must be recoverable before the CostEntry owner can disappear. Claim one
 // deterministic owner-backed event first; concurrent or later authorized deleters reuse the
 // original claimant's event rather than appending a second audit identity.
@@ -135,7 +188,7 @@ export async function ensureCostDeletionAuditEvent(input: {
   costId: unknown;
   actor: unknown;
   expectedUpdatedAt: unknown;
-  oldValue: { amount: unknown; note: unknown };
+  oldValue: CostDeletionSnapshot;
   // QA-2484: WHY, alongside who/what/when. Manish asked for it directly on the 2026-09-11 call
   // ("delete krte waqt reason ka ek daal dena chahiye"), and it rides in the SAME atomic update
   // that stages the tombstone rather than being written beside it afterwards - a reason recorded
@@ -158,6 +211,14 @@ export async function ensureCostDeletionAuditEvent(input: {
       ...COST_AUDIT_OWNER_ELIGIBLE,
       deletion_state: { $exists: false },
       updatedAt: input.expectedUpdatedAt,
+      // QA-2495 widened the SNAPSHOT and deliberately did NOT widen this predicate to all twelve.
+      // `updatedAt` is the concurrency token and already covers every field; these two are
+      // defence-in-depth, and the whole snapshot is still compared field-for-field on the reuse
+      // path below (`sameAuditValue(stored.old_value, event.old_value)`), so a mid-flight change to
+      // any of the twelve is still caught. Adding ten more equality terms here would buy nothing and
+      // would put ten new ways to produce a permanent, un-retryable 409 into the one handler
+      // QA-2497 has already been through - a widening whose only untested outcome is a false refusal
+      // is the shape of the bug, not the fix.
       amount: input.oldValue.amount,
       note: input.oldValue.note,
       "_audit_events.event_id": { $ne: event.event_id },
@@ -229,11 +290,20 @@ export async function ensureCostDeletionAuditEvent(input: {
 // green - this one only surfaced because a race test asserted the guarantee rather than the status.
 // So `reason` is a REQUIRED parameter, not an optional one: a caller that forgets it fails to
 // compile rather than silently falling back to the 409 this row exists to prevent.
+//
+// QA-2495 WIDENED old_value FROM TWO FIELDS TO TWELVE, AND WIDENED IT HERE IN THE SAME EDIT - which
+// is the entire point of the paragraph above. `sameAuditValue(written.old_value, input.oldValue)`
+// below compares the snapshot the writer stored against the snapshot this caller re-derives; had
+// only `ensureCostDeletionAuditEvent` been widened, EVERY row the writer produced would have failed
+// that line and the rescue would have stopped firing again, four hours after it was repaired the
+// first time. Both ends now take the same `CostDeletionSnapshot`, produced by the same
+// `costDeletionSnapshot` builder, so the next widening cannot reach one end alone without tsc
+// saying so.
 export async function costDeletionAuditIsDurable(input: {
   costId: unknown;
   eventId: string;
   actor: unknown;
-  oldValue: { amount: unknown; note: unknown };
+  oldValue: CostDeletionSnapshot;
   reason: string;
 }) {
   const owner = await CostEntry.collection.findOne({ _id: new Types.ObjectId(String(input.costId)) }, { projection: { _id: 1 } });
@@ -427,11 +497,19 @@ export async function notifyCostCorrection(input: {
   costId: unknown;
   actor: SessionUser;
   patch: Record<string, unknown>;
+  // QA-2506/QA-2508: the document AS IT WAS, so "changed" means changed rather than "was in the payload".
+  // Required, not optional - a caller that cannot be bothered to pass it would silently fall back to
+  // the old, wrong answer, and the wrong answer is the one that reads as working.
+  before: Record<string, unknown>;
   batchCode?: string | null;
   location?: unknown;
 }): Promise<{ notified: number; reason?: string }> {
-  const fields = Object.keys(input.patch ?? {}).filter((f) => f !== "updatedAt");
-  if (!fields.length) return { notified: 0, reason: "nothing changed" };
+  // QA-2506/QA-2508: was `Object.keys(input.patch)` - what was SENT. The cost form posts its whole payload,
+  // so a correction touching only the date told the money approvers the AMOUNT had moved. Now the
+  // same `changedFields` the audit trail itself uses (lib/audit.ts), so the notification and the
+  // audit row can never again describe the same request differently.
+  const fields = changedFields(input.before, input.patch ?? {}).filter((f) => f !== "updatedAt");
+  if (!fields.length) return { notified: 0, reason: "nothing actually changed" };
 
   const rule = await ApprovalRule.findOne({ action: "cost.post" }).lean<any>();
   if (!rule) return { notified: 0, reason: "no cost.post rule is configured, so there is no defined money audience" };
