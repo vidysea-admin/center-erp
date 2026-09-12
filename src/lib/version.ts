@@ -163,9 +163,10 @@ export const RELEASE_NOTE_CURRENT =
   "The previous note said that a release note is the only thing here published without "  +
   "signing in. That is not true - some reference data, such as the list of states and "  +
   "districts, is also served without a login. The note is unusual in a narrower way: it is "  +
-  "prose written by hand, and it is served exactly as written with nothing anywhere "  +
-  "checking it against anything, so a wrong sentence in it is not caught the way a wrong "  +
-  "figure in a report would be. That is the "  +
+  "prose written by hand, and it is served exactly as written. What gets checked "  +
+  "automatically before a release goes out is its shape - that it names this release, "  +
+  "that it is not a copy of an older one. Whether what it says is TRUE is established by "  +
+  "people reading it, which is how both of the errors above were found. That is the "  +
   "reason to be careful with it, and the previous note overstated it. "  +
   "The previous note also said that the review of the release before it kept finding "  +
   "figures that were correctly calculated from the wrong set of records. Some were. "  +
