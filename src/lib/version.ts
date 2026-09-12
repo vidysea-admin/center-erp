@@ -170,9 +170,10 @@ export const RELEASE_NOTE_CURRENT =
   "SECOND, a batch's status can no longer change without recording who changed it. That "  +
   "record is now written inside the one function every status change passes through, rather "  +
   "than at each of the places that call it, so a path added later cannot silently skip it. "  +
-  "Two paths were skipping it: completing a batch through an approval decision, and the "  +
-  "second half of the Complete action. A change made by an approval now names the approver "  +
-  "rather than reading as the system. "  +
+  "Three ways of changing a batch were skipping it: approving a cancellation, approving a "  +
+  "completion, and the Complete action itself, which moves a batch in two steps and was "  +
+  "recording neither of them. A change made by an approval now names the approver who "  +
+  "made it, rather than reading as though the system did it on its own. "  +
   "THIRD, and this one is about the tests rather than the product: one browser test could "  +
   "fail in a way that stopped the rest of its file from running at all, and it had been doing "  +
   "so. Roughly forty-five percent of that file's checks had not run for several releases, "  +
