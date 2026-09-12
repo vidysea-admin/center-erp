@@ -208,11 +208,33 @@ export async function ensureCostDeletionAuditEvent(input: {
   return { eventId: committedEventId, actor: String(stored.actor), claimed: claim.modifiedCount === 1 };
 }
 
+// QA-2497 (S2) - THIS FUNCTION IS THE RESCUE PATH, AND -305 BROKE IT BY WIDENING THE WRITER.
+//
+// A DELETE that loses the race to a recovery read (which acknowledges and collects the tombstone
+// first) finds its owner already gone. `costs/[id]/route.ts:190,197` then asks THIS function
+// whether the deletion nevertheless landed durably, and returns 200 when it did - that is the whole
+// reason the caller does not report a failure for an operation that fully succeeded. The comment
+// above ensureCostDeletionAuditEvent's claim says it out loud: "the winning claimant must not turn
+// successful completion into a false foreign-claim 500 merely because the owner is gone."
+//
+// QA-2484 made the writer stage `new_value: { deleted: true, reason }`. This checker still demanded
+// `new_value === null`, so it rejected EVERY row the writer produced and the rescue never fired. The
+// claimant got a 409 for a delete that had removed the row and written exactly one audit event.
+// Measured, not inferred: this arm passed on walls _w303/_w305/_w306/_w307/_w308 and failed on
+// _w310/_w311, the two carrying -305, with {"delete":409,"audits":1,"remains":false} identical on a
+// deterministic re-run.
+//
+// The shape being verified is the CONTRACT between two functions twelve lines apart in the same
+// file, and widening one without the other is how a guarantee gets deleted while every count stays
+// green - this one only surfaced because a race test asserted the guarantee rather than the status.
+// So `reason` is a REQUIRED parameter, not an optional one: a caller that forgets it fails to
+// compile rather than silently falling back to the 409 this row exists to prevent.
 export async function costDeletionAuditIsDurable(input: {
   costId: unknown;
   eventId: string;
   actor: unknown;
   oldValue: { amount: unknown; note: unknown };
+  reason: string;
 }) {
   const owner = await CostEntry.collection.findOne({ _id: new Types.ObjectId(String(input.costId)) }, { projection: { _id: 1 } });
   if (owner) return false;
@@ -223,7 +245,7 @@ export async function costDeletionAuditIsDurable(input: {
     && sameAuditValue(written.entity_id, new Types.ObjectId(String(input.costId)))
     && written.field === "deleted"
     && sameAuditValue(written.old_value, input.oldValue)
-    && written.new_value === null
+    && sameAuditValue(written.new_value, { deleted: true, reason: input.reason })
     && sameAuditValue(written.actor, new Types.ObjectId(String(input.actor)))
     && written.actor_type === "USER"
     && written.created_at instanceof Date

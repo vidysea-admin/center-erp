@@ -189,14 +189,14 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   if (!(await costFinanceAuditOutboxIsSettled(doc._id))) {
     if (await costDeletionAuditIsDurable({
       costId: doc._id, eventId: claim.eventId, actor: claim.actor,
-      oldValue: { amount: doc.amount, note: doc.note },
+      oldValue: { amount: doc.amount, note: doc.note }, reason,
     })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost's audit history is still being recorded. Nothing was deleted; retry after the audit trail recovers.");
   }
   if (!(await garbageCollectSettledCostDeletion(doc._id))) {
     if (await costDeletionAuditIsDurable({
       costId: doc._id, eventId: claim.eventId, actor: claim.actor,
-      oldValue: { amount: doc.amount, note: doc.note },
+      oldValue: { amount: doc.amount, note: doc.note }, reason,
     })) return NextResponse.json({ ok: true });
     throw new HttpError(409, "This cost changed while its audit history was being checked. Nothing was deleted; refresh and retry.");
   }
