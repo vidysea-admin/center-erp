@@ -2324,6 +2324,99 @@ for (const variant of ["ordinary", "mark_paid"]) {
           try { await uctx.close(); } catch {}
         }
       }
+
+      // ---- QA-2518: "No cost head matches" was unreachable in the only case that needs it ----
+      //
+      // Filed by the live -305 checker and reproduced there both ways in a real browser. The
+      // picker forces two rows into the rendered list on purpose - a matched subhead's PARENT, and
+      // the row currently SELECTED (hiding the selected row would blank the select while `value`
+      // still points at it). The sentence under the select was gated on `shown.length === 0`, which
+      // is a question about the rendered list, not about the search. With ANY head selected that
+      // length is never 0, so the explanation was withheld in exactly the case that reads as a
+      // broken taxonomy, and offered only when the empty list already said it.
+      //
+      // THIS IS DRIVEN IN A BROWSER, not asserted structurally, because the defect is a rendered
+      // condition and a structural pin would only prove the string exists in the file - it did
+      // exist, the whole time, unreachable.
+      //
+      // Both arms carry the GUARANTEE beside the message, not instead of it: the selected row must
+      // STILL be in the options. "The message renders now" and "the forcing rule was deleted" have
+      // identical message-visible readings, and only the option list tells them apart. That is this
+      // project's fixed-guard-vs-deleted-guard shape, and the arm exists to be red if a future
+      // change closes this by dropping `needed.add(String(value))`.
+      {
+        const qctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const qp = await qctx.newPage();
+          await qp.goto(BASE, { waitUntil: "networkidle" });
+          const qb = qp.locator('input[type="email"], input[name="email"]').first();
+          if (await qb.count()) {
+            await qb.fill("admin@vidysea.com");
+            await qp.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+            await qp.locator('button[type="submit"]').first().click();
+            await qp.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          await qp.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+          const search = qp.locator('input[aria-label="Search cost heads"]').first();
+          const appeared = await search.waitFor({ state: "visible", timeout: 45000 }).then(() => true).catch(() => false);
+          ok("QA-2518 [precondition] the cost-head search box is on the Add-cost form in a real browser",
+            appeared, "no input[aria-label=\"Search cost heads\"] on /costs - every arm below would be vacuous");
+
+          if (appeared) {
+            // The select is the picker's own - the one immediately after the search box.
+            const sel = qp.locator('input[aria-label="Search cost heads"] ~ select').first();
+            const readOpts = () => sel.evaluate((el) => Array.from(el.options).map((o) => o.value).filter(Boolean));
+            const msgVisible = () => qp.locator('text=/No cost head matches/').count().then((n) => n > 0);
+
+            const optionsBefore = await readOpts();
+            ok("QA-2518 [precondition] the picker offers at least one real cost head before any typing",
+              optionsBefore.length > 0, `options=${optionsBefore.length}`);
+
+            // ARM 1 - the case the message could never reach: a head SELECTED, a term matching nothing.
+            const pick = optionsBefore[0];
+            if (pick) {
+              await sel.selectOption(pick);
+              await search.fill("zzzz-no-such-cost-head-zzzz");
+              await qp.waitForTimeout(250);
+              const optsSelected = await readOpts();
+              const saidSo = await msgVisible();
+              ok("QA-2518: with a head SELECTED, a search that matches nothing says so in words",
+                saidSo,
+                `the picker collapsed to ${JSON.stringify(optsSelected)} and rendered no explanation - which is the pre-fix reading, where "no cost head matches" was gated on the rendered list rather than on the search`);
+              ok("QA-2518: ...and the selected row is STILL offered, so the message did not arrive by deleting the rule that keeps it",
+                optsSelected.includes(String(pick)),
+                `selected head ${pick} vanished from the options (${JSON.stringify(optsSelected)}) - the select now shows nothing while the form would still post that head. A message-only assertion would have stayed green through exactly this.`);
+            }
+
+            // ARM 2 - the message must not become permanent furniture. A term that DOES match is the
+            // only thing that distinguishes "reachable now" from "always on".
+            const word = String(optionsBefore[0] ? await sel.evaluate((el) => {
+              const o = Array.from(el.options).find((x) => x.value);
+              return String(o?.textContent || "").trim();
+            }) : "").split(/\s+/).filter((w) => w.length >= 4)[0] || "";
+            if (word) {
+              await search.fill(word);
+              await qp.waitForTimeout(250);
+              const stillSaying = await msgVisible();
+              const optsMatch = await readOpts();
+              ok("QA-2518: a search that DOES match stays silent - the explanation is conditional, not permanent",
+                !stillSaying && optsMatch.length > 0,
+                `term "${word}" matched ${optsMatch.length} head(s) and the no-match sentence was rendered anyway - the condition is now always-true, which is the opposite failure and just as useless`);
+            }
+
+            // ARM 3 - clearing the search restores the full list. Pinned because the fix touches the
+            // same branch that computes `shown`.
+            await search.fill("");
+            await qp.waitForTimeout(250);
+            const optsCleared = await readOpts();
+            ok("QA-2518: clearing the search restores every head, and the explanation goes away",
+              optsCleared.length === optionsBefore.length && !(await msgVisible()),
+              `before=${optionsBefore.length} afterClear=${optsCleared.length}`);
+          }
+        } finally {
+          try { await qctx.close(); } catch {}
+        }
+      }
     }
   } catch (e) {
     ok("QA-2295: the browser block ran without error", false, String((e && e.message) || e).slice(0, 300));

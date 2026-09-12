@@ -213,9 +213,16 @@ export function CostHeadPicker({ cats, value, onChange, required }: {
   const term = q.trim().toLowerCase();
 
   let shown = all;
+  // QA-2518: whether the SEARCH found anything, which is not the same question as whether the list
+  // is empty. Two rows are forced into `shown` on purpose below - the selected row and a matched
+  // subhead's parent - so `shown.length` answers "is the select blank", and the sentence under it
+  // wants to answer "did my typing match a head". With any head selected the first is never 0, and
+  // the explanation could never render in exactly the case that looks like a broken taxonomy.
+  let matchCount = -1;
   if (term) {
     const hit = (c: any) => String(c?.name ?? "").toLowerCase().includes(term);
     const matched = all.filter(hit);
+    matchCount = matched.length;
     // A matched SUBHEAD drags its parent head in with it. Without this the subhead lands in the
     // "Head no longer listed" group and a correct search reads as a broken taxonomy.
     const needed = new Set(matched.map((c: any) => String(c._id)));
@@ -235,7 +242,7 @@ export function CostHeadPicker({ cats, value, onChange, required }: {
         <option value="">Select...</option>
         <CostHeadOptions cats={shown} />
       </select>
-      {term && shown.length === 0 && (
+      {term && matchCount === 0 && (
         <p className="mt-1 text-xs text-amber-700">No cost head matches &quot;{q}&quot;. Clear the search, or name the head you need below.</p>
       )}
     </>
