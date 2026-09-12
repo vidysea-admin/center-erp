@@ -493,7 +493,18 @@ for (const suite of SUITES) {
   // So the anchor goes and the suffix is CAPTURED instead. A suite that reports skips now keeps its
   // real numbers AND says how many assertions did not run - "did not run" must never again be
   // reachable only by reading prose the summary line contradicts.
-  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED)?/m);
+  // QA-2544: the end anchor is BACK. Dropping it in QA-2540 fixed the SKIPPED suffix by widening
+  // the pattern to match anywhere on a line - which also made it match lines it had always been
+  // right to reject, such as a nested runner's own "TOTAL: N passed, M failed across K suites"
+  // echoed into a suite's stdout. `.match` without /g returns the FIRST hit, so that is not a
+  // cosmetic widening: it is how a suite comes to report somebody else's numbers as its own, which
+  // is QA-1551, already paid for once (e2e.mjs:4685 rewords a probe's total on the way out for
+  // exactly this reason, and its comment cites the anchor I had just deleted).
+  //
+  // So: keep the anchor, and admit the one suffix that is legitimate. Anything else trailing the
+  // summary still fails to match and still reports CRASHED - the strictness is unchanged; only
+  // SKIPPED is now known vocabulary.
+  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED.*)?\s*$/m);
   results.push({
     suite,
     passed: m ? Number(m[1]) : 0,
@@ -510,7 +521,11 @@ for (const r of results) {
   totalPass += r.passed; totalFail += r.failed;
   const state = r.crashed ? "CRASHED" : r.failed > 0 ? "FAILED" : "ok";
   if (r.crashed || r.failed > 0 || r.exit !== 0) bad++;
-  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${r.crashed ? " (no final count — crashed?)" : ""}`);
+  // QA-2543: the per-suite row carries the skip as well. "TOTAL is the line that gets quoted" was
+  // true and incomplete - THIS unit's own manifest quoted the per-suite row as evidence the wall was
+  // healthy, which is precisely how the dead CHANGELOG gate survived. A skip honest in TOTAL and
+  // absent from the row a reader copies is the same defect one line up.
+  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${(r.skipped ?? 0) > 0 ? `, ${r.skipped} SKIPPED` : ""}${r.crashed ? " (no final count — crashed?)" : ""}`);
 }
 // -153 (QA-354): a CRASHED suite reports `passed: 0, failed: 0`, so it adds nothing to either
 // total and the TOTAL line read "0 failed" while suites were dying. The per-suite rows do say

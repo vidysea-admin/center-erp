@@ -964,9 +964,18 @@ for (const file of walk(root)) {
   ];
   const shared = path.join(root, "..", "..", "qa", "tools", "gate-patterns.json");
   if (!fs.existsSync(shared)) {
-    // the root repo is not always present beside a checkout; only enforce when it is
+    // QA-2539: the sibling of QA-2537, and it survived that fix because I repaired the site I had
+    // been SHOWN rather than the shape. `else passed++` here is the same trade: the root repo is
+    // not beside an isolated copy (or beside the repo CI checks out - `qa/` is not in this repo at
+    // all), so this branch is the one that runs on every wall and every CI run, and it scored
+    // "I could not look" as "I looked and it was fine".
+    //
+    // It became MORE misleading than a plain silent skip once QA-2537 landed: one of the two now
+    // announces itself in TOTAL while the other is still counted as a pass on the same line of the
+    // same suite, so a reader seeing "1 assertion(s) SKIPPED" concludes skips are accounted for.
+    // Two silent skips are honest about nothing; one loud and one silent is actively misleading.
     if (gateFiles.some((f) => fs.existsSync(f))) { failed++; pushStructural("qa/tools/gate-patterns.json is missing while the gate readers exist - they will drift again."); }
-    else passed++;
+    else { skipped++; console.log(`  ·   gate-patterns drift check SKIPPED — the root repo is not beside this checkout (${shared}). This is NOT a pass: the check did not run.`); }
   } else {
     const inlined = [];
     for (const f of gateFiles) {
