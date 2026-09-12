@@ -166,8 +166,8 @@ export const RELEASE_NOTE_CURRENT =
   "follows whatever the screen is showing, because it is built from the same filters rather "  +
   "than recomputed. The portal Batch ID column stays exactly where it was and is still the "  +
   "field the scheme portal wants; the difference is that the new column reads the batch's own "  +
-  "code - the string a centre says out loud - and three of the four completed batches on this "  +
-  "system have no portal id at all, so they were previously grouped under a blank. "  +
+  "code - the string a centre says out loud. Batches that have not been given a portal id "  +
+  "yet were previously all grouped under a blank, so they could not be told apart. "  +
   "SECOND, a batch's status can no longer change without recording who changed it. That "  +
   "record is now written inside the one function every status change passes through, rather "  +
   "than at each of the places that call it, so a path added later cannot silently skip it. "  +
@@ -177,7 +177,8 @@ export const RELEASE_NOTE_CURRENT =
   "made it, rather than reading as though the system did it on its own. "  +
   "THIRD, and this one is about the tests rather than the product: one browser test could "  +
   "fail in a way that stopped the rest of its file from running at all, and it had been doing "  +
-  "so. Roughly forty-five percent of that file's checks had not run for several releases, "  +
+  "so. Only sixty-three of that file's one hundred and eighty-one checks were running; the "  +
+  "other hundred and eighteen sat behind the failure, for several releases, "  +
   "including the one written to catch a list that announces a count and then shows nothing. "  +
   "That failure is still reported as a failure; what changed is that it no longer takes the "  +
   "other checks with it. The checks for the two screen fixes in -305 are added to that file "  +
