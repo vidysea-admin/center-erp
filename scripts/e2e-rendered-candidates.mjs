@@ -35,7 +35,7 @@ import * as XLSX from "xlsx";
 import { writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pjoin } from "node:path";
-import { ok, req, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
+import { ok, req, login, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
 // QA-2441, THIRD instance in this one file, and the reason this is a FILE-level guard rather than a
 // fourth patched await. QA-2423 guarded a vanished-row read at :345; QA-2441 guarded a router-hop
@@ -795,6 +795,10 @@ const seen = (await req(admin, "GET", `/api/candidates?limit=2000`, undefined, 2
 ok("[precondition] this suite's own fixture candidates exist (3 Fresh + 1 Enrolled)", seen.length === fresh.length + 1, `found ${seen.length}`);
 
 // ================= THE INVARIANT =================
+// (...and the SAME invariant on /batches now lives in the QA-2493 block near the end of this file.
+// Identical defect, identical wording, different screen - a pill announcing a count while the table
+// renders nothing under an empty-SYSTEM message - and it shipped on live -304 because this block
+// only ever probed /candidates. b39c38f said so in its own commit message before it was pinned.)
 for (const r of results) {
   const value = decodeURIComponent((r.qs.split("=")[1] || "(no filter)"));
   const lies = r.announced > 0 && r.rows === 0;
@@ -1931,6 +1935,477 @@ for (const r of results) {
       /not part of your role|Checking your access/i.test(finalText), finalText.slice(0, 90).replace(/\n/g, " "));
   }
   await c.close();
+}
+
+
+// ========= QA-2493 + QA-2494: the invariant this suite already owns, one screen over ==========
+// Both shipped on live -304 and both were found by PEOPLE, not by this wall. Manish reported
+// /batches as lost completed batches and Umesh reproduced it on his own screen; Umesh then found
+// "Mark payment done" rendering outside the cost card with the sidebar clipped mid-word behind it.
+// The fix commit (b39c38f) said the uncomfortable part itself rather than implying it:
+//
+//   "QA-2493's invariant is already implemented, at e2e-rendered-candidates.mjs:800 ... Identical
+//    defect, identical wording, different page; the suite only ever probes /candidates."
+//   "NOT PINNED YET, and stated plainly rather than implied: ... nothing here has been rendered."
+//
+// So this is not a new suite and deliberately not a new file. It is the SAME invariant as :800 - a
+// count announced, rows rendered - carried to the screen that had none, plus the layout guarantee
+// QA-120 already learned one level up (ui.tsx:1244, the Section header taught to wrap) and never
+// carried into a form body. Both defects present to a person as DELETED DATA, which is why they
+// belong in the suite whose whole subject is a screen that lies about what it holds.
+{
+  // ---------------------------------------------------------------------------------------------
+  // QA-2493 - /batches has TWO pill rows and they AND together.
+  //
+  // The claim under test, in the fix's own words: EVERY PILL'S COUNT EQUALS THE NUMBER OF ROWS
+  // CLICKING IT PRODUCES. Before the fix each row's counts were computed as if the other row did
+  // not exist, so "Completed 4" + "Trainer required 3" both advertised rows and produced none -
+  // a blocker is a Planning fact (blockCount hard-coded it), so that pair asks for a batch that is
+  // Planning and Completed at once. DataTable then printed "No batches - plan the first one", the
+  // EMPTY-SYSTEM message, on a system holding twenty batches.
+  const BATCHES_URL = `${BASE}/batches`;
+  // DataTable pages client-side at 25 (src/components/ui.tsx:395 `pageSize = 25`), so the honest
+  // invariant is rendered === min(announced, 25), NOT rendered === announced. A maker's probe went
+  // red three times against a correct product before this line was written down.
+  const PAGE_SIZE = 25;
+  // Mirrors src/app/(app)/batches/page.tsx:149 (ATTENDANCE_SCOPE) and ui.tsx:148 (STATUS_LABEL).
+  // Copied rather than imported because this is a .mjs script and those are TSX modules - so the
+  // two [instrument] assertions below exist to make that copy go RED when it drifts, instead of
+  // quietly skipping every pairing and reporting a clean scoreboard.
+  const ATTENDANCE_SCOPE = ["Ready", "Active", "Assessment Awaited", "Closing", "Completed"];
+  const STATUS_VALUE = {
+    "All": "", "Planning": "Planning", "Ready": "Ready", "Active": "Active",
+    "Assessment Awaited": "Assessment Awaited", "Result Awaited": "Closing",
+    "Completed": "Completed", "Closed": "Closed", "Cancelled": "Cancelled",
+  };
+  const BLOCKER_LABELS = ["Trainer required", "Candidate shortage", "Infrastructure pending", "No attendance yet"];
+  // Which (blocker, status) pairs are a CONTRADICTION rather than a narrower search - the mirror of
+  // blockAllows() at batches/page.tsx:181. These are the pairs that used to empty the table while
+  // both pills promised rows, so they are the pairs worth driving.
+  const contradicts = (blockerLabel, statusPillLabel) => {
+    const v = STATUS_VALUE[statusPillLabel];
+    if (!v) return false;
+    return blockerLabel === "No attendance yet" ? !ATTENDANCE_SCOPE.includes(v) : v !== "Planning";
+  };
+
+  // QA-1243: `aria-pressed` is the product's OWN fact about which pill is selected. The two ROWS
+  // are told apart by the buttons' shared parent, never by a Tailwind class - a restyle must not be
+  // able to make this instrument dead-and-silent, which is exactly what it did to the tab detector.
+  const readPills = () => page.evaluate(() => {
+    const groups = [];
+    const byParent = new Map();
+    for (const b of document.querySelectorAll("button[aria-pressed]")) {
+      if (!byParent.has(b.parentElement)) { const g = []; byParent.set(b.parentElement, g); groups.push(g); }
+      const text = (b.innerText || "").replace(/\s+/g, " ").trim();
+      const m = text.match(/^(.*?)\s+(\d+)$/);
+      byParent.get(b.parentElement).push({
+        text, label: m ? m[1] : text, count: m ? Number(m[2]) : null,
+        pressed: b.getAttribute("aria-pressed") === "true",
+      });
+    }
+    return groups;
+  });
+  const rowWith = (groups, pred) => groups.find((g) => g.some(pred)) ?? [];
+  const statusRowOf = (groups) => rowWith(groups, (p) => p.label === "All");
+  const blockerRowOf = (groups) => rowWith(groups, (p) => BLOCKER_LABELS.includes(p.label));
+  const pillOf = (row, label) => row.find((p) => p.label === label) ?? null;
+
+  const readGrid = () => page.evaluate(() => {
+    const txt = document.body.innerText;
+    // ui.tsx:995 renders ONE colSpan <tr> inside tbody when a search empties the view. Nothing here
+    // types in the search box so it never fires; excluded anyway, so a reader who later adds a
+    // search cannot turn "no rows rendered" into "one row rendered" without noticing.
+    const rows = [...document.querySelectorAll("table tbody tr")].filter((tr) => !tr.querySelector("td[colspan]")).length;
+    const showing = txt.match(/Showing\s+\d+\D+?\d+\s+of\s+(\d+)/);
+    const empty = txt.match(/No batches[^\n]*/);
+    const tab = document.querySelector('button[aria-current="page"]');
+    return {
+      rows, total: showing ? Number(showing[1]) : null, empty: empty ? empty[0] : "",
+      tab: tab ? (tab.innerText || "").replace(/\s+/g, " ").trim() : "(none detected)",
+    };
+  });
+
+  // QA-1248's rule, applied here: settle on the list having ACTUALLY settled, never on a stopwatch.
+  // A slow runner that produced "announced>0, rows=0" would be handing this pin the live defect's
+  // own signature and getting the suite dismissed as flaky.
+  const settledBatches = async () => {
+    let timedOut = false;
+    await page.waitForFunction(() => {
+      const pills = document.querySelectorAll("button[aria-pressed]").length > 0;
+      const hasRow = !!document.querySelector("table tbody tr");
+      const empty = /No batches/i.test(document.body.innerText);
+      return pills && (hasRow || empty);
+    }, undefined, { timeout: 45000 }).catch(() => { timedOut = true; });
+    return timedOut;
+  };
+  const freshLoad = async () => {
+    // fStatus/fBlock are plain useState, so a navigation IS the reset. Every arm below starts from
+    // one, so no arm can inherit a filter another arm left standing and measure the wrong claim.
+    await page.goto(BATCHES_URL, { waitUntil: "domcontentloaded" });
+    return settledBatches();
+  };
+
+  // THE TRAP A CHECKER FOUND, and the reason this returns a boolean that every caller asserts on:
+  // post-fix a blocker pill can legitimately DISAPPEAR under a status that zeroes it
+  // (batches/page.tsx:434 keeps only `count > 0 || value === fBlock`). A clickPill() that quietly
+  // returned false would leave the arm below measuring THE ABSENCE OF A CONTROL and reporting it as
+  // a green invariant - an assertion that cannot fail, wearing a different coat.
+  const clickPill = async (label) => {
+    const clicked = await page.evaluate((wanted) => {
+      const btn = [...document.querySelectorAll("button[aria-pressed]")]
+        .find((b) => (b.innerText || "").replace(/\s+/g, " ").trim().replace(/\s+\d+$/, "") === wanted);
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }, label);
+    if (clicked) {
+      // Settle on the PRODUCT's own fact that the click landed (aria-pressed flipping), never on
+      // the row count - waiting for the number we are about to assert is how a pin stops being able
+      // to fail at all.
+      await page.waitForFunction((wanted) => {
+        const btn = [...document.querySelectorAll("button[aria-pressed]")]
+          .find((b) => (b.innerText || "").replace(/\s+/g, " ").trim().replace(/\s+\d+$/, "") === wanted);
+        return !!btn && btn.getAttribute("aria-pressed") === "true";
+      }, label, { timeout: 15000 }).catch(() => {});
+    }
+    return clicked;
+  };
+
+  // ---- the anti-vacuous preconditions (QA-1245: an EMPTY database once scored the same 47/0) ----
+  // Every one of these, alone, makes every assertion below pass for the wrong reason. None of them
+  // may skip: a precondition that cannot hold goes RED, because "this arm proved nothing" and "this
+  // arm proved the product correct" must never look the same on the scoreboard.
+  const bootTimedOut = await freshLoad();
+  ok("QA-2493 [precondition] /batches settled - it did not time out waiting for the list (a timeout looks exactly like the defect)",
+    !bootTimedOut, BATCHES_URL);
+  const boot = await readGrid();
+  ok("QA-2493 [precondition] the Batches tab is the one being measured, not Planning",
+    /^Batches/.test(boot.tab), boot.tab);
+  const bootPills = await readPills();
+  const bootStatusRow = statusRowOf(bootPills);
+  const bootBlockerRow = blockerRowOf(bootPills);
+  ok("QA-2493 [precondition] the STATUS pill row rendered and every pill carries a count to be judged against",
+    bootStatusRow.length >= 2 && bootStatusRow.every((p) => p.count !== null),
+    JSON.stringify(bootStatusRow.map((p) => p.text)));
+  const allPill = pillOf(bootStatusRow, "All");
+  ok("QA-2493 [precondition] the system under test actually HOLDS batches - QA-1245: an empty database scores the identical green",
+    !!allPill && allPill.count > 0, JSON.stringify(allPill));
+  ok("QA-2493 [precondition] the BLOCKER pill row rendered at all - without it every pairing below measures nothing",
+    bootBlockerRow.length > 0, JSON.stringify(bootPills.map((g) => g.map((p) => p.label))));
+  ok("QA-2493 [precondition] a NON-Planning status announces rows, so a blocker has something to be paired against",
+    bootStatusRow.some((p) => p.label !== "All" && STATUS_VALUE[p.label] && STATUS_VALUE[p.label] !== "Planning" && p.count > 0),
+    JSON.stringify(bootStatusRow.map((p) => p.text)));
+  ok("QA-2493 [instrument] every status pill label maps to a stored status value - ui.tsx:148 STATUS_LABEL drift goes RED here, not silent",
+    bootStatusRow.every((p) => STATUS_VALUE[p.label] !== undefined),
+    JSON.stringify(bootStatusRow.map((p) => p.label)));
+  ok("QA-2493 [instrument] every blocker pill label is one this pin knows the status domain of - a new blocker goes RED rather than unpaired",
+    bootBlockerRow.every((p) => BLOCKER_LABELS.includes(p.label)),
+    JSON.stringify(bootBlockerRow.map((p) => p.label)));
+
+  // ---- A. every STATUS pill, on its own ----
+  // This arm is the /batches translation of :800 and it is a REGRESSION GUARD, not the QA-2493 pin:
+  // with no blocker lit the old counts were already correct, so it would have been green on the
+  // broken build too. It is here because the invariant is stated over EVERY pill, and because the
+  // next person to touch these counts gets told immediately.
+  for (const label of bootStatusRow.map((p) => p.label)) {
+    const timedOut = await freshLoad();
+    const announced = pillOf(statusRowOf(await readPills()), label)?.count ?? null;
+    const clicked = announced === null ? false : await clickPill(label);
+    ok(`QA-2493 [status] "${label}": the pill was on screen with a count and was actually clicked`,
+      !timedOut && announced !== null && clicked, JSON.stringify({ timedOut, announced, clicked }));
+    if (timedOut || announced === null || !clicked) continue;
+    const g = await readGrid();
+    ok(`QA-2493 [status] "${label}": the screen renders rows for the ${announced} it announces (client page cap ${PAGE_SIZE})`,
+      g.rows === Math.min(announced, PAGE_SIZE),
+      JSON.stringify({ announced, rendered: g.rows, cap: PAGE_SIZE, pagerTotal: g.total, empty: g.empty }));
+    if (g.total !== null) {
+      ok(`QA-2493 [status] "${label}": the pager's own total agrees with the pill (${announced})`,
+        g.total === announced, JSON.stringify({ announced, pagerTotal: g.total, rendered: g.rows }));
+    }
+    if (label !== "All") {
+      ok(`QA-2493 [status] "${label}": an emptied table never claims the system is empty`,
+        !/plan the first one/i.test(g.empty), JSON.stringify({ rendered: g.rows, empty: g.empty }));
+      if (g.rows === 0) {
+        ok(`QA-2493 [status] "${label}": ...it names the filter that emptied it and says nothing was removed`,
+          /No batches match/i.test(g.empty), JSON.stringify({ empty: g.empty }));
+      }
+    }
+  }
+
+  // ---- B. STATUS then BLOCKER - the ordering Manish and Umesh both reported ----
+  let pairsStatusFirst = 0;
+  for (const blocker of bootBlockerRow.map((p) => p.label)) {
+    const timedOut = await freshLoad();
+    const pills = await readPills();
+    const pairable = statusRowOf(pills).filter((p) => p.label !== "All" && p.count > 0 && contradicts(blocker, p.label));
+    ok(`QA-2493 [precondition] a contradicting status WITH ROWS exists to pair against "${blocker}"`,
+      !timedOut && pairable.length > 0,
+      JSON.stringify({ timedOut, blocker, statuses: statusRowOf(pills).map((p) => p.text) }));
+    if (timedOut || !pairable.length) continue;
+    const status = pairable[0].label;
+    const clickedStatus = await clickPill(status);
+    ok(`QA-2493 [status->blocker] "${status}" was actually clicked before reading "${blocker}"`,
+      clickedStatus, JSON.stringify({ status, blocker }));
+    if (!clickedStatus) continue;
+    const bp = pillOf(blockerRowOf(await readPills()), blocker);
+    // Not a skip: with the status lit, the blocker pill must still be reachable. If it is gone, the
+    // arm cannot run, and saying so in red is the whole point - see clickPill's note above.
+    ok(`QA-2493 [status->blocker] with "${status}" lit, "${blocker}" is still on screen to be clicked`,
+      !!bp && bp.count !== null, JSON.stringify({ status, blocker, pill: bp }));
+    if (!bp || bp.count === null) continue;
+    const announced = bp.count;
+    const clickedBlocker = await clickPill(blocker);
+    ok(`QA-2493 [status->blocker] "${blocker}" was actually clicked - a pill that is not there measures the absence of a control, not the product`,
+      clickedBlocker, JSON.stringify({ status, blocker, announced }));
+    if (!clickedBlocker) continue;
+    const g = await readGrid();
+    ok(`QA-2493 [status->blocker] "${status}" then "${blocker}": the ${announced} that pill announced is the number of rows clicking it produced`,
+      g.rows === Math.min(announced, PAGE_SIZE),
+      JSON.stringify({ first: status, then: blocker, announced, rendered: g.rows, cap: PAGE_SIZE, pagerTotal: g.total, empty: g.empty }));
+    ok(`QA-2493 [status->blocker] "${status}" then "${blocker}": an emptied table never says "plan the first one" while a filter is active`,
+      !/plan the first one/i.test(g.empty), JSON.stringify({ rendered: g.rows, empty: g.empty }));
+    if (g.rows === 0) {
+      ok(`QA-2493 [status->blocker] "${status}" then "${blocker}": ...it names the filters and says nothing has been removed`,
+        /No batches match/i.test(g.empty), JSON.stringify({ empty: g.empty }));
+    }
+    pairsStatusFirst++;
+  }
+  ok("QA-2493 [precondition] at least one status->blocker contradiction was actually exercised",
+    pairsStatusFirst > 0, `pairs=${pairsStatusFirst}`);
+
+  // ---- C. BLOCKER then STATUS - the direction QA-2503 proved the first fix got wrong ----
+  // The cycle-2 checker measured it: with "Trainer required" lit the "Completed" pill read 0 and
+  // clicking it rendered thirteen. Same misreading as QA-2493, surviving in the untested direction.
+  let pairsBlockerFirst = 0;
+  for (const blocker of bootBlockerRow.map((p) => p.label)) {
+    const timedOut = await freshLoad();
+    const bp0 = pillOf(blockerRowOf(await readPills()), blocker);
+    ok(`QA-2493 [precondition] "${blocker}" is on screen from a clean load, to be clicked FIRST`,
+      !timedOut && !!bp0, JSON.stringify({ timedOut, blocker, pill: bp0 }));
+    if (timedOut || !bp0) continue;
+    const clickedBlocker = await clickPill(blocker);
+    ok(`QA-2493 [blocker->status] "${blocker}" was actually clicked first`, clickedBlocker, JSON.stringify({ blocker }));
+    if (!clickedBlocker) continue;
+    const pills = await readPills();
+    const pairable = statusRowOf(pills).filter((p) => p.label !== "All" && p.count > 0 && contradicts(blocker, p.label));
+    ok(`QA-2493 [precondition] with "${blocker}" lit, a contradicting status still ANNOUNCES rows to be judged`,
+      pairable.length > 0, JSON.stringify({ blocker, statuses: statusRowOf(pills).map((p) => p.text) }));
+    if (!pairable.length) continue;
+    const status = pairable[0].label;
+    const announced = pairable[0].count;
+    const clickedStatus = await clickPill(status);
+    ok(`QA-2493 [blocker->status] "${status}" was actually clicked`, clickedStatus, JSON.stringify({ blocker, status, announced }));
+    if (!clickedStatus) continue;
+    const g = await readGrid();
+    ok(`QA-2493 [blocker->status] "${blocker}" then "${status}": the ${announced} that pill announced is the number of rows clicking it produced`,
+      g.rows === Math.min(announced, PAGE_SIZE),
+      JSON.stringify({ first: blocker, then: status, announced, rendered: g.rows, cap: PAGE_SIZE, pagerTotal: g.total, empty: g.empty }));
+    ok(`QA-2493 [blocker->status] "${blocker}" then "${status}": an emptied table never says "plan the first one" while a filter is active`,
+      !/plan the first one/i.test(g.empty), JSON.stringify({ rendered: g.rows, empty: g.empty }));
+    if (g.rows === 0) {
+      ok(`QA-2493 [blocker->status] "${blocker}" then "${status}": ...it names the filters and says nothing has been removed`,
+        /No batches match/i.test(g.empty), JSON.stringify({ empty: g.empty }));
+    }
+    pairsBlockerFirst++;
+  }
+  ok("QA-2493 [precondition] at least one blocker->status contradiction was actually exercised (the QA-2503 direction)",
+    pairsBlockerFirst > 0, `pairs=${pairsBlockerFirst}`);
+}
+
+{
+  // ---------------------------------------------------------------------------------------------
+  // QA-2494 - one form row dragged the whole page into horizontal scroll.
+  //
+  // The cost form is a `md:grid-cols-6` grid and every Field is one cell, so the action buttons
+  // shared ONE cell (~250px). `Btn` is whitespace-nowrap (ui.tsx:174) and that row had no
+  // flex-wrap, so in EDIT mode four buttons (~390px) overflowed by ~140px: "Mark payment done"
+  // rendered outside the card, the sidebar clipped mid-word and a scrollbar crossed the window.
+  const cs = stamp("CF");
+  const CPW = "CiOnly@123";
+  const financeEmail = `zzcheck.qa2494.${cs}@vidysea-test.local`;
+  const madeUser = await req(admin, "POST", "/api/users", {
+    name: `ZZ Finance Overflow ${cs}`, email: financeEmail, password: CPW, role: "Admin", can_edit: true, location_scope: [],
+  });
+  const financeUserId = madeUser.data?.item?._id;
+  // THE CRITICAL PRECONDITION, and it is what made a maker's first probe pass on a DEFECTIVE build
+  // (QA-2504): all four buttons are gated on `canApproveCosts` = can("finance.approve", "edit")
+  // (costs/page.tsx:23), and finance.approve is one of the two keys in NO_ADMIN_BYPASS
+  // (permissions.ts:100) - the Admin ROLE does not carry it and the role matrix cannot give it.
+  // It has to be a per-user grant, or this whole block measures Add mode wearing an Edit title.
+  const granted = financeUserId
+    ? await req(admin, "PATCH", `/api/users/${financeUserId}`, { extra_permissions: ["finance.view", "finance.approve"] })
+    : { status: 0 };
+  const financeCookie = financeUserId ? await login(financeEmail, CPW) : "";
+  ok("QA-2494 [precondition] an Admin holding finance.view + finance.approve exists and signs in",
+    madeUser.status === 201 && granted.status === 200 && !!financeCookie,
+    JSON.stringify({ user: madeUser.status, grant: granted.status, cookie: !!financeCookie }));
+  const meLevels = financeCookie ? await req(financeCookie, "GET", "/api/permissions/me") : { status: 0, data: null };
+  const approveLevel = meLevels.data?.levels?.["finance.approve"] ?? null;
+  ok("QA-2494 [precondition] ...and the SERVER agrees they hold finance.approve at edit - a grant this test only assumed would put it on the three-button screen",
+    approveLevel === "edit", JSON.stringify({ status: meLevels.status, level: approveLevel }));
+
+  // A cost row to open. Prefer one this block created and marked; fall back to any NOT-Paid ledger
+  // row, because under the -302 approval rule a posted cost can PARK instead of writing the ledger.
+  const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+  const cat = cats[0];
+  const mkCost = async (cookie) => cat?._id ? req(cookie, "POST", "/api/costs", {
+    entry_date: today(), category: cat._id, amount: 1234, location: loc._id,
+    note: `ZZDEMO cost-form overflow fixture ${cs}`,
+  }) : { status: 0 };
+  const postA = await mkCost(admin);
+  let ledger = financeCookie ? ((await req(financeCookie, "GET", "/api/costs")).data?.items ?? []) : [];
+  let mineRow = ledger.find((c) => String(c.note ?? "").includes(cs));
+  let postB = { status: 0 };
+  if (!mineRow && financeCookie) {
+    postB = await mkCost(financeCookie);
+    ledger = (await req(financeCookie, "GET", "/api/costs")).data?.items ?? [];
+    mineRow = ledger.find((c) => String(c.note ?? "").includes(cs));
+  }
+  const unpaid = ledger.filter((c) => c.payment_status !== "Paid");
+  // ...and it must NOT be Paid. A Paid row hides "Mark payment done" (costs/page.tsx:235), so it
+  // renders THREE buttons rather than four, ~250px instead of ~390px, and does not overflow at all.
+  // A maker's probe passed green on the defective build for precisely this reason.
+  const target = (mineRow && mineRow.payment_status !== "Paid") ? mineRow : unpaid[0];
+  ok("QA-2494 [precondition] a NOT-Paid cost row exists to open in Edit mode (a Paid row renders three buttons and cannot overflow)",
+    !!target && target.payment_status !== "Paid",
+    JSON.stringify({ postAdmin: postA.status, postApprover: postB.status, ledger: ledger.length, unpaid: unpaid.length,
+      picked: target ? { id: String(target._id), payment_status: target.payment_status ?? null, mine: target === mineRow } : null }));
+
+  if (target?._id && financeCookie && approveLevel === "edit") {
+    const fctx = await browser.newContext({ viewport: { width: 1536, height: 900 } });
+    const fpage = await fctx.newPage();
+    await fpage.goto(BASE, { waitUntil: "domcontentloaded" });
+    await fpage.waitForTimeout(1200);
+    const fbox = fpage.locator('input[type="email"], input[name="email"], input[id="email"]').first();
+    let fSignedIn = false;
+    if (await fbox.count()) {
+      await fbox.fill(financeEmail);
+      await fpage.locator('input[type="password"]').first().fill(CPW);
+      await fpage.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+      await fpage.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+      fSignedIn = !/login/i.test(fpage.url());
+    }
+    ok("QA-2494 [precondition] the finance.approve Admin is signed in to a real browser", fSignedIn, fpage.url());
+
+    // The measurement itself is one line - and it is the line the fix commit said was missing.
+    const overflow = () => fpage.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      clientWidth: document.documentElement.clientWidth,
+      over: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      bodyOver: document.body.scrollWidth - document.documentElement.clientWidth,
+    }));
+    // ...and the SECOND measurement, because a checker found a build where the document stayed
+    // exactly viewport-wide while Delete hung 11px outside its own card. A page that does not
+    // scroll is not the same claim as a button that is inside the card it belongs to.
+    const cardFit = (title) => fpage.evaluate((wantedTitle) => {
+      const h3 = [...document.querySelectorAll("h3")].find((h) => (h.textContent || "").trim() === wantedTitle);
+      if (!h3) return { card: false, reason: "no card title " + wantedTitle };
+      // The Section root is the first ancestor of the title that ALSO contains the form's primary
+      // button (ui.tsx:1241 puts the title in a header div and the body in a sibling). Walking to
+      // it structurally rather than by class is QA-1243's rule applied to a layout assertion.
+      let card = h3.parentElement;
+      while (card && ![...card.querySelectorAll("button")].some((b) => /^(Save|Add|Add Cost)$/.test((b.textContent || "").trim()))) card = card.parentElement;
+      if (!card) return { card: false, reason: "no ancestor of the title carries the form's primary button" };
+      const btns = [...card.querySelectorAll("button")];
+      const labels = btns.map((b) => (b.textContent || "").trim());
+      const del = btns.find((b) => (b.textContent || "").trim() === "Delete");
+      const c = card.getBoundingClientRect();
+      const d = del ? del.getBoundingClientRect() : null;
+      const r1 = (n) => Math.round(n * 10) / 10;
+      return {
+        card: true, labels,
+        rightOverhang: d ? r1(d.right - c.right) : null,
+        leftOverhang: d ? r1(c.left - d.left) : null,
+        cardRect: { left: r1(c.left), right: r1(c.right) },
+        deleteRect: d ? { left: r1(d.left), right: r1(d.right) } : null,
+      };
+    }, title);
+
+    const openCosts = async (width, url, wantTitle) => {
+      await fpage.setViewportSize({ width, height: 900 });
+      await fpage.goto(url, { waitUntil: "domcontentloaded" });
+      let timedOut = false;
+      await fpage.waitForFunction((t) => [...document.querySelectorAll("h3")]
+        .some((h) => (h.textContent || "").trim() === t), wantTitle, { timeout: 45000 })
+        .catch(() => { timedOut = true; });
+      // One frame for the wrapped row to lay out before anything is measured - the title appearing
+      // is not the same event as the grid having its final width.
+      await fpage.waitForTimeout(400);
+      return timedOut;
+    };
+
+    const EDIT_URL = `${BASE}/costs?edit=${target._id}`;
+    const ADD_URL = `${BASE}/costs`;
+    const FOUR = ["Save", "Cancel", "Mark payment done", "Delete"];
+
+    for (const width of [1536, 400]) {
+      const timedOut = await openCosts(width, EDIT_URL, "Edit cost entry");
+      const fit = await cardFit("Edit cost entry");
+      // WITHOUT THIS, EVERY MEASUREMENT BELOW IS OF ADD MODE - one button, which fits, which is
+      // exactly how the defective build was reported green. Assert the four-button row FIRST.
+      ok(`QA-2494 [precondition] at ${width}px the cost form is in EDIT mode with all four action buttons rendered`,
+        !timedOut && fit.card === true && FOUR.every((l) => (fit.labels ?? []).includes(l)),
+        JSON.stringify({ width, timedOut, card: fit.card, reason: fit.reason ?? null, labels: fit.labels ?? null }));
+      if (timedOut || fit.card !== true || !FOUR.every((l) => (fit.labels ?? []).includes(l))) continue;
+      const o = await overflow();
+      ok(`QA-2494: at ${width}px the Edit cost form does not widen the page past the viewport`,
+        o.scrollWidth <= o.clientWidth, JSON.stringify({ width, ...o }));
+      ok(`QA-2494: at ${width}px the Delete button sits INSIDE the card it belongs to (a page that does not scroll is not the same claim)`,
+        fit.rightOverhang !== null && fit.rightOverhang <= 0.5 && fit.leftOverhang <= 0.5,
+        JSON.stringify({ width, rightOverhang: fit.rightOverhang, leftOverhang: fit.leftOverhang, cardRect: fit.cardRect, deleteRect: fit.deleteRect }));
+    }
+
+    // ADD mode, both widths. STATED PLAINLY: these two are CONTROL arms, not pins. Three of the
+    // four buttons are gated on `editId`, so Add mode has always fitted and would have been green
+    // on the broken build too. They are here so that a red Edit arm can be attributed to this form
+    // rather than to something the app shell does at that width - which is the difference between
+    // a finding and a wild goose chase.
+    for (const width of [1536, 400]) {
+      const timedOut = await openCosts(width, ADD_URL, "Add cost entry");
+      const fit = await cardFit("Add cost entry");
+      ok(`QA-2494 [control] at ${width}px the cost form is in ADD mode (one action button, which has always fitted)`,
+        !timedOut && fit.card === true && (fit.labels ?? []).includes("Add") && !(fit.labels ?? []).includes("Mark payment done"),
+        JSON.stringify({ width, timedOut, card: fit.card, labels: fit.labels ?? null }));
+      if (timedOut || fit.card !== true) continue;
+      const o = await overflow();
+      ok(`QA-2494 [control] at ${width}px the Add cost form does not widen the page - a red here means the SHELL, not this form`,
+        o.scrollWidth <= o.clientWidth, JSON.stringify({ width, ...o }));
+    }
+
+    // The batch Costs tab - the SECOND cost form in the product (batches/[id]/page.tsx:5876, a
+    // md:grid-cols-5 grid with the same shared-cell shape). STATED PLAINLY: it carries two buttons
+    // today, it had NOT overflowed yet, and this arm would have been green on the broken build. It
+    // is a forward guard for the third button somebody adds, which is the reason the fix commit
+    // changed it in the same change rather than waiting.
+    for (const width of [1536, 400]) {
+      await fpage.setViewportSize({ width, height: 900 });
+      await fpage.goto(`${BASE}/batches/${batch._id}`, { waitUntil: "domcontentloaded" });
+      // The Costs tab is gated on the rights payload arriving (batches/[id]/page.tsx:51), so its
+      // absence at first paint is "not yet", not "not allowed" - count() is immediate and would
+      // read a still-loading tab bar as a missing permission, which is a red about the wrong thing.
+      let tabThere = true;
+      await fpage.waitForFunction(() => [...document.querySelectorAll("button")]
+        .some((b) => (b.textContent || "").trim() === "Costs"), undefined, { timeout: 45000 })
+        .catch(() => { tabThere = false; });
+      const costsTab = fpage.getByRole("button", { name: "Costs", exact: true }).first();
+      if (tabThere) await costsTab.click().catch(() => {});
+      let timedOut = false;
+      if (tabThere) {
+        await fpage.waitForFunction(() => [...document.querySelectorAll("button")]
+          .some((b) => (b.textContent || "").trim() === "Add Cost"), undefined, { timeout: 45000 })
+          .catch(() => { timedOut = true; });
+        await fpage.waitForTimeout(400);
+      }
+      ok(`QA-2494 [precondition] at ${width}px the batch Costs tab opened and its cost form rendered`,
+        tabThere && !timedOut, JSON.stringify({ width, tabThere, timedOut, batch: String(batch._id) }));
+      if (!tabThere || timedOut) continue;
+      const o = await overflow();
+      ok(`QA-2494 [forward guard] at ${width}px the batch Costs tab's cost form does not widen the page`,
+        o.scrollWidth <= o.clientWidth, JSON.stringify({ width, ...o }));
+    }
+
+    await fctx.close();
+  }
 }
 
 
