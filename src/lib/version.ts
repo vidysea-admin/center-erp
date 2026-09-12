@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-306";
+export const RELEASE = "2026.08.14-307";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,28 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-307 fixes a small thing on the cost entry form, and it is worth saying what it was "  +
+  "because the shape of it matters more than the size. "  +
+  "When you type in the box that narrows the list of cost heads and nothing matches what "  +
+  "you typed, the form is supposed to tell you so in words - otherwise a list that has "  +
+  "gone quiet looks like the cost heads themselves have disappeared. That sentence was "  +
+  "there, and it could not appear whenever a cost head was already selected. The reason is "  +
+  "that the form deliberately keeps the selected head visible no matter what you type, "  +
+  "because hiding it would leave the screen showing nothing while the form still intended "  +
+  "to save that head. So the list was never truly empty, and the sentence was waiting for "  +
+  "a condition that could not happen. It was withheld in exactly the situation that looks "  +
+  "alarming and offered only when the empty list had already made the point. It now appears "  +
+  "whenever your search matched nothing, whether or not a head is selected, and the "  +
+  "selected head stays visible as before. Nothing about which cost heads are offered, or "  +
+  "which head a save posts, has changed. "  +
+  "This note carries no counts, and that is deliberate from this release onward. The "  +
+  "previous note went through round after round of review, and each one found a different "  +
+  "number that was correctly calculated from the wrong set. None of those numbers changed "  +
+  "what a reader would do. A note is the one thing here that is published without anyone having to "  +
+  "sign in, so it should say what changed and why it matters, and leave the arithmetic to "  +
+  "the records that can be checked.";
+
+const RELEASE_NOTE_ARCHIVE_306 =
   "-306 is a reporting change, a repair to the record of who changed a batch, and two "  +
   "repairs to the machinery that checks this software. "  +
   "FIRST, the part you can see. Finance and Revenue and P&L can now be read one batch at a "  +
@@ -1587,6 +1609,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_306 + " " +
   RELEASE_NOTE_ARCHIVE_305 + " " +
   RELEASE_NOTE_ARCHIVE_304 + " " +
   RELEASE_NOTE_ARCHIVE_303 + " " +
