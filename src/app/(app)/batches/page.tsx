@@ -182,8 +182,20 @@ function BatchesInner() {
     !c || !st || (c === "no-attendance" ? ATTENDANCE_SCOPE.includes(st) : st === "Planning");
 
   const shown = trainerScoped.filter((b) => matchesStatus(b, fStatus) && matchesBlock(b, fBlock));
-  const statusCount = (s: string) => trainerScoped.filter((b) => matchesStatus(b, s) && matchesBlock(b, fBlock)).length;
-  const blockCount = (c: string) => trainerScoped.filter((b) => matchesStatus(b, fStatus) && matchesBlock(b, c)).length;
+  // QA-2503 (checker, cycle 2 FAIL) - THE INVARIANT WAS RIGHT AND I APPLIED IT TO THE WRONG STATE.
+  // These counted under the OTHER filter as it stands NOW. But clicking a pill does not leave the
+  // other filter standing: blockAllows() clears a contradicting one, deliberately, and that is the
+  // fix for QA-2493. So with "Trainer required" lit, "Completed" counted 0 - correct for the state
+  // before the click - and clicking it cleared the blocker and rendered thirteen. The pill said zero
+  // and delivered thirteen, on a system that has those batches: EXACTLY the misreading QA-2493 was
+  // filed for, surviving in the direction I did not test. Six cases, measured by the checker.
+  //
+  // The invariant's own words are the fix: a count must equal what CLICKING IT PRODUCES, so each
+  // count is taken under the other filter only where that filter would SURVIVE the click.
+  const statusCount = (s: string) =>
+    trainerScoped.filter((b) => matchesStatus(b, s) && matchesBlock(b, blockAllows(fBlock, s) ? fBlock : "")).length;
+  const blockCount = (c: string) =>
+    trainerScoped.filter((b) => matchesStatus(b, blockAllows(c, fStatus) ? fStatus : "") && matchesBlock(b, c)).length;
   // The blocker ROW's visibility is measured UNFILTERED, deliberately. Hiding the row when the
   // current status zeroes every blocker would hide the very pill doing the emptying - this same
   // defect, reintroduced one layer up, and invisible instead of merely confusing.
