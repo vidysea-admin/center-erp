@@ -218,6 +218,15 @@ export function CostHeadPicker({ cats, value, onChange, required }: {
   // subhead's parent - so `shown.length` answers "is the select blank", and the sentence under it
   // wants to answer "did my typing match a head". With any head selected the first is never 0, and
   // the explanation could never render in exactly the case that looks like a broken taxonomy.
+  //
+  // QA-2526: the ledger row proposed `shown.length === 1 && shown[0]._id === value` instead, and it
+  // IS wrong - but not for the reason I first wrote. I argued it breaks on a parent drag; a checker
+  // built that case three ways in a browser and the proposal is silent and correct in all three,
+  // because a parent drag forces TWO rows in by construction and `length === 1` can never be it.
+  // What actually falsifies it: select "Assessment Fee", type "Assessment Fee". `shown` collapses to
+  // that one row, `shown[0]._id === value` holds, and it prints "No cost head matches 'Assessment
+  // Fee'" under a select displaying Assessment Fee - a false positive the ORIGINAL condition did not
+  // have. `matchCount` has neither failure because it asks the question the sentence asks.
   let matchCount = -1;
   if (term) {
     const hit = (c: any) => String(c?.name ?? "").toLowerCase().includes(term);

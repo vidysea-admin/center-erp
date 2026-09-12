@@ -2369,6 +2369,11 @@ for (const variant of ["ordinary", "mark_paid"]) {
             const msgVisible = () => qp.locator('text=/No cost head matches/').count().then((n) => n > 0);
 
             const optionsBefore = await readOpts();
+            // Captured before any typing, so nothing downstream depends on the list still being intact.
+            const labelBefore = await sel.evaluate((el) => {
+              const o = Array.from(el.options).find((x) => x.value);
+              return String(o?.textContent || "").trim();
+            });
             ok("QA-2518 [precondition] the picker offers at least one real cost head before any typing",
               optionsBefore.length > 0, `options=${optionsBefore.length}`);
 
@@ -2390,10 +2395,15 @@ for (const variant of ["ordinary", "mark_paid"]) {
 
             // ARM 2 - the message must not become permanent furniture. A term that DOES match is the
             // only thing that distinguishes "reachable now" from "always on".
-            const word = String(optionsBefore[0] ? await sel.evaluate((el) => {
-              const o = Array.from(el.options).find((x) => x.value);
-              return String(o?.textContent || "").trim();
-            }) : "").split(/\s+/).filter((w) => w.length >= 4)[0] || "";
+            // QA-2527: read the word from the label captured BEFORE any term was typed. The first
+            // version read it off the live select AFTER the no-match term was in the box, which made
+            // this arm depend on arm 1b's subject still being there - so under the mutation that
+            // deletes `needed.add(String(value))` the word evaluated to empty and this arm SILENTLY
+            // DID NOT RUN. Five lines printed where the fixed build prints six, and nothing in the
+            // output said an arm had gone missing. An arm that can vanish is an arm that cannot fail.
+            const word = String(labelBefore).split(/\s+/).filter((w) => w.length >= 4)[0] || "";
+            ok("QA-2518 [precondition] a searchable word was captured from the first head's label",
+              !!word, `no word of 4+ characters in ${JSON.stringify(labelBefore)} - arm 2 below would not run, and a branch that skips itself reports as silence rather than as red`);
             if (word) {
               await search.fill(word);
               await qp.waitForTimeout(250);
