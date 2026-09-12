@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-307";
+export const RELEASE = "2026.08.14-308";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,29 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-308 changes no software. It corrects the note published with the previous release, "  +
+  "and the correction is worth reading because of where the mistakes were. "  +
+  "The previous note said that a release note is the only thing here published without "  +
+  "signing in. That is not true - some reference data, such as the list of states and "  +
+  "districts, is also served without a login. The note is unusual in a narrower way: it is "  +
+  "prose written by hand, and it is served exactly as written with nothing anywhere "  +
+  "checking it against anything, so a wrong sentence in it is not caught the way a wrong "  +
+  "figure in a report would be. That is the "  +
+  "reason to be careful with it, and the previous note overstated it. "  +
+  "The previous note also said that the review of the release before it kept finding "  +
+  "figures that were correctly calculated from the wrong set of records. Some were. "  +
+  "Others were a different mistake - a sentence that claimed more than had been looked "  +
+  "at - and at least one had no calculation behind it at all. Describing them as one kind "  +
+  "of error made the account tidier than the truth. "  +
+  "Both of those sentences were in the paragraph explaining why these notes no longer "  +
+  "carry counts, and both are themselves claims about quantity written without their "  +
+  "boundaries checked - which is the thing that paragraph was announcing an end to. "  +
+  "Removing the figures from these notes was not enough on its own, because a claim about "  +
+  "how many or how much survives having its numerals taken out. What we are keeping is the "  +
+  "underlying commitment: a note says what changed and why it matters, and anything that "  +
+  "can be counted is left to the records where it can be checked.";
+
+const RELEASE_NOTE_ARCHIVE_307 =
   "-307 fixes a small thing on the cost entry form, and it is worth saying what it was "  +
   "because the shape of it matters more than the size. "  +
   "When you type in the box that narrows the list of cost heads and nothing matches what "  +
@@ -1609,6 +1632,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_307 + " " +
   RELEASE_NOTE_ARCHIVE_306 + " " +
   RELEASE_NOTE_ARCHIVE_305 + " " +
   RELEASE_NOTE_ARCHIVE_304 + " " +
