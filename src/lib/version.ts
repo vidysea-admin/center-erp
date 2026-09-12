@@ -158,7 +158,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-306 is a reporting change and two repairs to the machinery that checks this software. "  +
+  "-306 is a reporting change, a repair to the record of who changed a batch, and two "  +
+  "repairs to the machinery that checks this software. "  +
   "FIRST, the part you can see. Finance and Revenue and P&L can now be read one batch at a "  +
   "time: the reports table carries a Batch Code column beside the portal Batch ID, and the "  +
   "P&L screen has a Batch filter next to Centre, Job role and Scheme. The Excel download "  +
