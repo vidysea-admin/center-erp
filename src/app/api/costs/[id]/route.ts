@@ -5,7 +5,7 @@ import { requireFinance } from "@/lib/permissions";
 import { CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
-import { costDeletionAuditIsDurable, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, settleFinanceAuditEvents } from "@/lib/approvals";
+import { costDeletionAuditIsDurable, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, settleFinanceAuditEvents } from "@/lib/approvals";
 import { Types } from "mongoose";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
@@ -125,6 +125,25 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   );
   if (!updated) throw new HttpError(409, "This cost was deleted while the correction was being prepared. Nothing changed.");
   await auditDiff("CostEntry", updated._id, before, patch, user.id);
+  // QA-2500 (checker, cycle 1 FAIL): notifyCostCorrection was written for -305 - ninety lines of
+  // audience resolution, field-name-not-value summarising, redactMoneyInText and a fire-and-forget
+  // mail - and NEVER CALLED. Zero callers anywhere in src/. The checker measured it the only way that
+  // could: a 200 PATCH with a cost.post rule installed produced 0 Notification rows and 0 MailLogs.
+  // The unit claimed "an edit notifies the approvers" (Manish on the 2026-09-11 call: "aur phir edit
+  // pe bhi un logon ko vo message jayega"), the release note stated it as fact to every
+  // unauthenticated reader, and the feature did not exist. A function that compiles, typechecks and
+  // is never invoked is indistinguishable from one that was never written - except that it reads,
+  // to anyone grepping for it, as though the work is done.
+  //
+  // AFTER the audit row and AFTER the response value is settled, and deliberately not awaited into
+  // the response: a mail outage must not fail a correction that already landed.
+  void notifyCostCorrection({
+    costId: updated._id,
+    actor: user,
+    patch,
+    batchCode: (updated as any)?.batch ? String((updated as any).batch) : null,
+    location: (updated as any)?.location ?? null,
+  }).catch(() => { /* notification is a courtesy on top of a committed correction, never a gate */ });
   return NextResponse.json({ item: updated });
 });
 

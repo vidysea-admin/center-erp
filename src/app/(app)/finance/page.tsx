@@ -381,7 +381,14 @@ function FinanceInner() {
               key: "_act", label: "", minWidth: 150,
               render: (r: any) => (
                 <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
-                  <Btn small kind="ghost" onClick={() => router.push(`${BASE_PATH}/costs?edit=${r.id}`)}>Edit</Btn>
+                  {/* QA-2499 (checker, cycle 1 FAIL): this read `${BASE_PATH}/costs?edit=...` and was the ONLY
+                      router.push in the app carrying that prefix - every other one passes a plain path,
+                      because Next applies basePath itself. So the button rendered perfectly and navigated
+                      to /erp/erp/costs, a bare 404, which means the ?edit= deep-link handler -305 added to
+                      /costs HAD NEVER ONCE EXECUTED. Nothing at the API level could see this: the route,
+                      the rights check and the handler are all correct and all reachable by URL. Only a
+                      browser pressing the button finds it, which is exactly what the checker did. */}
+                  <Btn small kind="ghost" onClick={() => router.push(`/costs?edit=${r.id}`)}>Edit</Btn>
                   <Btn small kind="danger" onClick={() => removeEntry(r)}>Delete</Btn>
                 </span>
               ),
