@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-305";
+export const RELEASE = "2026.08.14-306";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -158,6 +158,30 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-306 is a reporting change and two repairs to the machinery that checks this software. "  +
+  "FIRST, the part you can see. Finance and Revenue and P&L can now be read one batch at a "  +
+  "time: the reports table carries a Batch Code column beside the portal Batch ID, and the "  +
+  "P&L screen has a Batch filter next to Centre, Job role and Scheme. The Excel download "  +
+  "follows whatever the screen is showing, because it is built from the same filters rather "  +
+  "than recomputed. The portal Batch ID column stays exactly where it was and is still the "  +
+  "field the scheme portal wants; the difference is that the new column reads the batch's own "  +
+  "code - the string a centre says out loud - and three of the four completed batches on this "  +
+  "system have no portal id at all, so they were previously grouped under a blank. "  +
+  "SECOND, a batch's status can no longer change without recording who changed it. That "  +
+  "record is now written inside the one function every status change passes through, rather "  +
+  "than at each of the places that call it, so a path added later cannot silently skip it. "  +
+  "Two paths were skipping it: completing a batch through an approval decision, and the "  +
+  "second half of the Complete action. A change made by an approval now names the approver "  +
+  "rather than reading as the system. "  +
+  "THIRD, and this one is about the tests rather than the product: one browser test could "  +
+  "fail in a way that stopped the rest of its file from running at all, and it had been doing "  +
+  "so. Roughly forty-five percent of that file's checks had not run for several releases, "  +
+  "including the one written to catch a list that announces a count and then shows nothing. "  +
+  "That failure is still reported as a failure; what changed is that it no longer takes the "  +
+  "other checks with it. The checks for the two screen fixes in -305 are added to that file "  +
+  "in this release, which is where they should have been when those fixes shipped."
+
+const RELEASE_NOTE_ARCHIVE_305 =
   "-305 is about correcting a cost after it has been recorded, which the screens did not really "  +
   "allow. Every list of costs - the ledger, the finance register, and a batch's own costs tab - now "  +
   "carries an Edit and a Delete control on the row, for a person who has been granted the right to "  +
@@ -1560,6 +1584,7 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  RELEASE_NOTE_ARCHIVE_305 + " " +
   RELEASE_NOTE_ARCHIVE_304 + " " +
   RELEASE_NOTE_ARCHIVE_303 + " " +
   RELEASE_NOTE_ARCHIVE_302 + " " +
