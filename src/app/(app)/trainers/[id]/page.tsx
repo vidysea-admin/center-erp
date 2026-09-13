@@ -391,7 +391,12 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                       {/* QA-2555: offerable() here too. The LOCATION select three lines above already used it;
                           this one listed retired job roles, so a trainer could be assigned to a role an
                           admin had switched off. Same helper, same line of code, one field apart. */}
-                      {offerable(programs, card.program).map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
+                      {/* QA-2572: a currently-selected inactive role is kept in the list (offerable's second
+                          argument) but was NOT labelled here, while Finance and Revenue & P&L both label
+                          it. The release note says a kept role shows "marked inactive" - true of two of
+                          the three screens that sentence names. Labelling makes the sentence true rather
+                          than weakening it, and removes the state where a retired role reads as live. */}
+                      {offerable(programs, card.program).map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}{p.active === false ? " (inactive)" : ""}</option>)}
                     </select>
                   </Field>
                   {PIPELINE_DATES.map(([f, label]) => (

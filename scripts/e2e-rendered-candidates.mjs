@@ -2448,8 +2448,13 @@ for (const r of results) {
     // first, then measure.
     // ROLE, per screen, and it is MEASURED rather than assumed (QA-2566 discrimination run,
     // 2026-09-13, on a rebuilt pre-QA-2560 mutant with a 65-character option injected):
-    //   /finance     mutant 468 vs 400 RED · fixed 400 = 400 GREEN  -> a real PIN, it discriminates
-    //   /finance/pnl mutant 400 = 400 GREEN · fixed 400 = 400 GREEN -> a CONTROL, it does not
+    //   /finance     mutant doc 468 on real data alone, 563 after injection · fixed 400 -> PIN
+    //   /finance/pnl mutant doc 400 before AND after injection      · fixed 400 -> CONTROL
+    // QA-2569: the FIRST version of this table reached the same conclusion through a run that
+    // could not support it - the injection was inert (QA-2568), so "pnl stayed 400" meant nothing.
+    // Re-measured with appendChild, which moves /finance's selects 242/245/439/144 -> 534 each and
+    // the document to 563, while pnl's stay 342 unmoved because its grid cell clamps them. Same
+    // answer, and this time the instrument was shown to be capable of producing the other one.
     // The pnl grid constrains its cells on its own, so that screen was never vulnerable at this
     // spot and its width class is precautionary. Calling both of them pins would be the QA-2532
     // shape - a mutation that cannot discriminate, reported as if it had.
@@ -2488,29 +2493,40 @@ for (const r of results) {
         // one people learn to skip. So CREATE the condition instead: widen one option in the live
         // DOM and re-measure. That tests the containment directly, is independent of what the seed
         // happens to hold, and goes red on the pre-fix build at every width it is run at.
+        // QA-2568: the injection below used to set textContent on an EXISTING option. MEASURED on
+        // an uncapped build: the selects read [242,245,439,144] BEFORE and the identical
+        // [242,245,439,144] AFTER, while the old precondition happily reported longest=65 - it
+        // asserted a STRING LENGTH where the property at risk is WIDTH. Chromium does not
+        // re-compute a <select>'s intrinsic width when an existing option's text changes;
+        // appendChild of a NEW option does ([534,534,534,534], document 563). So the arm was
+        // measuring an unwidened page - the exact failure its own precondition claimed to prevent,
+        // through a door that precondition did not watch.
         const LONG = "Z".repeat(65);
-        const injected = await fpage.evaluate((text) => {
+        const inj = await fpage.evaluate((text) => {
           const sels = [...document.querySelectorAll("select")].filter((s) => s.options.length > 1);
-          if (!sels.length) return { count: 0, longest: 0 };
-          for (const sel of sels) sel.options[sel.options.length - 1].textContent = text;
-          // force layout before anything is read back
+          for (const sel of sels) { const o = document.createElement("option"); o.textContent = text; sel.appendChild(o); }
+          // THE INSTRUMENT CHECKS ITSELF. A capped select is SUPPOSED not to widen, so "the real
+          // selects did not grow" cannot distinguish a working cap from an injection that does
+          // nothing - that is precisely how QA-2566 shipped green on a broken build. Inject the
+          // same option into an UNCONSTRAINED probe select parked outside the layout: if the probe
+          // does not widen, the technique is broken and the measurement below is worthless.
+          const probe = document.createElement("select");
+          probe.style.cssText = "position:absolute;left:-9999px;top:0";
+          for (const t of ["x", text]) { const o = document.createElement("option"); o.textContent = t; probe.appendChild(o); }
+          document.body.appendChild(probe);
           void document.documentElement.offsetWidth;
-          return {
-            count: sels.length,
-            longest: Math.max(...sels.flatMap((s) => [...s.options].map((o) => (o.textContent || "").length))),
-          };
+          const probeWidth = Math.round(probe.getBoundingClientRect().width);
+          probe.remove();
+          return { count: sels.length, probeWidth };
         }, LONG);
         await fpage.waitForTimeout(200);
-        // The injection is itself asserted. Without this, a selector that matched nothing would
-        // leave the measurement below reading an UNWIDENED page and reporting green - the exact
-        // failure this whole block is repairing, one layer up.
-        ok(`QA-2561/QA-2566 [precondition] at ${width}px a ${LONG.length}-character option was actually injected into ${label}'s filter selects`,
-          injected.count > 0 && injected.longest >= LONG.length,
-          JSON.stringify({ width, label, ...injected, want: LONG.length }));
-        if (!(injected.count > 0 && injected.longest >= LONG.length)) continue;
+        ok(`QA-2561/QA-2566/QA-2568 [precondition] at ${width}px the injection technique can actually widen a select (unconstrained probe grew past 300px), and ${label} has filter selects to inject into`,
+          inj.count > 0 && inj.probeWidth > 300,
+          JSON.stringify({ width, label, ...inj, note: "probeWidth<=300 means the instrument is broken, NOT that the page is fine" }));
+        if (!(inj.count > 0 && inj.probeWidth > 300)) continue;
         const ow = await overflow();
-        ok(`QA-2566${role === "control" ? " [control]" : ""}: at ${width}px ${label} still does not widen the page when a filter option is ${LONG.length} characters long${role === "control" ? " - this arm was GREEN on the broken build too and proves nothing on its own" : ""}`,
-          ow.scrollWidth <= ow.clientWidth, JSON.stringify({ width, label, role, optionChars: LONG.length, ...ow }));
+        ok(`QA-2566${role === "control" ? " [control]" : ""}: at ${width}px ${label} still does not widen the page when a filter option is ${LONG.length} characters long${role === "control" ? " - see the role comment above before reading anything into this arm" : ""}`,
+          ow.scrollWidth <= ow.clientWidth, JSON.stringify({ width, label, role, optionChars: LONG.length, probeWidth: inj.probeWidth, ...ow }));
         // leave no injected text behind for the next iteration to measure
         await fpage.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
       }

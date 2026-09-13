@@ -200,10 +200,17 @@ function FinanceInner() {
                 it would blank the select while the URL still carries its id, so the screen would
                 stop showing what the figures are actually filtered by - QA-2518's lesson, which
                 cost a whole release to learn on the cost-head picker.
-                Both halves are `offerable()` (src/lib/client.ts), which exists for exactly this and was
-                already being used on the LOCATION select a few lines above. I hand-rolled the same
-                logic before finding it - a guard nobody invokes and a guard that does not exist
-                have the same effect, and so does one nobody knows is there. */}
+                Both halves are `offerable()` (src/lib/client.ts), which exists for exactly this. I
+                hand-rolled the same logic before finding it - a guard nobody invokes and a guard
+                that does not exist have the same effect, and so does one nobody knows is there.
+                (QA-2571: an earlier version of this sentence said offerable() "was already being
+                used on the LOCATION select a few lines above". FALSE in THIS file - the Centre
+                select at :179 does not call it, and :207 below is the only call site here. The
+                true version of that observation belongs to trainers/[id], where the location
+                select did already use it. A claim carried from the file where it was true into
+                the file where it was not - third false neighbour-claim in this one comment
+                block, which is why the block now carries its own corrections instead of being
+                rewritten clean.) */}
             {offerable(lists.programs, f.program)
               .map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.active === false ? " (inactive)" : ""}</option>)}
           </select>
