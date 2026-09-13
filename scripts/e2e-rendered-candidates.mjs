@@ -2469,6 +2469,43 @@ for (const r of results) {
         const o = await overflow();
         ok(`QA-2561: at ${width}px ${label} does not widen the page past the viewport`,
           o.scrollWidth <= o.clientWidth, JSON.stringify({ width, label, ...o }));
+
+        // QA-2566: THE FOUR ARMS ABOVE WERE GREEN ON THE BROKEN BUILD, and a checker proved it by
+        // building the pre-fix mutant. The reason is the whole mechanism this pin cites: a <select>
+        // is sized by its widest OPTION, and the longest centre name the seed carries is ELEVEN
+        // characters - so an uncapped select and a capped one are the same width on this data and
+        // the arms cannot discriminate. "Populated" was never the property at risk; WIDE was.
+        //
+        // Asserting the seed contains a long name would make the pin depend on fixture data and go
+        // red on every wall until somebody widened the seed - a guard that cries on correct work is
+        // one people learn to skip. So CREATE the condition instead: widen one option in the live
+        // DOM and re-measure. That tests the containment directly, is independent of what the seed
+        // happens to hold, and goes red on the pre-fix build at every width it is run at.
+        const LONG = "Z".repeat(65);
+        const injected = await fpage.evaluate((text) => {
+          const sels = [...document.querySelectorAll("select")].filter((s) => s.options.length > 1);
+          if (!sels.length) return { count: 0, longest: 0 };
+          for (const sel of sels) sel.options[sel.options.length - 1].textContent = text;
+          // force layout before anything is read back
+          void document.documentElement.offsetWidth;
+          return {
+            count: sels.length,
+            longest: Math.max(...sels.flatMap((s) => [...s.options].map((o) => (o.textContent || "").length))),
+          };
+        }, LONG);
+        await fpage.waitForTimeout(200);
+        // The injection is itself asserted. Without this, a selector that matched nothing would
+        // leave the measurement below reading an UNWIDENED page and reporting green - the exact
+        // failure this whole block is repairing, one layer up.
+        ok(`QA-2561/QA-2566 [precondition] at ${width}px a ${LONG.length}-character option was actually injected into ${label}'s filter selects`,
+          injected.count > 0 && injected.longest >= LONG.length,
+          JSON.stringify({ width, label, ...injected, want: LONG.length }));
+        if (!(injected.count > 0 && injected.longest >= LONG.length)) continue;
+        const ow = await overflow();
+        ok(`QA-2566: at ${width}px ${label} still does not widen the page when a filter option is ${LONG.length} characters long`,
+          ow.scrollWidth <= ow.clientWidth, JSON.stringify({ width, label, optionChars: LONG.length, ...ow }));
+        // leave no injected text behind for the next iteration to measure
+        await fpage.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
       }
     }
 

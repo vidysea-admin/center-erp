@@ -158,8 +158,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-309 adds a Location filter and a Batch filter to three screens: Costs, Finance, "  +
-  "and Revenue and P&L. Batches are listed by their own code with the centre beside them, and "  +
+  "-309 lets Costs, Finance, and Revenue and P&L each be narrowed to one centre and "  +
+  "one batch. Batches are listed by their own code with the centre beside them, and "  +
   "choosing a centre narrows the batch list to that centre's batches, so the two read as "  +
   "one question rather than two. "  +
   "On the Costs screen these are new: the ledger could be sorted by location and by batch "  +
