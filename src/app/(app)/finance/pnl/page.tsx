@@ -1,7 +1,7 @@
 "use client";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDT } from "@/lib/client";
+import { api, fmtDT, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, DataTable, ErrorBanner } from "@/components/ui";
 
@@ -176,7 +176,23 @@ function PnlInner() {
         <label className="text-xs text-gray-600">Job role
           <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.program} onChange={(e) => set("program", e.target.value)}>
             <option value="">All job roles</option>
-            {lists.programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+            {/* QA-2555: a job role an admin has switched OFF is not offered here. Until now this
+                list ignored `active` entirely - while the Cost head select a few lines down has
+                always filtered - so the product's own reversible way to retire a row did not
+                retire it in the place people look. That is why Umesh's screenshot of this screen
+                showed "Drone Service Technician" twice: one live role and one already-disabled
+                scheme variant, reported to us as a duplicate. It was a duplicate ON THIS SCREEN and
+                nowhere else.
+                ...but a role that is CURRENTLY SELECTED stays listed even when inactive. Dropping
+                it would blank the select while the URL still carries its id, so the screen would
+                stop showing what the figures are actually filtered by - QA-2518's lesson, which
+                cost a whole release to learn on the cost-head picker.
+                Both halves are `offerable()` (src/lib/client.ts), which exists for exactly this and was
+                already being used on the LOCATION select a few lines above. I hand-rolled the same
+                logic before finding it - a guard nobody invokes and a guard that does not exist
+                have the same effect, and so does one nobody knows is there. */}
+            {offerable(lists.programs, f.program)
+              .map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.active === false ? " (inactive)" : ""}</option>)}
           </select>
         </label>
         {/* Manish's item 2: the batch-wise view he asked for. Sorted by code so the list reads the

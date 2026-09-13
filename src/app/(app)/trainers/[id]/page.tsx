@@ -388,7 +388,10 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                   <Field label="Job role" required>
                     <select className={inputCls} value={card.program} onChange={(e) => setCard({ ...card, program: e.target.value })}>
                       <option value="">—</option>
-                      {programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
+                      {/* QA-2555: offerable() here too. The LOCATION select three lines above already used it;
+                          this one listed retired job roles, so a trainer could be assigned to a role an
+                          admin had switched off. Same helper, same line of code, one field apart. */}
+                      {offerable(programs, card.program).map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.scheme ? ` (${p.scheme})` : ""}</option>)}
                     </select>
                   </Field>
                   {PIPELINE_DATES.map(([f, label]) => (
