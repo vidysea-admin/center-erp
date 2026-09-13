@@ -1688,6 +1688,10 @@ const RELEASE_NOTE_ARCHIVE =
   // checker: QA-2301's byte-perfect restoration of the -299 text landed in a constant nothing
   // reads. A comment warning about a defect does not prevent it; only an assertion does, so
   // check-user-copy.mjs now fails when a declared ARCHIVE_NNN is missing from this chain.
+  // -310: ARCHIVE_309 wired in here. I declared it and did not wire it, and the wall's own gate
+  // caught it - which is the assertion this block's comment says was added precisely because a
+  // warning comment had already failed to prevent the same thing twice.
+  RELEASE_NOTE_ARCHIVE_309 + " " +
   RELEASE_NOTE_ARCHIVE_308 + " " +
   RELEASE_NOTE_ARCHIVE_307 + " " +
   RELEASE_NOTE_ARCHIVE_306 + " " +
