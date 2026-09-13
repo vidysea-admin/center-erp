@@ -187,9 +187,12 @@ function FinanceInner() {
             className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All job roles</option>
             {/* QA-2555: a job role an admin has switched OFF is not offered here. Until now this
-                list ignored `active` entirely - while the Cost head select a few lines down has
-                always filtered - so the product's own reversible way to retire a row did not
-                retire it in the place people look. That is why Umesh's screenshot of this screen
+                list ignored `active` entirely - so the product's own reversible way to retire a row did
+                not retire it in the place people look. (An earlier version of this comment said
+                the Cost head select below "has always filtered", offered as the contrast. That is
+                FALSE: it filters on `!c.parent` - top-level heads only - and greps 0 for `active`.
+                The claim was checked by confirming a filter EXISTS rather than reading what it
+                filters ON, which is the same error one altitude down from QA-2565's.) That is why Umesh's screenshot of this screen
                 showed "Drone Service Technician" twice: one live role and one already-disabled
                 scheme variant, reported to us as a duplicate. It was a duplicate ON THIS SCREEN and
                 nowhere else.

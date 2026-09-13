@@ -169,8 +169,9 @@ export const RELEASE_NOTE_CURRENT =
   "The choice is kept in the page address, so a figure sent to a colleague as a link "  +
   "arrives filtered the way you left it, and on Finance the Excel download follows what "  +
   "the screen is showing. "  +
-  "One related change on the same screens: a job role that an administrator has switched "  +
-  "off is no longer offered in the Job role filter. It was being listed whether it was "  +
+  "One related change, on Finance, on Revenue and P&L, and on a trainer's own page: a "  +
+  "job role that an administrator has switched off is no longer offered where a job role "  +
+  "is chosen. It was being listed whether it was "  +
   "switched on or not, which is why a retired role could appear beside a live one of the "  +
   "same name and read as a duplicate. A role you have already filtered by stays in the "  +
   "list, marked inactive, so the screen never stops showing what the figures are "  +
