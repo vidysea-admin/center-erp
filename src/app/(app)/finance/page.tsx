@@ -204,7 +204,7 @@ function FinanceInner() {
             grand total. Only the control was missing. */}
         <label className="text-xs text-gray-500">Batch
           <select value={f.batch} onChange={(e) => set("batch", e.target.value)}
-            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All batches</option>
             {/* QA-2556: batch-wise WITHIN a location - picking a Centre narrows this list to that
                 centre's batches, so the two filters read as one question rather than two. */}

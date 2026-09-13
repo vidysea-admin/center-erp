@@ -186,7 +186,7 @@ function PnlInner() {
             batches" until a checker pointed out the count came from chat and sits in no census on
             disk - retracted from the public note, and it had to be retracted here too.) */}
         <label className="text-xs text-gray-600">Batch
-          <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.batch} onChange={(e) => set("batch", e.target.value)}>
+          <select className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.batch} onChange={(e) => set("batch", e.target.value)}>
             <option value="">All batches</option>
             {/* QA-2556: batch-wise WITHIN a location - picking a Centre narrows this list to that
                 centre's batches, so the two filters read as one question rather than two. */}

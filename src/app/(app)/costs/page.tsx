@@ -338,10 +338,14 @@ function CostsInner() {
             {/* QA-2556: location-wise and batch-wise, by the batch's own CODE - the string a centre
                 says out loud. The total in the heading above is summed from these rows, so it
                 narrows with them rather than continuing to report the whole ledger. */}
-            <div className="mb-2 flex flex-wrap items-end gap-2">
+            {/* QA-2557: min-w-0 on the row AND a max-width on each select. `flex-wrap` alone does not
+                save you here - a <select> is sized by its WIDEST OPTION, and a batch option carries a
+                full code plus a centre name, so at 400px the control itself was 534px wide and took
+                the page with it. The wall caught this on the first run after the filters landed. */}
+            <div className="mb-2 flex min-w-0 flex-wrap items-end gap-2">
               <label className="text-xs text-gray-500">Location
                 <select value={fLoc} onChange={(e) => setFilter("location", e.target.value)}
-                  className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
                   <option value="">All locations</option>
                   {[...locations].sort((a: any, b: any) => String(a.name ?? "").localeCompare(String(b.name ?? "")))
                     .map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
@@ -349,7 +353,7 @@ function CostsInner() {
               </label>
               <label className="text-xs text-gray-500">Batch
                 <select value={fBatch} onChange={(e) => setFilter("batch", e.target.value)}
-                  className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
                   <option value="">All batches</option>
                   {[...batches]
                     .filter((b: any) => !fLoc || String(b.location?._id ?? b.location ?? "") === fLoc)
