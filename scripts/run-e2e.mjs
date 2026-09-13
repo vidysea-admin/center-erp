@@ -129,13 +129,6 @@ const SUITES = [
     console.error("Running the whole wall here would look like the subset you asked for. Refusing instead.");
     console.error("To run the full wall, pass no arguments at all (`npm test`).");
     console.error("");
-// QA-2548: SKIPS ARE DELIBERATELY EXCLUDED FROM THE EXIT CODE, and this line is the only place
-// that decision exists. The app repo contains no `qa/` at all, so the release-row gate skips on
-// every CI run; exiting non-zero on a skip would make CI permanently red for being in the wrong
-// repo - the exact outcome that gate's own comment was written to prevent. A skip must be LOUD
-// (the per-suite row and the TOTAL warning both carry it) and must not be FATAL. The QA-2540
-// comment above argues hard that a skip is not a pass, which reads as an argument for the
-// opposite; it is not. Unwritten, this looked like an oversight rather than a call.
     process.exit(2);
   }
   if (asked.length) {
@@ -482,6 +475,7 @@ const SUITES = [
 }
 
 const results = [];
+const parserDrift = [];
 for (const suite of SUITES) {
   console.log(`\n━━━ ${suite} ━━━`);
   const r = spawnSync(process.execPath, [path.join(dir, suite)], { encoding: "utf-8", env: process.env, maxBuffer: 32 * 1024 * 1024 });
@@ -518,6 +512,13 @@ for (const suite of SUITES) {
   // untrue part, and it was untrue in the direction that mattered.
   // SKIPPED is now known vocabulary - in exactly one spelling.
   const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED \(did not run[^)]*\))?\s*$/m);
+  // QA-2551: the parser matches ONE exact spelling of the skip suffix, and nothing binds the suite
+  // that EMITS it to this reader - grep for "run-e2e" in check-user-copy.mjs finds only prose. A
+  // one-word reword there would send its real passes to CRASHED on a push gate: QA-2540 re-armed
+  // with a narrower trigger. Rather than couple the two files, DETECT the disagreement - if a suite
+  // said SKIPPED and the parse did not capture it, this reader has stopped understanding that
+  // suite, and it must say so rather than quietly read zero.
+  if (/SKIPPED/.test(r.stdout ?? "") && !(m && m[3])) parserDrift.push(suite);
   results.push({
     suite,
     passed: m ? Number(m[1]) : 0,
@@ -563,9 +564,27 @@ if (skippedSuites.length) {
   totalLine += String.fromCharCode(10) + "!! " + n + " assertion(s) SKIPPED - they did not run, and a skip is not a pass: " +
     skippedSuites.map((r) => r.suite + " (" + r.skipped + ")").join(", ");
 }
+if (parserDrift.length) {
+  totalLine += String.fromCharCode(10) + "!! " + parserDrift.length +
+    " suite(s) printed SKIPPED in a form this runner no longer parses - their skips are NOT in the numbers above: " +
+    parserDrift.join(", ");
+}
 if (quietFailures.length) {
   totalLine += `\n!! ${quietFailures.length} suite(s) reported no failures but exited non-zero: ` +
     quietFailures.map((r) => `${r.suite} (exit ${r.exit})`).join(", ");
 }
 console.log(totalLine);
+// QA-2548 / QA-2550: SKIPS ARE DELIBERATELY EXCLUDED FROM THIS EXIT CODE - `bad` counts failures
+// and crashes, never skips. The app repo contains no `qa/` at all, so the release-row gate skips on
+// every CI run; exiting non-zero on a skip would make CI permanently red for being in the wrong
+// repo, which is the exact outcome that gate's own comment was written to prevent. A skip must be
+// LOUD - the per-suite row and the TOTAL warnings above both carry it - and must not be FATAL. The
+// QA-2540/QA-2543 comments above argue hard that a skip is not a pass, which reads as an argument
+// for the opposite; it is not, and unwritten this looked like an oversight rather than a call.
+//
+// QA-2550: the first version of this comment landed 439 lines away, above the process.exit(2) that
+// ends argument parsing - where two of its own sentences were false ("the only place that decision
+// exists"; "the comment above"). It was filed as a misplaced-location defect and I fixed it by
+// moving the token rather than re-reading what it described, which is precisely the mistake the
+// note clause beside it made in the same cycle. A comment about a line has to be read AT that line.
 process.exit(bad ? 1 : 0);
