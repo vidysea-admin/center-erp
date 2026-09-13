@@ -164,11 +164,13 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // about. Written as what the system now does rather than as what this release adds, because a
 // novelty claim cannot be checked against the tree the reader has.
 export const RELEASE_NOTE_CURRENT =
-  "-310 lets the person approving a cost decide where that cost should be filed. When a "  +
-  "cost is posted naming a head that does not exist yet, the entry waits for approval and "  +
-  "does not reach the cost ledger until it is decided. The approver can file it under a "  +
-  "head that already exists, or create the head as proposed. Leaving that choice untouched "  +
-  "creates the head as proposed, and the decision records which head was chosen. "  +
+  "-310 lets the person approving a cost decide where that cost should be filed. When "  +
+  "someone other than an administrator posts a cost naming a head that does not exist yet, "  +
+  "the entry waits for approval and does not reach the cost ledger until it is decided; an "  +
+  "administrator posting the same cost creates that head as they go. The approver can file "  +
+  "a waiting cost under a head that already exists, or create the head as proposed. Leaving "  +
+  "that choice untouched creates the head as proposed, and where a head was chosen the "  +
+  "decision records which one. "  +
   "On Finance and on Revenue and P&L, a filter list that fails to load is named on the "  +
   "screen, and the lists that did load fill their dropdowns. An empty filter box used to "  +
   "look the same whether the list had been refused or simply had no rows to offer, which "  +
