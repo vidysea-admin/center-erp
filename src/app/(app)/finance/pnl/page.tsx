@@ -188,7 +188,11 @@ function PnlInner() {
         <label className="text-xs text-gray-600">Batch
           <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.batch} onChange={(e) => set("batch", e.target.value)}>
             <option value="">All batches</option>
-            {[...lists.batches].sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? ""))).map((b: any) => (
+            {/* QA-2556: batch-wise WITHIN a location - picking a Centre narrows this list to that
+                centre's batches, so the two filters read as one question rather than two. */}
+            {[...lists.batches]
+              .filter((b: any) => !f.location || String(b.location?._id ?? b.location ?? "") === f.location)
+              .sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? ""))).map((b: any) => (
               <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>
             ))}
           </select>

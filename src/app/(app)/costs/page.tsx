@@ -1,6 +1,6 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox } from "@/components/ui";
 import { usePerms } from "@/components/shell";
@@ -8,6 +8,27 @@ import { Activity } from "@/components/activity";
 
 function CostsInner() {
   const sp = useSearchParams();
+  const router = useRouter();
+  // QA-2556 - Umesh, 13 Sept: "cost, finance, revenue - har jagah location-wise aur batch-wise
+  // chahiye, batch code ke saath." Finance and Revenue & P&L carry both; this screen carried
+  // neither, and /api/costs has accepted both since it was written (api/costs/route.ts:29 reads
+  // location, batch, trainer, category). Same shape as the Finance gap: the server was ready and
+  // the screen had no control.
+  //
+  // The filters live in the URL, the way they do on Finance, and for the same reason written at the
+  // top of finance/page.tsx: a cost figure gets sent to somebody, and a link that does not carry
+  // what it was filtered by is a link to a different number.
+  const fLoc = sp.get("location") ?? "";
+  const fBatch = sp.get("batch") ?? "";
+  const ledgerQs = new URLSearchParams(
+    Object.entries({ location: fLoc, batch: fBatch }).filter(([, v]) => v) as [string, string][],
+  ).toString();
+  const setFilter = (k: "location" | "batch", v: string) => {
+    const next = new URLSearchParams(ledgerQs);
+    if (v) next.set(k, v); else next.delete(k);
+    const tabQ = sp.get("tab") ? `tab=${sp.get("tab")}&` : "";
+    router.push(`/costs?${tabQ}${next.toString()}`, { scroll: false });
+  };
   // R-E (CEO 14/08): whoever posts money is POST-only on it — they submit an entry, it goes to the
   // approval queue, and once decided it leaves their view. They never see the ledger ("they
   // shouldn't be able to see what has been posted").
@@ -47,7 +68,7 @@ function CostsInner() {
     api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => ["cost.post", "costcategory.create"].includes(i.action)))),
     asPostOnly
       ? Promise.resolve()
-      : api("/api/costs").then((d) => setCosts(d.items)),
+      : api(`/api/costs${ledgerQs ? `?${ledgerQs}` : ""}`).then((d) => setCosts(d.items)),
     asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     role === "Trainer" ? Promise.resolve() : api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
@@ -56,7 +77,7 @@ function CostsInner() {
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   // Wait for the RIGHTS, not the session (QA-1825) — the first paint does not know them yet, and
   // firing the ledger fetch for a post-only user would just banner their own 403 at them.
-  useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly]);
+  useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly, ledgerQs]);
 
   // QA-2483: the finance register's Edit lands here with ?edit=<id>. It opens the row in the form
   // ONLY once the ledger has actually arrived and only for someone who may correct it - otherwise
@@ -313,7 +334,31 @@ function CostsInner() {
           )}
           {!postOnly && (
 
-          <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}`}>
+          <Section title={`All cost entries — total ₹${total.toLocaleString("en-IN")}${ledgerQs ? " (filtered)" : ""}`}>
+            {/* QA-2556: location-wise and batch-wise, by the batch's own CODE - the string a centre
+                says out loud. The total in the heading above is summed from these rows, so it
+                narrows with them rather than continuing to report the whole ledger. */}
+            <div className="mb-2 flex flex-wrap items-end gap-2">
+              <label className="text-xs text-gray-500">Location
+                <select value={fLoc} onChange={(e) => setFilter("location", e.target.value)}
+                  className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  <option value="">All locations</option>
+                  {[...locations].sort((a: any, b: any) => String(a.name ?? "").localeCompare(String(b.name ?? "")))
+                    .map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-gray-500">Batch
+                <select value={fBatch} onChange={(e) => setFilter("batch", e.target.value)}
+                  className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  <option value="">All batches</option>
+                  {[...batches]
+                    .filter((b: any) => !fLoc || String(b.location?._id ?? b.location ?? "") === fLoc)
+                    .sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? "")))
+                    .map((b: any) => <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>)}
+                </select>
+              </label>
+              {ledgerQs && <Btn kind="ghost" onClick={() => router.push(`/costs${sp.get("tab") ? `?tab=${sp.get("tab")}` : ""}`, { scroll: false })}>Clear</Btn>}
+            </div>
             <DataTable rows={costs} loading={loading}
               cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
               onRowClick={canApproveCosts ? openEdit : undefined}
