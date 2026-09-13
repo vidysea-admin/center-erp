@@ -158,7 +158,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-309 changes no software. Like the release before it, it corrects a sentence in the "  +
+  "-309 changes nothing in the application. Like the release before it, it corrects a "  +
+  "sentence in the "  +
   "note published with the previous release - and it is the same sentence slot getting "  +
   "it wrong again, which is the part worth saying out loud. "  +
   "The previous note said that whether a release note is true is established by people "  +
@@ -166,14 +167,14 @@ export const RELEASE_NOTE_CURRENT =
   "half holds. The errors were found by automated review agents, not by a person. And "  +
   "they were not found the same way: one came from reading the note, and the other from "  +
   "reading the records the note was describing, which is a different check entirely. "  +
-  "Saying they were found the same way made the account neater than what happened, and "  +
-  "the paragraph it sat in was complaining about exactly that. "  +
+  "Saying they were found the same way made the account neater than what happened, which "  +
+  "is the thing that same note was complaining about. "  +
   "What is actually the case: what runs automatically before a release goes out tests the "  +
   "note's shape - that it names this release, that it is not a copy of an older one. "  +
   "Whether it is TRUE is established afterwards, by review, sometimes by reading the note "  +
   "and sometimes by going and reading the thing it describes. "  +
-  "This keeps happening in the same place: the paragraph explaining why these notes avoid "  +
-  "counts is the one that has kept claiming more than was checked. The rule we started "  +
+  "This keeps happening to the part of these notes that explains why they avoid counts: "  +
+  "it is the part that has kept claiming more than was checked. The rule we started "  +
   "with was to "  +
   "take the figures out. That was not sufficient: a sentence can say how many, or say "  +
   "only, or every, or both, without using a single figure, and each one still needs "  +

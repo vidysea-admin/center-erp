@@ -129,6 +129,13 @@ const SUITES = [
     console.error("Running the whole wall here would look like the subset you asked for. Refusing instead.");
     console.error("To run the full wall, pass no arguments at all (`npm test`).");
     console.error("");
+// QA-2548: SKIPS ARE DELIBERATELY EXCLUDED FROM THE EXIT CODE, and this line is the only place
+// that decision exists. The app repo contains no `qa/` at all, so the release-row gate skips on
+// every CI run; exiting non-zero on a skip would make CI permanently red for being in the wrong
+// repo - the exact outcome that gate's own comment was written to prevent. A skip must be LOUD
+// (the per-suite row and the TOTAL warning both carry it) and must not be FATAL. The QA-2540
+// comment above argues hard that a skip is not a pass, which reads as an argument for the
+// opposite; it is not. Unwritten, this looked like an oversight rather than a call.
     process.exit(2);
   }
   if (asked.length) {
@@ -503,8 +510,14 @@ for (const suite of SUITES) {
   //
   // So: keep the anchor, and admit the one suffix that is legitimate. Anything else trailing the
   // summary still fails to match and still reports CRASHED - the strictness is unchanged; only
-  // SKIPPED is now known vocabulary.
-  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED.*)?\s*$/m);
+  // QA-2549: and the suffix must be OUR suffix, not "anything after the word SKIPPED". My first
+  // restore ended the group in an unbounded `.*`, so `TOTAL: 5 passed, 2 failed, 3 SKIPPED across 9
+  // suites` still matched and was still read as a suite's own numbers - and QA-2543, in the SAME
+  // commit, is what makes lines of that shape exist in the first place. Measured: shipped pattern
+  // 5/2/3skip, this one 99/0. So "the strictness is unchanged" in that commit message was the
+  // untrue part, and it was untrue in the direction that mattered.
+  // SKIPPED is now known vocabulary - in exactly one spelling.
+  const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED \(did not run[^)]*\))?\s*$/m);
   results.push({
     suite,
     passed: m ? Number(m[1]) : 0,
