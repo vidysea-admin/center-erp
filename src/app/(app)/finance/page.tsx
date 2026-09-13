@@ -17,8 +17,8 @@ export default function FinancePage() {
   return <Suspense><FinanceInner /></Suspense>;
 }
 
-type Filters = { from: string; to: string; location: string; program: string; category: string };
-const EMPTY: Filters = { from: "", to: "", location: "", program: "", category: "" };
+type Filters = { from: string; to: string; location: string; program: string; category: string; batch: string };
+const EMPTY: Filters = { from: "", to: "", location: "", program: "", category: "", batch: "" };
 
 function FinanceInner() {
   const sp = useSearchParams();
@@ -31,7 +31,7 @@ function FinanceInner() {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [lists, setLists] = useState<{ locations: any[]; programs: any[]; categories: any[] }>({ locations: [], programs: [], categories: [] });
+  const [lists, setLists] = useState<{ locations: any[]; programs: any[]; categories: any[]; batches: any[] }>({ locations: [], programs: [], categories: [], batches: [] });
 
   // The filters live in the URL, not in component state. A finance figure gets sent to somebody —
   // "yeh dekho" — and a link that does not carry what it was filtered by is a link to a different
@@ -68,10 +68,11 @@ function FinanceInner() {
   useEffect(() => {
     (async () => {
       try {
-        const [l, p, c] = await Promise.all([
+        const [l, p, c, b] = await Promise.all([
           api("/api/locations?limit=500"), api("/api/programs?limit=500"), api("/api/master-lists/cost-categories"),
+          api("/api/batches?limit=2000"),
         ]);
-        setLists({ locations: l.items ?? [], programs: p.items ?? [], categories: c.items ?? [] });
+        setLists({ locations: l.items ?? [], programs: p.items ?? [], categories: c.items ?? [], batches: b.items ?? [] });
       } catch { /* the filters are a convenience; the report still loads without them */ }
     })();
   }, []);
@@ -186,6 +187,27 @@ function FinanceInner() {
             className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All job roles</option>
             {lists.programs.map((p: any) => <option key={p._id} value={p._id}>{p.name}</option>)}
+          </select>
+        </label>
+        {/* QA-2552 - Manish's item 2, the half of it that was NOT delivered. His mail says "Under
+            Finance AND Revenue & P&L, please add Batch Code as a reporting/filtering parameter".
+            Revenue & P&L got the filter in -306; THIS screen got only a Batch COLUMN, and I twice
+            reported the item as complete on the strength of that. A column you can type into is not
+            the parameter he asked for: the column search is a text match over rendered cells, so it
+            cannot tell one batch from another whose code contains it, it does not survive into the
+            Excel download, and it is not in the URL - so a finance figure sent to somebody as a link
+            arrives unfiltered, which is the exact failure the comment at the top of this file exists
+            to prevent.
+            The SERVER has accepted this filter the whole time (api/reports/costs/route.ts:27 reads
+            `batch` alongside location/program/category), so every total, the batch x head grid, the
+            register and the Excel download all narrow together and by construction still sum to the
+            grand total. Only the control was missing. */}
+        <label className="text-xs text-gray-500">Batch
+          <select value={f.batch} onChange={(e) => set("batch", e.target.value)}
+            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            <option value="">All batches</option>
+            {[...lists.batches].sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? "")))
+              .map((b: any) => <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>)}
           </select>
         </label>
         <label className="text-xs text-gray-500">Cost head
