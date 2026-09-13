@@ -158,35 +158,34 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "about how a candidate is dropped from a batch has changed.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-309 adds the batch filter to the Finance screen, and corrects a sentence in the note "  +
-  "published with the previous release. "  +
-  "FIRST, the part you can use. Finance can now be filtered by batch, the same way Revenue "  +
-  "and P&L already could. The filter sits beside Centre, Job role and Cost head, and the "  +
-  "list shows each batch by its own code with its centre beside it. Choosing one narrows "  +
-  "everything on the screen together - the totals, the spend by cost head, the batch and "  +
-  "cost-head grid, and the register underneath - and the Excel download follows what the "  +
-  "screen is showing. The choice is kept in the page address as well, so a figure sent to "  +
-  "a colleague as a link arrives filtered the way you left it. "  +
-  "Finance already had a Batch column and a box that searches the table. That is not the "  +
-  "same thing: searching the table matches text in what is drawn on screen, so it cannot "  +
-  "separate one batch from another whose code contains it, it does not reach the Excel "  +
-  "download, and it is not carried in the link. "  +
-  "SECOND, the correction. The previous note said that whether a release note is true is "  +
-  "established by people reading it, and that this is how the errors it was correcting had "  +
-  "been found. Neither half holds. The errors were found by automated review agents, not "  +
-  "by a person. And they were not found the same way: one came from reading the note, and "  +
-  "the other from reading the records the note was describing, which is a different check "  +
-  "entirely. Saying they were found the same way made the account neater than what "  +
-  "happened, which is the thing that same note was complaining about. "  +
-  "What is actually the case: what runs automatically before a release goes out tests the "  +
+  "-309 makes every screen where money is read filterable by centre and by batch. "  +
+  "Costs, Finance, and Revenue and P&L now all carry a Location filter and a Batch "  +
+  "filter. Batches are listed by their own code with the centre beside them, and "  +
+  "choosing a centre narrows the batch list to that centre's batches, so the two read as "  +
+  "one question rather than two. "  +
+  "On the Costs screen these are new: the ledger could be sorted by location and by batch "  +
+  "but not narrowed to one, and the running total at the top now sums only the entries "  +
+  "being shown and says so when a filter is on. On Finance the Batch filter is new; "  +
+  "Revenue and P&L already had one and it now respects the centre. "  +
+  "The choice is kept in the page address, so a figure sent to a colleague as a link "  +
+  "arrives filtered the way you left it, and on Finance the Excel download follows what "  +
+  "the screen is showing. "  +
+  "The Finance screen already had a Batch column and a box that searches the table. Those "  +
+  "are not the same thing: searching the table matches text in what is drawn on screen, so "  +
+  "it cannot separate one batch from another whose code contains it, it does not reach the "  +
+  "Excel download, and it is not carried in the link. "  +
+  "This release also corrects the note published with the previous one, which said that "  +
+  "whether a release note is true is established by people reading it, and that this is "  +
+  "how the errors it was correcting had been found. Neither half holds. They were found by "  +
+  "automated review agents, not by a person, and not the same way as each other: one came "  +
+  "from reading the note, the other from reading the records the note was describing. "  +
+  "What is actually the case: what runs automatically before a release goes out checks the "  +
   "note's shape - that it names this release, that it is not a copy of an older one. "  +
   "Whether it is TRUE is established afterwards, by review, sometimes by reading the note "  +
   "and sometimes by going and reading the thing it describes. "  +
-  "This has happened before in these notes: a sentence claiming more than had been "  +
-  "checked. The rule we started with was to take the figures out. That was not sufficient: "  +
-  "a sentence can say how many, or say only, or every, or both, without using a single "  +
-  "figure, and each one still needs someone to go and look. That is the rule we are "  +
-  "carrying forward.";
+  "The rule we started with was to keep figures out of these notes. That was not enough: a "  +
+  "sentence can say how many, or say only, or every, or both, without using a single "  +
+  "figure, and each one still needs someone to go and look.";
 
 const RELEASE_NOTE_ARCHIVE_308 =
   "-308 changes no software. It corrects the note published with the previous release, "  +
