@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-309";
+export const RELEASE = "2026.08.14-310";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,7 +157,26 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -310. Written against qa/contracts/public-release-note.md, which is the first contract this
+// surface has ever had - seven notes carried a false clause before it existed. [C1] no counts:
+// there are none. [C2] the boundary-word scan was run and read hit by hit, not as a digit scan;
+// the phrasings that survive it are ones that were measured on both builds rather than reasoned
+// about. Written as what the system now does rather than as what this release adds, because a
+// novelty claim cannot be checked against the tree the reader has.
 export const RELEASE_NOTE_CURRENT =
+  "-310 lets the person approving a cost decide where that cost should be filed. When a "  +
+  "cost is posted naming a head that does not exist yet, the entry waits for approval and "  +
+  "does not reach the cost ledger until it is decided. The approver can file it under a "  +
+  "head that already exists, or create the head as proposed. Leaving that choice untouched "  +
+  "creates the head as proposed, and the decision records which head was chosen. "  +
+  "On Finance and on Revenue and P&L, a filter list that fails to load is named on the "  +
+  "screen, and the lists that did load fill their dropdowns. An empty filter box used to "  +
+  "look the same whether the list had been refused or simply had no rows to offer, which "  +
+  "is a difference worth being able to see: the first is usually a question about your "  +
+  "access, and the second is not. The figures on those screens are drawn separately from "  +
+  "these lists, so a failure of this kind leaves the figures as they were.";
+
+const RELEASE_NOTE_ARCHIVE_309 =
   "-309 lets Costs, Finance, and Revenue and P&L each be narrowed to one centre and "  +
   "one batch. Batches are listed by their own code with the centre beside them, and "  +
   "choosing a centre narrows the batch list to that centre's batches, so the two read as "  +
