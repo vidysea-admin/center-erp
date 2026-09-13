@@ -177,14 +177,14 @@ function FinanceInner() {
         </label>
         <label className="text-xs text-gray-500">Centre
           <select value={f.location} onChange={(e) => set("location", e.target.value)}
-            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All centres</option>
             {lists.locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
         </label>
         <label className="text-xs text-gray-500">Job role
           <select value={f.program} onChange={(e) => set("program", e.target.value)}
-            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All job roles</option>
             {/* QA-2555: a job role an admin has switched OFF is not offered here. Until now this
                 list ignored `active` entirely - while the Cost head select a few lines down has
@@ -232,7 +232,7 @@ function FinanceInner() {
         </label>
         <label className="text-xs text-gray-500">Cost head
           <select value={f.category} onChange={(e) => set("category", e.target.value)}
-            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All heads</option>
             {lists.categories.filter((c: any) => !c.parent).map((c: any) => <option key={c._id} value={c._id}>{c.name}</option>)}
           </select>

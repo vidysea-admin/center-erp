@@ -2438,6 +2438,40 @@ for (const r of results) {
         o.scrollWidth <= o.clientWidth, JSON.stringify({ width, ...o }));
     }
 
+    // QA-2561: the two FINANCE screens had no narrow-width assertion at all. QA-2557 was a real
+    // 400px overflow on exactly these filter rows (a <select> is sized by its widest OPTION, and a
+    // batch option carries a code plus a centre name), it was found in a browser by hand, and the
+    // wall could not have caught it because the wall never opened these two pages narrow. The
+    // precondition below is load-bearing: /finance and /finance/pnl render their shell before the
+    // lists arrive, so measuring on first paint would measure a page with EMPTY selects - which
+    // fits at any width and would be green on the broken build. Assert the filter row is populated
+    // first, then measure.
+    for (const [label, path, needLabels] of [
+      ["/finance", "/finance", ["Centre", "Job role", "Batch", "Cost head"]],
+      ["/finance/pnl", "/finance/pnl", ["Centre", "Job role", "Batch", "Scheme"]],
+    ]) {
+      for (const width of [1536, 400]) {
+        await fpage.setViewportSize({ width, height: 900 });
+        await fpage.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+        let ready = true;
+        await fpage.waitForFunction((labels) => {
+          const txt = document.body.innerText || "";
+          if (!labels.every((l) => txt.includes(l))) return false;
+          // populated, not merely present: at least two selects carrying real options beyond the
+          // "All ..." placeholder. An empty select is narrow and proves nothing about width.
+          return [...document.querySelectorAll("select")].filter((s) => s.options.length > 1).length >= 2;
+        }, needLabels, { timeout: 45000 }).catch(() => { ready = false; });
+        await fpage.waitForTimeout(400);
+        const seen = await fpage.evaluate(() => [...document.querySelectorAll("select")].map((s) => s.options.length));
+        ok(`QA-2561 [precondition] at ${width}px ${label} rendered its filter row with populated selects`,
+          ready, JSON.stringify({ width, label, ready, optionCounts: seen }));
+        if (!ready) continue;
+        const o = await overflow();
+        ok(`QA-2561: at ${width}px ${label} does not widen the page past the viewport`,
+          o.scrollWidth <= o.clientWidth, JSON.stringify({ width, label, ...o }));
+      }
+    }
+
     await fctx.close();
   }
 }

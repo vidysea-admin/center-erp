@@ -162,19 +162,19 @@ function PnlInner() {
 
       <div className="grid gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 sm:grid-cols-5">
         <label className="text-xs text-gray-600">From
-          <input type="date" className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.from} onChange={(e) => set("from", e.target.value)} />
+          <input type="date" className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.from} onChange={(e) => set("from", e.target.value)} />
         </label>
         <label className="text-xs text-gray-600">To
-          <input type="date" className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.to} onChange={(e) => set("to", e.target.value)} />
+          <input type="date" className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.to} onChange={(e) => set("to", e.target.value)} />
         </label>
         <label className="text-xs text-gray-600">Centre
-          <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.location} onChange={(e) => set("location", e.target.value)}>
+          <select className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.location} onChange={(e) => set("location", e.target.value)}>
             <option value="">All centres</option>
             {lists.locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
         </label>
         <label className="text-xs text-gray-600">Job role
-          <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.program} onChange={(e) => set("program", e.target.value)}>
+          <select className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.program} onChange={(e) => set("program", e.target.value)}>
             <option value="">All job roles</option>
             {/* QA-2555: a job role an admin has switched OFF is not offered here. Until now this
                 list ignored `active` entirely - while the Cost head select a few lines down has
@@ -214,7 +214,7 @@ function PnlInner() {
           </select>
         </label>
         <label className="text-xs text-gray-600">Scheme
-          <select className="mt-0.5 w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.scheme} onChange={(e) => set("scheme", e.target.value)}>
+          <select className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.scheme} onChange={(e) => set("scheme", e.target.value)}>
             <option value="">All schemes</option>
             {lists.schemes.map((s: any) => <option key={s._id} value={s._id}>{s.name}</option>)}
           </select>
