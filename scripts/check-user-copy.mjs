@@ -958,11 +958,25 @@ for (const file of walk(root)) {
 // qa/tools/gate-patterns.json now, and neither may re-inline a release pattern. Same lesson as
 // ARCHITECTURE.md section 3, applied to the machinery instead of the app.
 {
+  // The readers must resolve BESIDE the pattern file, not from the app path - otherwise handing
+  // over GATE_PATTERNS_PATH would find the patterns and none of the files that read them, and the
+  // check would pass having compared nothing. That is the shape this whole unit keeps charging.
+  const qaRoot = process.env.GATE_PATTERNS_PATH
+    ? path.dirname(path.dirname(path.resolve(process.env.GATE_PATTERNS_PATH)))
+    : path.join(root, "..", "..", "qa");
   const gateFiles = [
-    path.join(root, "..", "..", "qa", "hooks", "mc-sessionstart.ps1"),
-    path.join(root, "..", "..", "qa", "tools", "unmanifested-releases.mjs"),
+    path.join(qaRoot, "hooks", "mc-sessionstart.ps1"),
+    path.join(qaRoot, "tools", "unmanifested-releases.mjs"),
   ];
-  const shared = path.join(root, "..", "..", "qa", "tools", "gate-patterns.json");
+  // QA-2567: resolve the same way CHANGELOG_PATH does since QA-2537. The relative path below is
+  // correct only when the app sits inside the root repo's working tree; inside a git-archive copy
+  // there is no root repo two levels up, so this check took the skip branch on EVERY wall. QA-2539
+  // made that skip announce itself, which is what surfaced this - but announcing a skip and running
+  // the check are different repairs and only the first had been made. The env var lets a caller
+  // that HAS the root repo (the wall driver does) hand it over; without one, behaviour is unchanged.
+  const shared = process.env.GATE_PATTERNS_PATH
+    ? path.resolve(process.env.GATE_PATTERNS_PATH)
+    : path.join(root, "..", "..", "qa", "tools", "gate-patterns.json");
   if (!fs.existsSync(shared)) {
     // QA-2539: the sibling of QA-2537, and it survived that fix because I repaired the site I had
     // been SHOWN rather than the shape. `else passed++` here is the same trade: the root repo is
