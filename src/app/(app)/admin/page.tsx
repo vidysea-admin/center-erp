@@ -923,10 +923,23 @@ function Approvals({ error, setError }: any) {
 
   // QA-1827: the named-approver picker needs people to pick. Fetched once; the list is small.
   const [people, setPeople] = useState<any[]>([]);
+
+  // QA-2578: `map_to_category` was fully implemented server-side — read, validated against an
+  // active head, and replayed — and reachable from NO screen: `grep map_to_category --include=*.tsx`
+  // returned zero, so this panel only ever sent {decision, note, approved_amount}. That left the
+  // CEO's first option unbuildable in practice: *"यह उसको एप्रोप्रियेट हेड, सबहेड में डाल पाएं या
+  // फिर एक नया हेड और सबहेड क्रिएट करें"* — the approver could only ever do the SECOND. Approving
+  // with nothing chosen still creates the head as proposed, so this select is additive and the
+  // existing default is untouched.
+  const [mapTo, setMapTo] = useState<Record<string, string>>({});
+  const [cats, setCats] = useState<any[]>([]);
   const load = () => api(`/api/approvals?status=${status}`).then((d) => { setConfig(d.config); setItems(d.items); })
     .catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [status]);
   useEffect(() => { api("/api/users").then((d) => setPeople(d.items ?? [])).catch(() => {}); }, []);
+  // The cost-category master is readable by every role by design (money masked, structure travels),
+  // so this needs no extra grant beyond the one already required to stand on this screen.
+  useEffect(() => { api("/api/master-lists/cost-categories").then((d) => setCats(d.items ?? [])).catch(() => {}); }, []);
 
   async function toggle(action: string, enabled: boolean, approver_role?: string, approver_users?: string[]) {
     try { await api("/api/approvals", { method: "PUT", json: { action, enabled, approver_role, ...(approver_users ? { approver_users } : {}) } }); load(); }
@@ -934,10 +947,20 @@ function Approvals({ error, setError }: any) {
   }
   async function decide(id: string, decision: string) {
     const amount = approvedAmount[id];
+    // QA-2578: sent ONLY on an approval that actually chose a head. An empty string is not sent at
+    // all rather than sent as "", because the route treats `map_to_category !== undefined` as the
+    // caller having expressed an intent — passing "" would mean "map to nothing", which is a third
+    // state nobody asked for.
+    const mapped = decision === "Approved" ? String(mapTo[id] ?? "").trim() : "";
     try {
       await api(`/api/approvals/${id}`, {
         method: "POST",
-        json: { decision, note: note[id], ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}) },
+        json: {
+          decision,
+          note: note[id],
+          ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}),
+          ...(mapped ? { map_to_category: mapped } : {}),
+        },
       });
       load();
     }
@@ -1044,6 +1067,22 @@ function Approvals({ error, setError }: any) {
                         className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                         value={approvedAmount[r._id] ?? ""}
                         onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
+                    )}
+                    {/* QA-2578. `min-w-0 max-w-[13rem]` is not decoration: a <select> takes its
+                        intrinsic width from its WIDEST OPTION, and a head label here is
+                        "Head → Subhead" of two admin-typed names, so it is the longest option list
+                        on this screen. -309 shipped exactly this cap on the finance filters after
+                        a 76-character centre name was measured in production. */}
+                    {r.status === "Pending" && r.action === "costcategory.create" && (
+                      <select className={inputCls + " min-w-0 max-w-[13rem]"}
+                        value={mapTo[r._id] ?? ""}
+                        onChange={(e) => setMapTo({ ...mapTo, [r._id]: e.target.value })}>
+                        <option value="">Create the head as proposed</option>
+                        {cats.filter((c: any) => c.active !== false).map((c: any) => {
+                          const parent = c.parent ? cats.find((p: any) => String(p._id) === String(c.parent)) : null;
+                          return <option key={c._id} value={c._id}>{parent ? `${parent.name} → ${c.name}` : c.name}</option>;
+                        })}
+                      </select>
                     )}
                     {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
                       value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />}
