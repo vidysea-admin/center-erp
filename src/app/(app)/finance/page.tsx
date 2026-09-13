@@ -32,6 +32,9 @@ function FinanceInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lists, setLists] = useState<{ locations: any[]; programs: any[]; categories: any[]; batches: any[] }>({ locations: [], programs: [], categories: [], batches: [] });
+  // QA-2582: which filter lists failed to load, by name. Kept SEPARATE from `error` on purpose —
+  // the report itself is fine, so this must not wear the colour of a failed report.
+  const [listsFailed, setListsFailed] = useState<string[]>([]);
 
   // The filters live in the URL, not in component state. A finance figure gets sent to somebody —
   // "yeh dekho" — and a link that does not carry what it was filtered by is a link to a different
@@ -67,13 +70,22 @@ function FinanceInner() {
 
   useEffect(() => {
     (async () => {
-      try {
-        const [l, p, c, b] = await Promise.all([
-          api("/api/locations?limit=500"), api("/api/programs?limit=500"), api("/api/master-lists/cost-categories"),
-          api("/api/batches?limit=2000"),
-        ]);
-        setLists({ locations: l.items ?? [], programs: p.items ?? [], categories: c.items ?? [], batches: b.items ?? [] });
-      } catch { /* the filters are a convenience; the report still loads without them */ }
+      // QA-2582. The old shape was `Promise.all` inside an EMPTY catch, and it was wrong twice
+      // over. `Promise.all` is all-or-nothing, so ONE refused endpoint emptied all FOUR dropdowns;
+      // and the empty catch meant the screen could not tell "there are no batches" from "that
+      // request was refused" — the reader sees four empty selects and no reason, which is the
+      // silent-failure shape this project keeps paying for. The half that was right is kept: this
+      // is NOT fatal and must not colour the report as broken.
+      const names = ["Centres", "Job roles", "Cost heads", "Batches"] as const;
+      const rs = await Promise.allSettled([
+        api("/api/locations?limit=500"), api("/api/programs?limit=500"),
+        api("/api/master-lists/cost-categories"), api("/api/batches?limit=2000"),
+      ]);
+      const got = (i: number) => (rs[i].status === "fulfilled" ? ((rs[i] as any).value.items ?? []) : []);
+      setLists({ locations: got(0), programs: got(1), categories: got(2), batches: got(3) });
+      const bad = names.filter((_, i) => rs[i].status === "rejected");
+      setListsFailed(bad as unknown as string[]);
+      rs.forEach((r, i) => { if (r.status === "rejected") console.error(`[finance] filter list "${names[i]}" failed to load:`, (r as any).reason); });
     })();
   }, []);
 
@@ -166,6 +178,15 @@ function FinanceInner() {
       {/* ONE filter object, applied server-side to every table below and to the export
           (developer note #4) — never a per-table filter, which is how two tables on one screen
           start describing two different windows. */}
+      {/* QA-2582: says WHICH list is missing and why the dropdown is empty. Deliberately not an
+          ErrorBanner — the report below is correct and complete; only the choices are short. */}
+      {listsFailed.length > 0 && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {listsFailed.join(", ")} could not be loaded, so {listsFailed.length === 1 ? "that filter is" : "those filters are"} empty.
+          The figures below are unaffected. This is usually a permissions problem — ask an administrator to check your access.
+        </p>
+      )}
+
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-gray-200 bg-white p-3">
         <label className="text-xs text-gray-500">From
           <input type="date" value={f.from} onChange={(e) => set("from", e.target.value)}

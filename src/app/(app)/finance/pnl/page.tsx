@@ -32,6 +32,8 @@ function PnlInner() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lists, setLists] = useState<{ locations: any[]; programs: any[]; schemes: any[]; batches: any[] }>({ locations: [], programs: [], schemes: [], batches: [] });
+  // QA-2582: kept separate from `error` — the report is fine, only the choices are short.
+  const [listsFailed, setListsFailed] = useState<string[]>([]);
 
   // Filters and the open card both live in the URL. A P&L figure is opened in order to send it to
   // somebody, and a link that carries neither the filter nor the card is a link to a different
@@ -53,13 +55,18 @@ function PnlInner() {
 
   useEffect(() => {
     (async () => {
-      try {
-        const [l, p, s, b] = await Promise.all([
-          api("/api/locations?limit=500"), api("/api/programs?limit=500"), api("/api/master-lists/schemes"),
-          api("/api/batches?limit=2000"),
-        ]);
-        setLists({ locations: l.items ?? [], programs: p.items ?? [], schemes: s.items ?? [], batches: b.items ?? [] });
-      } catch { /* the filters are a convenience; the report still loads without them */ }
+      // QA-2582, same defect as /finance one screen over: `Promise.all` in an EMPTY catch meant one
+      // refused endpoint emptied all FOUR dropdowns with no reason shown. Non-fatal is right; silent
+      // is not.
+      const names = ["Centres", "Job roles", "Schemes", "Batches"] as const;
+      const rs = await Promise.allSettled([
+        api("/api/locations?limit=500"), api("/api/programs?limit=500"),
+        api("/api/master-lists/schemes"), api("/api/batches?limit=2000"),
+      ]);
+      const got = (i: number) => (rs[i].status === "fulfilled" ? ((rs[i] as any).value.items ?? []) : []);
+      setLists({ locations: got(0), programs: got(1), schemes: got(2), batches: got(3) });
+      setListsFailed(names.filter((_, i) => rs[i].status === "rejected") as unknown as string[]);
+      rs.forEach((r, i) => { if (r.status === "rejected") console.error(`[pnl] filter list "${names[i]}" failed to load:`, (r as any).reason); });
     })();
   }, []);
 
@@ -159,6 +166,14 @@ function PnlInner() {
       </div>
 
       <ErrorBanner msg={error} />
+
+      {/* QA-2582: names the missing list instead of leaving an empty dropdown to be read as "no data". */}
+      {listsFailed.length > 0 && (
+        <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          {listsFailed.join(", ")} could not be loaded, so {listsFailed.length === 1 ? "that filter is" : "those filters are"} empty.
+          The figures below are unaffected. This is usually a permissions problem — ask an administrator to check your access.
+        </p>
+      )}
 
       <div className="grid gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3 sm:grid-cols-5">
         <label className="text-xs text-gray-600">From
