@@ -2446,9 +2446,16 @@ for (const r of results) {
     // lists arrive, so measuring on first paint would measure a page with EMPTY selects - which
     // fits at any width and would be green on the broken build. Assert the filter row is populated
     // first, then measure.
-    for (const [label, path, needLabels] of [
-      ["/finance", "/finance", ["Centre", "Job role", "Batch", "Cost head"]],
-      ["/finance/pnl", "/finance/pnl", ["Centre", "Job role", "Batch", "Scheme"]],
+    // ROLE, per screen, and it is MEASURED rather than assumed (QA-2566 discrimination run,
+    // 2026-09-13, on a rebuilt pre-QA-2560 mutant with a 65-character option injected):
+    //   /finance     mutant 468 vs 400 RED · fixed 400 = 400 GREEN  -> a real PIN, it discriminates
+    //   /finance/pnl mutant 400 = 400 GREEN · fixed 400 = 400 GREEN -> a CONTROL, it does not
+    // The pnl grid constrains its cells on its own, so that screen was never vulnerable at this
+    // spot and its width class is precautionary. Calling both of them pins would be the QA-2532
+    // shape - a mutation that cannot discriminate, reported as if it had.
+    for (const [label, path, needLabels, role] of [
+      ["/finance", "/finance", ["Centre", "Job role", "Batch", "Cost head"], "pin"],
+      ["/finance/pnl", "/finance/pnl", ["Centre", "Job role", "Batch", "Scheme"], "control"],
     ]) {
       for (const width of [1536, 400]) {
         await fpage.setViewportSize({ width, height: 900 });
@@ -2502,8 +2509,8 @@ for (const r of results) {
           JSON.stringify({ width, label, ...injected, want: LONG.length }));
         if (!(injected.count > 0 && injected.longest >= LONG.length)) continue;
         const ow = await overflow();
-        ok(`QA-2566: at ${width}px ${label} still does not widen the page when a filter option is ${LONG.length} characters long`,
-          ow.scrollWidth <= ow.clientWidth, JSON.stringify({ width, label, optionChars: LONG.length, ...ow }));
+        ok(`QA-2566${role === "control" ? " [control]" : ""}: at ${width}px ${label} still does not widen the page when a filter option is ${LONG.length} characters long${role === "control" ? " - this arm was GREEN on the broken build too and proves nothing on its own" : ""}`,
+          ow.scrollWidth <= ow.clientWidth, JSON.stringify({ width, label, role, optionChars: LONG.length, ...ow }));
         // leave no injected text behind for the next iteration to measure
         await fpage.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
       }
