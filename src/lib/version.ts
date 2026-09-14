@@ -182,7 +182,15 @@ export const RELEASE_NOTE_CURRENT =
   "the approver with creating the head as proposed and no way to tell why. "  +
   "None of this changes what anyone is allowed to do, or what any figure says.";
 
-const RELEASE_NOTE_310_TEXT =
+// The -310 archive holds its TEXT DIRECTLY. My first version of this bump wrote
+// `const RELEASE_NOTE_ARCHIVE_310 = RELEASE_NOTE_310_TEXT;` — an alias — and the release gate in
+// check-user-copy.mjs caught it: "the -310 archive note reads only 0 characters, too short to
+// check CURRENT against". The gate reads this file as TEXT, so an alias has no string in it to
+// measure, and its splice test could not run at all. That is the same shape as QA-2612, where
+// three ordinary aliasing forms of this very file defeated the note scanner — found here by a
+// guard that was already in place, on the very release whose note is about not stating things
+// that have not been checked.
+const RELEASE_NOTE_ARCHIVE_310 =
   "-310 gives the person approving a cost a choice about where that cost should be filed. "  +
   "Where a cost is waiting for approval because it names a head that does not exist yet, "  +
   "the approver can file it under a head that already exists, or create the head as "  +
@@ -197,9 +205,6 @@ const RELEASE_NOTE_310_TEXT =
   "is a difference worth being able to see: the first is usually a question about your "  +
   "access, and the second is not. The figures on those screens are drawn separately from "  +
   "these lists, so a failure of this kind leaves the figures as they were.";
-
-const RELEASE_NOTE_ARCHIVE_310 =
-  RELEASE_NOTE_310_TEXT;
 
 const RELEASE_NOTE_ARCHIVE_309 =
   "-309 lets Costs, Finance, and Revenue and P&L each be narrowed to one centre and "  +
