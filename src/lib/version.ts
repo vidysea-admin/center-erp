@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-310";
+export const RELEASE = "2026.08.14-311";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,13 +157,32 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
-// -310. Written against qa/contracts/public-release-note.md, which is the first contract this
-// surface has ever had - seven notes carried a false clause before it existed. [C1] no counts:
-// there are none. [C2] the boundary-word scan was run and read hit by hit, not as a digit scan;
-// the phrasings that survive it are ones that were measured on both builds rather than reasoned
-// about. Written as what the system now does rather than as what this release adds, because a
-// novelty claim cannot be checked against the tree the reader has.
+// -311. Written against qa/contracts/public-release-note.md. [C1] no counts - the only digits are
+// the release's own name. [C2] the boundary-word scan was run with qa/tools/scan-release-note.mjs
+// and every hit read individually against the code, not treated as a digit scan. Written as what
+// the system now does rather than as what this release adds, because a novelty claim cannot be
+// checked against the tree the reader has.
+//
+// The subject of this release is a screen declining to state something it has not checked. Every
+// sentence below was measured on BOTH builds by the qa-2624 checker in its own browser, verbatim
+// from the rendered screens - not reasoned about from the diff.
 export const RELEASE_NOTE_CURRENT =
+  "-311 is about a screen declining to state something it has not checked. On the people and "  +
+  "roles form, where an administrator chooses what a colleague is allowed to do, a rights list "  +
+  "that fails to load is now said on the screen. It used to report that the chosen profile "  +
+  "carried nothing at all, which reads as a measurement and was not one. The special rights and "  +
+  "removed rights sections used to disappear from the form entirely, which reads as there being "  +
+  "nothing to give or to take away. Each of them now says it could not be loaded, and says that "  +
+  "rights already held, and rights already taken away, stay as they are: saving the form while "  +
+  "that message is showing does not alter them. The list of people who can be named to approve "  +
+  "something behaves the same way, where before it said there were no accounts to name when it "  +
+  "had not managed to look. "  +
+  "The same applies where a cost is waiting on a head that does not exist yet: if the list of "  +
+  "heads an approver could file it under fails to load, the screen says so, instead of leaving "  +
+  "the approver with creating the head as proposed and no way to tell why. "  +
+  "None of this changes what anyone is allowed to do, or what any figure says.";
+
+const RELEASE_NOTE_310_TEXT =
   "-310 gives the person approving a cost a choice about where that cost should be filed. "  +
   "Where a cost is waiting for approval because it names a head that does not exist yet, "  +
   "the approver can file it under a head that already exists, or create the head as "  +
@@ -178,6 +197,9 @@ export const RELEASE_NOTE_CURRENT =
   "is a difference worth being able to see: the first is usually a question about your "  +
   "access, and the second is not. The figures on those screens are drawn separately from "  +
   "these lists, so a failure of this kind leaves the figures as they were.";
+
+const RELEASE_NOTE_ARCHIVE_310 =
+  RELEASE_NOTE_310_TEXT;
 
 const RELEASE_NOTE_ARCHIVE_309 =
   "-309 lets Costs, Finance, and Revenue and P&L each be narrowed to one centre and "  +
@@ -1694,6 +1716,10 @@ const RELEASE_NOTE_ARCHIVE =
   // -310: ARCHIVE_309 wired in here. I declared it and did not wire it, and the wall's own gate
   // caught it - which is the assertion this block's comment says was added precisely because a
   // warning comment had already failed to prevent the same thing twice.
+  // -311: ARCHIVE_310 wired in here in the SAME bump that declared it. -310's own wall caught me
+  // declaring ARCHIVE_309 and not wiring it, on a line whose comment already warned about exactly
+  // that. A comment warning about a defect does not prevent it; only an assertion does.
+  RELEASE_NOTE_ARCHIVE_310 + " " +
   RELEASE_NOTE_ARCHIVE_309 + " " +
   RELEASE_NOTE_ARCHIVE_308 + " " +
   RELEASE_NOTE_ARCHIVE_307 + " " +

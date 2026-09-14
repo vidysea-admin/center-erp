@@ -692,7 +692,9 @@ function SpecialGrants({ form, set }: any) {
   const [catalogFailed, setCatalogFailed] = useState(false);
   useEffect(() => {
     api("/api/permissions")
-      .then((d) => { setCatalog(d.catalog); setCatalogFailed(false); })
+      // QA-2628: `?? []` because a 200 whose body lacks `catalog` would otherwise put `undefined`
+      // into state, and `catalog.length` then throws where the sibling list merely renders empty.
+      .then((d) => { setCatalog(d.catalog ?? []); setCatalogFailed(false); })
       .catch((e: any) => { setCatalogFailed(true); console.error("[admin] permission catalogue failed to load; special grants cannot be shown:", e); });
   }, []);
   if (catalogFailed) return (
@@ -747,7 +749,9 @@ function RevokedRights({ form, set }: any) {
   const [catalogFailed, setCatalogFailed] = useState(false);
   useEffect(() => {
     api("/api/permissions")
-      .then((d) => { setCatalog(d.catalog); setCatalogFailed(false); })
+      // QA-2628: `?? []` because a 200 whose body lacks `catalog` would otherwise put `undefined`
+      // into state, and `catalog.length` then throws where the sibling list merely renders empty.
+      .then((d) => { setCatalog(d.catalog ?? []); setCatalogFailed(false); })
       .catch((e: any) => { setCatalogFailed(true); console.error("[admin] permission catalogue failed to load; removed rights cannot be shown:", e); });
   }, []);
   if (catalogFailed && form.role !== "Admin") return (
