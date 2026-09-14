@@ -933,13 +933,27 @@ function Approvals({ error, setError }: any) {
   // existing default is untouched.
   const [mapTo, setMapTo] = useState<Record<string, string>>({});
   const [cats, setCats] = useState<any[]>([]);
+  const [catsFailed, setCatsFailed] = useState(false);
   const load = () => api(`/api/approvals?status=${status}`).then((d) => { setConfig(d.config); setItems(d.items); })
     .catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [status]);
   useEffect(() => { api("/api/users").then((d) => setPeople(d.items ?? [])).catch(() => {}); }, []);
   // The cost-category master is readable by every role by design (money masked, structure travels),
   // so this needs no extra grant beyond the one already required to stand on this screen.
-  useEffect(() => { api("/api/master-lists/cost-categories").then((d) => setCats(d.items ?? [])).catch(() => {}); }, []);
+  //
+  // QA-2597. This fetch shipped in -310 with an EMPTY catch, and on THIS screen an empty catch is
+  // worse than it looks: `cats` is the only source for the map-to-a-head control, so one refused
+  // request leaves the approver with exactly one option — "Create the head as proposed" — which is
+  // the branch -310 exists to stop being the only one. Silently, with no error and no console line,
+  // so even a live checker's console-error rule sees nothing. Same class as QA-2582, which was
+  // fixed and shipped two files away in this very release; that fix was scoped to a QA id when the
+  // defect was a class. The failure is NOT fatal to the screen — the queue itself still loads — so
+  // it is named where the missing control is, not raised as a page-level error.
+  useEffect(() => {
+    api("/api/master-lists/cost-categories")
+      .then((d) => { setCats(d.items ?? []); setCatsFailed(false); })
+      .catch((e: any) => { setCatsFailed(true); console.error("[admin] cost-head list failed to load; the approver cannot file a parked cost onto an existing head:", e); });
+  }, []);
 
   async function toggle(action: string, enabled: boolean, approver_role?: string, approver_users?: string[]) {
     try { await api("/api/approvals", { method: "PUT", json: { action, enabled, approver_role, ...(approver_users ? { approver_users } : {}) } }); load(); }
@@ -1083,6 +1097,13 @@ function Approvals({ error, setError }: any) {
                           return <option key={c._id} value={c._id}>{parent ? `${parent.name} → ${c.name}` : c.name}</option>;
                         })}
                       </select>
+                    )}
+                    {/* QA-2597: say why the only choice is "create as proposed" rather than letting
+                        a failed fetch look like an empty master list. */}
+                    {r.status === "Pending" && r.action === "costcategory.create" && catsFailed && (
+                      <span className="text-xs text-amber-700">
+                        Cost heads could not be loaded, so filing this onto an existing head is unavailable — approving now creates the head as proposed. Reload to try again.
+                      </span>
                     )}
                     {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
                       value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />}
