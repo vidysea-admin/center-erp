@@ -72,7 +72,15 @@ function Programs({ error, setError }: any) {
   // QA-118: the job-roles master feeds the skill input as suggestions (free text stays
   // allowed — legacy programmes carry skills the master may not list yet).
   const [jobRoles, setJobRoles] = useState<any[]>([]);
-  useEffect(() => { api("/api/master-lists/job-roles").then((d) => setJobRoles(d.items ?? [])).catch(() => {}); }, []);
+  // QA-2624: the last of the five, and the only one that stays an empty catch on purpose — the
+  // skill input keeps free text by design (QA-118 above), so an unfetched suggestion list costs a
+  // reader nothing and claims nothing. It logs, because a silent refusal that nobody can see is
+  // how the other four went unnoticed for a release.
+  useEffect(() => {
+    api("/api/master-lists/job-roles")
+      .then((d) => setJobRoles(d.items ?? []))
+      .catch((e: any) => console.error("[admin] job-role suggestions failed to load; free text is unaffected:", e));
+  }, []);
 
   function open(p?: any) {
     setEdit(p ?? null);
@@ -649,8 +657,23 @@ function Users({ error, setError }: any) {
 // at the moment of choosing it — the matrix tab remains where it is edited.
 function RolePresetSummary({ role }: { role?: string }) {
   const [roles, setRoles] = useState<any[]>([]);
-  useEffect(() => { api("/api/permissions").then((d) => setRoles(d.roles ?? [])).catch(() => {}); }, []);
+  // QA-2624. The empty catch here was the worst of the five in this file, because this component
+  // does not merely go blank on a failure — it makes a STATEMENT. With `roles` stuck at [], the
+  // sentence below reads "This profile carries 0 rights" to an administrator AT THE MOMENT OF
+  // CHOOSING A ROLE. That is not a missing control; it is a false claim about permissions, dressed
+  // as a measurement, on the screen where someone decides what a colleague can do.
+  const [rolesFailed, setRolesFailed] = useState(false);
+  useEffect(() => {
+    api("/api/permissions")
+      .then((d) => { setRoles(d.roles ?? []); setRolesFailed(false); })
+      .catch((e: any) => { setRolesFailed(true); console.error("[admin] role presets failed to load; the profile summary cannot be shown:", e); });
+  }, []);
   if (!role || role === "Admin") return role === "Admin" ? <p className="mt-1 text-[11px] text-gray-500">Admin bypasses the matrix — every right, always.</p> : null;
+  if (rolesFailed) return (
+    <p className="mt-1 text-[11px] text-amber-700">
+      What this profile carries could not be loaded, so it is not shown here rather than shown as none. Check the Permissions tab.
+    </p>
+  );
   const set = roles.find((r) => r.role === role)?.permissions ?? [];
   return (
     <p className="mt-1 text-[11px] text-gray-500" title={set.join(", ") || "no rights toggled"}>
@@ -662,7 +685,21 @@ function RolePresetSummary({ role }: { role?: string }) {
 // Per-user special grants on top of the role's toggled set (2026-08-11, CEO).
 function SpecialGrants({ form, set }: any) {
   const [catalog, setCatalog] = useState<any[]>([]);
-  useEffect(() => { api("/api/permissions").then((d) => setCatalog(d.catalog)).catch(() => {}); }, []);
+  // QA-2624: `if (!catalog.length) return null` cannot tell "the catalogue is empty" from "that
+  // request was refused", so a failed fetch made this whole section DISAPPEAR from the user form.
+  // An administrator who opened the form to grant a right sees no grant control and reasonably
+  // concludes there is none to give.
+  const [catalogFailed, setCatalogFailed] = useState(false);
+  useEffect(() => {
+    api("/api/permissions")
+      .then((d) => { setCatalog(d.catalog); setCatalogFailed(false); })
+      .catch((e: any) => { setCatalogFailed(true); console.error("[admin] permission catalogue failed to load; special grants cannot be shown:", e); });
+  }, []);
+  if (catalogFailed) return (
+    <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+      Special rights could not be loaded, so they are not shown. Any rights this user already has are unchanged and saving here will not remove them.
+    </p>
+  );
   if (!catalog.length) return null;
   const extra: string[] = form.extra_permissions ?? [];
   const toggle = (key: string) =>
@@ -704,7 +741,20 @@ function SpecialGrants({ form, set }: any) {
 // grant) carries it. Deny wins; pointless on an Admin, whose role bypasses every check.
 function RevokedRights({ form, set }: any) {
   const [catalog, setCatalog] = useState<any[]>([]);
-  useEffect(() => { api("/api/permissions").then((d) => setCatalog(d.catalog)).catch(() => {}); }, []);
+  // QA-2624, same shape as SpecialGrants: a refused fetch silently removed the "Removed rights"
+  // section, so an administrator who came to check what had been taken away from a user saw
+  // nothing and could read that as nothing being taken away.
+  const [catalogFailed, setCatalogFailed] = useState(false);
+  useEffect(() => {
+    api("/api/permissions")
+      .then((d) => { setCatalog(d.catalog); setCatalogFailed(false); })
+      .catch((e: any) => { setCatalogFailed(true); console.error("[admin] permission catalogue failed to load; removed rights cannot be shown:", e); });
+  }, []);
+  if (catalogFailed && form.role !== "Admin") return (
+    <p className="rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+      Removed rights could not be loaded, so they are not shown — this does not mean none are set. Any already removed stay removed and saving here will not restore them.
+    </p>
+  );
   if (!catalog.length || form.role === "Admin") return null;
   const revoked: string[] = form.revoked_permissions ?? [];
   const toggle = (key: string) =>
@@ -937,7 +987,15 @@ function Approvals({ error, setError }: any) {
   const load = () => api(`/api/approvals?status=${status}`).then((d) => { setConfig(d.config); setItems(d.items); })
     .catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [status]);
-  useEffect(() => { api("/api/users").then((d) => setPeople(d.items ?? [])).catch(() => {}); }, []);
+  // QA-2624: an empty catch here produces the same class of false statement as the role summary —
+  // with `people` stuck at [], the branch below prints "No active <role> accounts to name", which
+  // tells an administrator there is nobody to name when in fact the list was never fetched.
+  const [peopleFailed, setPeopleFailed] = useState(false);
+  useEffect(() => {
+    api("/api/users")
+      .then((d) => { setPeople(d.items ?? []); setPeopleFailed(false); })
+      .catch((e: any) => { setPeopleFailed(true); console.error("[admin] the people list failed to load; named approvers cannot be listed:", e); });
+  }, []);
   // The cost-category master is readable by every role by design (money masked, structure travels),
   // so this needs no extra grant beyond the one already required to stand on this screen.
   //
@@ -1030,7 +1088,9 @@ function Approvals({ error, setError }: any) {
                       </label>
                     );
                   })}
-                  {!people.some((u: any) => u.role === c.approver_role) && (
+                  {peopleFailed ? (
+                    <span className="text-xs text-amber-700">The people list could not be loaded, so who can be named is not shown — this does not mean nobody can be.</span>
+                  ) : !people.some((u: any) => u.role === c.approver_role) && (
                     <span className="text-xs text-gray-400">No active {c.approver_role} accounts to name.</span>
                   )}
                 </div>
