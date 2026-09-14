@@ -944,8 +944,11 @@ function Approvals({ error, setError }: any) {
   // QA-2597. This fetch shipped in -310 with an EMPTY catch, and on THIS screen an empty catch is
   // worse than it looks: `cats` is the only source for the map-to-a-head control, so one refused
   // request leaves the approver with exactly one option — "Create the head as proposed" — which is
-  // the branch -310 exists to stop being the only one. Silently, with no error and no console line,
-  // so even a live checker's console-error rule sees nothing. Same class as QA-2582, which was
+  // the branch -310 exists to stop being the only one. Silently, with no error and no console line
+  // OF THE APPLICATION'S OWN — QA-2599 corrects the first version of this comment, which said a
+  // live checker's console rule "sees nothing": the browser still logs its own `Failed to load
+  // resource ... 403`, so a COUNT rule does see a line. It just names no control and no
+  // consequence, which is the half that actually mattered. Same class as QA-2582, which was
   // fixed and shipped two files away in this very release; that fix was scoped to a QA id when the
   // defect was a class. The failure is NOT fatal to the screen — the queue itself still loads — so
   // it is named where the missing control is, not raised as a page-level error.
