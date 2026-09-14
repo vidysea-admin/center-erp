@@ -2069,9 +2069,15 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // the identifier, and the QA-2356 discrimination arm below (which asserts the non-figure text
   // survives redaction) goes red against behaviour the product documents as intended.
   //
-  // That made the arm a guard that cries on correct work: ~28% of runs since the epoch entered the
-  // "mu0…" era, in contiguous ~47-second blocks, which is why several consecutive runs looked like
-  // "every run" and an earlier note of mine wrote that universal from two observations.
+  // That made the arm a guard that cries on correct work: ~10.8% of runs in the "mu0…" era, in
+  // contiguous ~47-second blocks (36³ ms = 46,656), which is why several consecutive runs looked
+  // like "every run" and an earlier note of mine wrote that universal from two observations.
+  //
+  // QA-2601: the first version of this comment said ~28%, inherited from QA-2592's reasoning that
+  // TWO of the three digits come from the "mu0" prefix — only ONE does. The checker measured 10.81%
+  // three independent ways (exhaustive scan of all 60,466,176 ms of the era, 5M random draws, and
+  // exact enumeration, all agreeing). The rate does not change the fix, which takes it to zero
+  // either way; it is corrected because a number in source is one nobody re-derives.
   //
   // The digits are MAPPED, not stripped, so uniqueness is preserved exactly: stripping them would
   // let two runs in the same era collide, and a fixture id that can collide is how a pin reads
