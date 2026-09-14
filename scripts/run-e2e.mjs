@@ -98,6 +98,17 @@ const SUITES = [
   // time; a checker reached the zero-Admin lockout 3 of 3 rounds by sending two. Its own file
   // because it deactivates Admins, which no other suite can tolerate running underneath it.
   "e2e-admin-floor.mjs",
+  // QA-2644: this suite existed since the 2026-08-12 sign-out bug and had NEVER RUN — absent from
+  // this list, from package.json and from ci.yml, on all 38 wall logs. It is the only suite that
+  // reproduces the production shape: nginx in front, the app seeing an internal address, so any URL
+  // the SERVER builds can point somewhere no browser can reach. That is the shape that put the bug
+  // in production, and the suite written to catch it was never wired to anything.
+  //
+  // Its first run ever, 2026-09-14: it CRASHED at an unguarded readFileSync, which contributed
+  // 0 passed / 0 failed and read as "crashed" rather than "this is missing" - and hid the ten
+  // assertions below it. Guarded, it reads 21 passed / 1 failed against a local server behind the
+  // proxy; every production-shape arm passes and the one red names a genuinely absent file.
+  "e2e-proxy.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

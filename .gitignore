@@ -32,6 +32,12 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# QA-2644: `.env*` also swallowed `.env.example`, which is why that file never existed - while
+# scripts/e2e-proxy.mjs has asserted since it was written that `.env.example` documents AUTH_URL.
+# The suite could not be satisfied by anyone, because the ignore rule prevented the file it wanted.
+# This negation un-ignores exactly that one name; `.env`, `.env.local` and every real secret file
+# stay ignored. The comment above already anticipated this ("can opt-in for committing if needed").
+!.env.example
 
 # vercel
 .vercel

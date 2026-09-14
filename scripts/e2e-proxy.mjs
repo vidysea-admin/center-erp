@@ -10,7 +10,12 @@
 // public origin.
 import http from "node:http";
 
-const APP = process.env.APP_URL || "http://localhost:3000";
+// QA-2644: APP_URL used to default to :3000 outright, which is right for CI and wrong for every
+// local wall on another port — the suite would have proxied to a server that was not the one under
+// test. Derived from BASE_URL (which the runner and CI both set) with the old default as fallback.
+const APP = process.env.APP_URL
+  || (process.env.BASE_URL ? new URL(process.env.BASE_URL).origin : null)
+  || "http://localhost:3000";
 const PUBLIC_HOST = "erp.example.test";          // what the browser typed
 const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // what the app sees
 const PORT = Number(process.env.PROXY_PORT || 3999);
@@ -80,8 +85,23 @@ if (leaksInternal(soLoc)) {
 }
 ok("sign-out clears the session cookie", (signout.headers.getSetCookie?.() ?? []).some((c) => /session-token=;|session-token=""|Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
   JSON.stringify(signout.headers.getSetCookie?.() ?? []).slice(0, 160));
-ok(".env.example documents AUTH_URL so production can be configured correctly",
-  (await import("node:fs")).readFileSync(new URL("../.env.example", import.meta.url), "utf8").includes("AUTH_URL"));
+// QA-2644. This assertion used to read the file OUTSIDE the ok() call, so a missing
+// `.env.example` threw ENOENT and killed the whole suite at this line — taking the ten assertions
+// BELOW it with it, which are the ones this file exists for: no-store on signed-in pages (the
+// Back-button replay after sign-out) and "no API body carries the internal address". A suite that
+// dies contributes 0 passed / 0 failed and reads as "crashed", not as "this is missing", which is
+// how it stayed invisible: absent from run-e2e.mjs, package.json and ci.yml, and never run on any
+// wall since it was written.
+//
+// The file is genuinely absent (not tracked, not on disk), so this arm is a REAL red — it just has
+// to be a red rather than a crash. Reading it safely is the whole change.
+{
+  let envExample = null;
+  try { envExample = (await import("node:fs")).readFileSync(new URL("../.env.example", import.meta.url), "utf8"); } catch { envExample = null; }
+  ok(".env.example documents AUTH_URL so production can be configured correctly",
+    envExample !== null && envExample.includes("AUTH_URL"),
+    envExample === null ? "no .env.example in the repo — AUTH_URL is undocumented for whoever configures production" : "present but no AUTH_URL");
+}
 
 // ---- 3b. Signed-in pages must not be cacheable (Back after sign-out must not show data) ----
 const signedInPage = await fetch(`${BASE}/batches`, { headers: { cookie } });
