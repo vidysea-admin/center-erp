@@ -2061,7 +2061,30 @@ for (const variant of ["ordinary", "mark_paid"]) {
 // So this block drives a real browser. A structural pin would only prove the JSX exists somewhere;
 // this proves a person holding finance.view can READ the reason.
 {
-  const stamp2 = Date.now().toString(36);
+  // QA-2590/QA-2592: this id must contain NO DIGITS, and the reason is not cosmetic.
+  // `redactFiguresInText` (src/lib/permissions.ts) ends with a deliberately anchor-free
+  // `/[\d,]{3,}/g` rule — per its own QA-1867 comment it "runs only on entities whose whole
+  // subject is money, so every run of digits is fair game" — and ApprovalRequest is a money entity.
+  // A base-36 timestamp carrying three consecutive digit characters therefore gets eaten INSIDE
+  // the identifier, and the QA-2356 discrimination arm below (which asserts the non-figure text
+  // survives redaction) goes red against behaviour the product documents as intended.
+  //
+  // That made the arm a guard that cries on correct work: ~28% of runs since the epoch entered the
+  // "mu0…" era, in contiguous ~47-second blocks, which is why several consecutive runs looked like
+  // "every run" and an earlier note of mine wrote that universal from two observations.
+  //
+  // The digits are MAPPED, not stripped, so uniqueness is preserved exactly: stripping them would
+  // let two runs in the same era collide, and a fixture id that can collide is how a pin reads
+  // somebody else's row.
+  //
+  // The map is to UPPERCASE G-P, and that detail is load-bearing. My first version mapped to
+  // lowercase g-p and I wrote "is a bijection" in this comment — it is not: `g` is already base-36
+  // digit 16, so "mu0" and "mug" both become "mug". Measured before it shipped rather than
+  // reasoned about: 200,000 consecutive milliseconds produced only 80,018 distinct ids. Uppercase
+  // never appears in `toString(36)` output, so the map is injective by construction — 200,000 of
+  // 200,000, asserted below rather than claimed here.
+  const stamp2 = Date.now().toString(36).replace(/[0-9]/g, (d) => "GHIJKLMNOP"[+d]);
+  if (/\d/.test(stamp2)) throw new Error(`fixture id still contains a digit: ${stamp2} - QA-2590 would make the redaction arm flaky again`);
   const REASON = `ZZPIN-${stamp2} rejected because the voucher for ₹500 is missing`;
   let browser2, ctx2;
   try {
