@@ -104,10 +104,13 @@ const SUITES = [
   // the SERVER builds can point somewhere no browser can reach. That is the shape that put the bug
   // in production, and the suite written to catch it was never wired to anything.
   //
-  // Its first run ever, 2026-09-14: it CRASHED at an unguarded readFileSync, which contributed
-  // 0 passed / 0 failed and read as "crashed" rather than "this is missing" - and hid the ten
-  // assertions below it. Guarded, it reads 21 passed / 1 failed against a local server behind the
-  // proxy; every production-shape arm passes and the one red names a genuinely absent file.
+  // Its first run ever, 2026-09-14: it CRASHED at an unguarded readFileSync, contributing
+  // 0 passed / 0 failed - which the wall reads as "crashed" rather than "this is missing" - and it
+  // hid the fourteen assertions below that line. Guarded, and with the `.env.example` the same
+  // commit added (the `.gitignore` `.env*` rule had been swallowing that name, so nobody could
+  // have satisfied the assertion), it reads 22 passed / 0 failed.
+  // QA-2651: an earlier version of this comment said 21/1 and "ten assertions" - both were true
+  // mid-commit and false by the end of it.
   "e2e-proxy.mjs",
 ];
 

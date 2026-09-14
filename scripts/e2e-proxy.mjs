@@ -18,7 +18,18 @@ const APP = process.env.APP_URL
   || "http://localhost:3000";
 const PUBLIC_HOST = "erp.example.test";          // what the browser typed
 const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // what the app sees
-const PORT = Number(process.env.PROXY_PORT || 3999);
+// QA-2649, cycle 2. This was `Number(process.env.PROXY_PORT || 3999)` - a HARDCODED port, and
+// `PROXY_PORT` occurs in exactly one place in the whole repo: that line. Nothing sets it. While the
+// suite never ran, :3999 was inert; wiring it into the wall is what made it live, and a peer
+// holding that port would kill the suite at an unguarded `listen` - the wall then reads
+// `CRASHED - 0 passed, 0 failed ... NOT a pass`. A LOUD FALSE RED on the gate whose green is the
+// authority to push, on a tree with nothing wrong with it. Fourteen peer servers were live during
+// the check that caught this.
+//
+// Port 0 asks the OS for a free one, so the suite reserves nothing and can collide with nothing -
+// better than mirroring a claimed port, because there is no bookkeeping left to get wrong. An
+// explicit PROXY_PORT still wins, for anyone who needs to watch the traffic on a known port.
+const PORT_REQUESTED = Number(process.env.PROXY_PORT || 0);
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
@@ -36,7 +47,15 @@ const proxy = http.createServer((cReq, cRes) => {
   pReq.on("error", (e) => { cRes.writeHead(502); cRes.end(String(e)); });
   cReq.pipe(pReq);
 });
-await new Promise((r) => proxy.listen(PORT, r));
+proxy.on("error", (e) => {
+  // An unguarded listen failure surfaced as a crash with no counts, which the wall reads as
+  // "crashed" rather than "the port was taken" - the same illegibility the guarded readFileSync
+  // below was fixed for.
+  console.log(`REFUSED: the proxy could not bind (${e.code ?? e.message}). Nothing was tested.`);
+  process.exit(2);
+});
+await new Promise((r) => proxy.listen(PORT_REQUESTED, r));
+const PORT = proxy.address().port;   // the port actually granted, never the one requested
 const BASE = `http://localhost:${PORT}/erp`;
 console.log(`proxy on :${PORT} → ${APP}  (app sees Host: ${INTERNAL_HOST})\n`);
 
@@ -86,15 +105,19 @@ if (leaksInternal(soLoc)) {
 ok("sign-out clears the session cookie", (signout.headers.getSetCookie?.() ?? []).some((c) => /session-token=;|session-token=""|Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
   JSON.stringify(signout.headers.getSetCookie?.() ?? []).slice(0, 160));
 // QA-2644. This assertion used to read the file OUTSIDE the ok() call, so a missing
-// `.env.example` threw ENOENT and killed the whole suite at this line — taking the ten assertions
+// `.env.example` threw ENOENT and killed the whole suite at this line — taking the FOURTEEN assertions
 // BELOW it with it, which are the ones this file exists for: no-store on signed-in pages (the
 // Back-button replay after sign-out) and "no API body carries the internal address". A suite that
 // dies contributes 0 passed / 0 failed and reads as "crashed", not as "this is missing", which is
 // how it stayed invisible: absent from run-e2e.mjs, package.json and ci.yml, and never run on any
 // wall since it was written.
 //
-// The file is genuinely absent (not tracked, not on disk), so this arm is a REAL red — it just has
-// to be a red rather than a crash. Reading it safely is the whole change.
+// QA-2651: the first version of this comment said the file "is genuinely absent... so this arm is a
+// REAL red" - true when I wrote it and false by the end of the SAME COMMIT, which also added
+// `.env.example` and the `.gitignore` negation that let it exist. A comment describing a state its
+// own commit abolished sends the next reader looking for a problem that is not there.
+// What is true now: the file exists, this arm is green, and the FIX here is the guard - delete the
+// file and this must go RED at 21/1, never crash.
 {
   let envExample = null;
   try { envExample = (await import("node:fs")).readFileSync(new URL("../.env.example", import.meta.url), "utf8"); } catch { envExample = null; }
