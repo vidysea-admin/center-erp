@@ -191,6 +191,13 @@ function ReportsInner() {
     // literal is a FALLBACK for the first paint only — the word itself is the server's
     // (REPORT_LABELS), so the tile, this header and the Excel info tab cannot drift apart.
     { key: "gu", group: "Grand Total", label: L.unknown?.short ?? "Pending", hint: L.unknown?.was, minWidth: 122, sortable: true, sortValue: (r: any) => r.total.unknown, render: (r: any) => num(r.total.unknown), total: grandTotal("unknown") },
+    // REQ-365f. The CEO reads a blank TC Status as a refusal; this report deliberately does not
+    // (QA-527/528), and Umesh's settlement was "alag rakho, par jod kar bhi dikhao" - so the two
+    // columns above stay exactly as they are and this one shows them added. It sits immediately
+    // after them because it is read as their sum, not as a further independent count. Label and
+    // hint come from the server (REPORT_LABELS) for the same reason `gu` does: the tile, this
+    // header and the Excel info tab must say one thing. The literal is a first-paint fallback.
+    { key: "gy", group: "Grand Total", label: L.not_yet_approved?.short ?? "Not approved yet", hint: L.not_yet_approved?.was, minWidth: 148, sortable: true, sortValue: (r: any) => r.total.not_yet_approved, render: (r: any) => num(r.total.not_yet_approved), total: grandTotal("not_yet_approved") },
     { key: "gm", group: "Grand Total", label: "Mobilised", minWidth: 116, sortable: true, sortValue: (r: any) => r.total.mobilised, render: (r: any) => <b>{num(r.total.mobilised)}</b>, total: grandTotal("mobilised") },
     { key: "gi", group: "Grand Total", label: "In training", minWidth: 124, sortable: true, sortValue: (r: any) => r.total.in_training, render: (r: any) => <b>{num(r.total.in_training)}</b>, total: grandTotal("in_training") },
     { key: "gc", group: "Grand Total", label: "Passed", minWidth: 96, sortable: true, sortValue: (r: any) => r.total.certified, render: (r: any) => <b>{num(r.total.certified)}</b>, total: grandTotal("certified") },

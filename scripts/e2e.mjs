@@ -3320,6 +3320,46 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     ok("QA-398 (-170): two programmes on ONE job role are SUMMED, not assigned - keep-last silently loses a target while the approved column still reconciles",
       rpRow?.cells?.[ROLE]?.target === 460,
       JSON.stringify({ target: rpRow?.cells?.[ROLE]?.target, expected: 460, cell: rpRow?.cells?.[ROLE] }));
+
+    // ---- REQ-365f (QA-769 / QA-767) -----------------------------------------------------------
+    // The CEO reads "no verdict yet" as "not approved"; this report deliberately does not, because
+    // a blank sheet cell is not a refusal (QA-527/528). Umesh settled it verbatim - "alag rakho,
+    // par jod kar bhi dikhao" - so the three counts stay and a FOURTH, combined figure is shown.
+    //
+    // This pin is the whole reason that figure is safe to add. It is not checked on one fixture
+    // cell: it is checked on EVERY cell, every row total and the grand total in the response, so a
+    // future edit that maintains the sum in a second place and lets the two drift fails here.
+    // Pre-fix the field does not exist, `Number(undefined)` is NaN, and NaN never equals the sum -
+    // so this assertion fails loudly on the old build rather than passing vacuously (REQ-388).
+    const f365 = [];
+    for (const r of (rep.rows ?? [])) {
+      for (const [role, c] of Object.entries(r.cells ?? {})) f365.push([`${r.location?.name}/${role}`, c]);
+      if (r.total) f365.push([`${r.location?.name}/ROW-TOTAL`, r.total]);
+    }
+    if (rep.total) f365.push(["GRAND-TOTAL", rep.total]);
+    const f365bad = f365.filter(([, c]) =>
+      Number(c?.not_yet_approved) !== Number(c?.not_approved ?? 0) + Number(c?.unknown ?? 0));
+    ok("REQ-365f: 'Not approved yet' equals Not approved + Pending in EVERY cell, row total and grand total - derived, never typed",
+      f365.length > 0 && f365bad.length === 0,
+      JSON.stringify({ checked: f365.length, mismatched: f365bad.length, first: f365bad.slice(0, 3) }));
+
+    // Umesh's EXPLICIT condition in REQ-365f: the combined line must not be called "Not approved",
+    // because that name repeats the exact false claim REQ-365d exists to prevent. A rename to that
+    // string is a contract violation, not a cosmetic change, so it is pinned rather than trusted.
+    const f365label = rep.labels?.not_yet_approved ?? null;
+    ok("REQ-365f: the combined line is labelled, and is NOT called 'Not approved' (Umesh's explicit condition)",
+      !!f365label && typeof f365label.label === "string" && f365label.label.trim().length > 0
+        && f365label.label.trim().toLowerCase() !== "not approved"
+        && String(f365label.short ?? "").trim().toLowerCase() !== "not approved",
+      JSON.stringify({ label: f365label?.label ?? null, short: f365label?.short ?? null }));
+
+    // ...and the three underlying counts SURVIVE. REQ-365f adds a line; it does not collapse the
+    // distinction. If a later change ever drops one of the three in favour of the sum, the client
+    // loses the evidence that a blank is not a refusal - which is the thing QA-527/528 bought.
+    ok("REQ-365f: the three underlying counts are still reported separately - the combined line is an addition, not a replacement",
+      ["approved", "not_approved", "unknown"].every((k) => !!rep.labels?.[k])
+        && f365.every(([, c]) => typeof c?.approved === "number" && typeof c?.not_approved === "number" && typeof c?.unknown === "number"),
+      JSON.stringify({ labels: Object.keys(rep.labels ?? {}) }));
     ok("QA-398 (-170): ...and Approved counts only the row whose TC Status actually reads Approved",
       rpRow?.cells?.[ROLE]?.approved === 180,
       JSON.stringify({ approved: rpRow?.cells?.[ROLE]?.approved, expected: 180 }));

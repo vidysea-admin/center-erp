@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
-import { REPORT_LABELS, centreVerdict, reportRollup } from "@/lib/rules";
+import { REPORT_LABELS, centreVerdict, notYetApproved, reportRollup } from "@/lib/rules";
 
 // QA-441: the report as an .xlsx, carrying THE SAME NUMBERS as the screen. It reads the same
 // `reportRollup` the screen reads — an export that recomputes is an export that eventually
@@ -26,6 +26,10 @@ export const GET = apiHandler(async (_req: NextRequest) => {
       // LOCATIONS target itna tha… approve kitne hain, not approved kitne hain."
       out[`${role} — Not approved`] = c?.not_approved ?? 0;
       out[`${role} — No verdict`] = c?.unknown ?? 0;
+      // REQ-365f: the same combined figure the screen shows, per role here because a spreadsheet
+      // has no width limit and this file is where the pivoting happens. Read off the cell rather
+      // than re-added locally - one production path, so the sheet and the screen cannot disagree.
+      out[`${role} — Not approved yet`] = c?.not_yet_approved ?? 0;
       out[`${role} — Mobilised`] = c?.mobilised ?? 0;
       out[`${role} — In training`] = c?.in_training ?? 0;
       out[`${role} — Passed`] = c?.certified ?? 0;
@@ -34,6 +38,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     out["Grand Total — Approved"] = r.total.approved;
     out["Grand Total — Not approved"] = r.total.not_approved;
     out["Grand Total — No verdict"] = r.total.unknown;
+    out["Grand Total — Not approved yet"] = r.total.not_yet_approved;
     out["Grand Total — Mobilised"] = r.total.mobilised;
     out["Grand Total — In training"] = r.total.in_training;
     out["Grand Total — Passed"] = r.total.certified;
@@ -56,6 +61,11 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     totalRow[`${role} — Approved`] = sum.approved;
     totalRow[`${role} — Not approved`] = sum.not_approved;
     totalRow[`${role} — No verdict`] = sum.unknown;
+    // This row builds its own per-role sums locally, so there is no cell to read the combined
+    // figure off - it is DERIVED through the one shared function instead of being added again by
+    // hand here. Adding `a.not_yet_approved + ...` into the reduce above would be a second place
+    // the same sum is maintained.
+    totalRow[`${role} — Not approved yet`] = notYetApproved(sum);
     totalRow[`${role} — Mobilised`] = sum.mobilised;
     totalRow[`${role} — In training`] = sum.in_training;
     totalRow[`${role} — Passed`] = sum.certified;
@@ -64,6 +74,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   totalRow["Grand Total — Approved"] = total.approved;
   totalRow["Grand Total — Not approved"] = total.not_approved;
   totalRow["Grand Total — No verdict"] = total.unknown;
+  totalRow["Grand Total — Not approved yet"] = total.not_yet_approved;
   totalRow["Grand Total — Mobilised"] = total.mobilised;
   totalRow["Grand Total — In training"] = total.in_training;
   totalRow["Grand Total — Passed"] = total.certified;

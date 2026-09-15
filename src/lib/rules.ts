@@ -5070,8 +5070,23 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
 // "of this much target, this much is approved, this much is refused, and this much nobody has said."
 export type ReportCell = {
   target: number; approved: number; not_approved: number; unknown: number;
+  // REQ-365f. The CEO reads "no verdict yet" as "not approved"; the report counts them apart
+  // because a blank sheet cell is not a refusal (QA-527/528). Umesh settled it verbatim:
+  // "alag rakho, par jod kar bhi dikhao" - keep them separate AND show them added. So the three
+  // counts above are untouched evidence and this is a FOURTH, combined figure beside them.
+  //
+  // IT IS NEVER ASSIGNED A LITERAL. Every place a cell is built or summed recomputes it through
+  // `notYetApproved` below, so it cannot drift from the two figures it is made of. A stored sum
+  // is a transcription, and a transcription of a number sitting on the same screen as its own
+  // parts is exactly what goes stale first.
+  not_yet_approved: number;
   mobilised: number; in_training: number; certified: number;
 };
+
+// ONE definition of the combined figure. Everything that needs it calls this; nothing adds the
+// two fields together on its own.
+export const notYetApproved = (c: { not_approved: number; unknown: number }) =>
+  c.not_approved + c.unknown;
 export type ReportRow = {
   location: { _id: string; name: string; code?: string };
   cells: Record<string, ReportCell>;   // job role -> figures
@@ -5104,6 +5119,7 @@ export type ReportDetailRow = {
   location: { _id: string; name: string };
   role: string; program_code: string;
   target: number; approved: number; not_approved: number; unknown: number;
+  not_yet_approved: number;   // REQ-365f, derived - see ReportCell
   mobilised: number; in_training: number; certified: number;
   // The two TC Statuses, side by side, because they are NOT the same field and the difference is
   // what a reader is actually looking for. `row_status` is LocationTarget.tc_status - the ONE this
@@ -5122,12 +5138,18 @@ export type ReportDetailRow = {
 };
 
 const emptyCell = (): ReportCell => ({
-  target: 0, approved: 0, not_approved: 0, unknown: 0, mobilised: 0, in_training: 0, certified: 0,
+  target: 0, approved: 0, not_approved: 0, unknown: 0, not_yet_approved: 0,
+  mobilised: 0, in_training: 0, certified: 0,
 });
 const addInto = (a: ReportCell, b: ReportCell) => {
   a.target += b.target; a.approved += b.approved; a.not_approved += b.not_approved;
   a.unknown += b.unknown; a.mobilised += b.mobilised;
   a.in_training += b.in_training; a.certified += b.certified;
+  // RECOMPUTED, not accumulated. `a.not_yet_approved += b.not_yet_approved` gives the same
+  // arithmetic today and would make this a SECOND place the figure is maintained - the two could
+  // then disagree after any future edit to either part. Deriving it here means the sum and its
+  // parts are one statement rather than two that happen to agree.
+  a.not_yet_approved = notYetApproved(a);
 };
 
 // QA-527: the sheet's verdict on one (centre x job role) row, in three states rather than two.
@@ -5454,10 +5476,12 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
       approved: verdict === "approved" ? tgt : 0,
       not_approved: verdict === "not_approved" ? tgt : 0,
       unknown: verdict === "unknown" ? tgt : 0,
+      not_yet_approved: 0,   // REQ-365f: derived on the next line, never typed
       mobilised: c?.mobilised ?? 0,
       in_training: c?.in_training ?? 0,
       certified: p?.certified ?? 0,
     };
+    one.not_yet_approved = notYetApproved(one);
     // SUM. Never assign. See the note above this function.
     addInto(row.cells[cellKey], one);
     addInto(row.total, one);
@@ -5481,6 +5505,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
       location: { _id: String(t.location._id), name: t.location.name },
       role, program_code: String(t.program.code ?? ""),
       target: one.target, approved: one.approved, not_approved: one.not_approved, unknown: one.unknown,
+      not_yet_approved: one.not_yet_approved,
       mobilised: 0, in_training: 0, certified: 0,
       row_status: String(t.tc_status ?? "").trim(),
       centre_status: String(t.location.tc_status ?? "").trim(),
@@ -5496,7 +5521,7 @@ export async function reportRollup(scope: Record<string, unknown> = {}, opts: { 
       detail.push({
         location: { _id: String(t.location._id), name: t.location.name },
         role, program_code: String(t.program.code ?? ""),
-        target: 0, approved: 0, not_approved: 0, unknown: 0,
+        target: 0, approved: 0, not_approved: 0, unknown: 0, not_yet_approved: 0,
         mobilised: cb?.mobilised ?? 0,
         in_training: cb?.in_training ?? 0,
         certified: passBatchBy.get(String(b._id)) ?? 0,
@@ -5585,6 +5610,15 @@ export const REPORT_LABELS = {
   approved: { label: "Approved Target", short: "Approved", was: "", tag: "Client sheet", of_approved: false },
   unknown: { label: "Pending Target", short: "Pending", was: "Called \"No verdict yet\" until 25 Aug 2026. The client sheet has not filled in TC Status on these (centre x job role) rows - nobody has refused them, nobody has approved them either.", tag: "Client sheet · TC Status blank", of_approved: false },
   not_approved: { label: "Not approved", short: "Not approved", was: "", tag: "Client sheet", of_approved: false },
+  // REQ-365f, and it sits HERE - immediately after the two figures it adds - because it is read as
+  // their sum, not as a fifth independent count. The three above remain untouched evidence.
+  //
+  // THE LABEL IS DELIBERATELY NOT "Not approved". That is Umesh's explicit condition in REQ-365f,
+  // because reusing that name would repeat the exact false claim REQ-365d exists to prevent - that
+  // a blank sheet cell is a refusal. The contract writes the name as "abhi tak approved nahi
+  // (not approved yet)"; the English half is what renders, to match every other label in this
+  // table, and his words are kept verbatim in the hint so the reason travels with the figure.
+  not_yet_approved: { label: "Not approved yet", short: "Not approved yet", was: "Not approved + Pending, added together. The CEO reads a blank TC Status as a refusal; the report keeps them apart because a blank is not a refusal (QA-527/528). Umesh, 23 Aug: \"alag rakho, par jod kar bhi dikhao\" - keep them separate and show them added too. This line is that sum; it is NOT a count of refusals.", tag: "Client sheet | Not approved + Pending", of_approved: false },
   mobilised: { label: "Mobilised", short: "Mobilised", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
   in_training: { label: "In training", short: "In training", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
   certified: { label: "Passed", short: "Passed", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
@@ -5597,6 +5631,7 @@ export const SOURCES = {
   // blank, and on this data the blank is a THIRD of the target. Saying so on the screen matters
   // more than usual here: the two look identical in every export anyone has made so far.
   not_approved: "Client sheet - target on rows whose TC Status says Unapproved / Not approved / Rejected",
+  not_yet_approved: "Client sheet - Not approved plus Pending, added. Everything the client has not approved, whether refused outright or not yet answered (REQ-365f)",
   unknown: "Client sheet - target on rows whose TC Status is BLANK, plus any value this report does not recognise (those are listed separately on the screen, never hidden here). Nobody has refused these; nobody has approved them either. On 2026-08-21 it was 24 of 55 rows and 4,775 of the target, all of them genuinely blank. NOTE: the TC Status counted here is the one on the (centre x job role) row, not the one on the centre - a centre can read Approved while its own job-role rows are still blank, and then this figure is waiting on a field rather than on the client. Open the tile to see which rows those are.",
   mobilised: "Our records - candidates ENROLLED onto a batch at this centre x job role. A candidate typed into the pool but not yet put on a batch is not counted.",
   in_training: "Our records - candidates whose enrolment is complete",
