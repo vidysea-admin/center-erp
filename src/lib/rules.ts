@@ -5618,7 +5618,7 @@ export const REPORT_LABELS = {
   // a blank sheet cell is a refusal. The contract writes the name as "abhi tak approved nahi
   // (not approved yet)"; the English half is what renders, to match every other label in this
   // table, and his words are kept verbatim in the hint so the reason travels with the figure.
-  not_yet_approved: { label: "Not approved yet", short: "Not approved yet", was: "Not approved + Pending, added together. The CEO reads a blank TC Status as a refusal; the report keeps them apart because a blank is not a refusal (QA-527/528). Umesh, 23 Aug: \"alag rakho, par jod kar bhi dikhao\" - keep them separate and show them added too. This line is that sum; it is NOT a count of refusals.", tag: "Client sheet | Not approved + Pending", of_approved: false },
+  not_yet_approved: { label: "Not approved yet", short: "Not approved yet", was: "Not approved + Pending, added together. The CEO reads a blank TC Status as a refusal; the report keeps them apart because a blank is not a refusal. Umesh, 23 Aug: \"alag rakho, par jod kar bhi dikhao\" - keep them separate and show them added too. This line is that sum; it is NOT a count of refusals.", tag: "Client sheet | Not approved + Pending", of_approved: false },
   mobilised: { label: "Mobilised", short: "Mobilised", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
   in_training: { label: "In training", short: "In training", was: "", tag: "Our records", of_approved: true, batch_scoped: true },
   certified: { label: "Passed", short: "Passed", was: "", tag: "Our records", of_approved: true, batch_scoped: true },

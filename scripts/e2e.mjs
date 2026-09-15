@@ -3356,6 +3356,26 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     // ...and the three underlying counts SURVIVE. REQ-365f adds a line; it does not collapse the
     // distinction. If a later change ever drops one of the three in favour of the sum, the client
     // loses the evidence that a blank is not a refusal - which is the thing QA-527/528 bought.
+    // QA-2732. THE HEADLINE DESIGN DECISION WAS PROTECTED BY NOTHING. `not_yet_approved` is meant
+    // to be RECOMPUTED wherever a cell is summed, never accumulated - and the cycle-1 checker showed
+    // that reverting `addInto` to `a.not_yet_approved += b.not_yet_approved` leaves the entire wall
+    // GREEN, because summing derived values is arithmetically identical today. A decision no
+    // assertion can distinguish from its opposite is a comment, not a design.
+    //
+    // It is not observable through the API, so it is asserted where it lives: in the shipped source.
+    // Comment lines are excluded, because the file deliberately NAMES the forbidden shape in the
+    // comment that explains why it is forbidden - counting mentions instead of code is exactly the
+    // defect QA-2704 charged in qa/tools one directory over.
+    {
+      const rulesSrc = await import("node:fs").then((fs) => fs.readFileSync("src/lib/rules.ts", "utf8"));
+      const accum = rulesSrc.split(/\r?\n/)
+        .filter((ln) => !ln.trimStart().startsWith("//"))
+        .filter((ln) => /not_yet_approved\s*\+=/.test(ln));
+      ok("REQ-365f: 'Not approved yet' is never ACCUMULATED in executable code - it is recomputed from its parts wherever a cell is summed",
+        accum.length === 0,
+        JSON.stringify({ offending: accum.map((l) => l.trim()) }));
+    }
+
     ok("REQ-365f: the three underlying counts are still reported separately - the combined line is an addition, not a replacement",
       ["approved", "not_approved", "unknown"].every((k) => !!rep.labels?.[k])
         && f365.every(([, c]) => typeof c?.approved === "number" && typeof c?.not_approved === "number" && typeof c?.unknown === "number"),
@@ -3381,9 +3401,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     {
       const keys = Object.keys(rep.labels ?? {});
       const off = keys.filter((k) => (rep.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0) !== rep.total?.[k]);
+      // QA-2729. THIS GUARD USED TO READ `keys.length === 7`, and this unit broke it by adding an
+      // eighth measure - which is the assertion's own fault, not the measure's. The guard exists to
+      // stop the check passing VACUOUSLY when `labels` arrives empty (an empty `keys` makes `off`
+      // empty too), and a magic total answers that by accident while also forbidding every
+      // legitimate addition. It is the same shape as QA-2704 one directory over: it COUNTED the
+      // enumeration instead of NAMING what has to be in it.
+      //
+      // So: name them. A measure disappearing fails here, a measure being added does not, and an
+      // empty payload still cannot pass.
+      const REQUIRED_MEASURES = ["target", "approved", "unknown", "not_approved", "not_yet_approved", "mobilised", "in_training", "certified"];
+      const missingM = REQUIRED_MEASURES.filter((k) => !keys.includes(k));
       ok("QA-1074: sum(detail[k]) === total[k] for EVERY measure - a tile and the panel it opens cannot disagree",
-        keys.length === 7 && off.length === 0,
-        JSON.stringify({ keys: keys.length, mismatched: off.map((k) => ({ k, detail: (rep.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0), total: rep.total?.[k] })) }));
+        missingM.length === 0 && off.length === 0,
+        JSON.stringify({ keys: keys.length, missing: missingM, mismatched: off.map((k) => ({ k, detail: (rep.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0), total: rep.total?.[k] })) }));
 
       // The fixture's own two rows, found in `detail` by (centre, job role). They were created one
       // Approved and one blank a few lines above, so this pin also proves `row_status` is the ROW's
@@ -3563,9 +3594,12 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
         {
           const keys = Object.keys(repY.labels ?? {});
           const off = keys.filter((k) => (repY.detail ?? []).reduce((a, d) => a + (d[k] || 0), 0) !== repY.total?.[k]);
+          // QA-2729, same correction as the QA-1074 site above: named, not counted.
+          const requiredY = ["target", "approved", "unknown", "not_approved", "not_yet_approved", "mobilised", "in_training", "certified"];
+          const missingY = requiredY.filter((k) => !keys.includes(k));
           ok("-253: sum(detail[k]) === total[k] for every measure STILL holds once detail mixes centre rows and batch rows",
-            keys.length === 7 && off.length === 0,
-            JSON.stringify({ mismatched: off }));
+            missingY.length === 0 && off.length === 0,
+            JSON.stringify({ missing: missingY, mismatched: off }));
         }
 
         // (f) -256 (Umesh, 2026-08-26): "agar batch bnn hi nhi skta tho vo batch successfull wali
