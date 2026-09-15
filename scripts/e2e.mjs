@@ -3366,11 +3366,32 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
     // Comment lines are excluded, because the file deliberately NAMES the forbidden shape in the
     // comment that explains why it is forbidden - counting mentions instead of code is exactly the
     // defect QA-2704 charged in qa/tools one directory over.
+    //
+    // QA-2743, cycle 3. THE CYCLE-2 VERSION OF THIS GUARD WAS ITSELF TOO NARROW, and the checker
+    // measured it: it forbade `+=` only, so the SAME accumulation written
+    // `a.not_yet_approved = a.not_yet_approved + b.not_yet_approved` left the wall at 1615/0 on a
+    // real build - while the sentence above it claimed the figure "is never ACCUMULATED in
+    // executable code". An enumeration of forbidden spellings can always be beaten by the next
+    // spelling; that is the same error one layer up from what this guard was written to catch.
+    //
+    // So the primary assertion is now POSITIVE and immune to spelling: inside `addInto`, the ONLY
+    // executable line that touches `not_yet_approved` must be the recompute itself. `+=`, `a = a +
+    // b`, `a = b + a` and anything else all fail it, because none of them is that line. The
+    // file-wide negative is kept BESIDE it and widened to catch self-assignment, because `addInto`
+    // is not the only place a cell could be summed in future - the positive pins the one site that
+    // exists, the negative watches the ones that do not exist yet.
     {
       const rulesSrc = await import("node:fs").then((fs) => fs.readFileSync("src/lib/rules.ts", "utf8"));
+      const body = rulesSrc.match(/const addInto = \(a: ReportCell, b: ReportCell\) => \{([\s\S]*?)\n\};/);
+      const bodyLines = (body ? body[1] : "").split(/\r?\n/).filter((ln) => !ln.trimStart().startsWith("//"));
+      const touching = bodyLines.filter((ln) => /not_yet_approved/.test(ln)).map((ln) => ln.trim());
+      ok("REQ-365f/QA-2743: inside addInto the ONLY executable line touching 'Not approved yet' is the RECOMPUTE - so every spelling of accumulation fails, not just `+=`",
+        !!body && touching.length === 1 && /^a\.not_yet_approved\s*=\s*notYetApproved\(a\)\s*;?$/.test(touching[0]),
+        JSON.stringify({ extracted: !!body, touching }));
       const accum = rulesSrc.split(/\r?\n/)
         .filter((ln) => !ln.trimStart().startsWith("//"))
-        .filter((ln) => /not_yet_approved\s*\+=/.test(ln));
+        .filter((ln) => /not_yet_approved\s*\+=/.test(ln)
+          || /not_yet_approved\s*=[^;]*not_yet_approved/.test(ln));
       ok("REQ-365f: 'Not approved yet' is never ACCUMULATED in executable code - it is recomputed from its parts wherever a cell is summed",
         accum.length === 0,
         JSON.stringify({ offending: accum.map((l) => l.trim()) }));
