@@ -22,7 +22,7 @@ const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // wha
 // nothing in this repo SETS `PROXY_PORT` - not the runner, not package.json, not ci.yml. (An
 // earlier version of this line said it "occurs in exactly one place in the whole repo". That was
 // false the moment it shipped, because the comment saying it is itself several of the occurrences -
-// QA-2653, and not the first comment in this file to be false on arrival. The claim that matters is
+// QA-2653, and the third comment in this one file to be false on arrival. The claim that matters is
 // that nothing SETS it, which stays true however many times the name is written.) While the
 // suite never ran, :3999 was inert; wiring it into the wall is what made it live, and a peer
 // holding that port would kill the suite at an unguarded `listen` - the wall then reads
@@ -118,8 +118,8 @@ if (leaksInternal(soLoc)) {
 ok("sign-out clears the session cookie", (signout.headers.getSetCookie?.() ?? []).some((c) => /session-token=;|session-token=""|Max-Age=0|Expires=Thu, 01 Jan 1970/.test(c)),
   JSON.stringify(signout.headers.getSetCookie?.() ?? []).slice(0, 160));
 // QA-2644. This assertion used to read the file OUTSIDE the ok() call, so a missing
-// `.env.example` threw ENOENT and killed the whole suite at this line - taking every assertion
-// BELOW it with it (fourteen, counted from the suite's own output; the crash emitted 7 of 22 lines), which are the ones this file exists for: no-store on signed-in pages (the
+// `.env.example` threw ENOENT and killed the whole suite at this line — taking the FOURTEEN assertions
+// BELOW it with it, which are the ones this file exists for: no-store on signed-in pages (the
 // Back-button replay after sign-out) and "no API body carries the internal address". A suite that
 // dies contributes 0 passed / 0 failed and reads as "crashed", not as "this is missing", which is
 // how it stayed invisible: absent from run-e2e.mjs, package.json and ci.yml, and never run on any
