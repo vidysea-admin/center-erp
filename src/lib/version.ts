@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-311";
+export const RELEASE = "2026.08.14-312";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,16 +157,29 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
-// -311. Written against qa/contracts/public-release-note.md. [C1] no counts - the only digits are
-// the release's own name. [C2] the boundary-word scan was run with qa/tools/scan-release-note.mjs
-// and every hit read individually against the code, not treated as a digit scan. Written as what
-// the system now does rather than as what this release adds, because a novelty claim cannot be
-// checked against the tree the reader has.
-//
-// The subject of this release is a screen declining to state something it has not checked. Every
-// sentence below was measured on BOTH builds by the qa-2624 checker in its own browser, verbatim
-// from the rendered screens - not reasoned about from the diff.
+// -312. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master 1237bea..3eed915, eight commits). [C1] no counts - the only digits are the
+// release's own name. Five of the eight commits touch test scripts, .gitignore and .env.example
+// only; they get one sentence and no claim. The product change is REQ-365f (unit qa-769-767,
+// checked-PASS cycle 3): the tile, the Grand Total column and the Excel columns are each measured
+// in qa/verdicts/qa-769-767-abhi-tak-approved-nahi.md (D2, D6, D10); the explanation sheet not
+// describing the new columns is the same verdict's own reading of the downloaded workbook
+// (QA-2733/2734 still Open).
 export const RELEASE_NOTE_CURRENT =
+  "-312 is about the Reports screen, where the target for each centre and job role is set "  +
+  "against what the client sheet says about it. Alongside the Not approved figure and the "  +
+  "Pending figure there is a Not approved yet figure, which is those two added together. It is "  +
+  "shown as a tile at the top of the screen, as a column in the Grand Total part of the table, "  +
+  "and as columns in the Excel download. Not approved and Pending are still shown as separate "  +
+  "figures. Pending is target on rows where the client sheet has not filled in a TC Status, "  +
+  "together with any status the report does not recognise. A blank status is not a refusal, so "  +
+  "Not approved yet should not be read as a count of refusals, and it is not named Not approved "  +
+  "for that reason. The sheet inside the Excel download that explains where "  +
+  "the numbers come from does not describe the new columns. This release also changes the "  +
+  "automated checks that are run before a release; users will not see those changes.";
+
+// -312: the -311 note moved here as its own literal string, never an alias (the -310 defect).
+const RELEASE_NOTE_ARCHIVE_311 =
   "-311 is about a screen declining to state something it has not checked. On the people and "  +
   "roles form, where an administrator chooses what a colleague is allowed to do, a rights list "  +
   "that fails to load is now said on the screen. It used to report that the chosen profile "  +
@@ -1724,6 +1737,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -311: ARCHIVE_310 wired in here in the SAME bump that declared it. -310's own wall caught me
   // declaring ARCHIVE_309 and not wiring it, on a line whose comment already warned about exactly
   // that. A comment warning about a defect does not prevent it; only an assertion does.
+  // -312: ARCHIVE_311 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_311 + " " +
   RELEASE_NOTE_ARCHIVE_310 + " " +
   RELEASE_NOTE_ARCHIVE_309 + " " +
   RELEASE_NOTE_ARCHIVE_308 + " " +
