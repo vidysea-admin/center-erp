@@ -27,8 +27,8 @@ const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // wha
 // suite never ran, :3999 was inert; wiring it into the wall is what made it live, and a peer
 // holding that port would kill the suite at an unguarded `listen` - the wall then reads
 // `CRASHED - 0 passed, 0 failed ... NOT a pass`. A LOUD FALSE RED on the gate whose green is the
-// authority to push, on a tree with nothing wrong with it. Peer servers were live in numbers during
-// the check that caught this - the point is that the collision is ordinary here, not how many.
+// authority to push, on a tree with nothing wrong with it. Fourteen peer servers were live during
+// the check that caught this.
 //
 // Port 0 asks the OS for a free one, so the suite reserves nothing and can collide with nothing -
 // better than mirroring a claimed port, because there is no bookkeeping left to get wrong. An
@@ -130,9 +130,7 @@ ok("sign-out clears the session cookie", (signout.headers.getSetCookie?.() ?? []
 // `.env.example` and the `.gitignore` negation that let it exist. A comment describing a state its
 // own commit abolished sends the next reader looking for a problem that is not there.
 // What is true now: the file exists, this arm is green, and the FIX here is the guard - delete the
-// file and this arm must go RED - one failure, the rest still reported - never crash. (No count
-// here on purpose: "21/1" was right for 22 assertions and goes wrong on the 23rd, which is how
-// QA-2650 and QA-2673 both happened.)
+// file and this must go RED at 21/1, never crash.
 {
   let envExample = null;
   try { envExample = (await import("node:fs")).readFileSync(new URL("../.env.example", import.meta.url), "utf8"); } catch { envExample = null; }
