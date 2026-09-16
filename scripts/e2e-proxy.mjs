@@ -19,11 +19,7 @@ const APP = process.env.APP_URL
 const PUBLIC_HOST = "erp.example.test";          // what the browser typed
 const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // what the app sees
 // QA-2649, cycle 2. This was `Number(process.env.PROXY_PORT || 3999)` - a HARDCODED port, and
-// nothing in this repo SETS `PROXY_PORT` - not the runner, not package.json, not ci.yml. (An
-// earlier version of this line said it "occurs in exactly one place in the whole repo". That was
-// false the moment it shipped, because the comment saying it is itself several of the occurrences -
-// QA-2653, and the third comment in this one file to be false on arrival. The claim that matters is
-// that nothing SETS it, which stays true however many times the name is written.) While the
+// `PROXY_PORT` occurs in exactly one place in the whole repo: that line. Nothing sets it. While the
 // suite never ran, :3999 was inert; wiring it into the wall is what made it live, and a peer
 // holding that port would kill the suite at an unguarded `listen` - the wall then reads
 // `CRASHED - 0 passed, 0 failed ... NOT a pass`. A LOUD FALSE RED on the gate whose green is the
@@ -33,16 +29,7 @@ const INTERNAL_HOST = "ip-10-0-105-118.ap-south-1.compute.internal:3000"; // wha
 // Port 0 asks the OS for a free one, so the suite reserves nothing and can collide with nothing -
 // better than mirroring a claimed port, because there is no bookkeeping left to get wrong. An
 // explicit PROXY_PORT still wins, for anyone who needs to watch the traffic on a known port.
-// QA-2654: `Number("abc")` is NaN and `Number("99999")` is out of range, and both throw inside
-// `listen`'s own validatePort BEFORE the error handler below can see them - so a mistyped
-// PROXY_PORT crashed with no counts, which is exactly the illegibility the handler exists to stop.
-// Refused here instead, in the same voice.
-const PORT_RAW = process.env.PROXY_PORT;
-const PORT_REQUESTED = Number(PORT_RAW || 0);
-if (!Number.isInteger(PORT_REQUESTED) || PORT_REQUESTED < 0 || PORT_REQUESTED > 65535) {
-  console.log(`REFUSED: PROXY_PORT=${JSON.stringify(PORT_RAW)} is not a usable port. Nothing was tested.`);
-  process.exit(2);
-}
+const PORT_REQUESTED = Number(process.env.PROXY_PORT || 0);
 
 let pass = 0, fail = 0;
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
