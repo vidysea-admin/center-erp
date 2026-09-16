@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-312";
+export const RELEASE = "2026.08.14-313";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,6 +157,25 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -313. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master a4fe6a8..173bba1, one commit, unit qa-selfreg-fields-drop, checked-PASS cycle 2).
+// [C1] no counts - the only digits are the release's own name. Every clause is scoped to what
+// qa/verdicts/qa-selfreg-fields-drop.md measured: the drawer after a step toggle (arm 2 + Mode D),
+// the no-change Save keeping batch interest and interest lists (arms 3/3b + Mode D "sent {}"), a real
+// change still saving (Mode D, mother's name), and no personal fields on the toggle response for a
+// user with no candidates.manage key or view-only (arms 4/4b). Scoped to the Enrollment tab because
+// that is the only door the verdict drove, although the drawer component is shared.
+export const RELEASE_NOTE_CURRENT =
+  "-313 is about editing a student from a batch's Enrollment tab. After one of a student's "  +
+  "enrollment steps is ticked there, opening Edit on that student shows the details the student "  +
+  "gave when registering, such as father's and mother's name, date of birth, gender, education "  +
+  "and email. Before this release it could show only the name and mobile number unless the page "  +
+  "was reloaded. Saving that form without changing anything no longer sets the student's batch "  +
+  "interest back to Current or empties the programmes and locations the student said they were "  +
+  "interested in, and a detail that is changed is still saved. People who do not have edit rights "  +
+  "on candidates still do not receive a student's personal details when they tick a step.";
+
+// -313: the -312 note moved here as its own literal string, never an alias (the -310 defect).
 // -312. Written against qa/contracts/public-release-note.md over the whole delta production receives
 // (origin/master 1237bea..3eed915, eight commits). [C1] no counts - the only digits are the
 // release's own name. Five of the eight commits touch test scripts, .gitignore and .env.example
@@ -165,7 +184,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // in qa/verdicts/qa-769-767-abhi-tak-approved-nahi.md (D2, D6, D10); the explanation sheet not
 // describing the new columns is the same verdict's own reading of the downloaded workbook
 // (QA-2733/2734 still Open).
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_312 =
   "-312 is about the Reports screen, where the target for each centre and job role is set "  +
   "against what the client sheet says about it. Alongside the Not approved figure and the "  +
   "Pending figure there is a Not approved yet figure, which is those two added together. It is "  +
@@ -1738,6 +1757,8 @@ const RELEASE_NOTE_ARCHIVE =
   // declaring ARCHIVE_309 and not wiring it, on a line whose comment already warned about exactly
   // that. A comment warning about a defect does not prevent it; only an assertion does.
   // -312: ARCHIVE_311 wired in here in the SAME bump that declared it.
+  // -313: ARCHIVE_312 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_312 + " " +
   RELEASE_NOTE_ARCHIVE_311 + " " +
   RELEASE_NOTE_ARCHIVE_310 + " " +
   RELEASE_NOTE_ARCHIVE_309 + " " +
