@@ -5,7 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { assertMemberInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember, Candidate, CandidateResult, DailyLog, GovtAttendanceRow } from "@/models";
 import { audit } from "@/lib/audit";
-import { ROSTER_CANDIDATE_FIELDS } from "@/app/api/batches/[id]/members/route";
+import { rosterCandidateFields } from "@/app/api/batches/[id]/members/route";
 
 // PATCH enrollment worklist update (Rules 22–24).
 // Body: { reg_done?, kyc_done?, enroll_done?, accept_done?, failed?, issue?, issue_note?, source? }
@@ -31,8 +31,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // (`{ ...x, ...res.item }`, batches/[id]/page.tsx) — updateEnrollment returns the raw saved
   // doc with `candidate` unpopulated, so without this the merge clobbered a candidate's own
   // name/phone with a bare ObjectId, rendering "(unnamed candidate)" until the next full reload.
-  // Same restricted field list the roster's own GET already uses, so the two can never drift.
-  await m.populate("candidate", ROSTER_CANDIDATE_FIELDS);
+  // Same DECISION the roster's own GET makes, from the same function, so the two can never drift.
+  // qa-selfreg-fields-drop: this used to be the narrow list for everyone, so an editor's cached card
+  // shrank to five fields on every toggle and the Edit drawer showed only name and mobile.
+  const candFields = await rosterCandidateFields(user);
+  if (candFields === null) await m.populate("candidate");
+  else await m.populate("candidate", candFields);
   await audit({
     entity: "BatchMember", entityId: m._id, field: "enrollment",
     newValue: { status: m.enrollment_status, reg: m.reg_done, kyc: m.kyc_done, enroll: m.enroll_done, accept: m.accept_done, issue: m.issue },

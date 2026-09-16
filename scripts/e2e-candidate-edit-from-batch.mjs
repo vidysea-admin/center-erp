@@ -2,9 +2,10 @@
 // for the batch Enrollment tab's new Edit button: GET /api/batches/[id]/members now populates the
 // FULL candidate document (not a 5-field projection), and — the load-bearing regression guard —
 // that this did NOT loosen GET /api/candidates/[id] or GET /api/locations, both deliberately
-// closed to Trainer (QA-060/095, a tested invariant in e2e-roles.mjs). The client component itself
-// (CandidateEditDrawer) is not driven here; e2e-rendered-candidates.mjs is this project's pattern
-// for that and is out of scope for this unit's server-side change.
+// closed to Trainer (QA-060/095, a tested invariant in e2e-roles.mjs). Section 1c (QA-2751,
+// qa-selfreg-fields-drop, 2026-09-16) additionally drives a real chromium through the Enrollment
+// tab - toggle a step, Edit with no reload, Save with no change - because that defect was only
+// visible on the screen. Its browser preconditions are ASSERTIONS: no chromium means red, not skipped.
 // Run: node scripts/e2e-candidate-edit-from-batch.mjs
 import { requireLocalBase } from "./db-guard.mjs";
 const BASE = requireLocalBase("e2e-candidate-edit-from-batch", process.env.BASE_URL || "http://localhost:3000/erp");
@@ -110,6 +111,182 @@ ok("QA-1459: the five fields the roster actually renders are UNCHANGED for that 
   memberAsTrainer?.candidate?.name === cand.name && memberAsTrainer?.candidate?.phone === cand.phone
   && "sidh_candidate_id" in (memberAsTrainer?.candidate ?? {}) && "apaar_id" in (memberAsTrainer?.candidate ?? {}),
   JSON.stringify(memberAsTrainer?.candidate));
+
+// ---- 1c. qa-selfreg-fields-drop (QA-2751). Sections 1 and 1b prove what the roster GET hands out.
+// The defect lived in the OTHER door that feeds the Enrollment tab: a step toggle's PATCH
+// /api/members/[id] populated the narrow five-field list for EVERYONE, the page merged that over the
+// cached card, the card's Edit handed the shrunken record to CandidateEditDrawer (which then skips
+// its own fetch), and the drawer showed only name and mobile. Saving without touching anything then
+// wrote batch_interest "Current" and [] interest lists over the student's own answers.
+// These arms drive the real screen: a real click on a step, Edit with no reload, Save with no change.
+// They run on the fixture candidate above, BEFORE section 3 changes any permission, and put nothing
+// back that a later section reads (name/phone/aadhaar_no are untouched by a no-change save).
+{
+  const T = "QA-2751";
+  const memberId = member?._id;
+  const setFuture = async () => req(admin, "PATCH", `/api/candidates/${cand._id}`, {
+    gender: "Female", education: "12th Pass", batch_interest: "Future",
+    interested_programs: [prog._id], interested_locations: [loc._id],
+  });
+  const readCand = async () => { const r = await req(admin, "GET", `/api/candidates/${cand._id}`); return r.data?.item ?? r.data; };
+  const fx = await setFuture();
+  const EXPECT = {
+    father_name: "Father " + stamp, dob: "2002-04-17", gender: "Female", education: "12th Pass",
+    aadhaar_no: "999941057058", email: cand.email,
+  };
+  const before = await readCand();
+  ok(`${T} [precondition]: the fixture candidate holds father_name, dob, gender, education, aadhaar_no, email, batch_interest "Future" and non-empty interest lists (without these every arm below is vacuous)`,
+    fx.status === 200 && before?.father_name === EXPECT.father_name && String(before?.dob ?? "").slice(0, 10) === EXPECT.dob
+    && before?.gender === "Female" && before?.education === "12th Pass" && before?.aadhaar_no === EXPECT.aadhaar_no
+    && before?.email === EXPECT.email && before?.batch_interest === "Future"
+    && (before?.interested_programs ?? []).length > 0 && (before?.interested_locations ?? []).length > 0,
+    JSON.stringify({ patch: fx.status, got: before && { father_name: before.father_name, dob: before.dob, gender: before.gender, education: before.education, aadhaar_no: before.aadhaar_no, email: before.email, batch_interest: before.batch_interest, ip: before.interested_programs, il: before.interested_locations } }));
+  ok(`${T} [precondition]: the roster member id is known`, !!memberId, JSON.stringify(member));
+
+  // ---- arm 5 (direct API): an EDITOR's toggle response carries the whole candidate ----
+  const adminPatch = await req(admin, "PATCH", `/api/members/${memberId}`, { issue: null, failed: false });
+  ok(`${T} arm 5: an editor's PATCH /api/members/[id] response carries the full candidate (father_name present), so the page's merge cannot shrink the cached card`,
+    adminPatch.status === 200 && adminPatch.data?.item?.candidate?.father_name === EXPECT.father_name,
+    JSON.stringify({ status: adminPatch.status, candidate_keys: Object.keys(adminPatch.data?.item?.candidate ?? {}) }));
+
+  // ---- arm 4 (server, least privilege): a user who may toggle steps but NOT edit candidates still
+  // gets the narrow row from that same door. The Trainer role holds candidates.assign nowhere by
+  // default (QA-1290), so it is granted for this arm ONLY and the role set is byte-restored after. ----
+  const permsA = (await req(admin, "GET", "/api/permissions")).data;
+  const trSetA = (permsA?.roles ?? []).find((r) => r.role === "Trainer")?.permissions ?? [];
+  const grant = await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: [...trSetA.filter((p) => p !== "candidates.assign"), "candidates.assign"] });
+  const trPatch = await req(trainerCookie, "PATCH", `/api/members/${memberId}`, { issue: null, failed: false });
+  const trCand = trPatch.data?.item?.candidate;
+  ok(`${T} arm 4 [precondition]: the trainer, granted candidates.assign but NOT candidates.manage, can use the toggle door at all (200, candidate populated with its name)`,
+    grant.status === 200 && !trSetA.includes("candidates.manage") && trPatch.status === 200 && trCand?.name === cand.name,
+    JSON.stringify({ grant: grant.status, patch: trPatch.status, body: JSON.stringify(trPatch.data).slice(0, 200) }));
+  const LEAK = ["father_name", "dob", "aadhaar_no", "email", "mother_name", "religion", "social_category", "gender", "education"];
+  ok(`${T} arm 4: that trainer's PATCH /api/members/[id] response carries NO father_name/dob/aadhaar_no/email (QA-1459 holds on the toggle door too)`,
+    !!trCand && LEAK.every((f) => trCand[f] === undefined),
+    JSON.stringify({ leaked: LEAK.filter((f) => trCand?.[f] !== undefined), candidate_keys: Object.keys(trCand ?? {}) }));
+  await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: trSetA });
+  const trSetA2 = ((await req(admin, "GET", "/api/permissions")).data?.roles ?? []).find((r) => r.role === "Trainer")?.permissions ?? [];
+  ok(`${T} arm 4: Trainer's permission set is byte-restored after the grant`, JSON.stringify([...trSetA2].sort()) === JSON.stringify([...trSetA].sort()), JSON.stringify({ before: trSetA, after: trSetA2 }));
+
+  // ---- arm 4b (QA-2753, checker cycle 1): the boundary is EDIT, not "holds the key at all". Arm 4's
+  // trainer holds no candidates.manage key, so a helper gated on VIEW (hasPermission) passed it too and
+  // leaked nine personal fields to every view-only holder with the suite still green. Grant exactly
+  // candidates.manage:view, PROVE the grant is in effect for that session, then assert the narrow row. ----
+  const grantV = await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: [...trSetA.filter((p) => p !== "candidates.assign" && !p.startsWith("candidates.manage")), "candidates.assign", "candidates.manage:view"] });
+  const meV = await req(trainerCookie, "GET", "/api/permissions/me");
+  const trPatchV = await req(trainerCookie, "PATCH", `/api/members/${memberId}`, { issue: null, failed: false });
+  const trCandV = trPatchV.data?.item?.candidate;
+  ok(`${T} arm 4b [precondition]: the trainer now holds candidates.manage at VIEW level (read back from /api/permissions/me) and can still use the toggle door`,
+    grantV.status === 200 && meV.data?.levels?.["candidates.manage"] === "view" && trPatchV.status === 200 && trCandV?.name === cand.name,
+    JSON.stringify({ grant: grantV.status, level: meV.data?.levels?.["candidates.manage"], patch: trPatchV.status }));
+  ok(`${T} arm 4b: a VIEW-only candidates.manage holder's PATCH /api/members/[id] response carries NO personal fields - the full record is for EDIT holders only`,
+    !!trCandV && LEAK.every((f) => trCandV[f] === undefined),
+    JSON.stringify({ leaked: LEAK.filter((f) => trCandV?.[f] !== undefined), candidate_keys: Object.keys(trCandV ?? {}) }));
+  await req(admin, "PUT", "/api/permissions", { role: "Trainer", permissions: trSetA });
+  const trSetA3 = ((await req(admin, "GET", "/api/permissions")).data?.roles ?? []).find((r) => r.role === "Trainer")?.permissions ?? [];
+  ok(`${T} arm 4b: Trainer's permission set is byte-restored after the view grant`, JSON.stringify([...trSetA3].sort()) === JSON.stringify([...trSetA].sort()), JSON.stringify({ before: trSetA, after: trSetA3 }));
+
+  // ---- arms 2, 3, 3b: the rendered journey ----
+  let browser = null;
+  try {
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch({ headless: true });
+    const ctx = await browser.newContext({ viewport: { width: 1536, height: 900 } });
+    const page = await ctx.newPage();
+    page.on("dialog", (d) => d.dismiss().catch(() => {}));
+    await page.goto(BASE, { waitUntil: "domcontentloaded" });
+    await page.locator('input[type="email"]').first().fill("admin@vidysea.com");
+    await page.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+    await page.locator('button[type="submit"]').first().click();
+    await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+    ok(`${T} [precondition]: the browser is signed in as Admin`, !/login/i.test(page.url()), page.url());
+
+    const card = () => page.locator(`xpath=//div[@title=${JSON.stringify(cand.name)}]/ancestor::div[contains(@class,"rounded-xl")][1]`).first();
+    const openTab = async () => {
+      await page.goto(`${BASE}/batches/${batch._id}?tab=Enrollment`, { waitUntil: "domcontentloaded" });
+      await card().locator("button", { hasText: /^Edit$/ }).waitFor({ timeout: 45000 });
+    };
+    const toggleRegistration = async () => {
+      const resp = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/members\//.test(r.url()), { timeout: 30000 });
+      await card().locator("button", { hasText: /Registration$/ }).first().click();
+      const r = await resp;
+      await page.waitForTimeout(800); // the setMembers merge re-renders the card
+      return r.status();
+    };
+    const DRAWER = "div.fixed.inset-0.z-50";
+    const openEditAndRead = async () => {
+      await card().locator("button", { hasText: /^Edit$/ }).click();
+      await page.locator(DRAWER, { hasText: "Save changes" }).waitFor({ timeout: 20000 });
+      await page.waitForTimeout(600);
+      return page.evaluate((sel) => {
+        const root = [...document.querySelectorAll(sel)].find((d) => d.innerText.includes("Save changes"));
+        const norm = (x) => String(x ?? "").replace(/\s+/g, " ").replace(/\*/g, "").trim();
+        const val = (label) => {
+          const span = [...root.querySelectorAll("label > span")].find((s) => norm(s.textContent) === label);
+          const c = span?.parentElement?.querySelector("input,select,textarea");
+          return c ? c.value : "(control not found)";
+        };
+        return { name: val("Name"), father_name: val("Father's name"), dob: val("Date of birth"), gender: val("Gender"),
+          education: val("Education"), aadhaar_no: val("Aadhaar number"), email: val("Email"), batch_interest: val("Interested in") };
+      }, DRAWER);
+    };
+    const saveNoChange = async () => {
+      const resp = page.waitForResponse((r) => r.request().method() === "PATCH" && /\/api\/candidates\//.test(r.url()), { timeout: 30000 });
+      await page.locator(DRAWER).locator("button", { hasText: "Save changes" }).click();
+      const r = await resp;
+      await page.waitForTimeout(800);
+      return { status: r.status(), sent: r.request().postDataJSON?.() ?? null };
+    };
+
+    // arm 2 - toggle a step through the UI, then Edit WITHOUT reloading
+    await openTab();
+    const tStatus = await toggleRegistration();
+    ok(`${T} arm 2 [precondition]: the Registration step was toggled by a real click and the server accepted it`, tStatus === 200, String(tStatus));
+    const shown = await openEditAndRead();
+    const missing = Object.keys(EXPECT).filter((f) => shown[f] !== EXPECT[f]);
+    ok(`${T} arm 2: after a step toggle (no reload) the Edit drawer still shows father_name, dob, gender, education, aadhaar_no and email`,
+      missing.length === 0, JSON.stringify({ missing, shown }));
+
+    // arm 3 - Save with no change, then read the candidate back
+    const s3 = await saveNoChange();
+    const after3 = await readCand();
+    ok(`${T} arm 3: Save with no change after a toggle leaves batch_interest "Future" and both interest lists non-empty in the DB`,
+      after3?.batch_interest === "Future" && (after3?.interested_programs ?? []).length > 0 && (after3?.interested_locations ?? []).length > 0,
+      JSON.stringify({ save: s3.status, sent: s3.sent, db: { batch_interest: after3?.batch_interest, ip: after3?.interested_programs, il: after3?.interested_locations } }));
+
+    // arm 3b - the DRAWER's own guarantee, isolated from the server fix. Arm 3 cannot see the drawer:
+    // once the PATCH carries the whole document, sending every field sends the values already stored.
+    // So the toggle response is cut back to the five roster fields in the browser (exactly what the
+    // pre-fix server sent, and what a user without candidates.manage still gets), and a no-change Save
+    // must STILL write nothing over the student's answers.
+    await setFuture();
+    await openTab();
+    await page.route("**/api/members/**", async (route) => {
+      if (route.request().method() !== "PATCH") return route.continue();
+      const res = await route.fetch();
+      const j = await res.json().catch(() => null);
+      const c = j?.item?.candidate;
+      if (c) j.item.candidate = Object.fromEntries(["_id", "name", "phone", "lifecycle_status", "sidh_candidate_id", "apaar_id"].filter((k) => k in c).map((k) => [k, c[k]]));
+      await route.fulfill({ response: res, json: j });
+    });
+    const t3b = await toggleRegistration();
+    await page.unroute("**/api/members/**");
+    const shown3b = await openEditAndRead();
+    ok(`${T} arm 3b [precondition]: the card really was narrowed - the drawer opened on a record with no father_name (so this arm tests the drawer, not the server)`,
+      t3b === 200 && shown3b.name === cand.name && shown3b.father_name === "", JSON.stringify({ toggle: t3b, shown3b }));
+    const s3b = await saveNoChange();
+    const after3b = await readCand();
+    ok(`${T} arm 3b: from a drawer hydrated with an INCOMPLETE record, Save with no change still leaves batch_interest "Future" and both interest lists non-empty`,
+      after3b?.batch_interest === "Future" && (after3b?.interested_programs ?? []).length > 0 && (after3b?.interested_locations ?? []).length > 0,
+      JSON.stringify({ save: s3b.status, sent: s3b.sent, db: { batch_interest: after3b?.batch_interest, ip: after3b?.interested_programs, il: after3b?.interested_locations } }));
+    await ctx.close();
+  } catch (e) {
+    ok(`${T}: the rendered Enrollment-tab journey ran to its end without an uncaught error`, false,
+      `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 300)}`);
+  } finally {
+    try { if (browser) await browser.close(); } catch { /* nothing left to close */ }
+  }
+}
 
 // ---- 2. out-of-scope: a trainer not assigned to this batch is still refused the roster (the
 // widened populate must not have loosened assertBatchInScope) ----

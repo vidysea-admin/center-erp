@@ -6,6 +6,16 @@ import { requirePerm, hasEditLevel } from "@/lib/permissions";
 // The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
 // Named once so the QA-1459 branch below cannot drift from what -212 established.
 export const ROSTER_CANDIDATE_FIELDS = "name phone lifecycle_status sidh_candidate_id apaar_id";
+
+// QA-1459's decision - WHICH FIELDS of a roster member's candidate this user may receive - stated
+// once, for every door that hands the Enrollment tab a member row. The per-card PATCH
+// (api/members/[id]) used to hard-code the narrow list even for editors, and the page merges that
+// response over its cached row, so after one step toggle the card's Edit opened a drawer holding
+// only name and mobile - and Save wrote "Current" and empty interest lists over the student's own
+// answers (qa-selfreg-fields-drop). `null` means the whole document.
+export async function rosterCandidateFields(user: Parameters<typeof hasEditLevel>[0]): Promise<string | null> {
+  return (await hasEditLevel(user, "candidates.manage")) ? null : ROSTER_CANDIDATE_FIELDS;
+}
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
 import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
@@ -40,11 +50,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // that drawer only ever mounts for a user who may edit candidates. So ask that exact question,
   // with the exact function the drawer's own gate uses, and give everyone else the five fields the
   // roster actually renders. A Trainer's screen is byte-identical to what it was before -222.
-  const mayEditCandidates = await hasEditLevel(user, "candidates.manage");
+  const candFields = await rosterCandidateFields(user);
   const q = BatchMember.find({ batch: id }).sort({ joined_on: 1 });
-  const items = await (mayEditCandidates
+  const items = await (candFields === null
     ? q.populate("candidate")
-    : q.populate("candidate", ROSTER_CANDIDATE_FIELDS)
+    : q.populate("candidate", candFields)
   ).lean();
 
   // GD-102: "kitne bacche ki kitni-kitni attendance chal rahi hai" — each member's running

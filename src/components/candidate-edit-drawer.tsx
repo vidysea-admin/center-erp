@@ -112,6 +112,11 @@ export function CandidateEditDrawer({
   onBlockedByBatchHistory?: () => void;
 }) {
   const [form, setForm] = useState<any>({});
+  // qa-selfreg-fields-drop: what the form was hydrated FROM. An edit sends only what the operator
+  // changed, so a record that arrived incomplete (a cached roster row, a half-loaded page) can never
+  // write its blanks and defaults - "Current", [] - over the student's real answers.
+  const [loaded, setLoaded] = useState<any>({});
+  const hydrate = (f: any) => { setForm(f); setLoaded(f); };
   const [error, setError] = useState("");
   const [savingC, setSavingC] = useState(false);
   const [dupes, setDupes] = useState<any[]>([]);
@@ -142,10 +147,10 @@ export function CandidateEditDrawer({
   // this path, or the drawer will silently 403 for exactly the audience it was built for.
   useEffect(() => {
     if (!open) return;
-    if (mode === "add") { setForm({}); setError(""); return; }
-    if (candidate) { setForm(candidateToForm(candidate)); return; }
+    if (mode === "add") { hydrate({}); setError(""); return; }
+    if (candidate) { hydrate(candidateToForm(candidate)); return; }
     if (candidateId) {
-      api(`/api/candidates/${candidateId}`).then((d) => setForm(candidateToForm(d.item ?? d))).catch((e: any) => setError(e.message));
+      api(`/api/candidates/${candidateId}`).then((d) => hydrate(candidateToForm(d.item ?? d))).catch((e: any) => setError(e.message));
     }
   }, [open, mode, candidateId, candidate]);
 
@@ -170,12 +175,14 @@ export function CandidateEditDrawer({
       if (mode === "edit" && candidateId) {
         // PATCH is partial: a blank select/date means "not changing this", never "cast '' to
         // ObjectId/Date" (imported rows legitimately have location/program/dob still empty).
-        const json: any = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== ""));
+        // qa-selfreg-fields-drop: and only what CHANGED since the form was loaded - see `loaded`.
+        const changed = (k: string) => JSON.stringify(form[k]) !== JSON.stringify(loaded[k]);
+        const json: any = Object.fromEntries(Object.entries(form).filter(([k, v]) => v !== "" && changed(k)));
         // QA-726 (-212, checker on qa-210): the ONE field where blank has to mean "clear it", not
         // "leave it". null (not "") because the QA-417 partial index does not index null.
-        if (form.sidh_candidate_id !== undefined && !String(form.sidh_candidate_id).trim()) json.sidh_candidate_id = null;
+        if (changed("sidh_candidate_id") && form.sidh_candidate_id !== undefined && !String(form.sidh_candidate_id).trim()) json.sidh_candidate_id = null;
         // QA-902: the same for the APAAR ID, and for the identical reason.
-        if (form.apaar_id !== undefined && !String(form.apaar_id).trim()) json.apaar_id = null;
+        if (changed("apaar_id") && form.apaar_id !== undefined && !String(form.apaar_id).trim()) json.apaar_id = null;
         await api(`/api/candidates/${candidateId}`, { method: "PATCH", json });
       } else {
         await api("/api/candidates", { method: "POST", json: form });
