@@ -215,7 +215,17 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
     // and the pin reported "the region moved" while the rendered text was unchanged.
     const labels = [...row.matchAll(/>((?:[^<>{}]|\{[^{}]*\}){6,80})<\/Btn>/g)].map((m) => m[1].trim())
       .filter((t) => /Awaited|statusLabel\(/.test(t));
-    const bare = labels.filter((t) => !t.includes("→"));
+    // QA-2771: `!t.includes("→")` only refused a label with NO arrow at all, so `Go → Assessment
+    // Awaited` and `→ Assessment Awaited` both still read as "has an arrow" and passed GREEN - the
+    // arrow's presence was being trusted to mean the action side was meaningful, and it doesn't.
+    // Pin the exact two client-worded action phrases this file's own labels use (source line ~206),
+    // rather than "two or more words", so a typo'd action phrase is caught as precisely as a missing one.
+    const EXPECTED_ACTIONS = ["Training done", "Assessment done"];
+    const bare = labels.filter((t) => {
+      const arrow = t.indexOf("→");
+      if (arrow === -1) return true;
+      return !EXPECTED_ACTIONS.includes(t.slice(0, arrow).trim());
+    });
     ok("QA-2435: both batch-transition buttons name the ACTION and the state, not the state alone",
       labels.length >= 2 && bare.length === 0,
       labels.length < 2
