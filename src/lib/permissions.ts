@@ -30,6 +30,12 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   // different powers, and this product already learned that the expensive way — `assertTrainerDocDeleteInScope`
   // exists precisely because document DELETE had to be narrower than document read/upload.
   { key: "candidates.delete", label: "Delete candidate records (junk rows only — a real person is Dropped)", group: "Candidates" },
+  // Sub-unit D (qa-candidates-purge, Umesh 2026-09-17, qa/specs/manish-delete-surfaces.md section 9):
+  // candidates.delete ARCHIVES (QA-1792). This is the separate, narrower right to PERMANENTLY delete an
+  // archived candidate with no batch history, results, government rows or documents. Admin holds it
+  // through the role bypass (it is not in NO_ADMIN_BYPASS); no other role carries it by default, so it
+  // is granted per role from the matrix or per person through extra_permissions.
+  { key: "candidates.purge", label: "Permanently delete an archived candidate (no batch history, results, government rows or documents) — cannot be undone", group: "Candidates" },
   { key: "trainers.delete", label: "Delete trainer records (junk rows only — a real trainer is Dropped)", group: "Trainers" },
   { key: "batches.delete", label: "Delete empty batch shells (a batch with any history is Cancelled)", group: "Batches" },
   // 2026-08-25 (Umesh, feedback-inbox): a batch created by mistake (e.g. for a test) that already

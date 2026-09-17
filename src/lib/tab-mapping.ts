@@ -1,5 +1,6 @@
 import * as XLSX from "xlsx";
-import { Candidate, Location, Program, SheetChange, TabMapping, Trainer } from "@/models";
+import crypto from "crypto";
+import { AuditLog, Candidate, Location, Program, SheetChange, TabMapping, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
 import {
   CatalogEntity, FIELD_CATALOG, FieldSpec, LocationLite, ProgramLite,
@@ -160,8 +161,50 @@ function displayOf(spec: FieldSpec | undefined, v: unknown, ctx: ParseContext): 
 export type TabMappingReport = {
   created: number; review: number; unchanged: number;
   skipped: string[]; // named rows, never silent
+  purged?: number; // QA-2775: rows whose lead was permanently deleted in the ERP - never re-created
   error?: string;
 };
+
+// ---- QA-2775 (Umesh, qa/specs/manish-delete-surfaces.md section 10): a purged lead must not come back ----
+// ingestRows below creates an entity for every key it cannot find, which is exactly right for a new lead
+// and exactly wrong for one the team permanently deleted: the sheet still carries the row, so the next
+// change to ANY cell on that tab used to re-create the person as a fresh active Unassigned candidate
+// (measured by the purge cycle-1 checker, probe2.log). The purge therefore leaves a marker, and this file
+// consults it before creating.
+//
+// The marker is the sheet ROW IDENTITY and nothing else: which key field, and an HMAC of the normalised key.
+// Not the key itself - for a Candidate the only keyable field is the phone, and a stored phone is the very
+// PII the purge exists to erase. A plain hash would not do either: ten digits is a space a laptop walks in
+// minutes. Keyed with AUTH_SECRET, the marker is useless without the server's secret. The price, disclosed:
+// rotating AUTH_SECRET silently orphans every existing marker.
+//
+// It is stored IN the purge audit row (`old_value.sheet_keys`), not in a new collection: that row is already
+// the durable, one-per-purge record that the candidate was erased, so "is this key purged" and "was this
+// candidate purged" cannot drift into two stores.
+export function rowKeyOf(entity: CatalogEntity, keyField: string, v: unknown): string {
+  const keySpec = fieldSpec(entity, keyField);
+  return keySpec?.type === "phone" ? phone10(v) || S(v) : normHeader(v);
+}
+export function purgedRowMarker(entity: CatalogEntity, keyField: string, key: string): string {
+  return crypto.createHmac("sha256", process.env.AUTH_SECRET ?? "").update(`purged-row|${entity}|${keyField}|${key}`).digest("hex");
+}
+// Every marker a purge of this record must leave: one per keyable field, for the current value AND every
+// earlier value the history recorded (a sheet can still carry the phone the ERP later corrected).
+export function purgedRowMarkers(entity: CatalogEntity, valuesByField: Record<string, unknown[]>): { key_field: string; marker: string }[] {
+  const out: { key_field: string; marker: string }[] = [];
+  const seen = new Set<string>();
+  for (const spec of FIELD_CATALOG[entity].filter((f) => f.keyable)) {
+    for (const v of valuesByField[spec.key] ?? []) {
+      const key = rowKeyOf(entity, spec.key, v);
+      if (!key) continue;
+      const marker = purgedRowMarker(entity, spec.key, key);
+      if (seen.has(marker)) continue;
+      seen.add(marker);
+      out.push({ key_field: spec.key, marker });
+    }
+  }
+  return out;
+}
 
 // Runs inside the watch cycle: the workbook is already fetched, changedTabs says which tabs got a
 // new snapshot this run. A mapping runs when its tab changed — or unconditionally until its first
@@ -200,8 +243,20 @@ export async function runTabMappings(src: any, wb: XLSX.WorkBook, changedTabs: S
 async function ingestRows(src: any, tm: any, rows: ParsedRow[], ctx: ParseContext, report: TabMappingReport): Promise<number> {
   const entity = tm.entity_type as CatalogEntity;
   const Model = MODELS[entity];
-  const keySpec = fieldSpec(entity, tm.key_field);
-  const normKey = (v: unknown) => (keySpec?.type === "phone" ? phone10(v) || S(v) : normHeader(v));
+  const normKey = (v: unknown) => rowKeyOf(entity, tm.key_field, v); // QA-2775: the SAME normaliser the purge marker uses
+  // QA-2775: purge markers, loaded once and only when some row has no existing record. Only a row whose
+  // purge actually committed carries field "purged"; an aborted purge renames its row (candidate-archive.ts).
+  let purgedMarkers: Set<string> | null = null;
+  const wasPurged = async (key: string): Promise<boolean> => {
+    if (entity !== "Candidate") return false;
+    if (!purgedMarkers) {
+      const rows = await AuditLog.find({ entity, field: "purged", "old_value.sheet_keys.key_field": tm.key_field })
+        .select("old_value.sheet_keys").lean<any[]>();
+      purgedMarkers = new Set(rows.flatMap((r) => (r.old_value?.sheet_keys ?? [])
+        .filter((k: any) => k?.key_field === tm.key_field).map((k: any) => String(k.marker))));
+    }
+    return purgedMarkers.has(purgedRowMarker(entity, tm.key_field, key));
+  };
 
   // One query, normalized in memory — phone formats in the DB vary and the AVPL import used
   // NA-<name> placeholders where the sheet had no phone.
@@ -224,6 +279,13 @@ async function ingestRows(src: any, tm: any, rows: ParsedRow[], ctx: ParseContex
     const existing = byKey.get(key);
 
     if (!existing) {
+      // QA-2775: a lead the ERP permanently deleted is reported, never re-created. Named by ROW NUMBER only:
+      // last_report is stored, and writing the sheet's name back into it would re-store the person.
+      if (await wasPurged(key)) {
+        report.purged = (report.purged ?? 0) + 1;
+        report.skipped.push(`row ${row.rowNum}: this lead was permanently deleted (purged) in the ERP - not re-created`);
+        continue;
+      }
       if (entity === "Location") {
         // Centres are contract entities — a mapping updates them but never invents one.
         report.skipped.push(`"${row.label}": no matching centre — locations are never auto-created`);

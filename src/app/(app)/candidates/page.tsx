@@ -33,6 +33,9 @@ function CandidatesInner() {
   // verb as missing. The server refuses independently; this only decides who is OFFERED it.
   const { can: canRight, loaded: rightsLoaded } = usePerms();
   const canDeleteCandidate = rightsLoaded && canRight("candidates.delete", "edit");
+  // Sub-unit D (qa-candidates-purge): the PERMANENT delete is its own right, never implied by
+  // candidates.delete (which archives). Offered only to holders, and only on archived rows.
+  const canPurgeCandidate = rightsLoaded && canRight("candidates.purge", "edit");
   // QA-1364: /api/candidates/[id]/drop now asks candidates.assign too when the candidate carries
   // an active_batch (it is a roster drop by another name, same dropMemberChecked() the roster
   // door calls). Assume yes while rights are loading, same as canImport a hundred lines up this
@@ -112,6 +115,19 @@ function CandidatesInner() {
   // QA-021: the drop drawer's state.
   const [dropT, setDropT] = useState<any>(null);
   const [dropForm, setDropForm] = useState<any>({});
+  // Sub-unit D: the typed-confirmation Drawer. `purgeBlockers` is the server's own precondition list
+  // (GET /api/candidates/[id]/purge), so the Drawer names what blocks rather than guessing.
+  const [purgeT, setPurgeT] = useState<any>(null);
+  const [purgeForm, setPurgeForm] = useState<{ name: string; reason: string }>({ name: "", reason: "" });
+  const [purgeBlockers, setPurgeBlockers] = useState<{ key: string; message: string }[] | null>(null);
+  const [purgeError, setPurgeError] = useState("");
+  const openPurge = async (r: any) => {
+    setPurgeT(r); setPurgeForm({ name: "", reason: "" }); setPurgeBlockers(null); setPurgeError("");
+    try {
+      const pre = await api(`/api/candidates/${r._id}/purge`);
+      setPurgeBlockers(pre.blockers ?? []);
+    } catch (e: any) { setPurgeError(e.message); setPurgeBlockers([]); }
+  };
   const [dropReasons, setDropReasons] = useState<any[]>([]);
   const [editId, setEditId] = useState<string>("");
   const [editRecord, setEditRecord] = useState<any>(null);
@@ -766,6 +782,18 @@ Archive anyway?`)) return;
               </span>
             ),
           },
+          // Sub-unit D (qa-candidates-purge): the PERMANENT delete gets its own column, present only for
+          // holders of candidates.purge. It is kept out of the _edit cell on purpose: that cell carries
+          // exactly one access decision (candidates.delete, QA-1010/QA-1061), and erasure must never be
+          // offered under the archive right. Within the column the only choice is a STATUS one - an
+          // active row has nothing to purge until it is archived.
+          ...(canPurgeCandidate ? [{
+            key: "_purge", label: "", minWidth: 170, render: (r: any) => (
+              <span onClick={(e) => e.stopPropagation()}>
+                {r.archived_at ? <Btn small kind="danger" onClick={() => openPurge(r)}>Delete permanently…</Btn> : null}
+              </span>
+            ),
+          }] : []),
           {
             // QA-021 (-68): Dropout is reachable from ANY stage now, not only a batch roster.
             // candidates-bulk-archive-restore-ux: same fixed-layout floor issue as _edit above -
@@ -826,6 +854,45 @@ Archive anyway?`)) return;
               } catch (e: any) { setError(e.message); }
             }}>Confirm Drop</Btn>
             <Btn kind="ghost" onClick={() => setDropT(null)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
+
+      <Drawer error={purgeError} open={!!purgeT} onClose={() => setPurgeT(null)} title={purgeT ? `Permanently delete ${purgeT.name}?` : ""}>
+        <div className="space-y-3">
+          <p className="text-sm text-red-700">
+            This removes the candidate record for good. It cannot be undone and there is no restore.
+            The audit trail keeps only a masked summary (initials and the last 4 digits of the phone), and the
+            person&apos;s earlier history and message log are masked too: who changed what, and when, stays.
+            If the lead came from a watched sheet tab, that sheet row will not be imported again.
+          </p>
+          {purgeBlockers === null ? (
+            <p className="text-sm text-gray-500">Checking whether this record can be permanently deleted…</p>
+          ) : purgeBlockers.length > 0 ? (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <p className="font-medium">This candidate cannot be permanently deleted yet:</p>
+              <ul className="mt-1 list-disc pl-5">
+                {purgeBlockers.map((b) => <li key={b.key}>{b.message}</li>)}
+              </ul>
+            </div>
+          ) : null}
+          <Field label={`Type the candidate's name (${purgeT?.name ?? ""}) to confirm`} required>
+            <input className={inputCls} value={purgeForm.name} onChange={(e) => setPurgeForm({ ...purgeForm, name: e.target.value })} />
+          </Field>
+          <Field label="Reason" required>
+            <input className={inputCls} placeholder="Why is this record being deleted permanently?" value={purgeForm.reason}
+              onChange={(e) => setPurgeForm({ ...purgeForm, reason: e.target.value })} />
+          </Field>
+          <div className="flex gap-2">
+            <Btn kind="danger"
+              disabled={!purgeT || !purgeBlockers || purgeBlockers.length > 0 || purgeForm.name.trim() !== String(purgeT?.name ?? "").trim() || !purgeForm.reason.trim()}
+              onClick={async () => {
+                try {
+                  await api(`/api/candidates/${purgeT._id}/purge`, { method: "POST", json: { confirm_name: purgeForm.name, reason: purgeForm.reason.trim() } });
+                  setPurgeT(null); load();
+                } catch (e: any) { setPurgeError(e.message); }
+              }}>Delete permanently</Btn>
+            <Btn kind="ghost" onClick={() => setPurgeT(null)}>Cancel</Btn>
           </div>
         </div>
       </Drawer>

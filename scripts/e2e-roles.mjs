@@ -2150,6 +2150,368 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     JSON.stringify({ was: opsBase.length, now: restored.length }));
 }
 
+// ---- Sub-unit D (qa-candidates-purge): candidates.purge - the permanent delete ----
+// Umesh, 2026-09-17 (qa/specs/manish-delete-surfaces.md section 9). This deliberately reverses
+// QA-1792's "delete is archive-only" for ONE narrow case: an archived candidate with no batch history,
+// results, government rows or documents, on a separate door, with a required reason and a masked
+// audit snapshot. Every refusal below asserts WHICH refusal fired (QA-2457) and that it wrote nothing:
+// the record is still there and the audit trail did not grow - a refusal that half-wrote would pass a
+// status-only pin.
+{
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const pmc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await pmc.connect();
+  const pdb = pmc.db(process.env.MONGODB_DB || "center_erp_ci");
+
+  const sP = "PG" + Date.now().toString().slice(-6);
+  const permsSnapP = (await req(admin, "GET", "/api/permissions")).data;
+  const opsBaseP = (permsSnapP.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
+  ok("candidates.purge: the right is in the permissions catalogue, so an Admin can grant it",
+    (permsSnapP.catalog ?? []).some((c) => c.key === "candidates.purge"),
+    JSON.stringify((permsSnapP.catalog ?? []).filter((c) => c.group === "Candidates").map((c) => c.key)));
+
+  const locP = (await req(admin, "POST", "/api/locations", { code: "L" + sP, name: "Purge Loc " + sP, approval_status: "Approved" })).data.item;
+  const progP = (await req(admin, "POST", "/api/programs", { code: "P" + sP, name: "Purge Prog " + sP, trainer_skill: "sk" + sP, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 })).data.item;
+  const jprIdP = (await req(spoc, "GET", "/api/locations?limit=200")).data.items?.[0]?._id;
+  let nP = 0;
+  const mkCandP = async (locId = locP._id) => (await req(admin, "POST", "/api/candidates", {
+    name: "Purge " + sP + " N" + (++nP) + Math.random().toString(36).slice(2, 5),
+    phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+    location: locId, program: progP._id,
+  })).data.item;
+  const archiveP = async (c, extra = {}) => (await req(admin, "DELETE", `/api/candidates/${c._id}`, { reason: "purge fixture", ...extra })).status;
+  const exists = async (c) => !!(await pdb.collection("candidates").findOne({ _id: new ObjectId(c._id) }));
+  const auditCount = async (c) => pdb.collection("auditlogs").countDocuments({ entity: "Candidate", entity_id: new ObjectId(c._id) });
+  const purge = (who, c, body) => req(who, "POST", `/api/candidates/${c._id}/purge`, body);
+  const goodBody = (c, reason = "duplicate junk row") => ({ confirm_name: c.name, reason });
+  // A refusal must name its own reason AND leave no trace.
+  // QA-2774 cycle 2: "unchanged" now means the trail's CONTENT, not only its row count. The purge masks earlier
+  // history in place, and an in-place update keeps the count - so a refusal that masked the history before
+  // refusing (masking IS a write) would have passed a count-only check.
+  const auditRowsText = async (c) => JSON.stringify(await pdb.collection("auditlogs").find({ entity: "Candidate", entity_id: new ObjectId(c._id) }).sort({ _id: 1 }).toArray());
+  const refusedClean = async (label, who, c, body, status, re) => {
+    const aBefore = await auditCount(c);
+    const tBefore = await auditRowsText(c);
+    const r = await purge(who, c, body);
+    ok(`candidates.purge: ${label} - refused with ${status}, naming why`,
+      r.status === status && re.test(String(r.data?.error ?? "")), `status=${r.status} ${String(r.data?.error ?? "").slice(0, 200)}`);
+    const still = await exists(c);
+    const aAfter = await auditCount(c);
+    const untouched = (await auditRowsText(c)) === tBefore;
+    ok(`candidates.purge: ${label} - ...and wrote nothing (record still there, audit trail unchanged)`,
+      still && aAfter === aBefore && untouched, JSON.stringify({ still, aBefore, aAfter, untouched }));
+  };
+
+  // ---- Admin, the default holder: allowed, and the audit row is one row with a masked snapshot ----
+  {
+    const c = await mkCandP();
+    // Give the record PII the snapshot must NOT carry. Written straight to the DB so the fixture does
+    // not depend on the Aadhaar checksum or the edit door.
+    // Per-run values: aadhaar_no / apaar_id carry unique indexes, so a fixed literal collides with the
+    // record a previous run left behind whenever that run could not purge it (a pre-fix baseline).
+    const tail8 = String(Date.now()).slice(-8);
+    const aadhaarP = "2345" + tail8, apaarP = "9988" + tail8;
+    await pdb.collection("candidates").updateOne({ _id: new ObjectId(c._id) },
+      { $set: { aadhaar_no: aadhaarP, apaar_id: apaarP, email: "purge.pii." + tail8 + "@example.test", father_name: "Fatherly Name" } });
+    ok("candidates.purge fixture: Admin's candidate archived first", (await archiveP(c)) === 200);
+    const pre = await req(admin, "GET", `/api/candidates/${c._id}/purge`);
+    ok("candidates.purge: the pre-check reports NO blockers on an archived, empty record",
+      pre.status === 200 && Array.isArray(pre.data?.blockers) && pre.data.blockers.length === 0, JSON.stringify(pre.data).slice(0, 200));
+    const aBefore = await auditCount(c);
+    const r = await purge(admin, c, goodBody(c, "  duplicate lead from import  "));
+    ok("candidates.purge: an Admin can permanently delete an archived, empty candidate (default holder)",
+      r.status === 200 && r.data?.purged === true, `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+    ok("candidates.purge: ...and the Candidate row is really gone from the database",
+      !(await exists(c)));
+    const rows = await pdb.collection("auditlogs").find({ entity: "Candidate", entity_id: new ObjectId(c._id) }).toArray();
+    const purgedRows = rows.filter((x) => x.field === "purged");
+    ok("candidates.purge: ...exactly ONE audit row was added, and it is the purge row",
+      rows.length === aBefore + 1 && purgedRows.length === 1, JSON.stringify({ aBefore, after: rows.length, purged: purgedRows.length }));
+    const pr = purgedRows[0] ?? {};
+    const snapText = JSON.stringify(pr.old_value ?? null);
+    const digits = String(c.phone).replace(/\D/g, "");
+    ok("candidates.purge: ...the audit row carries the TRIMMED reason",
+      String(pr.new_value ?? "") === "permanently deleted - duplicate lead from import", String(pr.new_value ?? ""));
+    ok("candidates.purge: ...the snapshot says which record went (initials, phone last 4, centre)",
+      pr.old_value?.name_initials === c.name.split(/\s+/).map((w) => w[0].toUpperCase() + ".").join(" ")
+      && pr.old_value?.phone_last4 === "******" + digits.slice(-4) && String(pr.old_value?.location) === String(locP._id),
+      snapText.slice(0, 240));
+    ok("candidates.purge: ...and the snapshot is MASKED - no full name, full phone, Aadhaar, APAAR, email or parent name",
+      !!pr.old_value && !snapText.includes(c.name) && !snapText.includes(digits) && !snapText.includes(aadhaarP)
+      && !snapText.includes(apaarP) && !snapText.includes("purge.pii.") && !snapText.includes("Fatherly"),
+      snapText.slice(0, 240));
+  }
+
+  // ---- Operations: refused by default, allowed once granted, refused again once revoked ----
+  {
+    const c1 = await mkCandP();
+    await archiveP(c1);
+    await refusedClean("Operations without the right", ops, c1, goodBody(c1), 403, /Permanently delete an archived candidate/);
+
+    await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBaseP, "candidates.purge"] }, 200);
+    await new Promise((r) => setTimeout(r, 5500)); // role-permission cache TTL
+    const g = await purge(ops, c1, goodBody(c1));
+    ok("candidates.purge: ...Operations GRANTED the right from the matrix can permanently delete",
+      g.status === 200 && !(await exists(c1)), `status=${g.status} ${JSON.stringify(g.data).slice(0, 160)}`);
+
+    await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBaseP }, 200);
+    await new Promise((r) => setTimeout(r, 5500));
+    const c2 = await mkCandP();
+    await archiveP(c2);
+    await refusedClean("Operations after the right is REVOKED", ops, c2, goodBody(c2), 403, /Permanently delete an archived candidate/);
+    await purge(admin, c2, goodBody(c2)); // tidy
+  }
+
+  // ---- Per-person grant (extra_permissions) on a scoped Location user: own centre yes, foreign no ----
+  {
+    const spocUser = ((await req(admin, "GET", "/api/users?limit=200")).data.items ?? []).find((u) => u.email === "spoc.jpr03@vidysea.com");
+    ok("candidates.purge fixture: the scoped SPOC user and their centre exist", !!spocUser && !!jprIdP);
+    if (spocUser && jprIdP) {
+      const extraBefore = spocUser.extra_permissions ?? [];
+      const foreign = await mkCandP(locP._id);
+      await archiveP(foreign);
+      await refusedClean("a scoped SPOC WITHOUT a per-person grant", spoc, foreign, goodBody(foreign), 403, /Permanently delete an archived candidate/);
+      await req(admin, "PATCH", `/api/users/${spocUser._id}`, { extra_permissions: [...new Set([...extraBefore, "candidates.purge"])] });
+      const spocP = await login("spoc.jpr03@vidysea.com", PW);
+      await refusedClean("a per-person grant does not reach ANOTHER centre's candidate (Rule 38)", spocP, foreign, goodBody(foreign), 403, /Out of scope/);
+      const own = await mkCandP(jprIdP);
+      await archiveP(own);
+      const r = await purge(spocP, own, goodBody(own));
+      ok("candidates.purge: ...but an extra_permissions grant DOES open it on their own centre",
+        r.status === 200 && !(await exists(own)), `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+      await req(admin, "PATCH", `/api/users/${spocUser._id}`, { extra_permissions: extraBefore });
+      await purge(admin, foreign, goodBody(foreign)); // tidy
+    }
+  }
+
+  // ---- Request refusals (Admin, so only the named refusal can fire) ----
+  {
+    const c = await mkCandP();
+    await archiveP(c);
+    await refusedClean("a blank reason", admin, c, { confirm_name: c.name, reason: "   " }, 400, /reason is required/i);
+    await refusedClean("a missing reason", admin, c, { confirm_name: c.name }, 400, /reason is required/i);
+    await refusedClean("a typed name that does not match", admin, c, { confirm_name: c.name + "x", reason: "junk" }, 400, /Type the candidate's name exactly/);
+    // QA-2776 (mutant s5 survived cycle 1): nothing asserted that an EMPTY confirmation is refused, so a door
+    // that skipped the name check whenever nothing was typed stayed green.
+    await refusedClean("a BLANK typed name", admin, c, { confirm_name: "   ", reason: "junk" }, 400, /Type the candidate's name exactly/);
+    await refusedClean("a MISSING typed name", admin, c, { reason: "junk" }, 400, /Type the candidate's name exactly/);
+    await purge(admin, c, goodBody(c)); // tidy
+  }
+
+  // ---- Preconditions, ONE AT A TIME: each fixture fails exactly one, and the message names it ----
+  {
+    // not archived
+    const c = await mkCandP();
+    await refusedClean("a candidate that is NOT archived", admin, c, goodBody(c), 409, /is not archived/);
+    const pre = await req(admin, "GET", `/api/candidates/${c._id}/purge`);
+    ok("candidates.purge: the pre-check names 'not archived' as the only blocker",
+      JSON.stringify((pre.data?.blockers ?? []).map((b) => b.key)) === JSON.stringify(["not_archived"]), JSON.stringify(pre.data).slice(0, 200));
+    await archiveP(c); await purge(admin, c, goodBody(c)); // tidy
+  }
+  {
+    // batch history (a real roster row through the API, then archived with confirmation)
+    const c = await mkCandP();
+    const b = (await req(admin, "POST", "/api/batches", { location: locP._id, program: progP._id, planned_start: "2027-08-01", target_size: 5 })).data.item;
+    const add = await req(admin, "POST", `/api/batches/${b._id}/members`, { candidate: c._id });
+    ok("candidates.purge fixture: batch-history candidate is on a roster", [200, 201].includes(add.status), `status=${add.status} ${JSON.stringify(add.data).slice(0, 160)}`);
+    ok("candidates.purge fixture: ...and archived with the batch-history confirmation", (await archiveP(c, { confirm_batch_history: true })) === 200);
+    await refusedClean("a candidate WITH batch history", admin, c, goodBody(c), 409, /has batch history/);
+  }
+  {
+    // results (inserted directly: in the product a result is only reachable through a roster, so the
+    // API cannot build "results but no roster" - which is exactly why this check must stand alone)
+    const c = await mkCandP();
+    await archiveP(c);
+    const ins = await pdb.collection("candidateresults").insertOne({ candidate: new ObjectId(c._id), batch: new ObjectId(), createdAt: new Date(), updatedAt: new Date() });
+    await refusedClean("a candidate with a recorded RESULT", admin, c, goodBody(c), 409, /recorded result/);
+    await pdb.collection("candidateresults").deleteOne({ _id: ins.insertedId });
+    await purge(admin, c, goodBody(c)); // tidy
+  }
+  {
+    // government attendance rows (an unmatched-later row can keep `candidate` with no roster row)
+    const c = await mkCandP();
+    await archiveP(c);
+    const ins = await pdb.collection("govtattendancerows").insertOne({ import: new ObjectId(), candidate: new ObjectId(c._id), name: "x", createdAt: new Date(), updatedAt: new Date() });
+    await refusedClean("a candidate linked to a GOVERNMENT attendance row", admin, c, goodBody(c), 409, /government attendance row/);
+    await pdb.collection("govtattendancerows").deleteOne({ _id: ins.insertedId });
+    await purge(admin, c, goodBody(c)); // tidy
+  }
+  {
+    // documents (through the real door), then removed through the real per-document door - after
+    // which the SAME candidate purges, proving the refusal was about the document and nothing else
+    const c = await mkCandP();
+    await archiveP(c);
+    const doc = await req(admin, "POST", `/api/candidates/${c._id}/documents`, { doc_type: "Photo", file_url: "/erp/api/files/purge-" + sP + ".jpg", original_name: "p.jpg" });
+    ok("candidates.purge fixture: the candidate has a document", [200, 201].includes(doc.status), `status=${doc.status}`);
+    await refusedClean("a candidate that still has a DOCUMENT", admin, c, goodBody(c), 409, /document.*on file/);
+    const pre = await req(admin, "GET", `/api/candidates/${c._id}/purge`);
+    ok("candidates.purge: the pre-check the Drawer shows names the documents blocker",
+      (pre.data?.blockers ?? []).some((b) => b.key === "documents" && /Remove each document first/.test(b.message)), JSON.stringify(pre.data).slice(0, 200));
+    ok("candidates.purge: ...and the refusal did not delete the document either",
+      (await pdb.collection("candidatedocuments").countDocuments({ candidate: new ObjectId(c._id) })) === 1);
+    const docId = doc.data?.item?._id;
+    if (docId) await req(admin, "DELETE", `/api/candidates/${c._id}/documents/${docId}`);
+    const r = await purge(admin, c, goodBody(c));
+    ok("candidates.purge: ...once the document is removed, the same candidate purges",
+      r.status === 200 && !(await exists(c)), `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+  }
+
+  // ---- QA-2774 (Umesh, spec section 10): the EARLIER history is masked at purge, not only the new row ----
+  // Cycle 1's checker read full old/new phones, the father's name, the email and a raw archive reason back
+  // out of GET /api/audit/Candidate/<purged id>, as Admin AND as Operations. Every PII value below is written
+  // through the product's own doors where one exists (create -> registration MailLog; PATCH -> auditDiff rows;
+  // archive DELETE -> the reason row), and read back through BOTH the audit API and the database, because a
+  // mask on the way OUT of one reader would pass an API-only check while the collection kept the value.
+  {
+    const t8 = String(Date.now()).slice(-8);
+    const nameH = "Histname " + sP + " Zq" + t8.slice(-4);
+    const phone0 = "8" + t8 + "1", phone1 = "7" + t8 + "2", alt1 = "6" + t8 + "3";
+    const email0 = "hist.first." + t8 + "@example.test", email1 = "hist.second." + t8 + "@example.test";
+    const father0 = "Fatherfirst" + t8, father1 = "Fathersecond" + t8, mother1 = "Mothername" + t8;
+    const apaar1 = "1" + t8 + "345", aadhaarH = "3456" + t8;
+    const cr = await req(admin, "POST", "/api/candidates", { name: nameH, phone: phone0, email: email0, father_name: father0, location: locP._id, program: progP._id });
+    const c = cr.data?.item;
+    ok("QA-2774 fixture: a candidate with an email is created through the real door", [200, 201].includes(cr.status) && !!c?._id, `status=${cr.status} ${JSON.stringify(cr.data).slice(0, 160)}`);
+    if (c?._id) {
+      const cid = new ObjectId(c._id);
+      // the registration mail is fire-and-forget after the response; wait for its MailLog row
+      let regMail = 0;
+      for (let i = 0; i < 20 && !regMail; i++) { regMail = await pdb.collection("maillogs").countDocuments({ entity: "Candidate", entity_id: cid }); if (!regMail) await new Promise((r) => setTimeout(r, 500)); }
+      ok("QA-2774 fixture: the registration mail left a MailLog row addressed to the first email", regMail >= 1
+        && !!(await pdb.collection("maillogs").findOne({ entity: "Candidate", entity_id: cid, to: email0 })), `rows=${regMail}`);
+      const pa = await req(admin, "PATCH", `/api/candidates/${c._id}`, { phone: phone1, email: email1, father_name: father1, mother_name: mother1, alt_phone: alt1, apaar_id: apaar1 });
+      ok("QA-2774 fixture: phone, email, father's/mother's name, alt phone and APAAR changed through PATCH", pa.status === 200, `status=${pa.status} ${JSON.stringify(pa.data).slice(0, 200)}`);
+      await pdb.collection("candidates").updateOne({ _id: cid }, { $set: { aadhaar_no: aadhaarH } });
+      // Fixtures with no product door of their own in this environment: an OTP mail sent to the address
+      // before the record existed (entity PublicToken, no entity_id) and an SMS naming the person.
+      await pdb.collection("maillogs").insertMany([
+        { channel: "email", to: email1.toUpperCase(), subject: "****** is your registration code", status: "skipped", entity: "PublicToken", createdAt: new Date(), updatedAt: new Date() },
+        { channel: "sms", to: "+91" + phone1, subject: `Hello ${nameH}, call ${phone1}`, status: "skipped", entity: "Candidate", entity_id: cid, createdAt: new Date(), updatedAt: new Date() },
+      ]);
+      ok("QA-2774 fixture: archived with a reason that names the person and their phone",
+        (await archiveP(c, { reason: `dup of ${nameH} ${phone0} (${email0})` })) === 200);
+      const trailBefore = await pdb.collection("auditlogs").find({ entity: "Candidate", entity_id: cid }).sort({ _id: 1 }).toArray();
+      const mailIds = (await pdb.collection("maillogs").find({ $or: [{ entity_id: cid }, { to: email1.toUpperCase() }] }).toArray()).map((m) => m._id);
+      const raw = [nameH, "Histname", "Zq" + t8.slice(-4), phone0, phone1, alt1, email0, email1, father0, father1, mother1, apaar1, aadhaarH];
+      ok("QA-2774 precondition: before the purge the trail really does carry the raw values (so the checks below can fail)",
+        ["Histname", phone0, phone1, email0, email1, father0, father1, mother1, apaar1].every((v) => JSON.stringify(trailBefore).includes(v)),
+        JSON.stringify(trailBefore.map((r) => r.field)));
+
+      const r = await purge(admin, c, { confirm_name: nameH, reason: `removing ${nameH} ${phone1}` });
+      ok("QA-2774: the purge of a record with a PII-rich history succeeds", r.status === 200, `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+      const leaks = (text) => raw.filter((v) => text.toLowerCase().includes(v.toLowerCase()));
+
+      const trailAfter = await pdb.collection("auditlogs").find({ entity: "Candidate", entity_id: cid }).sort({ _id: 1 }).toArray();
+      ok("QA-2774: no audit row for the purged candidate still carries ANY raw PII value (database read-back)",
+        leaks(JSON.stringify(trailAfter)).length === 0, JSON.stringify(leaks(JSON.stringify(trailAfter))));
+      for (const [who, label] of [[admin, "Admin"], [ops, "Operations"]]) {
+        const api = await req(who, "GET", `/api/audit/Candidate/${c._id}`);
+        const text = JSON.stringify(api.data ?? {});
+        ok(`QA-2774: GET /api/audit/Candidate/<purged id> as ${label} serves no raw PII value`,
+          api.status === 200 && (api.data?.items ?? []).length === trailAfter.length && leaks(text).length === 0,
+          JSON.stringify({ status: api.status, items: (api.data?.items ?? []).length, leaks: leaks(text) }));
+      }
+      const kept = trailBefore.every((b) => trailAfter.some((a) => String(a._id) === String(b._id) && a.field === b.field
+        && String(a.actor) === String(b.actor) && String(a.created_at) === String(b.created_at) && a.actor_type === b.actor_type));
+      ok("QA-2774: ...while every earlier row keeps WHO, WHEN and WHICH FIELD (and exactly one purge row was added)",
+        kept && trailAfter.length === trailBefore.length + 1, JSON.stringify({ kept, before: trailBefore.length, after: trailAfter.length }));
+      const phoneRow = trailAfter.find((x) => x.field === "phone");
+      ok("QA-2774: ...a phone change still reads as a phone change, masked to its last 4 digits",
+        phoneRow?.old_value === "******" + phone0.slice(-4) && phoneRow?.new_value === "******" + phone1.slice(-4), JSON.stringify(phoneRow ?? null));
+      const pr = trailAfter.find((x) => x.field === "purged") ?? {};
+      ok("QA-2774: the purge row's snapshot keeps the archive reason's words but not the person (cycle 1 copied it raw)",
+        /dup of/.test(String(pr.old_value?.archive_reason ?? "")) && leaks(JSON.stringify(pr.old_value ?? null)).length === 0,
+        JSON.stringify(pr.old_value?.archive_reason ?? null));
+      ok("QA-2774: ...and the typed purge reason is scrubbed the same way",
+        /^permanently deleted - removing /.test(String(pr.new_value ?? "")) && leaks(String(pr.new_value ?? "")).length === 0, String(pr.new_value ?? ""));
+      const mailAfter = await pdb.collection("maillogs").find({ _id: { $in: mailIds } }).toArray();
+      ok("QA-2774: every MailLog row for the person survives (status kept) with no raw PII - including the OTP row that has no entity_id",
+        mailAfter.length === mailIds.length && mailIds.length >= 3 && mailAfter.every((m) => !!m.status) && leaks(JSON.stringify(mailAfter)).length === 0,
+        JSON.stringify({ rows: mailAfter.length, expected: mailIds.length, leaks: leaks(JSON.stringify(mailAfter)) }));
+    }
+  }
+
+  // ---- QA-2775 (Umesh, spec section 10): a purged lead on a watched sheet tab must not come back ----
+  // The cycle-1 checker's probe2: a lead ingested from a watched Candidate tab, archived and purged, was
+  // re-created as a NEW active Unassigned candidate the next time any cell on that tab changed. The same tab
+  // also gets a brand-new row in that change, so "nothing was created" cannot pass because the ingest never ran.
+  {
+    const XLSX = await import("xlsx");
+    const S2 = "ZP" + Date.now().toString().slice(-6), d8 = Date.now().toString().slice(-8);
+    const leadName = "Sheetlead " + S2, leadPhone = "98" + d8, newName = "Newlead " + S2;
+    const tab = [["Name", "Mobile"], [leadName, leadPhone], ["Other " + S2, "97" + d8]];
+    const wb = () => { const w = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w, XLSX.utils.aoa_to_sheet(tab), "Leads"); return "data:application/octet-stream;base64," + XLSX.write(w, { type: "base64", bookType: "xlsx" }); };
+    const srcR = await req(admin, "POST", "/api/sync-sources", { name: "purge src " + S2, source_url: wb(), mode: "watch", interval_minutes: 5 });
+    const src = srcR.data?.item;
+    ok("QA-2775 fixture: a watched sheet source is created", [200, 201].includes(srcR.status) && !!src?._id, `status=${srcR.status} ${JSON.stringify(srcR.data).slice(0, 160)}`);
+    if (src?._id) {
+      const run = async () => { await req(admin, "PATCH", `/api/sync-sources/${src._id}`, { source_url: wb() }); return req(admin, "POST", `/api/sync-sources/${src._id}/run`); };
+      await req(admin, "POST", `/api/sync-sources/${src._id}/run`);
+      const put = await req(admin, "PUT", `/api/sync-sources/${src._id}/tab-mappings`, { tab: "Leads", entity_type: "Candidate", columns: [{ header: "Name", field: "name" }, { header: "Mobile", field: "phone" }], constants: { location: locP._id, program: progP._id }, key_field: "phone" });
+      ok("QA-2775 fixture: the Leads tab is mapped to Candidates keyed on phone", put.status === 200, `status=${put.status} ${JSON.stringify(put.data).slice(0, 160)}`);
+      await req(admin, "POST", `/api/sync-sources/${src._id}/run`);
+      const byPhone = () => pdb.collection("candidates").find({ phone: { $regex: d8 + "$" } }).toArray();
+      const leads = (await byPhone()).filter((x) => x.phone.endsWith(leadPhone));
+      ok("QA-2775 fixture: the sheet lead was ingested as exactly one candidate", leads.length === 1, JSON.stringify(leads.map((x) => x.name)));
+      const lead = leads[0];
+      if (lead) {
+        // a review item that carries the person's name, so the masking of sheet review rows is exercised too
+        tab[1][0] = leadName + " Renamed";
+        await run();
+        const scBefore = await pdb.collection("sheetchanges").find({ entity: lead._id }).toArray();
+        ok("QA-2775 fixture: renaming the lead on the sheet raised a review item carrying the name", scBefore.some((x) => x.field_name === "name" && String(x.new_value).includes("Renamed")), JSON.stringify(scBefore.map((x) => x.field_name)));
+        const leadC = { _id: String(lead._id), name: lead.name };
+        ok("QA-2775 fixture: the sheet lead is archived", (await archiveP(leadC)) === 200);
+        const pr = await purge(admin, leadC, { confirm_name: lead.name, reason: "junk sheet lead" });
+        ok("QA-2775 fixture: ...and permanently deleted", pr.status === 200, `status=${pr.status} ${JSON.stringify(pr.data).slice(0, 160)}`);
+
+        tab[2][0] = "Other " + S2 + " Y";
+        tab.push([newName, "96" + d8]);
+        await run();
+        const after = await byPhone();
+        ok("QA-2775: a purged lead still on a watched tab is NOT re-created when that tab next changes",
+          !after.some((x) => x.phone.endsWith(leadPhone)), JSON.stringify(after.map((x) => ({ name: x.name, archived: !!x.archived_at, status: x.lifecycle_status }))));
+        ok("QA-2775: ...while a genuinely new row in the same change IS created (the ingest really ran)",
+          after.filter((x) => x.name === newName).length === 1, JSON.stringify(after.map((x) => x.name)));
+        const tms = (await req(admin, "GET", `/api/sync-sources/${src._id}/tab-mappings`)).data?.items ?? [];
+        const lr = tms.find((t) => t.tab === "Leads")?.last_report ?? {};
+        ok("QA-2775: the sheet review names that row as purged - by row number, without re-storing the name or phone",
+          lr.purged === 1 && (lr.skipped ?? []).some((s) => /^row 2: this lead was permanently deleted \(purged\)/.test(s))
+          && !JSON.stringify(lr).includes("Sheetlead") && !JSON.stringify(lr).includes(leadPhone), JSON.stringify(lr).slice(0, 300));
+        const pRow = await pdb.collection("auditlogs").findOne({ entity: "Candidate", entity_id: lead._id, field: "purged" });
+        const keys = pRow?.old_value?.sheet_keys ?? [];
+        ok("QA-2775: the purged marker is the row identity only - key field + a keyed hash, never the phone itself",
+          keys.length >= 1 && keys.every((k) => k.key_field === "phone" && /^[0-9a-f]{64}$/.test(k.marker)) && !JSON.stringify(keys).includes(leadPhone),
+          JSON.stringify(keys));
+        const scAfter = await pdb.collection("sheetchanges").find({ entity: lead._id }).toArray();
+        ok("QA-2775: ...and the lead's sheet review items no longer carry the name",
+          scAfter.length === scBefore.length && !JSON.stringify(scAfter).includes("Sheetlead"), JSON.stringify(scAfter.map((x) => [x.field_name, x.old_value, x.new_value, x.impact_snapshot])).slice(0, 300));
+      }
+      await req(admin, "PATCH", `/api/sync-sources/${src._id}`, { active: false }); // tidy: nothing else ingests this source
+    }
+  }
+
+  // ---- The archive DELETE still only archives - a purge-able record included ----
+  {
+    const c = await mkCandP();
+    const d = await req(admin, "DELETE", `/api/candidates/${c._id}`, { reason: "still archive-only" });
+    const row = await pdb.collection("candidates").findOne({ _id: new ObjectId(c._id) });
+    const purgedRows = await pdb.collection("auditlogs").countDocuments({ entity: "Candidate", entity_id: new ObjectId(c._id), field: "purged" });
+    ok("candidates.purge: the archive DELETE on an empty record STILL only archives - the row survives, no purge row",
+      d.status === 200 && !!row && !!row.archived_at && purgedRows === 0, JSON.stringify({ status: d.status, found: !!row, purgedRows }));
+    const d2 = await req(admin, "DELETE", `/api/candidates/${c._id}`, { reason: "again" });
+    ok("candidates.purge: ...and a second archive DELETE on the already-archived record does not erase it either",
+      !!(await pdb.collection("candidates").findOne({ _id: new ObjectId(c._id) })), `status=${d2.status}`);
+  }
+
+  // restore Operations exactly as found
+  await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBaseP }, 200);
+  const opsBackP = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
+  ok("candidates.purge: Operations' rights are restored exactly as found - this block leaves no residue",
+    JSON.stringify([...opsBackP].sort()) === JSON.stringify([...opsBaseP].sort()), JSON.stringify({ was: opsBaseP.length, now: opsBackP.length }));
+  await pmc.close();
+}
+
 // ---- QA-1211: the CREATE door validated two fields and then threw them away ----
 // `POST /api/users` read `body.extra_permissions` to decide whether the request needed an Admin
 // (the escalation guard), and then `User.create` did not list it. Same for `revoked_permissions`.

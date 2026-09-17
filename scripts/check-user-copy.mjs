@@ -5298,6 +5298,53 @@ for (const file of walk(root)) {
   }
 }
 
+// Sub-unit D (qa-candidates-purge, Umesh 2026-09-17): the PERMANENT delete. The control and its door
+// must be gated on the SAME key - six times in eight releases a control was gated on one thing while
+// its door checked another (see the -218 note in e2e-roles.mjs) - and the Drawer must say, in words a
+// centre operator reads, that this cannot be undone and must ask for the typed name and a reason.
+// candidates.delete ARCHIVES; a purge button gated on it would offer erasure to everyone who may archive.
+{
+  const rel = "app/(app)/candidates/page.tsx";
+  const pageSrc = stripComments(fs.readFileSync(path.join(root, rel), "utf8"));
+  const routeRel = "app/api/candidates/[id]/purge/route.ts";
+  const routePath = path.join(root, routeRel);
+  const routeSrc = fs.existsSync(routePath) ? stripComments(fs.readFileSync(routePath, "utf8")) : "";
+  const pageRead = pageSrc.length > 10000 && pageSrc.includes("function CandidatesInner");
+  const gateOnPurgeKey = /const canPurgeCandidate = rightsLoaded && canRight\("candidates\.purge", "edit"\)/.test(pageSrc);
+  const buttonGated = /\.\.\.\(canPurgeCandidate \? \[\{\s*key: "_purge"/.test(pageSrc) && /\{r\.archived_at \? <Btn small kind="danger" onClick=\{\(\) => openPurge\(r\)\}>/.test(pageSrc);
+  const drawerSaysPermanent = pageSrc.includes("It cannot be undone and there is no restore.");
+  const asksTypedName = pageSrc.includes("Type the candidate's name (") && /confirm_name: purgeForm\.name/.test(pageSrc);
+  const asksReason = /reason: purgeForm\.reason\.trim\(\)/.test(pageSrc);
+  // QA-2776 (purge cycle-1 checker): the blocker list was pinned only on `purgeBlockers.map(`, so rendering
+  // the machine key in place of the sentence (mutant u5) stayed green. The rendered text is pinned now.
+  const showsBlockers = pageSrc.includes("This candidate cannot be permanently deleted yet:")
+    && pageSrc.includes("{purgeBlockers.map((b) => <li key={b.key}>{b.message}</li>)}");
+  // QA-2776: the disabled condition had no pin at all - dropping the name gate (u1), the reason gate (u2) or
+  // the blocker gate (u3) each stayed green. It is pinned WHOLE, not clause by clause, so an operator flip
+  // (`||` to `&&`) or a reordered clause that changes meaning is caught too; a harmless rewrite fails loudly
+  // here and is then re-pinned on purpose. The server refuses independently (e2e-roles), but a button that
+  // lights up for a wrong name is the screen promising something the door will then refuse.
+  const disabledGate = pageSrc.includes(
+    'disabled={!purgeT || !purgeBlockers || purgeBlockers.length > 0 || purgeForm.name.trim() !== String(purgeT?.name ?? "").trim() || !purgeForm.reason.trim()}');
+  // QA-2774: the Drawer's promise must match what the purge now does - earlier history and messages masked,
+  // and a sheet-sourced lead not re-imported (QA-2775).
+  const drawerTellsHistory = pageSrc.includes("earlier history and message log are masked too")
+    && pageSrc.includes("that sheet row will not be imported again.");
+  const doorOnPurgeKey = /requirePerm\(user, "candidates\.purge"\)/.test(routeSrc);
+  if (pageRead && gateOnPurgeKey && buttonGated && drawerSaysPermanent && asksTypedName && asksReason && showsBlockers && disabledGate && drawerTellsHistory && doorOnPurgeKey) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the permanent-delete control no longer matches its door or its warning"
+      + " (page read=" + pageRead + ", control gated on candidates.purge=" + gateOnPurgeKey
+      + ", offered only on archived rows=" + buttonGated + ", Drawer says it cannot be undone=" + drawerSaysPermanent
+      + ", asks for the typed name=" + asksTypedName + ", sends a trimmed reason=" + asksReason
+      + ", names the blocking preconditions=" + showsBlockers + ", confirm button disabled until name+reason+no blockers=" + disabledGate
+      + ", Drawer says earlier history is masked and the sheet row is not re-imported=" + drawerTellsHistory + ", " + routeRel + " requires candidates.purge=" + doorOnPurgeKey + ")"
+      + " - qa-candidates-purge. candidates.delete only archives; erasing a record is a separate right, and the operator"
+      + " must be told in plain words that there is no way back.");
+  }
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);
