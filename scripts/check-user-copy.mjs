@@ -5345,6 +5345,52 @@ for (const file of walk(root)) {
   }
 }
 
+// qa-delete-a-batch-drawer (contract manish-delete-surfaces.md 2a, Umesh 2026-09-17): the two
+// whole-batch delete verbs used to confirm through window.prompt/window.confirm - a fat-fingered
+// Enter with any non-empty text proceeded either way. Both Drawers must ask the operator to TYPE
+// the batch code, name why, and stay disabled until both are present - same discipline as the
+// candidates.purge Drawer above, and the same reason QA-2776 pins the disabled condition WHOLE
+// rather than clause by clause: a `||`-to-`&&` flip or a dropped clause must fail loudly here, not
+// only light up a button the server will then refuse.
+{
+  const rel = "app/(app)/batches/[id]/page.tsx";
+  const pageSrc = stripComments(fs.readFileSync(path.join(root, rel), "utf8"));
+  const pageRead = pageSrc.length > 5000 && pageSrc.includes("function BatchDetail");
+  // Scoped to the TWO call sites this unit replaces, not to the file as a whole - this page has
+  // several OTHER window.prompt/confirm doors (Reopen, document delete, daily-log delete, cost
+  // removal) that are out of scope and must keep working exactly as they do today.
+  const noPromptLeft = !pageSrc.includes("window.prompt(`Force-delete ${b.code}?")
+    && !pageSrc.includes("confirm(`Delete ${b.code}?");
+  const forceOpensDrawer = /onClick=\{\(\) => \{ setForceDeleteForm\(\{ code: "", reason: "" \}\); setForceDeleteError\(""\); setForceDeleteOpen\(true\); \}\}/.test(pageSrc);
+  const emptyOpensDrawer = /onClick=\{\(\) => \{ setEmptyDeleteForm\(\{ code: "", reason: "" \}\); setEmptyDeleteError\(""\); setEmptyDeleteOpen\(true\); \}\}/.test(pageSrc);
+  const forceSaysNoRecovery = pageSrc.includes("There is no recovery inside the product. Use Cancel");
+  const emptySaysNoRecovery = pageSrc.includes("This is only allowed while the batch carries no members, results, costs, logs or attendance.")
+    && pageSrc.includes("There is no recovery inside the product.");
+  // Pinned WHOLE (QA-2776's lesson): dropping the code-match clause or the reason clause on EITHER
+  // Drawer must fail loudly rather than leave a button enabled for a wrong code or an empty reason.
+  const forceDisabledGate = pageSrc.includes(
+    'disabled={forceDeleteForm.code.trim() !== String(b.code ?? "").trim() || !forceDeleteForm.reason.trim()}');
+  const emptyDisabledGate = pageSrc.includes(
+    'disabled={emptyDeleteForm.code.trim() !== String(b.code ?? "").trim() || !emptyDeleteForm.reason.trim()}');
+  // The gates this unit must NOT touch (contract 2a: "no change to the gate, UI upgrade only").
+  const forceGateUnchanged = /const canForceDeleteBatch = rightsLoadedB && canRightB\("batches\.delete_with_data", "edit"\)/.test(pageSrc);
+  const emptyGateUnchanged = /const canDeleteBatch = rightsLoadedB && canRightB\("batches\.delete", "edit"\)/.test(pageSrc);
+  if (pageRead && noPromptLeft && forceOpensDrawer && emptyOpensDrawer && forceSaysNoRecovery && emptySaysNoRecovery
+    && forceDisabledGate && emptyDisabledGate && forceGateUnchanged && emptyGateUnchanged) passed++;
+  else {
+    failed++;
+    pushStructural(rel + ": the whole-batch delete Drawer no longer matches its confirmation contract"
+      + " (page read=" + pageRead + ", no window.prompt/confirm left=" + noPromptLeft
+      + ", force button opens Drawer=" + forceOpensDrawer + ", empty button opens Drawer=" + emptyOpensDrawer
+      + ", force Drawer says no recovery=" + forceSaysNoRecovery + ", empty Drawer says no recovery=" + emptySaysNoRecovery
+      + ", force Confirm disabled until code+reason=" + forceDisabledGate + ", empty Confirm disabled until code+reason=" + emptyDisabledGate
+      + ", force gate still batches.delete_with_data=" + forceGateUnchanged + ", empty gate still batches.delete=" + emptyGateUnchanged + ")"
+      + " - qa-delete-a-batch-drawer. This unit is a UI upgrade only: the server gates are unchanged,"
+      + " but the typed-confirmation Drawer replacing window.prompt/window.confirm must ask for the"
+      + " batch CODE and a reason, and Confirm must stay disabled until both are present.");
+  }
+}
+
   // -175: every finding, printed once, AFTER every check has had its say. See the note where this
   // loop used to live.
   for (const h of hits) console.log("  ✗ " + h);

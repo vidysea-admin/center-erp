@@ -63,7 +63,10 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   // moving the check past the carried-work count and branching on which right applies.
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const batch = await Batch.findById(id).select("code status location program +deletion_state +deletion_actor +deletion_reason +deletion_recorded_work +deletion_requires_finance +deletion_audit_event_id").lean<any>();
+  // qa-delete-a-batch-drawer: planned_start/planned_end added to the select so the pre-delete
+  // SNAPSHOT below (both branches) can name the batch's own dates - the inbox records there is no
+  // recovery once this door runs, so the audit row is the only place those dates survive.
+  const batch = await Batch.findById(id).select("code status location program planned_start planned_end +deletion_state +deletion_actor +deletion_reason +deletion_recorded_work +deletion_requires_finance +deletion_audit_event_id").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
 
   const [members, results, costs, logs, closures, govtRows, invoices] = await Promise.all([
@@ -175,7 +178,22 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     // makes a retry after an acknowledgement crash exactly-once, and the batch stays protected if
     // this write fails rather than becoming an unaudited disappearance.
     const auditId = new Types.ObjectId(String(deletion.deletion_audit_event_id));
-    const auditValue = `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${deletion.deletion_recorded_work ?? breakdown}) — reason: ${deletion.deletion_reason}`;
+    const auditSummary = `${batch.code} (${batch.status}) FORCE-deleted with recorded work (${deletion.deletion_recorded_work ?? breakdown}) — reason: ${deletion.deletion_reason}`;
+    // qa-delete-a-batch-drawer (contract 2a): this used to be a bare string - a reader had to
+    // parse prose to know what was destroyed. `new_value` is Schema.Types.Mixed (models/index.ts
+    // AuditLogSchema), so it now also carries the structured counts already computed above
+    // (`carried`) plus the batch's own identifying fields, since nothing else on disk remembers
+    // them once the deleteOne below runs (no recovery inside the product,
+    // qa/feedback-inbox.md:4404-4408). `summary` keeps the old human-readable string so every
+    // existing reader (components/activity.tsx JSON.stringify's the whole value either way) stays
+    // intact.
+    const auditValue = {
+      summary: auditSummary,
+      snapshot: {
+        code: batch.code, status: batch.status, location: batch.location, program: batch.program,
+        planned_start: batch.planned_start, planned_end: batch.planned_end, carried,
+      },
+    };
     await AuditLog.collection.updateOne(
       { _id: auditId },
       {
@@ -197,8 +215,22 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   }
 
   await requirePerm(user, "batches.delete");
+  // qa-delete-a-batch-drawer (contract 2a): the empty-shell Drawer now collects a reason too
+  // (QA-2484's "a destructive verb records why" standard, even though an empty shell carries no
+  // cascade rows to lose - the DECISION being audited is still worth one). Kept OPTIONAL here,
+  // not a 400 refusal: QA-904's own e2e pin (scripts/e2e-roles.mjs, "an EMPTY batch shell can be
+  // deleted by a non-Admin holding batches.delete") calls this door with no body at all, and this
+  // unit's brief is "no change to the gate" - so an existing caller with no reason still succeeds,
+  // exactly as before; the Drawer is what makes a reason required for anyone using the product UI.
+  let emptyReason = "";
+  try { const body = await readJson(req); emptyReason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
+  const emptySnapshot = { code: batch.code, status: batch.status, location: batch.location, program: batch.program, planned_start: batch.planned_start, planned_end: batch.planned_end };
   await Batch.deleteOne({ _id: id });
-  await audit({ entity: "Batch", entityId: id, field: "delete", newValue: `${batch.code} (${batch.status}) deleted — empty shell, no members/results/costs/logs/closure/attendance/invoice`, actor: user.id });
+  const emptySummary = `${batch.code} (${batch.status}) deleted — empty shell, no members/results/costs/logs/closure/attendance/invoice`
+    + (emptyReason ? ` — reason: ${emptyReason}` : "");
+  // Same structured-snapshot shape as the force-delete branch above, for the same reason: this is
+  // the batch's own record disappearing with no other trace of its dates/location/program left.
+  await audit({ entity: "Batch", entityId: id, field: "delete", newValue: { summary: emptySummary, snapshot: emptySnapshot }, actor: user.id });
   return NextResponse.json({ deleted: batch.code });
 });
 

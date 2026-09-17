@@ -2029,6 +2029,31 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
     const delB2 = await req(ops, "DELETE", `/api/batches/${b2._id}`);
     ok("QA-904: an EMPTY batch shell can be deleted by a non-Admin holding batches.delete",
       delB2.status === 200, `status=${delB2.status} ${JSON.stringify(delB2.data).slice(0, 140)}`);
+
+    // qa-delete-a-batch-drawer (contract 2a): the door must still accept a caller with NO reason
+    // at all - this is the exact request the pin above has sent for weeks, and the brief for this
+    // unit is "no change to the gate, UI upgrade only". A snapshot must still be recorded even
+    // when no reason was given, since the batch's own record (code/dates/location/program) is
+    // what is gone the moment this succeeds.
+    const b2Audit = (await req(admin, "GET", `/api/audit/Batch/${b2._id}`)).data.items ?? [];
+    const b2Row = b2Audit.find((x) => x.field === "delete");
+    ok("qa-delete-a-batch-drawer: an empty-shell delete with no reason still records a structured snapshot",
+      !!b2Row && typeof b2Row.new_value === "object" && b2Row.new_value?.snapshot?.code === b2.code
+      && !/reason:/.test(String(b2Row.new_value?.summary ?? "")),
+      JSON.stringify(b2Row?.new_value ?? null));
+
+    // The Drawer this unit ships ALWAYS sends a reason (Confirm is disabled until one is typed) -
+    // this is what a real product user's request actually looks like.
+    const b3 = (await req(admin, "POST", "/api/batches", { location: loc9._id, program: prog9._id, planned_start: "2027-07-02", target_size: 5 })).data.item;
+    const delB3 = await req(ops, "DELETE", `/api/batches/${b3._id}`, { reason: "qa-delete-a-batch-drawer: created for a smoke test" }, 200);
+    ok("qa-delete-a-batch-drawer: an empty-shell delete WITH a reason still succeeds (200) - the reason is recorded, never enforced server-side, so this cannot regress the QA-904 no-reason pin above",
+      delB3.status === 200, `status=${delB3.status}`);
+    const b3Audit = (await req(admin, "GET", `/api/audit/Batch/${b3._id}`)).data.items ?? [];
+    const b3Row = b3Audit.find((x) => x.field === "delete");
+    ok("qa-delete-a-batch-drawer: ...and the reason lands in the audit summary, with the snapshot naming the batch's own dates/location/program",
+      !!b3Row && /reason: qa-delete-a-batch-drawer: created for a smoke test/.test(String(b3Row.new_value?.summary ?? ""))
+      && String(b3Row.new_value?.snapshot?.location) === String(loc9._id) && String(b3Row.new_value?.snapshot?.program) === String(prog9._id),
+      JSON.stringify(b3Row?.new_value ?? null));
   }
 
   // ---- REVOKING closes it again. A right that cannot be taken back is not a toggle. ----
@@ -3601,6 +3626,19 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           : { status: 0 };
         ok("QA-1864 control: WITH finance.approve the same force-delete succeeds — the gate narrows, it does not block",
           del2.status === 200, `got ${del2.status} · ${JSON.stringify(del2.data ?? {}).slice(0, 160)}`);
+
+        // qa-delete-a-batch-drawer (contract 2a): the force-delete audit value used to be a bare
+        // string - a reader had to parse prose to know what was destroyed. bat64 carried exactly
+        // one CostEntry when del2 removed it, so the structured `carried` counts on the audit row
+        // must say so directly, not just inside the sentence.
+        if (del2.status === 200) {
+          const fdAudit = (await req(admin, "GET", `/api/audit/Batch/${bat64._id}`)).data.items ?? [];
+          const fdRow = fdAudit.find((x) => x.field === "delete" && /FORCE-deleted/.test(String(x.new_value?.summary ?? "")));
+          ok("qa-delete-a-batch-drawer: the force-delete audit row carries the structured carried-work counts, not only the prose sentence",
+            !!fdRow && fdRow.new_value?.snapshot?.carried?.costs === 1 && fdRow.new_value?.snapshot?.code === bat64.code
+            && /reason: QA-1864 probe: granted/.test(String(fdRow.new_value?.summary ?? "")),
+            JSON.stringify(fdRow?.new_value ?? null));
+        }
         await req(admin, "PATCH", `/api/users/${mkLeak.data.item?._id}`, { extra_permissions: [] });
       }
     }
