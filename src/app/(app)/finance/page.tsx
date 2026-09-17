@@ -95,6 +95,31 @@ function FinanceInner() {
     router.push(`/finance${next.toString() ? `?${next}` : ""}`, { scroll: false });
   };
 
+  // QA-2741: this screen's Cost head filter offered TOP-LEVEL HEADS ONLY, so the one branch the
+  // server wrote for subheads was unreachable from every screen in the product. `costRollup` states
+  // the rule in its own words (rules.ts:6105) - "Choosing a HEAD means the head and everything under
+  // it; choosing a subhead means that one only" - and implements both halves at :6106-6110. The
+  // second half was dead by construction: nothing could produce a subhead id for this filter.
+  // REQ-424 makes Head -> Subhead the taxonomy and REQ-428 makes the activity-wise cut P0, and the
+  // by-head x by-subhead grid further down THIS VERY SCREEN already shows the split it could not
+  // narrow to. The server needs no change and gets none.
+  //
+  // Two things ride along, and both are older lessons arriving late at this one control:
+  //  - `offerable()` (QA-2555/QA-2518). This select greps 0 for `active`, so a head an admin
+  //    retired is still offered - the defect fixed in the Job role select thirty lines below, whose
+  //    comment names THIS select as the contrast and was wrong to (QA-2571). A currently-selected
+  //    row stays listed even when inactive, or the select blanks while the URL still carries its id.
+  //  - an ORPHAN group, because `offerable()` can drop an inactive HEAD while its subheads are still
+  //    live. With nowhere to put them those options would vanish in silence, which is QA-426's
+  //    shape: a value is offered or refused out loud, never dropped quietly.
+  const catParent = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
+  const catLabel = (c: any) => `${c?.name}${c?.active === false ? " (inactive)" : ""}`;
+  const offeredCats: any[] = offerable(lists.categories, f.category);
+  const costHeads = offeredCats.filter((c: any) => !catParent(c));
+  const subsOfHead = (id: string) => offeredCats.filter((c: any) => catParent(c) === String(id));
+  const orphanSubs = offeredCats.filter(
+    (c: any) => catParent(c) !== "" && !costHeads.some((h: any) => String(h._id) === catParent(c)));
+
   // The measure vocabulary comes from the server (COST_LABELS) rather than being typed here a
   // second time — the tiles, the table headers and the xlsx all have to say the same words, and a
   // client component cannot import rules.ts.
@@ -265,7 +290,26 @@ function FinanceInner() {
           <select value={f.category} onChange={(e) => set("category", e.target.value)}
             className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
             <option value="">All heads</option>
-            {lists.categories.filter((c: any) => !c.parent).map((c: any) => <option key={c._id} value={c._id}>{c.name}</option>)}
+            {/* Grouped exactly the way batches/page.tsx:619 groups its trainer select - one
+                <optgroup> per head, with "All of <head>" carrying the HEAD's own id so the
+                head-and-everything-under-it reading stays one click away. A head with no subheads
+                stays a plain <option>, because an optgroup of one is noise. */}
+            {costHeads.map((h: any) => {
+              const mine = subsOfHead(String(h._id));
+              return mine.length === 0 ? (
+                <option key={String(h._id)} value={String(h._id)}>{catLabel(h)}</option>
+              ) : (
+                <optgroup key={String(h._id)} label={catLabel(h)}>
+                  <option value={String(h._id)}>All of {catLabel(h)}</option>
+                  {mine.map((s: any) => <option key={String(s._id)} value={String(s._id)}>{catLabel(s)}</option>)}
+                </optgroup>
+              );
+            })}
+            {orphanSubs.length > 0 && (
+              <optgroup label="Subheads whose head has been retired">
+                {orphanSubs.map((s: any) => <option key={String(s._id)} value={String(s._id)}>{catLabel(s)}</option>)}
+              </optgroup>
+            )}
           </select>
         </label>
         {qs && <Btn kind="ghost" onClick={() => router.push("/finance", { scroll: false })}>Clear</Btn>}

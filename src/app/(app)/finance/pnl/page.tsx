@@ -192,9 +192,8 @@ function PnlInner() {
           <select className="mt-0.5 w-full min-w-0 max-w-full rounded border border-gray-300 px-2 py-1 text-sm" value={f.program} onChange={(e) => set("program", e.target.value)}>
             <option value="">All job roles</option>
             {/* QA-2555: a job role an admin has switched OFF is not offered here. Until now this
-                list ignored `active` entirely - while the Cost head select a few lines down has
-                always filtered - so the product's own reversible way to retire a row did not
-                retire it in the place people look. That is why Umesh's screenshot of this screen
+                list ignored `active` entirely - so the product's own reversible way to retire a row
+                did not retire it in the place people look. That is why Umesh's screenshot of this screen
                 showed "Drone Service Technician" twice: one live role and one already-disabled
                 scheme variant, reported to us as a duplicate. It was a duplicate ON THIS SCREEN and
                 nowhere else.
@@ -202,10 +201,19 @@ function PnlInner() {
                 it would blank the select while the URL still carries its id, so the screen would
                 stop showing what the figures are actually filtered by - QA-2518's lesson, which
                 cost a whole release to learn on the cost-head picker.
-                Both halves are `offerable()` (src/lib/client.ts), which exists for exactly this and was
-                already being used on the LOCATION select a few lines above. I hand-rolled the same
-                logic before finding it - a guard nobody invokes and a guard that does not exist
-                have the same effect, and so does one nobody knows is there. */}
+                Both halves are `offerable()` (src/lib/client.ts), which exists for exactly this. I
+                hand-rolled the same logic before finding it - a guard nobody invokes and a guard
+                that does not exist have the same effect, and so does one nobody knows is there.
+                (QA-2742: this block is the TWIN of the one in ../page.tsx, and two of that file's
+                corrections never reached this copy. It said the Cost head select "a few lines down
+                has always filtered", offered as the contrast - false there, and false twice over
+                here, because THIS page has no cost-head control at all: a grep for one returns this
+                comment and nothing else. It also said offerable() "was already being used on the
+                LOCATION select a few lines above" - the claim QA-2571 retracted next door; the
+                Centre select above does not call it. Retracted here now. The lesson is the
+                retraction's, not the claim's: correcting an over-claim everywhere you can SEE it
+                does not correct the copy you forgot you had written, so grep the repo for a
+                sentence before calling its retraction done - QA-2088.) */}
             {offerable(lists.programs, f.program)
               .map((p: any) => <option key={p._id} value={p._id}>{p.name}{p.active === false ? " (inactive)" : ""}</option>)}
           </select>

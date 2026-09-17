@@ -2532,6 +2532,332 @@ for (const r of results) {
       }
     }
 
+    // ---- QA-2747, cycle 2. THE RENDERED COST-HEAD FILTER.
+    //
+    // Cycle 1 asserted this feature's UI half against the SHIPPED SOURCE, and the checker beat that
+    // guard by writing the heads-only control in this repo's OWN other idiom
+    // (`!(c.parent?._id ?? c.parent)`, already shipped at costs/page.tsx:290): the suite stayed at
+    // 243 passed / 0 failed while a browser on that same build offered 2 of 16 live subheads and
+    // zero "All of <head>" options. A second hole: the guard's comment-stripper only dropped lines
+    // that STARTED like a comment, so the JSX comment beside the control satisfied its own
+    // `/optgroup/` test.
+    //
+    // Both holes are the same mistake - asserting the SOURCE, where any predicate has infinitely
+    // many spellings. The DOM has one. So the guarantee moves here, to the thing a person actually
+    // uses, and the source guard below is kept only as a cheap early signal.
+    {
+      const cs2 = stamp();
+      const mkCat = async (name, parent) => (await req(admin, "POST", "/api/master-lists/cost-categories",
+        parent ? { name, parent } : { name })).data?.item?._id;
+      const rhead = await mkCat(`ZZ Rendered Head ${cs2}`, null);
+      const rsub1 = rhead ? await mkCat(`ZZ Rendered Salary ${cs2}`, rhead) : null;
+      const rsub2 = rhead ? await mkCat(`ZZ Rendered Food ${cs2}`, rhead) : null;
+      ok("QA-2747 [precondition]: a head with two subheads exists to be offered",
+        !!(rhead && rsub1 && rsub2), JSON.stringify({ rhead: !!rhead, rsub1: !!rsub1, rsub2: !!rsub2 }));
+      // QA-2768 (cycle-4 checker): with the `orphanSubs.length > 0 &&` guard removed, a database with ZERO
+      // orphans (a live subhead under a retired head) renders an EMPTY "Subheads whose head has been
+      // retired" optgroup - and every arm stayed green, because every arm read the select only AFTER
+      // this block had created its own orphan (ohead/osub below), and earlier runs' orphans persist.
+      // So the select is read HERE, before any orphan of this run exists, and only once the API says
+      // the list holds zero orphans. Earlier runs of THIS block leave their "ZZ " orphans behind; those
+      // (and only those) are retired first - a non-"ZZ " orphan is somebody else's record and is left
+      // alone, which makes the precondition below fail out loud rather than pass on a state it did not reach.
+      {
+        const zpid = (c) => String(c?.parent?._id ?? c?.parent ?? "");
+        const orphansOf = (items) => {
+          const byId = new Map(items.map((c) => [String(c._id), c]));
+          return items.filter((c) => c.active !== false && zpid(c) && byId.get(zpid(c))?.active === false);
+        };
+        const before = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+        const stale = orphansOf(before).filter((c) => /^ZZ /.test(String(c.name || "")));
+        const staleRetire = [];
+        for (const o of stale) staleRetire.push((await req(admin, "PATCH", `/api/master-lists/cost-categories/${o._id}`, { active: false })).status);
+        const after = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+        const left = orphansOf(after);
+        // "zero orphans" must be a state REACHED, not an empty list: the read-back has to contain this
+        // run's own head and both subheads (so an API failure returning [] cannot pass), every retire
+        // returned 200, and not one orphan remains.
+        const reached = after.length > 0 && [rhead, rsub1, rsub2].every((id) => id && after.some((c) => String(c._id) === String(id)))
+          && staleRetire.every((s) => s === 200) && left.length === 0;
+        ok("QA-2768 [precondition]: the master list (read back, holding this run's head and both subheads) has ZERO live subheads under a retired head",
+          reached, JSON.stringify({ items: after.length, staleRetired: stale.length, staleRetire, left: left.length, leftNames: left.slice(0, 5).map((c) => c.name) }));
+        if (reached) {
+          await fpage.goto(`${BASE}/finance`, { waitUntil: "domcontentloaded" });
+          await fpage.waitForFunction((want) => {
+            const lab = [...document.querySelectorAll("label")].find((l) => /Cost head/i.test(l.textContent || ""));
+            const sel = lab?.querySelector("select");
+            return !!sel && [...sel.options].some((o) => String(o.value) === want);
+          }, String(rsub1), { timeout: 15000 }).catch(() => null);
+          await fpage.waitForTimeout(500);
+          const pre = await fpage.evaluate(() => {
+            const lab = [...document.querySelectorAll("label")].find((l) => /Cost head/i.test(l.textContent || ""));
+            const sel = lab?.querySelector("select");
+            if (!sel) return { found: false, groups: [] };
+            return { found: true, groups: [...sel.querySelectorAll("optgroup")].map((g) => ({
+              label: g.label, values: [...g.querySelectorAll("option")].map((o) => String(o.value)) })) };
+          });
+          const groups = pre.groups ?? [];
+          const empty = groups.filter((g) => g.values.length === 0);
+          // Non-vacuous: the select must have rendered this run's head group (so "no empty group" is
+          // measured over a loaded control, not over a select that has not received its list yet).
+          const loaded = groups.some((g) => g.values.includes(String(rhead)) && g.values.includes(String(rsub1)));
+          ok("QA-2768: with ZERO orphans, the rendered Cost head filter shows NO empty optgroup (no \"Subheads whose head has been retired\" header with nothing under it)",
+            pre.found === true && loaded && empty.length === 0,
+            JSON.stringify({ found: pre.found, loaded, groupCount: groups.length, emptyGroups: empty.map((g) => g.label) }));
+        }
+      }
+      // QA-2754 (cycle-2 checker): the orphan group could be DELETED with every arm green, because no
+      // fixture had a retired head and arm 2 counted only subheads whose head was active. So: a head that
+      // is retired while its subhead stays live - the exact record the orphan group exists to offer.
+      const ohead = await mkCat(`ZZ Retired Head ${cs2}`, null);
+      const osub = ohead ? await mkCat(`ZZ Orphan Sub ${cs2}`, ohead) : null;
+      // QA-2767 (d): created while ohead is still LIVE - the API refuses a subhead under an inactive head
+      // (409, master-lists/[list]/route.ts:138) - and retired below, after its head.
+      const oretsub = ohead ? await mkCat(`ZZ Orphan Retired Sub ${cs2}`, ohead) : null;
+      const retire = ohead ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${ohead}`, { active: false }) : null;
+      // QA-2756, cycle 4 (qa/debug/qa-cost-head-filter-no-subheads-cycle3.md §2.2). Three cycles each
+      // found ONE more claimed behaviour no arm could fail on. This cycle lists every branch of the
+      // finance/page.tsx hunk and gives each a fixture and an arm. Two more records:
+      //  - rplain: a head with NO subheads (B5 - the branch that renders a plain <option>);
+      //  - rretsub: a RETIRED subhead under the ACTIVE head rhead (B7 - offerable() on subheads).
+      const RPLAIN_NAME = `ZZ Plain Head ${cs2}`;
+      const rplain = await mkCat(RPLAIN_NAME, null);
+      const rretsub = rhead ? await mkCat(`ZZ Retired Sub ${cs2}`, rhead) : null;
+      const retireSub = rretsub ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${rretsub}`, { active: false }) : null;
+      // QA-2767 (cycle-4 checker): catLabel()'s " (inactive)" on a SELECTED retired row was measured at 1
+      // of its 5 call sites. Two more records give the other shapes a selected retired row can take:
+      //  - rretplain: a RETIRED head with NO subheads (the plain <option> branch);
+      //  - oretsub: a RETIRED subhead under the RETIRED head ohead (lands in the orphan group when linked).
+      // (A retired head WITH a subhead is ohead itself; a retired subhead under a live head is rretsub.)
+      const rretplain = await mkCat(`ZZ Retired Plain ${cs2}`, null);
+      const retirePlain = rretplain ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${rretplain}`, { active: false }) : null;
+      const retireOSub = oretsub ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${oretsub}`, { active: false }) : null;
+      const readback = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+      const oheadRow = readback.find((c) => String(c._id) === String(ohead));
+      const osubRow = readback.find((c) => String(c._id) === String(osub));
+      ok("QA-2754 [precondition]: a RETIRED head (read back active:false) keeps a LIVE subhead",
+        !!(retire?.status === 200 && oheadRow?.active === false && osubRow && osubRow.active !== false),
+        JSON.stringify({ retire: retire?.status, headActive: oheadRow?.active, subActive: osubRow?.active }));
+      const rpid = (c) => String(c?.parent?._id ?? c?.parent ?? "");
+      const rplainRow = readback.find((c) => String(c._id) === String(rplain));
+      const rretsubRow = readback.find((c) => String(c._id) === String(rretsub));
+      ok("QA-2756 [precondition]: a LIVE head with NO subheads, and a RETIRED subhead under a live head, both read back",
+        !!(rplainRow && rplainRow.active !== false && !rpid(rplainRow)
+          && !readback.some((c) => rpid(c) === String(rplain))
+          && retireSub?.status === 200 && rretsubRow?.active === false && rpid(rretsubRow) === String(rhead)),
+        JSON.stringify({ rplain: !!rplainRow, plainActive: rplainRow?.active, plainChildren: readback.filter((c) => rpid(c) === String(rplain)).length,
+          retireSub: retireSub?.status, retSubActive: rretsubRow?.active, retSubUnderRhead: rpid(rretsubRow) === String(rhead) }));
+      const rretplainRow = readback.find((c) => String(c._id) === String(rretplain));
+      const oretsubRow = readback.find((c) => String(c._id) === String(oretsub));
+      ok("QA-2767 [precondition]: a RETIRED head with NO subheads, and a RETIRED subhead under the RETIRED head, both read back",
+        !!(retirePlain?.status === 200 && rretplainRow?.active === false && !rpid(rretplainRow)
+          && !readback.some((c) => rpid(c) === String(rretplain))
+          && retireOSub?.status === 200 && oretsubRow?.active === false && rpid(oretsubRow) === String(ohead) && oheadRow?.active === false),
+        JSON.stringify({ retirePlain: retirePlain?.status, plainActive: rretplainRow?.active, plainChildren: readback.filter((c) => rpid(c) === String(rretplain)).length,
+          retireOSub: retireOSub?.status, oSubActive: oretsubRow?.active, oSubUnderOhead: rpid(oretsubRow) === String(ohead), headActive: oheadRow?.active }));
+
+      if (rhead && rsub1 && rsub2) {
+        // The select renders before the master list arrives, so a fixed sleep can read an empty control.
+        // Wait for THIS run's plain head (rplain) or a timeout; the arms below still judge what was read.
+        const readCostHeadSelect = () => fpage.evaluate(() => {
+          const lab = [...document.querySelectorAll("label")].find((l) => /Cost head/i.test(l.textContent || ""));
+          if (!lab) return { found: false };
+          const sel = lab.querySelector("select");
+          if (!sel) return { found: false };
+          const selOpt = sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+          return {
+            found: true,
+            value: String(sel.value),
+            selectedText: selOpt ? (selOpt.textContent || "").trim() : null,
+            offeredValues: [...sel.options].map((o) => String(o.value)).filter(Boolean),
+            // every option, with the element it sits in - so "plain, outside every optgroup" and
+            // "offered exactly once" are measurable rather than inferred
+            options: [...sel.options].map((o) => ({ value: String(o.value), text: (o.textContent || "").trim(),
+              inGroup: o.parentElement?.tagName === "OPTGROUP", group: o.parentElement?.tagName === "OPTGROUP" ? o.parentElement.label : null })),
+            groups: [...sel.querySelectorAll("optgroup")].map((g) => ({
+              label: g.label,
+              options: [...g.querySelectorAll("option")].map((o) => ({ value: String(o.value), text: (o.textContent || "").trim() })),
+            })),
+          };
+        });
+        const waitForCostHeadOptions = (id) => fpage.waitForFunction((want) => {
+          const lab = [...document.querySelectorAll("label")].find((l) => /Cost head/i.test(l.textContent || ""));
+          const sel = lab?.querySelector("select");
+          return !!sel && [...sel.options].some((o) => String(o.value) === want);
+        }, String(id), { timeout: 15000 }).catch(() => null);
+        await fpage.goto(`${BASE}/finance`, { waitUntil: "domcontentloaded" });
+        await waitForCostHeadOptions(rsub1);
+        await fpage.waitForTimeout(500);
+        const shape = await readCostHeadSelect();
+
+        // 1. The group exists, and it carries BOTH the head-and-everything-under-it option and the
+        //    two subheads. Matched on ID, never on label text - a CSS text-transform or a stray
+        //    glyph in a label has produced false product failures on this project more than once.
+        const grp = (shape.groups ?? []).find((g) => (g.options ?? []).some((o) => o.value === String(rhead)));
+        const grpValues = grp ? grp.options.map((o) => o.value) : [];
+        ok("QA-2747: the RENDERED Cost head filter groups a head with its subheads - the head's own id and both subhead ids are all offered inside one optgroup",
+          !!grp && grpValues.includes(String(rhead)) && grpValues.includes(String(rsub1)) && grpValues.includes(String(rsub2)),
+          JSON.stringify({ found: shape.found, group: grp ? grp.label : null, grpValues, want: [rhead, rsub1, rsub2].map(String) }));
+
+        // 2. TOTAL COVERAGE, not a sample. Every LIVE subhead the master list knows about must be
+        //    offered, whatever its head's state (QA-2754 - the orphan group serves the ones under a
+        //    retired head). This is the arm the checker's probe effectively ran
+        //    when it read "2 of 16 live subheads offered" - a sampled assertion would have missed it.
+        const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+        const pid = (c) => String(c?.parent?._id ?? c?.parent ?? "");
+        // QA-2754: EVERY live subhead - whether its head is active or retired. The earlier
+        // `activeById.has(parent)` condition excluded exactly the subheads the orphan group serves.
+        const wantSubs = cats
+          .filter((c) => c.active !== false && pid(c))
+          .map((c) => String(c._id));
+        const offered = new Set(shape.offeredValues ?? []);
+        const missing = wantSubs.filter((id) => !offered.has(id));
+        ok("QA-2747: EVERY live subhead the master list knows is offered by the rendered filter - counted, not sampled",
+          wantSubs.length > 0 && missing.length === 0,
+          JSON.stringify({ liveSubheads: wantSubs.length, offered: offered.size, missing: missing.length }));
+
+        // 3. QA-2754: the retired head's live subhead is offered, and offered in a group of its own -
+        //    never inside a group labelled with the retired head, which the control does not offer.
+        const orphanGrp = (shape.groups ?? []).find((g) => (g.options ?? []).some((o) => o.value === String(osub)));
+        const inRetiredHeadGrp = !!orphanGrp && (orphanGrp.options ?? []).some((o) => o.value === String(ohead));
+        ok("QA-2754: a live subhead whose head is RETIRED is still offered by the rendered filter, in a group that does not offer the retired head",
+          !!osub && offered.has(String(osub)) && !!orphanGrp && !inRetiredHeadGrp,
+          JSON.stringify({ offered: offered.has(String(osub)), group: orphanGrp ? orphanGrp.label : null, inRetiredHeadGrp }));
+
+        // ---- QA-2756, cycle 4: one arm per remaining behaviour of the finance/page.tsx hunk
+        // (B-numbers are qa/debug/qa-cost-head-filter-no-subheads-cycle3.md §2.2; B13-B16 were added
+        // by re-deriving the hunk in cycle 4). Every match is by id; the label arms compare text only
+        // for the option already located by id.
+        const RHEAD_NAME = `ZZ Rendered Head ${cs2}`;
+        const RSUB1_NAME = `ZZ Rendered Salary ${cs2}`;
+        const opts = shape.options ?? [];
+        const optsOf = (id) => opts.filter((o) => o.value === String(id));
+
+        // B2 (isolated): the head's group holds ONLY that head and its OWN subheads - `subsOfHead`
+        // matches on the head id. Arm 1 only checks presence, so "every subhead under every head" passed it.
+        const ownIds = new Set([String(rhead), ...cats.filter((c) => pid(c) === String(rhead)).map((c) => String(c._id))]);
+        const strangers = grpValues.filter((v) => !ownIds.has(v));
+        ok("QA-2756/B2: the head's optgroup offers ONLY that head and its own subheads - no subhead of another head rides in",
+          !!grp && strangers.length === 0, JSON.stringify({ group: grp ? grp.label : null, size: grpValues.length, strangers: strangers.length }));
+
+        // B5: a head with NO subheads is still offered - once, as a plain option outside every optgroup.
+        const plainOpts = optsOf(rplain);
+        ok("QA-2756/B5: a head with NO subheads is still offered by the rendered filter - exactly once, as a plain option outside every optgroup",
+          !!rplain && plainOpts.length === 1 && plainOpts[0].inGroup === false,
+          JSON.stringify({ count: plainOpts.length, inGroup: plainOpts.map((o) => o.inGroup), groups: plainOpts.map((o) => o.group) }));
+
+        // B4: the head's own option inside its group reads "All of <head name>".
+        const allOf = grp ? grp.options.find((o) => o.value === String(rhead)) : null;
+        ok('QA-2756/B4: the head\'s own option inside its group reads "All of <head name>"',
+          !!allOf && allOf.text === `All of ${RHEAD_NAME}`, JSON.stringify({ text: allOf ? allOf.text : null, want: `All of ${RHEAD_NAME}` }));
+
+        // B15 (added in cycle 4): the optgroup is labelled with the head's name - it is how a reader
+        // knows which head a subhead belongs to.
+        ok("QA-2756/B15: the head's optgroup is labelled with the head's own name",
+          !!grp && grp.label === RHEAD_NAME, JSON.stringify({ label: grp ? grp.label : null, want: RHEAD_NAME }));
+
+        // B13 (added in cycle 4): a LIVE row's label is its bare name - " (inactive)" is only for a retired row.
+        const sub1Opt = optsOf(rsub1)[0];
+        ok('QA-2756/B13: a LIVE head and a LIVE subhead are labelled with their bare names - no " (inactive)" suffix',
+          !!sub1Opt && sub1Opt.text === RSUB1_NAME && plainOpts.length > 0 && plainOpts[0].text === RPLAIN_NAME,
+          JSON.stringify({ sub: sub1Opt ? sub1Opt.text : null, plain: plainOpts[0] ? plainOpts[0].text : null }));
+
+        // B14 (added in cycle 4): a subhead under a LIVE head is offered exactly once - the orphan group
+        // (`!costHeads.some(...)`) must not repeat it.
+        const sub1Opts = optsOf(rsub1);
+        ok("QA-2756/B14: a subhead under a LIVE head is offered exactly once - the orphan group does not repeat it",
+          sub1Opts.length === 1,
+          JSON.stringify({ count: sub1Opts.length, groups: sub1Opts.map((o) => o.group) }));
+
+        // B16 (added in cycle 4): the orphan group says why it exists.
+        ok('QA-2756/B16: the group holding a retired head\'s live subheads is labelled as such ("... head has been retired")',
+          !!orphanGrp && /head has been retired/i.test(orphanGrp.label || ""), JSON.stringify({ label: orphanGrp ? orphanGrp.label : null }));
+
+        // B6: a RETIRED head that is not the current selection is not offered anywhere.
+        ok("QA-2756/B6: a RETIRED head is NOT offered by the rendered filter when it is not the selected value",
+          !!ohead && optsOf(ohead).length === 0, JSON.stringify({ count: optsOf(ohead).length, groups: optsOf(ohead).map((o) => o.group) }));
+
+        // B7: a RETIRED subhead under a LIVE head is not offered anywhere.
+        ok("QA-2756/B7: a RETIRED subhead under a LIVE head is NOT offered by the rendered filter",
+          !!rretsub && optsOf(rretsub).length === 0, JSON.stringify({ count: optsOf(rretsub).length, groups: optsOf(rretsub).map((o) => o.group) }));
+
+        // B19 (cycle 5, found by re-enumerating the hunk): `orphanSubs` is drawn from offeredCats, so a
+        // RETIRED subhead under a RETIRED head is not offered when it is not the selection. B7 covers the
+        // retired subhead under a LIVE head (the subsOfHead path) and cannot see this one.
+        ok("QA-2767/B19: a RETIRED subhead under a RETIRED head is NOT offered by the rendered filter when it is not the selected value",
+          !!oretsub && optsOf(oretsub).length === 0, JSON.stringify({ count: optsOf(oretsub).length, groups: optsOf(oretsub).map((o) => o.group) }));
+
+        // B12: choosing a subhead THROUGH THE CONTROL puts `category=<its id>` in the URL - the link
+        // that gets sent to somebody carries the filter (QA-2552).
+        const costSel = fpage.locator("label").filter({ hasText: /Cost head/i }).locator("select").first();
+        let picked = null;
+        try { picked = await costSel.selectOption(String(rsub1), { timeout: 10000 }); } catch (e) { picked = `ERR ${String(e?.message || e).slice(0, 120)}`; }
+        await fpage.waitForURL((u) => new URL(String(u)).searchParams.get("category") === String(rsub1), { timeout: 10000 }).catch(() => null);
+        const urlCat = new URL(fpage.url()).searchParams.get("category");
+        ok("QA-2756/B12: choosing a subhead in the rendered Cost head filter puts category=<that subhead's id> in the URL",
+          urlCat === String(rsub1), JSON.stringify({ picked, urlCat, want: String(rsub1) }));
+
+        // B8 + B9 (QA-2756): a link to a RETIRED head still shows that head selected (QA-2518), and
+        // the selected option says it is inactive.
+        await fpage.goto(`${BASE}/finance?category=${ohead}`, { waitUntil: "domcontentloaded" });
+        await waitForCostHeadOptions(rsub1);
+        await fpage.waitForTimeout(500);
+        const linked = await readCostHeadSelect();
+        ok("QA-2756/B8: /finance?category=<RETIRED head> still shows that head as the select's value",
+          linked.found === true && linked.value === String(ohead), JSON.stringify({ found: linked.found, value: linked.value, want: String(ohead) }));
+        ok('QA-2756/B9: ...and the selected option for that retired head carries " (inactive)"',
+          linked.found === true && linked.value === String(ohead) && /\(inactive\)$/.test(linked.selectedText || ""),
+          JSON.stringify({ value: linked.value, selectedText: linked.selectedText }));
+
+        // QA-2767 (cycle-4 checker): B9 reads the "All of" option only. catLabel() is called at four
+        // more places, and each was replaceable by the bare name with every arm green. One arm per
+        // call site, each on a link to a retired row of the shape that call site renders. The option
+        // (or group) is always located by ID first; only its text/label is then compared.
+        const selOpt = (read, id) => (read.options ?? []).find((o) => o.value === String(id)) ?? null;
+        const endsInactive = (s) => typeof s === "string" && / \(inactive\)$/.test(s);
+
+        // (a) the head OPTGROUP label - `label={catLabel(h)}` - for a selected retired head WITH a subhead (ohead/osub).
+        const aOpt = selOpt(linked, ohead);
+        ok('QA-2767/a: /finance?category=<RETIRED head WITH a subhead> labels that head\'s optgroup with " (inactive)"',
+          linked.found === true && linked.value === String(ohead) && !!aOpt && aOpt.inGroup === true && endsInactive(aOpt.group)
+            && (linked.groups ?? []).some((g) => g.label === aOpt.group && (g.options ?? []).some((o) => o.value === String(osub))),
+          JSON.stringify({ value: linked.value === String(ohead), inGroup: aOpt ? aOpt.inGroup : null, group: aOpt ? aOpt.group : null }));
+
+        // (b) the PLAIN option - `{catLabel(h)}` in the no-subheads branch - for a selected retired plain head.
+        await fpage.goto(`${BASE}/finance?category=${rretplain}`, { waitUntil: "domcontentloaded" });
+        await waitForCostHeadOptions(rsub1);
+        await fpage.waitForTimeout(500);
+        const linkedB = await readCostHeadSelect();
+        const bOpt = selOpt(linkedB, rretplain);
+        ok('QA-2767/b: /finance?category=<RETIRED head with NO subheads> selects it as a plain option whose text ends " (inactive)"',
+          linkedB.found === true && linkedB.value === String(rretplain) && !!bOpt && bOpt.inGroup === false
+            && endsInactive(linkedB.selectedText) && endsInactive(bOpt.text),
+          JSON.stringify({ value: linkedB.value === String(rretplain), inGroup: bOpt ? bOpt.inGroup : null, selectedText: linkedB.selectedText }));
+
+        // (c) the SUBHEAD option inside a head group - `{catLabel(s)}` - for a selected retired subhead under a live head.
+        await fpage.goto(`${BASE}/finance?category=${rretsub}`, { waitUntil: "domcontentloaded" });
+        await waitForCostHeadOptions(rsub1);
+        await fpage.waitForTimeout(500);
+        const linkedC = await readCostHeadSelect();
+        const cOpt = selOpt(linkedC, rretsub);
+        ok('QA-2767/c: /finance?category=<RETIRED subhead under a live head> selects it inside that head\'s group, text ending " (inactive)"',
+          linkedC.found === true && linkedC.value === String(rretsub) && !!cOpt && cOpt.group === RHEAD_NAME
+            && endsInactive(linkedC.selectedText) && endsInactive(cOpt.text),
+          JSON.stringify({ value: linkedC.value === String(rretsub), group: cOpt ? cOpt.group : null, selectedText: linkedC.selectedText }));
+
+        // (d) the ORPHAN option - `{catLabel(s)}` in the retired-head group - for a selected retired subhead under a retired head.
+        await fpage.goto(`${BASE}/finance?category=${oretsub}`, { waitUntil: "domcontentloaded" });
+        await waitForCostHeadOptions(rsub1);
+        await fpage.waitForTimeout(500);
+        const linkedD = await readCostHeadSelect();
+        const dOpt = selOpt(linkedD, oretsub);
+        ok('QA-2767/d: /finance?category=<RETIRED subhead under a RETIRED head> selects it in the orphan group, text ending " (inactive)"',
+          linkedD.found === true && linkedD.value === String(oretsub) && !!dOpt && /head has been retired/i.test(dOpt.group || "")
+            && endsInactive(linkedD.selectedText) && endsInactive(dOpt.text),
+          JSON.stringify({ value: linkedD.value === String(oretsub), group: dOpt ? dOpt.group : null, selectedText: linkedD.selectedText }));
+      }
+    }
+
     await fctx.close();
   }
 }

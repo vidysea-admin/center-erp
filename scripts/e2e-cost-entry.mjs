@@ -2042,6 +2042,77 @@ for (const variant of ["ordinary", "mark_paid"]) {
       ok("QA-1976: the parent/subhead fixture built", false, `head=${h.status} sub=${sub.status} - this pin measured nothing`);
     }
   }
+
+  // ---- QA-2741: costRollup's SUBHEAD branch, exercised for the first time since it was written.
+  // rules.ts:6105 states it in words - "Choosing a HEAD means the head and everything under it;
+  // choosing a subhead means that one only" - and implements both halves at :6106-6110. Only the
+  // HEAD half had ever been reachable: /finance offered top-level heads ONLY, so nothing in the
+  // product could produce a subhead id for this filter and no assertion had ever sent one. A branch
+  // no caller can reach and no test covers is indistinguishable from a branch that does not work -
+  // so this pin does BOTH halves, because fixing the screen without testing the branch would just
+  // move the unknown one layer down.
+  //
+  // Asserted on MEMBERSHIP of the register, never on a total: this database carries other people's
+  // entries and a total would be measuring them too.
+  {
+    const offPost = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    const offCat = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
+    ok("QA-2741 [precondition]: cost.post and costcategory.create approval are OFF, so the fixture lands in the ledger rather than the queue",
+      offPost.status === 200 && offCat.status === 200, `post=${offPost.status} cat=${offCat.status}`);
+    const mkCat = async (name, parent) => (await req(admin, "POST", "/api/master-lists/cost-categories",
+      parent ? { name, parent } : { name })).data?.item?._id;
+    const cutHead = await mkCat(`ZZ Cut Head ${stamp}`, null);
+    const cutSalary = cutHead ? await mkCat(`ZZ Cut Salary ${stamp}`, cutHead) : null;
+    const cutFood = cutHead ? await mkCat(`ZZ Cut Food ${stamp}`, cutHead) : null;
+    const postCost = async (category, amount) => {
+      const r = await req(ops, "POST", "/api/costs", baseEntry({ category, amount, payment_mode: "Cash" }));
+      return r.status === 201 ? String(r.data?.item?._id ?? "") : "";
+    };
+    const onHead = cutHead ? await postCost(cutHead, 1000) : "";
+    const onSalary = cutSalary ? await postCost(cutSalary, 200) : "";
+    const onFood = cutFood ? await postCost(cutFood, 30) : "";
+    const built = !!(cutHead && cutSalary && cutFood && onHead && onSalary && onFood);
+    ok("QA-2741 [precondition]: a head with two subheads under it, one ledger entry against each",
+      built, JSON.stringify({ head: !!cutHead, salary: !!cutSalary, food: !!cutFood, eHead: !!onHead, eSalary: !!onSalary, eFood: !!onFood }));
+    if (built) {
+      const idsIn = async (qs) => new Set(((await req(admin, "GET", `/api/reports/costs?${qs}`)).data?.register ?? []).map((r) => String(r.id)));
+      const bySub = await idsIn(`category=${cutSalary}`);
+      ok("QA-2741: choosing a SUBHEAD narrows to that subhead ALONE - not its head's own entry, not its sibling's",
+        bySub.has(onSalary) && !bySub.has(onHead) && !bySub.has(onFood),
+        JSON.stringify({ salary: bySub.has(onSalary), head: bySub.has(onHead), food: bySub.has(onFood) }));
+      const byHead = await idsIn(`category=${cutHead}`);
+      ok("QA-2741: ...while choosing the HEAD still means the head AND everything under it - all three rows",
+        byHead.has(onHead) && byHead.has(onSalary) && byHead.has(onFood),
+        JSON.stringify({ head: byHead.has(onHead), salary: byHead.has(onSalary), food: byHead.has(onFood) }));
+      // QA-2747, cycle 2. THE REAL GUARANTEE NOW LIVES IN THE BROWSER
+      // (`e2e-rendered-candidates.mjs`, the QA-2747 arms), because this one was beaten exactly the
+      // way a source guard always can be: the checker rewrote the heads-only control as
+      // `!(c.parent?._id ?? c.parent)` - this repo's own other spelling, already shipped at
+      // costs/page.tsx:290 - and the suite stayed at 243/0 while a browser offered 2 of 16 live
+      // subheads. Its second half was satisfied by the JSX COMMENT beside the control, because the
+      // stripper only dropped lines that STARTED like a comment.
+      //
+      // Kept as a cheap early signal, with both holes closed: whole `{/* … */}` blocks are removed
+      // rather than comment-looking lines, and the test is now POSITIVE - the control must MAP the
+      // derived head list into optgroups and the derived subhead list into options. A predicate has
+      // infinitely many spellings; the thing it must DO has one description.
+      const finSrcRaw = readFileSync(new URL("../src/app/(app)/finance/page.tsx", import.meta.url), "utf8");
+      const finSrc = finSrcRaw
+        .replace(/\{\/\*[\s\S]*?\*\/\}/g, " ")   // JSX comment blocks, however they are indented
+        .replace(/\/\*[\s\S]*?\*\//g, " ")          // ordinary block comments
+        .split(/\r?\n/).filter((ln) => !ln.trimStart().startsWith("//")).join("\n");
+      const positives = {
+        headsMapped: /costHeads\s*\.map\(/.test(finSrc),
+        subsMapped: /subsOfHead\(/.test(finSrc),
+        optgroupInCode: /<optgroup/.test(finSrc),
+        orphansHandled: /orphanSubs/.test(finSrc),
+        offerableUsed: /offerable\(\s*lists\.categories/.test(finSrc),
+      };
+      ok("QA-2747: the Cost head control MAPS its derived head list into optgroups and its derived subhead list into options - asserted positively, on source with comment BLOCKS removed",
+        Object.values(positives).every(Boolean),
+        JSON.stringify(positives));
+    }
+  }
 }
 
 // ---------------- QA-2295 / QA-2296 — THE REJECTION REASON, ON A SCREEN ----------------
