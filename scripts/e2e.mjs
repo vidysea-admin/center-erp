@@ -912,6 +912,163 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   ok("-113: a clean batch reports nothing to settle",
     (await req("GET", `/api/batches/${d1._id}/complete`, undefined, 200)).data.status === "Completed");
 
+  // ---- QA-2736 (Manish, 11/09, item 4: "when I remove/delete a Tested batch, it automatically
+  // reverts to 'Result Awaited'"). Reproduced on an isolated pre-fix copy on 2026-09-17
+  // (qa/evidence/repro-qa-2736-2026-09-17): nothing reverts. A batch that reached Closing on a
+  // DERIVED sign-off (no exam_held press) has a result deleted, the derived sign-off walks back to
+  // Pending, and the batch stays at Closing still LABELLED "Result Awaited", with no way back -
+  // Closing->Active answered 409 "not allowed". Umesh (2026-09-16, gate answered): proper naming
+  // (option 3) + an Admin Reopen Closing->Active (option 1).
+  {
+    const labelOf = async (id) => (await req("GET", `/api/batches/${id}`)).data;
+    const listed = async (id) => ((await req("GET", "/api/batches?limit=2000")).data.items ?? []).find((x) => String(x._id) === String(id));
+    // (1) the stranded state, driven exactly as reproduced
+    const { b: s1, mems: sm1 } = await mkBatch(2, 5);
+    await req("PUT", `/api/batches/${s1._id}/results`, { rows: sm1.map((m) => ({ member: String(m._id), result: "Pass", score: 70, max_score: 100, assessed_on: today })) }, 200);
+    await req("POST", `/api/batches/${s1._id}/transition`, { target: "Closing" }, 200);
+    const signed = await labelOf(s1._id);
+    ok("QA-2736: a Closing batch whose assessment IS signed off still reads 'Result Awaited'",
+      signed.item?.status === "Closing" && signed.status_label === "Result Awaited", JSON.stringify({ s: signed.item?.status, l: signed.status_label }));
+    const del = (await rowsOf(s1._id)).find((i) => String(i.member) === String(sm1[1]._id));
+    await req("DELETE", `/api/results/${del.result._id}`, { reason: "QA-2736 pin: a test row" }, 200);
+    const stranded = await labelOf(s1._id);
+    const strandedCl = await closureOf(s1._id);
+    ok("QA-2736 repro: deleting a result leaves the batch AT Closing with its derived sign-off walked back to Pending",
+      stranded.item?.status === "Closing" && strandedCl?.assessment_status === "Pending" && !strandedCl?.exam_held,
+      JSON.stringify({ s: stranded.item?.status, a: strandedCl?.assessment_status, held: strandedCl?.exam_held }));
+    ok("QA-2736 naming: that stranded batch reads 'Assessment sign-off pending', not 'Result Awaited' (detail)",
+      stranded.status_label === "Assessment sign-off pending", String(stranded.status_label));
+    const strandedRow = await listed(s1._id);
+    ok("QA-2736 naming: …and the batches register says the same, in the label and the stage",
+      strandedRow?.status_label === "Assessment sign-off pending" && strandedRow?.settlement_stage === "Assessment sign-off pending",
+      JSON.stringify({ l: strandedRow?.status_label, st: strandedRow?.settlement_stage }));
+    // (2) the reopen door
+    ok("QA-2736 reopen: a blank reason is refused (409) and the batch does not move",
+      await (async () => { const r = await req("POST", `/api/batches/${s1._id}/transition`, { target: "Active" }); return r.status === 409 && /reason/i.test(String(r.data?.error ?? "")); })()
+      && (await statusOf(s1._id)) === "Closing");
+    ok("QA-2736 reopen: a whitespace-only reason is refused too (the QA-1048 standard)",
+      await (async () => { const r = await req("POST", `/api/batches/${s1._id}/transition`, { target: "Active", reason: "   " }); return r.status === 409 && /reason/i.test(String(r.data?.error ?? "")); })()
+      && (await statusOf(s1._id)) === "Closing");
+    {
+      const opsCookie = await loginAs("ops@vidysea.com", "CiOnly@123");
+      const byOps = await fetch(BASE + `/api/batches/${s1._id}/transition`, { method: "POST", headers: { "Content-Type": "application/json", cookie: opsCookie }, body: JSON.stringify({ target: "Active", reason: "ops trying to reopen" }) });
+      const opsBody = await byOps.json().catch(() => ({}));
+      ok("QA-2736 reopen: Operations (holds batches.manage) is refused - ADMIN only - and the batch does not move",
+        (byOps.status === 409 || byOps.status === 403) && /admin/i.test(String(opsBody.error ?? "")) && (await statusOf(s1._id)) === "Closing",
+        `${byOps.status} ${String(opsBody.error ?? "").slice(0, 90)}`);
+      // QA-2764 (cycle 2): the refusal names the batch by ITS word, not the enum's default word.
+      ok("QA-2764: the Operations refusal names the stranded batch 'Assessment sign-off pending', not 'Result Awaited'",
+        /from Assessment sign-off pending to Active/.test(String(opsBody.error ?? "")) && !/Result Awaited/.test(String(opsBody.error ?? "")),
+        String(opsBody.error ?? "").slice(0, 120));
+    }
+    // QA-2764 (cycle 2): every screen that shows a batch's status reads a server-derived word. The
+    // plan screen has its own payload; programs/locations/trainers/candidates read GET /api/batches
+    // (pinned above) filtered by program/location/trainer - pinned on each filter they actually send.
+    {
+      const plan = (await req("GET", `/api/batches/${s1._id}/plan`)).data;
+      ok("QA-2764: GET /api/batches/[id]/plan carries status_label 'Assessment sign-off pending' for the stranded batch",
+        plan?.status_label === "Assessment sign-off pending", String(plan?.status_label));
+      const byProg = ((await req("GET", `/api/batches?program=${prog._id}&limit=2000`)).data.items ?? []).find((x) => String(x._id) === String(s1._id));
+      const byLoc = ((await req("GET", `/api/batches?location=${loc._id}`)).data.items ?? []).find((x) => String(x._id) === String(s1._id));
+      ok("QA-2764: the program and location batch lists (the filters those screens send) carry the same word",
+        byProg?.status_label === "Assessment sign-off pending" && byLoc?.status_label === "Assessment sign-off pending",
+        JSON.stringify({ p: byProg?.status_label, l: byLoc?.status_label }));
+      // QA-2766 (cycle 2): pnlRollup calls settlementStage with its own closure select - a second
+      // consumer of the same predicate, so it gets its own arm.
+      const pnl = await req("GET", `/api/reports/pnl?batch=${s1._id}`);
+      const pnlRow = (pnl.data?.register ?? []).find((x) => String(x.key) === String(s1._id));
+      ok("QA-2766: the P&L register's stage for the stranded batch reads 'Assessment sign-off pending'",
+        pnl.status === 200 && pnlRow?.stage === "Assessment sign-off pending", `${pnl.status} ${JSON.stringify(pnlRow?.stage)}`);
+    }
+    // QA-2765 (cycle 2, checker): a reopen carrying a date or an override used to answer 200 and drop it.
+    for (const [what, extra] of [["actual_start", { actual_start: today }], ["backdate_override", { backdate_override: true }], ["enrollment_override", { enrollment_override: true }]]) {
+      const r = await req("POST", `/api/batches/${s1._id}/transition`, { target: "Active", reason: "QA-2765 pin", ...extra });
+      ok(`QA-2765: a reopen carrying ${what} is REFUSED by name and the batch does not move`,
+        r.status >= 400 && /changes no dates/i.test(String(r.data?.error ?? "")) && (await statusOf(s1._id)) === "Closing",
+        `${r.status} ${String(r.data?.error ?? "").slice(0, 120)}`);
+    }
+    const reopened = await req("POST", `/api/batches/${s1._id}/transition`, { target: "Active", reason: "QA-2736 pin: sign-off walked back" });
+    ok("QA-2736 reopen: an Admin with a reason moves Closing -> Active",
+      reopened.status === 200 && (await statusOf(s1._id)) === "Active", `${reopened.status} ${String(reopened.data?.error ?? "")}`);
+    const trail = (await req("GET", `/api/audit/Batch/${s1._id}`)).data;
+    const trailRows = trail.items ?? trail.rows ?? trail ?? [];
+    ok("QA-2736 reopen: a reopened_from_closing row quotes the reason, beside the central status row",
+      Array.isArray(trailRows)
+        && trailRows.some((a) => a.field === "reopened_from_closing" && /QA-2736 pin: sign-off walked back/.test(String(a.new_value ?? a.newValue ?? "")))
+        && trailRows.some((a) => a.field === "status" && String(a.old_value ?? a.oldValue) === "Closing" && String(a.new_value ?? a.newValue) === "Active"),
+      JSON.stringify((Array.isArray(trailRows) ? trailRows : []).map((a) => [a.field, a.old_value ?? a.oldValue, String(a.new_value ?? a.newValue ?? "").slice(0, 60)]).slice(0, 8)));
+    const clAfter = await closureOf(s1._id);
+    ok("QA-2736 reopen: the closure is untouched by the reopen (sign-offs are the rows' and the humans', not the door's)",
+      clAfter?.assessment_status === strandedCl?.assessment_status && clAfter?.certification_status === strandedCl?.certification_status,
+      JSON.stringify({ before: [strandedCl?.assessment_status, strandedCl?.certification_status], after: [clAfter?.assessment_status, clAfter?.certification_status] }));
+    ok("QA-2736 reopen: an Active batch cannot be 'reopened' to Active (no door where there is nothing to reopen)",
+      (await req("POST", `/api/batches/${s1._id}/transition`, { target: "Active", reason: "again" })).status === 409);
+    // (3) the ordinary Result Awaited path must NOT be relabelled: the 'Assessment done' press
+    // (exam_held) reaches Closing with NO results at all, which is exactly what Result Awaited means
+    // (QA-2250). A predicate on assessment_status alone would have renamed every such batch.
+    const { b: s2, mems: sm2 } = await mkBatch(2, 6);
+    await req("POST", `/api/batches/${s2._id}/transition`, { target: "Closing", exam_held: true }, 200);
+    const held = await labelOf(s2._id);
+    ok("QA-2736 naming: a batch moved by 'Assessment done' with results still to come reads 'Result Awaited'",
+      held.item?.status === "Closing" && held.status_label === "Result Awaited", JSON.stringify({ s: held.item?.status, l: held.status_label }));
+    // QA-2766 (cycle 2): the discriminating half of the P&L stage pin. The stranded arm alone survived a
+    // mutant that dropped assessment_status/exam_held from pnlRollup's closure select, because a closure
+    // with neither field reads as "sign-off pending" for EVERY Closing batch. This batch is the one that
+    // must NOT be renamed.
+    {
+      const pnl2 = await req("GET", `/api/reports/pnl?batch=${s2._id}`);
+      const row2 = (pnl2.data?.register ?? []).find((x) => String(x.key) === String(s2._id));
+      ok("QA-2766: the P&L register's stage for an exam_held Closing batch stays 'Result awaited'",
+        pnl2.status === 200 && row2?.stage === "Result awaited", `${pnl2.status} ${JSON.stringify(row2?.stage)}`);
+    }
+    // (4) deriveCompletion's status guard (repro scenario C): results entered while the batch sits at
+    // Assessment Awaited never derived, so it arrived at Closing Pending and could not complete until
+    // somebody touched a row.
+    const { b: s3, mems: sm3 } = await mkBatch(2, 7);
+    await req("PATCH", `/api/batches/${s3._id}`, { planned_end: today }, 200);
+    await req("POST", `/api/batches/${s3._id}/transition`, { target: "Assessment Awaited" }, 200);
+    await req("PUT", `/api/batches/${s3._id}/results`, { rows: sm3.map((m) => ({ member: String(m._id), result: "Fail", failure_reason: "QA-2736 pin", assessed_on: today })) }, 200);
+    const aaCl = await closureOf(s3._id);
+    ok("QA-2736: results entered at Assessment Awaited derive the assessment sign-off there too",
+      aaCl?.assessment_status === "Completed" && aaCl?.assessment_derived === true && (await statusOf(s3._id)) === "Assessment Awaited",
+      JSON.stringify({ a: aaCl?.assessment_status, d: aaCl?.assessment_derived }));
+    // DISCLOSED BEHAVIOUR CHANGE (checker, cycle 1): because the sign-off now derives at Assessment
+    // Awaited, Rule 18's "OR assessment Completed" arm lets such a batch move to Closing WITHOUT the
+    // exam_held press. Rule 18 always allowed that for a Completed assessment; what changed is that
+    // the assessment reaches Completed here at all. Pinned so it cannot change silently either way.
+    {
+      const noPress = await req("POST", `/api/batches/${s3._id}/transition`, { target: "Closing" });
+      const cl3 = await closureOf(s3._id);
+      ok("QA-2736 disclosed: Assessment Awaited with EVERY result entered moves to Closing without the exam_held press (200), exam_held stays false",
+        noPress.status === 200 && (await statusOf(s3._id)) === "Closing" && !cl3?.exam_held,
+        `${noPress.status} ${String(noPress.data?.error ?? "")} held=${cl3?.exam_held}`);
+    }
+    // (5) the candidate journey had the two words INVERTED against the batch (lib/candidate-journey.ts
+    // journeyOf). It is computed on the client from active_batch.status, so no API call can see it -
+    // the REAL module is loaded with jiti (the check-money-mask.mjs precedent) and asked directly.
+    {
+      const { createRequire } = await import("node:module");
+      const pathM = await import("node:path");
+      const root = pathM.resolve(pathM.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+      const jm = createRequire(import.meta.url)(pathM.join(root, "node_modules/jiti"));
+      const J = (jm.createJiti ?? jm)(pathM.join(root, "scripts/e2e.mjs"), { interopDefault: true })(pathM.join(root, "src/lib/candidate-journey.ts"));
+      const at = (bs) => J.journeyOf({ lifecycle_status: "Enrolled", active_batch_status: bs });
+      ok("QA-2736 journey: a student on a Result Awaited (Closing) batch reads 'Result Awaited', and on a finished one 'Training Completed'",
+        at("Closing") === "Result Awaited" && at("Completed") === "Training Completed" && at("Assessment Awaited") === "Training Completed" && at("Active") === "Training Ongoing",
+        JSON.stringify({ Closing: at("Closing"), Completed: at("Completed"), AA: at("Assessment Awaited"), Active: at("Active") }));
+      // QA-2766 (cycle 2): one arm per branch, so a single-branch mutant names itself.
+      ok("QA-2766 journey: Assessment Awaited batch -> 'Training Completed' (delivery over)", at("Assessment Awaited") === "Training Completed", at("Assessment Awaited"));
+      ok("QA-2766 journey: Completed batch, no result -> 'Training Completed'", at("Completed") === "Training Completed", at("Completed"));
+      ok("QA-2736 label module: exactly the walked-back shape is renamed - Pending+no exam_held yes; Pending+exam_held, Completed, or no closure no",
+        J.batchStatusLabel("Closing", { assessment_status: "Pending", exam_held: false }) === "Assessment sign-off pending"
+          && J.batchStatusLabel("Closing", { assessment_status: "Pending", exam_held: true }) === "Result Awaited"
+          && J.batchStatusLabel("Closing", { assessment_status: "Completed", exam_held: false }) === "Result Awaited"
+          && J.batchStatusLabel("Closing", null) === "Result Awaited"
+          && J.batchStatusLabel("Active", { assessment_status: "Pending" }) === "Active",
+        "batchStatusLabel mapping");
+    }
+  }
+
   // ---- QA-697 (-206, checker on qa-204): a REFUSED press must change nothing ----
   // The door wrote every unmarked student to Fail, derived the sign-offs, walked the batch
   // Active -> Closing, and only then met Rule 18 and threw 409. Permanent rows, a moved batch, and

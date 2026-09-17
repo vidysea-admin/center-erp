@@ -109,7 +109,9 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
       <div className="flex flex-wrap items-center gap-3">
         <BackLink fallback="/batches" label="Batches" />
         <h1 className="text-xl font-semibold">{b.code}</h1>
-        <Chip value={b.status} />
+        {/* QA-2736: the per-batch word the server derived - a Closing batch whose sign-off walked back
+            reads "Assessment sign-off pending", not "Result Awaited". */}
+        <Chip value={b.status} label={data.status_label} />
         {data.settlement_stage && (
           <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-0.5 text-[11px] font-medium text-violet-700" title="Where this batch stands on the money chain">
             {data.settlement_stage}
@@ -163,7 +165,7 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
           <div className={`text-sm font-semibold ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "text-red-800" : "text-amber-800"}`}>This batch has no students yet — upload the roster</div>
           <p className={`mt-1 text-sm ${["Completed", "Assessment Awaited", "Closing"].includes(b.status) ? "text-red-700" : "text-amber-700"}`}>
             {["Completed", "Assessment Awaited", "Closing"].includes(b.status)
-              ? "It is marked " + b.status + " with an empty roster, so its attendance, results and billing are all reading zero."
+              ? "It is marked " + (data.status_label || statusLabel(b.status)) + " with an empty roster, so its attendance, results and billing are all reading zero."
               : "Readiness, attendance and every count on the dashboard stay wrong until the students are on it."}
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
@@ -398,6 +400,21 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // as the two below it (the -207 ruling); the window.prompt on the Reopen control is the older pattern
   // and is deliberately left alone rather than half-migrated inside an unrelated unit.
   const [restoreOpen, setRestoreOpen] = useState(false);
+  // QA-2736: the Closing -> Active reopen. Same pattern as restoreBatch below and for the same reason:
+  // not routed through transition(), which swallows the refusal while the drawer closes anyway.
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopening, setReopening] = useState(false);
+  async function reopenToActive() {
+    const why = reopenReason.trim();
+    if (!why) return;
+    setReopening(true);
+    try {
+      await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target: "Active", reason: why } });
+      setReopenOpen(false); setReopenReason(""); onChanged();
+    } catch (e: any) { setError(e.message); }
+    finally { setReopening(false); }
+  }
   const [restoreTarget, setRestoreTarget] = useState("Planning");
   const [restoreReason, setRestoreReason] = useState("");
   const [restoring, setRestoring] = useState(false);
@@ -530,7 +547,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           }
         }}>Training done → Assessment Awaited</Btn>
       )}
-      {["Active", "Assessment Awaited"].includes(b.status) && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → Result Awaited</Btn>}
+      {["Active", "Assessment Awaited"].includes(b.status) && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → {statusLabel("Closing")}</Btn>}
       {/* -207 (Umesh, 23/08, with the screen open): "2 duplicate buttons fro similar functionlity
           ?? essaa kyu hai , worst user experiece. only ye blue wala Complete batch button rakho and
           put it in the same row of attendance and all. along with same ui and ye button mai vo
@@ -560,6 +577,14 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           if (why && why.trim()) transition("Closing", { reason: why.trim() });
         }}>Reopen (Admin)</Btn>
       )}
+      {/* QA-2736 (Manish item 4; Umesh 2026-09-16): the way back out of Result Awaited, one rung below
+          -113's Reopen. Admin only because only an Admin can do it (rules.ts Closing->Active) - a
+          control that can only 409 for the viewer is QA-723's dead button - and everyone else who can
+          move status is TOLD, the -235 Cancelled precedent, rather than shown nothing. A Drawer with a
+          required reason, not window.prompt. */}
+      {b.status === "Closing" && (isAdmin
+        ? <Btn small kind="ghost" onClick={() => setReopenOpen(true)}>Reopen to Active (Admin)</Btn>
+        : <span className="text-xs text-gray-500">Only an Admin can reopen this batch to Active.</span>)}
       {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
       {b.status === "Completed" && (
         <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
@@ -612,7 +637,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         <div className="lg:col-span-2 flex flex-wrap items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2 text-xs text-green-900">
           {/* -104: this banner printed the raw enum, so the Overview said "Result Awaited" in the
               header chip and "Closing" two lines below it. Same label map as the chip. */}
-          <span className="font-semibold">{b.status === "Active" ? "Running" : statusLabel(b.status)}</span>
+          <span className="font-semibold">{b.status === "Active" ? "Running" : (data.status_label || statusLabel(b.status))}</span>
           {b.actual_start && <span>since {fmtDate(b.actual_start)}</span>}
           {dayN && dayM && b.status === "Active" && <span>· day {Math.min(dayN, dayM)} of {dayM}</span>}
           {att && <span>· our logs {att.days_held} day{att.days_held === 1 ? "" : "s"}</span>}
@@ -782,6 +807,26 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           asked us not to do. */}
       {/* -235: Umesh chose "Admin target khud chune" over a fixed restore point, so all three pre-cancel
           states are offered and the Admin says which one the batch was really in. */}
+      <Drawer open={reopenOpen && b.status === "Closing" && isAdmin} onClose={() => setReopenOpen(false)} title={`Reopen ${b.code} to Active`} error={error}>
+        <div className="space-y-3 text-sm">
+          <p className="text-gray-700">
+            The batch goes back from <b>{data.status_label || statusLabel(b.status)}</b> to <b>Active</b>. Results, certificates,
+            sign-offs and the record that the assessment was held are all kept exactly as they are — this moves the status only.
+          </p>
+          <p className="text-xs text-gray-500">
+            Use it when a result was removed after the assessment was signed off, or the batch was moved on by mistake. Your
+            name and the reason are written to the batch history.
+          </p>
+          <Field label="Reason" required>
+            <input className={inputCls} data-testid="reopen-closing-reason" placeholder="e.g. a test result was removed; assessment to be re-marked"
+              value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} />
+          </Field>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn onClick={reopenToActive} disabled={reopening || !reopenReason.trim()}>{reopening ? "Reopening…" : "Reopen to Active"}</Btn>
+            <Btn kind="ghost" onClick={() => setReopenOpen(false)}>Cancel</Btn>
+          </div>
+        </div>
+      </Drawer>
       <Drawer open={restoreOpen && b.status === "Cancelled"} onClose={() => setRestoreOpen(false)} title={`Restore ${b.code}`} error={error}>
         <div className="space-y-3 text-sm">
           <p className="text-gray-600">
@@ -826,8 +871,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         <div className="text-sm">
           <div className="font-semibold">You are recording that the assessment was HELD</div>
           <p className="mt-1 text-slate-700">
-            The batch moves out of <b>{b.status === "Assessment Awaited" ? "Assessment Awaited" : "Active"}</b> and into <b>Result Awaited</b>, where it waits for the
-            results. <b>The results are not needed for this</b> — that is what Result Awaited means.
+            The batch moves out of <b>{b.status === "Assessment Awaited" ? "Assessment Awaited" : "Active"}</b> and into <b>{statusLabel("Closing")}</b>, where it waits for the
+            results. <b>The results are not needed for this</b> — that is what {statusLabel("Closing")} means.
           </p>
           <p className="mt-2 text-slate-700">
             Marking results and issuing certificates happens afterwards, and the batch only becomes{" "}
@@ -3963,7 +4008,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-3 py-1.5 text-xs text-blue-900">
         <span><b>Assessment → Certification</b> completes the batch. <b>Invoice → dues</b> closes it — later, no hurry.</span>
         <span className="cursor-help rounded-full border border-blue-300 px-1.5 text-[10px] font-bold text-blue-700"
-          title="Assessment done moves the batch to Result Awaited; certification done marks it Completed. Nothing about money is needed for that. Invoice and dues are the later step that ends in Closed — a Completed batch can sit there indefinitely.">?</span>
+          title={"Assessment done moves the batch to " + statusLabel("Closing") + "; certification done marks it Completed. Nothing about money is needed for that. Invoice and dues are the later step that ends in Closed — a Completed batch can sit there indefinitely."}>?</span>
       </div>
       {(closureSaving || closureSaveNotice) && (
         <div role="status" aria-live="polite" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">

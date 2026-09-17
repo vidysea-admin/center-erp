@@ -83,7 +83,7 @@ export default function ProgramDetailPage({ params }: { params: Promise<{ id: st
           columns={[
             { key: "code", label: "Code", sortable: true },
             { key: "location", label: "Centre", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name },
-            { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
+            { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} label={r.status_label} /> }, // QA-2764 (cycle 2): the per-batch word, not the enum's
             { key: "roster_count", label: "Roster", sortable: true },
             { key: "planned_start", label: "Start", sortable: true, sortValue: (r: any) => r.planned_start ? new Date(r.planned_start).getTime() : null, render: (r: any) => fmtDate(r.planned_start) },
           ]} empty="No batches for this job role yet." />

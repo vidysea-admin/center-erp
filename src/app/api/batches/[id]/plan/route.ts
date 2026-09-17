@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser } from "@/lib/authz";
-import { Batch, Location, PublicToken } from "@/models";
+import { Batch, Closure, Location, PublicToken } from "@/models";
+import { batchStatusLabel } from "@/lib/candidate-journey";
 import { assertBatchInScope, occupantName, planArtifact, recipientKey, slotGeneration, storedTokenKey } from "@/lib/rules";
 import { canShareLinks } from "@/lib/permissions";
 
@@ -79,8 +80,14 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
     (loc?.contacts ?? []).forEach((c: any) => add(c?._id ? `contact:${String(c._id)}` : "", c?.phone, c?.role_label));
   }
 
+  // QA-2764 (cycle 2): the plan screen's status chip read the bare enum's word, so a stranded
+  // Closing batch said "Result Awaited" here while the register and detail said sign-off pending.
+  const planStatus = String((art as any)?.batch?.status ?? "");
+  const status_label = batchStatusLabel(planStatus, planStatus === "Closing"
+    ? await Closure.findOne({ batch: id }).select("assessment_status exam_held").lean<any>() : null);
   return NextResponse.json({
     ...art,
+    status_label,
     // Kept so nothing that already reads `share` breaks; it is the most recent active link.
     share: links[0] ? { token: links[0].token, allow_updates: !!links[0].allow_updates, created_at: links[0].createdAt } : null,
     shares: links.map((l) => ({

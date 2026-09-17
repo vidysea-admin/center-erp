@@ -7,7 +7,7 @@ import {
   LocationTarget, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -1262,9 +1262,10 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       // finished genuinely does mean the results are recorded.
       const closure = await Closure.findOne({ batch: batchId }).lean<any>();
       if (!closure?.exam_held && closure?.assessment_status !== "Completed") {
-        fail("Rule 18: record that the assessment was HELD before moving to Result Awaited. "
+        // QA-2736: the word comes from the one label map (lib/candidate-journey), not a literal.
+        fail(`Rule 18: record that the assessment was HELD before moving to ${BATCH_STATUS_LABEL.Closing}. `
           + "Use the 'Assessment done' button on the batch - it is a deliberate, audited press, and "
-          + "it does NOT need the results: Result Awaited is where a batch waits for them.");
+          + `it does NOT need the results: ${BATCH_STATUS_LABEL.Closing} is where a batch waits for them.`);
       }
       break;
     }
@@ -1280,6 +1281,37 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       // Completing stamped an end date on the batch; reopening takes it off again, or Rule 32 goes on
       // refusing attendance for every day after an end that no longer applies.
       batch.set("actual_end", undefined);
+      break;
+    }
+    // QA-2736 (Manish item 4; Umesh 2026-09-16, gate option 1): the way back one rung DOWN from
+    // Result Awaited, shaped like -113's Completed->Closing one rung up. Reproduced on an isolated
+    // pre-fix copy (qa/evidence/repro-qa-2736-2026-09-17): a batch that reached Closing on a DERIVED
+    // assessment sign-off has a result deleted, deriveCompletion walks the sign-off back to Pending
+    // (correctly - it follows the rows both ways), and the batch is left at Closing with no door out:
+    // Closing->Active and Closing->Assessment Awaited both fell to `default:` and 409'd. The asymmetry
+    // - a reopen at the top of the ladder and none one rung below - is what stranded him.
+    // Admin only, reason required (trimmed: the QA-1048 standard - "   " is not a reason), audited
+    // twice: the central status row below and this explicit one quoting why. It touches NO closure
+    // field: human sign-offs are untouched by definition, derived ones already follow the rows, and
+    // exam_held stays true if it was pressed, because the exam having been held is still a fact.
+    case "Closing->Active": {
+      // QA-2764 (cycle 2): the closure is read FIRST so the refusal names the batch's own word -
+      // a stranded batch reads "Assessment sign-off pending", and a sentence saying "from Result
+      // Awaited" about it was the inconsistency this unit exists to remove.
+      const cl = await Closure.findOne({ batch: batchId }).select("assessment_status exam_held").lean<any>();
+      if (!opts.isAdmin) fail(`Only an Admin can reopen a batch from ${batchStatusLabel("Closing", cl)} to Active.`);
+      if (!String(opts.reason ?? "").trim()) fail("Reopening a batch to Active needs a reason — it is audited.");
+      // QA-2765 (cycle 2, checker): the route forwards actual_start for ANY target Active, so a reopen
+      // carrying one answered 200 and silently dropped it - the caller believed a date moved. Refused
+      // by name, the Cancelled->Active restore arm's shape, before anything is written.
+      if (opts.actual_start || opts.backdate_override === true || opts.enrollment_override === true) {
+        fail("Reopening a batch puts its status back to Active and changes no dates and no enrolment check. Reopen it first, then correct anything else.");
+      }
+      await audit({
+        entity: "Batch", entityId: batch._id, field: "reopened_from_closing",
+        newValue: `reopened to Active from ${batchStatusLabel("Closing", cl)} (assessment sign-off: ${cl?.assessment_status ?? "none recorded"}); reason: ${String(opts.reason).trim()}`,
+        actor: opts.actor ?? null, actorType: opts.actor ? "USER" : "SYSTEM",
+      });
       break;
     }
     case "Closing->Completed": {
@@ -1769,7 +1801,13 @@ export async function batchHealth(batchId: string): Promise<BatchHealth> {
 export function settlementStage(batchStatus: string, closure: any, invoice: any): string | null {
   if (batchStatus === "Closed") return "Closed — all dues settled";
   if (batchStatus === "Assessment Awaited") return "Assessment awaited";
-  if (batchStatus === "Closing") return "Result awaited";
+  // QA-2736: a Closing batch whose derived sign-off walked back is not awaiting results - same
+  // predicate as the chip (batchStatusLabel), so the stage and the status can never disagree. The
+  // ordinary case keeps its sentence-case spelling, which e2e.mjs pins.
+  if (batchStatus === "Closing") {
+    const label = batchStatusLabel(batchStatus, closure);
+    return label === BATCH_STATUS_LABEL.Closing ? "Result awaited" : label;
+  }
   if (batchStatus !== "Completed") return null;
   if (closure?.certification_status !== "Completed") return "Awaiting certification";
   if (!invoice || invoice.status === "Not Ready") return "Certified — invoice not ready";
@@ -1926,14 +1964,20 @@ export async function settleCertificatesFromFiles(batchId: string, actorId?: str
 // the very same gates (Rules 43/46/18), after every save:
 //   every roster member has a final result       → assessment_status  = Completed
 //   every Pass is Issued or Not Issued           → certification_status = Completed
-//   both Completed                                → the batch walks Active→Closing→Completed itself
+//   (QA-2738: this line used to read "both Completed → the batch walks Active→Closing→Completed
+//   itself". It never did - see WHERE DERIVATION STOPS at the bottom of this function. The batch
+//   moves only by a human press; QA-2736's Closing->Active reopen is the way back out.)
 // A batch with no per-candidate rows (legacy, batch-level figures) is untouched — its ticks stay
 // hand-driven. Nothing here can throw into the caller: a derived step that fails is logged and
 // left for the hand path, never a 500 on a certificate upload.
 export async function deriveCompletion(batchId: string, actorId?: string) {
   try {
     const batch = await Batch.findById(batchId).select("status").lean<any>();
-    if (!batch || !["Active", "Closing"].includes(batch.status)) return;
+    // QA-2736 (repro C, pre-fix copy 2026-09-17): "Assessment Awaited" was missing from this guard
+    // since that status landed (Karunn, 2026-09-10). Results entered while a batch waited for its
+    // assessment never derived, so it arrived at Closing with the assessment Pending and could not
+    // complete until somebody touched a row. It is a live, un-frozen status like the other two.
+    if (!batch || !["Active", "Assessment Awaited", "Closing"].includes(batch.status)) return;
     const closure = await Closure.findOne({ batch: batchId });
     if (!closure) return;
     let changed = false;
@@ -1981,7 +2025,8 @@ export async function deriveCompletion(batchId: string, actorId?: string) {
     if (changed) await closure.save();
     // WHERE DERIVATION STOPS, AND WHY — both learned from the wall, not from review.
     // It derives FACTS ABOUT THE ROWS (assessment/certification sign-off) and never moves the batch
-    // itself, because the batch's own status ladder is ONE-WAY: there is no Closing→Active and
+    // itself, because the batch's own status ladder is ONE-WAY: there was no Closing→Active (QA-2736
+    // added an Admin-only, reasoned reopen - a human door, not a derived one) and
     // Completed is the DEC-6 freeze (results, certificates and figures locked, no admin override —
     // Umesh, 13/08). A derived sign-off has to be reversible (un-mark a student and it walks back);
     // a derived TRANSITION could not be. So the two buttons stay human — and they now succeed on the
@@ -6484,7 +6529,7 @@ export async function pnlRollup(scope: Record<string, unknown> = {}, filters: Pn
 
   const batchIds = batches.map((b) => b._id);
   const [closures, invoices, costs] = await Promise.all([
-    Closure.find({ batch: { $in: batchIds } }).select("batch billable_passed passed certification_status dues_settled").lean<any[]>(),
+    Closure.find({ batch: { $in: batchIds } }).select("batch billable_passed passed certification_status dues_settled assessment_status exam_held").lean<any[]>(),
     Invoice.find({ batch: { $in: batchIds } }).select("batch amount status invoice_no raised_on paid_on received_amount receipt_ref").lean<any[]>(),
     CostEntry.find({ ...scope, batch: { $in: batchIds } }).select("batch amount").lean<any[]>(),
   ]);

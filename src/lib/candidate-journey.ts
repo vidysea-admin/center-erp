@@ -106,9 +106,44 @@ export function journeyOf(r: JourneyInput): string {
   if (r.latest_result === "Absent") return "Absent at Assessment";
   if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
   const bs = r.active_batch_status;
-  if (bs === "Closing") return "Training Completed";
-  if (bs === "Completed") return "Result Awaited";
+  // QA-2736: this used to read Closing -> "Training Completed" and Completed -> "Result Awaited",
+  // written (39dac69) before -102 relabelled Closing itself as "Result Awaited". From -102 on it was
+  // INVERTED: the batch header said "Result Awaited" while its students said "Training Completed",
+  // and a batch that had finished said its students were still waiting. Now the student's word
+  // matches the batch's word: delivery over (Assessment Awaited) -> Training Completed; exam held,
+  // results pending (Closing) -> Result Awaited; a finished batch with no result recorded for this
+  // student -> Training Completed (training is over; nothing says a result is coming).
+  if (bs === "Closing") return "Result Awaited";
+  if (bs === "Assessment Awaited" || bs === "Completed") return "Training Completed";
   return "Training Ongoing";
+}
+
+// QA-2736 (Manish item 4; Umesh 2026-09-16, option 3 "proper name tagging"): the ONE label map for a
+// batch status. It moved here from components/ui.tsx (which re-exports it unchanged) because the
+// server needs the same words - rules.ts error text, settlementStage, the batch APIs - and a
+// "use client" module cannot be imported by rules.ts. Same wall and same fix as
+// SETTLED_CERTIFICATE_STATUSES below. -102's rule still holds: the enum says "Closing" everywhere,
+// only the human-facing word changes.
+export const BATCH_STATUS_LABEL: Record<string, string> = { Closing: "Result Awaited" };
+export const SIGNOFF_PENDING_LABEL = "Assessment sign-off pending";
+
+/**
+ * The label for ONE batch, which needs its closure: a Closing batch that got there on a sign-off
+ * which has since walked back (a result deleted after a DERIVED sign-off) is not waiting for
+ * results, it is waiting for its assessment to be signed off again - and calling it "Result
+ * Awaited" is what made Manish read it as a revert.
+ *
+ * `exam_held` is part of the predicate on purpose and is a deliberate narrowing of the approved
+ * plan's `assessment_status !== "Completed"` alone. Measured on the pre-fix copy (repro B/C): the
+ * ordinary "Assessment done -> Result Awaited" press (QA-2250) reaches Closing with the assessment
+ * Pending BY DESIGN - results come afterwards - so the plain predicate would rename every normal
+ * Result Awaited batch. Rule 18 lets a batch into Closing only with exam_held OR a Completed
+ * assessment, so "Pending and no exam_held" is exactly the walked-back shape and nothing else.
+ */
+export function batchStatusLabel(status?: string | null, closure?: { assessment_status?: string | null; exam_held?: boolean | null } | null): string {
+  if (!status) return "";
+  if (status === "Closing" && closure && closure.assessment_status !== "Completed" && !closure.exam_held) return SIGNOFF_PENDING_LABEL;
+  return BATCH_STATUS_LABEL[status] ?? status;
 }
 
 // The stage a drop is recorded AT — whichever bucket the person is in right now.

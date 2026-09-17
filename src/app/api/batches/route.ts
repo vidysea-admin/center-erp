@@ -5,6 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { AuditLog, Batch, BatchMember, CandidateResult, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
 import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, govtBatchIdConflict, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
+import { batchStatusLabel } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { mailUsersByRole } from "@/lib/mailer";
@@ -80,7 +81,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const passByBatch = new Map(passCounts.map((c) => [String(c._id), c.passed as number]));
   // QA-048: the post-Completed money chain, visible per row (derived from Closure+Invoice).
   const doneIds = items.filter((b) => ["Completed", "Closed"].includes(b.status)).map((b) => b._id);
-  const closures = doneIds.length ? await Closure.find({ batch: { $in: doneIds } }).select("batch certification_status dues_settled").lean<any[]>() : [];
+  // QA-2736: Closing batches' closures are read too - assessment_status + exam_held decide whether a
+  // Closing batch is "Result Awaited" or "Assessment sign-off pending" (batchStatusLabel). Invoices
+  // stay Completed/Closed only; nothing about a Closing batch reads one.
+  const closureIds = items.filter((b) => ["Closing", "Completed", "Closed"].includes(b.status)).map((b) => b._id);
+  const closures = closureIds.length ? await Closure.find({ batch: { $in: closureIds } }).select("batch certification_status dues_settled assessment_status exam_held").lean<any[]>() : [];
   const invoices = doneIds.length ? await Invoice.find({ batch: { $in: doneIds } }).select("batch status").lean<any[]>() : [];
   const clByB = new Map(closures.map((c) => [String(c.batch), c]));
   const invByB = new Map(invoices.map((i) => [String(i.batch), i]));
@@ -129,6 +134,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
     enrolled_count: byBatch.get(String(b._id))?.enrolled ?? 0,
     passed_count: passByBatch.get(String(b._id)) ?? 0,
     settlement_stage: settlementStage(b.status, clByB.get(String(b._id)), invByB.get(String(b._id))),
+    status_label: batchStatusLabel(b.status, clByB.get(String(b._id))),
     // A-12 (24-Aug sheet; live -244 shows it on FOUR rows, one of them still Active): this read
     // `?? 0`, so a centre that has never logged a single day here was indistinguishable from one that
     // logged zero. Three certified batches and one running batch all printed a bold "0 days ours"

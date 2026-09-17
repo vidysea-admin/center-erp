@@ -504,7 +504,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
             columns={[
               { key: "code", label: "Batch", mobile: false },
               { key: "location", label: "Centre", render: (r: any) => r.location?.name ?? "—" },
-              { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
+              { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} label={r.status_label} /> }, // QA-2764 (cycle 2): the per-batch word, not the enum's
               { key: "planned_start", label: "Starts", render: (r: any) => fmt(r.planned_start), mobile: false },
             ]}
             onRowClick={(r: any) => { window.location.href = `${BASE_PATH}/batches/${r._id}`; }}

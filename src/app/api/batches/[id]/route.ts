@@ -5,6 +5,7 @@ import { requirePerm, requireFinance } from "@/lib/permissions";
 import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
+import { batchStatusLabel } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { audit, auditDiff } from "@/lib/audit";
 import { createHash } from "crypto";
@@ -29,7 +30,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
         await Closure.findOne({ batch: id }).select("certification_status dues_settled").lean(),
         await Invoice.findOne({ batch: id }).select("status").lean())
     : null;
-  return NextResponse.json({ item: readiness.batch, readiness, health, settlement_stage: st });
+  // QA-2736: the per-batch status WORD, derived once here from the same predicate the register and
+  // settlementStage use, so the screen renders it rather than re-deciding it.
+  const status_label = batchStatusLabel(readiness.batch.status, readiness.batch.status === "Closing"
+    ? await Closure.findOne({ batch: id }).select("assessment_status exam_held").lean<any>()
+    : null);
+  return NextResponse.json({ item: readiness.batch, readiness, health, settlement_stage: st, status_label });
 });
 
 // 2026-08-14 (Umesh): "agar data ka koi source nahi hai toh remove that." The 13/08 seed

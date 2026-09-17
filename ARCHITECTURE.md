@@ -1050,6 +1050,26 @@ constant's own comment:
   one fact". Pinned in `scripts/e2e.mjs` by editing a due date on an Active batch's plan, re-sending
   `{ create: true }`, and asserting the edit survived.
 
+**QA-2736 (2026-09-17) - two additions to this row, named on the way in.**
+- **A new server arm, `Closing->Active`** (Admin only, trimmed reason, `reopened_from_closing` audit row
+  beside the central status row, no closure field touched). Its client copy is the "Reopen to Active
+  (Admin)" control + Drawer in `batches/[id]/page.tsx` `statusActions`, offered only on `Closing` and only
+  to `isAdmin` (the same `role === "Admin"` the transition route forwards); non-Admins get the sentence,
+  the -235 Cancelled precedent. Both change together.
+- **The batch status WORD now has one server-reachable source.** `BATCH_STATUS_LABEL` /
+  `batchStatusLabel(status, closure)` live in the import-free `lib/candidate-journey.ts`;
+  `components/ui.tsx` re-exports `STATUS_LABEL`/`statusLabel` from it. A Closing batch whose closure has
+  `assessment_status !== "Completed"` AND no `exam_held` reads "Assessment sign-off pending". The server
+  derives `status_label` on `GET /api/batches` and `GET /api/batches/[id]`; `settlementStage` uses the same
+  predicate. Screens render `status_label`, they do not re-decide it. The batches-list filter PILL stays
+  per-status ("Result Awaited" = Closing) because a pill is a stored value, not a batch.
+  **Every screen that renders one batch's status passes `label={status_label}`** (QA-2764, cycle 2):
+  `batches/page.tsx` (row + mobile card), `batches/[id]/page.tsx` (header, banner, empty-roster sentence),
+  `batches/[id]/plan/page.tsx` (from `GET /api/batches/[id]/plan`), `programs/[id]`, `locations/[id]` Batches
+  tab, `trainers/[id]` Assignments tab (all three from `GET /api/batches`). `candidates/page.tsx`'s
+  assign drawer is deliberately bare: it lists only Planning/Ready/Active, where the label cannot differ.
+  A new batch-status Chip without `label` is this row's drift.
+
 ### 3.13 "Was this batch recorded AFTER it ran?" — COLLAPSED (QA-957/958/965), do not re-grow it
 
 **This row was first written, in this very file, saying the opposite — that the gate reads only one of

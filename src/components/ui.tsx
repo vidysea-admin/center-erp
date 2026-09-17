@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
 import { sourceLink } from "@/lib/client";
 import { plain } from "@/lib/user-copy";
+import { BATCH_STATUS_LABEL, SIGNOFF_PENDING_LABEL, batchStatusLabel } from "@/lib/candidate-journey";
 
 // 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
 // every drill-down header carries this. Browser-back when there is history (keeps scroll
@@ -145,16 +146,23 @@ export function HealthBanner({ health, onDismiss }: { health?: { score: string; 
 // assessment (to enter) and certification (to leave), and Completed is NOT Closed. So the word
 // changes, the enum does not: `BATCH_STATUS`, every rule, transition, audit row and test keep
 // saying "Closing", and only the human-facing label reads the client's own term.
-export const STATUS_LABEL: Record<string, string> = { Closing: "Result Awaited" };
+// QA-2736: the map itself now lives in the import-free lib/candidate-journey.ts so the server reads
+// the same words; this is a re-export, not a copy.
+export const STATUS_LABEL: Record<string, string> = BATCH_STATUS_LABEL;
+export { batchStatusLabel, SIGNOFF_PENDING_LABEL };
 export function statusLabel(value?: string | null): string {
   return value ? (STATUS_LABEL[value] ?? value) : "";
 }
 
-export function Chip({ value }: { value?: string | null }) {
+// QA-2736: `label` is the per-batch word the server derived (`status_label`, from batchStatusLabel);
+// colour still keys on the stored value.
+export function Chip({ value, label }: { value?: string | null; label?: string | null }) {
   if (!value) return <span className="text-gray-400">—</span>;
-  const shown = statusLabel(value);
+  const shown = label || statusLabel(value);
   return (
-    <span title={shown === value ? undefined : `Stored as “${value}” — assessment is done, the result is awaited; certification takes it to Completed.`}
+    <span title={shown === value ? undefined : shown === SIGNOFF_PENDING_LABEL
+      ? `Stored as “${value}” — a result was removed after the assessment sign-off was derived, so the sign-off no longer holds. Record the missing result, or an Admin can reopen the batch to Active.`
+      : `Stored as “${value}” — assessment is done, the result is awaited; certification takes it to Completed.`}
       className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${CHIP_COLORS[value] ?? "bg-gray-100 text-gray-700"}`}>
       {shown}
     </span>

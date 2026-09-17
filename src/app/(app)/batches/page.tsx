@@ -435,7 +435,7 @@ function BatchesInner() {
                 .filter((o) => o.count > 0 || o.value === fBlock)} />
           )}
           <DataTable rows={shown} storageKey="batches" onRowClick={(r) => router.push(`/batches/${r._id}`)}
-            cardTitle={(r: any) => <>{r.code} <Chip value={r.status} /></>}
+            cardTitle={(r: any) => <>{r.code} <Chip value={r.status} label={r.status_label} /></>}
             loading={loading}
             defaultSort={{ key: "planned_start", dir: "desc" }}
             columns={[
@@ -455,11 +455,17 @@ function BatchesInner() {
                 key: "status", label: "Status", sortable: true, sortValue: (r: any) => r.status,
                 // -104: searchable by BOTH words — the client types "Result Awaited", an engineer
                 // reading an audit row types "Closing", and either must find the row.
-                filterText: (r: any) => [statusLabel(r.status), r.status === statusLabel(r.status) ? "" : r.status, r.settlement_stage].filter(Boolean).join(" — "),
+                // QA-2736: plus the per-batch word (status_label), so "sign-off pending" finds the row too.
+                // QA-2766 (cycle 2): for a stranded batch the stage IS the status word ("Assessment sign-off
+                // pending" printed twice, chip and caption). The caption and its search text are dropped when
+                // they only repeat status_label, which also makes the status_label search term its own
+                // evidence rather than one a duplicate stage copy silently backs up.
+                filterText: (r: any) => [...new Set([r.status_label, statusLabel(r.status), r.status])].filter(Boolean)
+                  .concat(r.settlement_stage && r.settlement_stage !== r.status_label ? [r.settlement_stage] : []).join(" — "),
                 render: (r: any) => (
                   <span className="flex flex-col gap-0.5">
-                    <Chip value={r.status} />
-                    {r.settlement_stage && <span className="text-[10px] font-medium leading-3 text-gray-500">{r.settlement_stage}</span>}
+                    <Chip value={r.status} label={r.status_label} />
+                    {r.settlement_stage && r.settlement_stage !== r.status_label && <span className="text-[10px] font-medium leading-3 text-gray-500">{r.settlement_stage}</span>}
                   </span>
                 ),
               },

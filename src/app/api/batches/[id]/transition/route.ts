@@ -6,6 +6,7 @@ import { assertBatchInScope, transitionBatch } from "@/lib/rules";
 import { requireApproval } from "@/lib/approvals";
 import { Batch, Closure } from "@/models";
 import { audit } from "@/lib/audit";
+import { BATCH_STATUS_LABEL } from "@/lib/candidate-journey";
 
 // POST { target: "Ready"|"Active"|"Assessment Awaited"|"Closing"|"Completed"|"Cancelled"|"Planning", reason?,
 //        actual_start?, actual_end?, backdate_override? }
@@ -43,7 +44,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // applied. "The assessment was held" is a fact about moving a batch to Result Awaited and about
   // nothing else; it is not a way to stamp exam_held onto a batch at any other moment.
   if (exam_held === true && target !== "Closing") {
-    throw new HttpError(400, "Recording that the assessment was held applies to moving a batch to Result Awaited, nothing else.");
+    throw new HttpError(400, `Recording that the assessment was held applies to moving a batch to ${BATCH_STATUS_LABEL.Closing}, nothing else.`);
   }
 
   // RPL M24: gated only when an Admin has enabled the action; otherwise a no-op.
@@ -112,7 +113,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // them - which is the whole reason `check-user-copy.mjs` exists and fails the wall on a code
       // in a shape `plain()` cannot strip. That suite is part of the wall and this unit never ran
       // it, so the failure it caused was carried through two cycles as if it were baseline.
-      newValue: "true - the assessment was HELD; results are NOT required to reach Result Awaited",
+      newValue: `true - the assessment was HELD; results are NOT required to reach ${BATCH_STATUS_LABEL.Closing}`,
       actor: user.id, actorType: "USER",
     });
   }

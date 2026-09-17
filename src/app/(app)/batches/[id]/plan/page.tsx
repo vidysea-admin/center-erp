@@ -85,7 +85,8 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
           <div className="flex flex-wrap items-center gap-3">
             <BackLink fallback={`/batches/${id}`} label="← Batch" />
             <h1 className="text-xl font-semibold">Backward plan · {b.code}</h1>
-            <Chip value={b.status} />
+            {/* QA-2764 (cycle 2): the per-batch word, not the enum's - served by GET /api/batches/[id]/plan. */}
+            <Chip value={b.status} label={data?.status_label} />
             <span className="text-sm text-gray-500">
               {b.program?.name}{b.location ? ` · ${b.location.name}` : ""} · {fmtDate(b.planned_start)}{b.planned_end ? ` → ${fmtDate(b.planned_end)}` : ""}{b.trainer ? ` · Trainer ${b.trainer.name}` : ""}
             </span>

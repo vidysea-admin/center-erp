@@ -694,7 +694,7 @@ function LocBatches({ locationId }: any) {
         columns={[
           { key: "code", label: "Code", render: (r: any) => <Link className="text-blue-700 hover:underline" href={`/batches/${r._id}`}>{r.code}</Link> },
           { key: "program", label: "Program", render: (r: any) => r.program?.name },
-          { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} /> },
+          { key: "status", label: "Status", render: (r: any) => <Chip value={r.status} label={r.status_label} /> }, // QA-2764 (cycle 2): the per-batch word, not the enum's
           { key: "roster_count", label: "Roster", render: (r: any) => `${r.roster_count}/${r.target_size}` },
           { key: "planned_start", label: "Start", render: (r: any) => fmtDate(r.planned_start) },
         ]} empty="No batches yet." />
