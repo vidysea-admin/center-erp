@@ -210,8 +210,11 @@ ok("home: the strip's JSX closes before the trainers-by-role block", stripClose 
   // The STORED status stays `Assessment Awaited` - this asserts the button text, never the enum.
   {
     const row = b.slice(b.indexOf("transition("), b.indexOf("setExamHeldOpen(true)") + 400);
-    const labels = [...row.matchAll(/>([^<>{}]{6,60})<\/Btn>/g)].map((m) => m[1].trim())
-      .filter((t) => /Awaited/.test(t));
+    // -314: qa-2736 renders the landing state through statusLabel("Closing") (still "Result
+    // Awaited" on screen), so a label may carry one {expression}; the old [^<>{}] class skipped it
+    // and the pin reported "the region moved" while the rendered text was unchanged.
+    const labels = [...row.matchAll(/>((?:[^<>{}]|\{[^{}]*\}){6,80})<\/Btn>/g)].map((m) => m[1].trim())
+      .filter((t) => /Awaited|statusLabel\(/.test(t));
     const bare = labels.filter((t) => !t.includes("→"));
     ok("QA-2435: both batch-transition buttons name the ACTION and the state, not the state alone",
       labels.length >= 2 && bare.length === 0,
