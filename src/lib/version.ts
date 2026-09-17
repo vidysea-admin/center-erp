@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-315";
+export const RELEASE = "2026.08.14-316";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,6 +157,31 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -316. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master 2a11aac..this bump: 67da001 qa-candidates-purge checked-PASS c2, verdict ce238141).
+// [C1] no counts. Every clause is scoped to what the cycle-2 verdict measured, not to what the unit
+// intends: grantable = permissions.ts candidates.purge + e2e-roles default/grant/revoke arms; typed
+// name + reason = checker Mode D 41/41 (Confirm disabled until both); the five blockers = the refusal
+// arms the checker re-ran; masked fields = its own DB read-back plus /api/audit/Candidate/<id> as
+// Admin AND Operations; 'kept, with who acted, which field changed and when' = row count and
+// field/actor/created_at untouched; sheet clauses = its own two-marker probe (old phone not
+// re-created, a genuinely new row still created, review names the row by number).
+// [C2] boundary words: 'the activity trail and the mail records ... and the records of changes that
+// came from a watched sheet' names ONLY the three stores the verdict read back. Workbook snapshots,
+// notification and follow-up text, unattached uploads and mail logged under other entities are NOT
+// masked (manifest disclosure) - so the note says nothing like 'everywhere' or 'all records'.
+export const RELEASE_NOTE_CURRENT =
+  "-316 adds a permanent delete for a student record that has already been archived. An Admin, or "  +
+  "a user an Admin grants the right to, can delete such a record from the Candidates screen after "  +
+  "typing the student's name and a reason. The delete is refused while the record is still active, "  +
+  "and while it is attached to a batch, a result, attendance, a government row or a cost entry. The "  +
+  "activity trail and the mail records for that student are kept, with who acted, which field "  +
+  "changed and when, but the name, phone number, email, date of birth and government id numbers "  +
+  "they carried are replaced by a masked form; the records of changes that came from a watched "  +
+  "sheet are masked the same way. A student deleted this way is not created again by the sheet "  +
+  "sync while the row is still on the sheet, and the sync names that row by its row number.";
+
+// -316: the -315 note moved here as its own literal string, never an alias (the -310 defect).
 // -315. Written against qa/contracts/public-release-note.md over the whole delta production receives
 // (origin/master aa89d6d..this bump: 880444b qa-2761-save-button-feedback checked-PASS c1, verdict
 // 181c14fa). [C1] no counts. Screens named = the manifest's wired-button list; check mark / red scoped
@@ -164,7 +189,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // Add Program); 'stay open' = QA-2763 1-4 (H1-H5); parked 202 = H9 + checker probe; not-yet list =
 // QA-2773. Closure Saves return to active on failure rather than red (disclosed) - so the note does
 // not name closure; batch status buttons = Mark Ready/Start/Record it/Complete/Cancel/Reopen (feedback prop).
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_315 =
   "-315 is about what a save button shows after it is pressed. On the batch, plan, location, Admin, "  +
   "Costs and Trainers screens and in the candidate edit form, a button that sends a save is disabled "  +
   "and shows that it is working until the server answers, so pressing it twice does not send the "  +
@@ -1804,6 +1829,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -313: ARCHIVE_312 wired in here in the SAME bump that declared it.
   // -314: ARCHIVE_313 wired in here in the SAME bump that declared it.
   // -315: ARCHIVE_314 wired in here in the SAME bump that declared it.
+  // -316: ARCHIVE_315 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_315 + " " +
   RELEASE_NOTE_ARCHIVE_314 + " " +
   RELEASE_NOTE_ARCHIVE_313 + " " +
   RELEASE_NOTE_ARCHIVE_312 + " " +
