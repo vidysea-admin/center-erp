@@ -2537,6 +2537,274 @@ ok("SPOC cannot open the permission matrix", (await req(spoc, "GET", "/api/permi
   await pmc.close();
 }
 
+// ---- Sub-unit C (qa-delete-c-result-delete): `results.delete` — un-marking is its own right ----
+// Umesh, 2026-09-17 (qa/specs/manish-delete-surfaces.md sections 2b + 9 answer 1). DELETE
+// /api/results/[id] — the door that destroys a candidate's assessment history including every
+// reassessment attempt — used to be gated by `closure.manage` ALONE: the same key that MARKS a
+// result. Operations, Location AND Trainer all hold `closure.manage` by default, so everyone who
+// could enter a mark could also erase one. `results.delete` is the narrower destructive right on
+// top of that surface (the relationship `batches.delete_with_data` has to `batches.delete`), and
+// the route now requires BOTH. Admin-only at ship; widening is a matrix PUT.
+//
+// Two things these assertions are written NOT to be:
+//   - They never assert that the least-privileged persona SUCCEEDS. Every non-Admin arm asserts the
+//     REFUSAL and then asserts that the refusal WROTE NOTHING (the row is still there, byte for
+//     byte, its audit trail did not grow, and the batch's derived figures did not move). A
+//     status-only pin would pass on a door that refused after half-deleting.
+//   - They never take "got a 403" as the answer. `closure.manage` is asked first, so an arm that
+//     holds the marking surface but not the delete right can only be refused by the NEW key, and an
+//     arm that holds the delete right but not the surface can only be refused by the OLD one. Each
+//     arm asserts WHICH refusal fired by its label (QA-2457).
+{
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const rmc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await rmc.connect();
+  const rdb = rmc.db(process.env.MONGODB_DB || "center_erp_ci");
+
+  const sR = "RD" + Date.now().toString().slice(-6);
+  const keyOf = (e) => String(e).replace(/:(view|edit)$/, "");
+  const permsSnapR = (await req(admin, "GET", "/api/permissions")).data;
+  const rolesR = permsSnapR.roles ?? [];
+  const opsBaseR = rolesR.find((r) => r.role === "Operations")?.permissions ?? [];
+  const enrBaseR = rolesR.find((r) => r.role === "Enrollment")?.permissions ?? [];
+
+  ok("results.delete: the right is in the permissions catalogue, so an Admin can see and grant it",
+    (permsSnapR.catalog ?? []).some((c) => c.key === "results.delete"),
+    JSON.stringify((permsSnapR.catalog ?? []).filter((c) => c.group === "Batches").map((c) => c.key)));
+
+  // Umesh's answer 1: Admin only AT SHIP. Asserted against the LIVE matrix rather than against the
+  // defaults constant, because a stored RolePermission row beats the default (ARCHITECTURE §3.2b)
+  // and the live matrix is the thing an operator actually gets.
+  const holdersR = rolesR.filter((r) => r.role !== "Admin" && (r.permissions ?? []).some((p) => keyOf(p) === "results.delete"));
+  ok("results.delete: ...and NO non-Admin role holds it at ship - Admin only (Umesh, spec section 9 answer 1)",
+    holdersR.length === 0, JSON.stringify(holdersR.map((r) => r.role)));
+  // The contrast that makes the line above mean something: the SURFACE right is held widely. If the
+  // new key were folded into closure.manage, or defaulted the same way, these three roles would
+  // have inherited the destructive verb on day one. That is the defect this unit removes, so it is
+  // pinned rather than described.
+  const surfaceHolders = rolesR.filter((r) => r.role !== "Admin" && (r.permissions ?? []).some((p) => keyOf(p) === "closure.manage")).map((r) => r.role);
+  ok("results.delete: ...while closure.manage - the MARKING surface - is held by several non-Admin roles, which is exactly why destroying needed its own key",
+    surfaceHolders.length >= 2, JSON.stringify(surfaceHolders));
+
+  // ---- A REAL marked result, built through the product's own doors ----
+  // No hand-seeded CandidateResult: the row is created by adding a fresh candidate to a live batch
+  // and marking them Pass through the marking grid's own PUT, so every rule and audit row applies.
+  let nR = 0;
+  const mkResultOn = async (b) => {
+    const cr = await req(admin, "POST", "/api/candidates", {
+      name: "Unmark " + sR + " N" + (++nR) + Math.random().toString(36).slice(2, 5),
+      phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"),
+      location: b.locId, program: b.progId,
+    });
+    const cand = cr.data?.item;
+    if (!cand?._id) return null;
+    const add = await req(admin, "POST", `/api/batches/${b.id}/members`, { candidate: cand._id });
+    if (![200, 201].includes(add.status)) return null;
+    const roster = (await req(admin, "GET", `/api/batches/${b.id}/results`)).data?.items ?? [];
+    const mine = roster.find((m) => String(m.candidate?._id ?? m.candidate) === String(cand._id));
+    if (!mine?.member) return null;
+    const put = await req(admin, "PUT", `/api/batches/${b.id}/results`, {
+      rows: [{ member: mine.member, result: "Pass", score: 71, max_score: 100, assessed_on: new Date().toISOString().slice(0, 10) }],
+    });
+    if (![200, 201].includes(put.status)) return null;
+    const after = (await req(admin, "GET", `/api/batches/${b.id}/results`)).data?.items ?? [];
+    const row = after.find((m) => String(m.candidate?._id ?? m.candidate) === String(cand._id))?.result;
+    return row?._id ? { cand, b, rid: String(row._id), member: mine.member } : null;
+  };
+
+  // Find a batch that will host this block's fixtures: any live batch whose roster accepts a new
+  // candidate and whose marking is not frozen. Tried rather than assumed - which batches the seed
+  // leaves markable depends on which suites ran before this one.
+  let hostR = null, firstR = null;
+  for (const bi of ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])) {
+    if (["Completed", "Cancelled"].includes(String(bi.status))) continue;
+    const det = (await req(admin, "GET", `/api/batches/${bi._id}`)).data?.item ?? {};
+    const locId = String(det.location?._id ?? det.location ?? "");
+    const progId = String(det.program?._id ?? det.program ?? "");
+    if (!locId || !progId) continue;
+    const cand = { id: String(bi._id), locId, progId, code: bi.code };
+    const f = await mkResultOn(cand);
+    if (f) { hostR = cand; firstR = f; break; }
+  }
+  ok("results.delete fixture: a live batch accepts a fresh candidate and a Pass mark through the real doors",
+    !!hostR && !!firstR, JSON.stringify({ host: hostR?.code ?? null, result: firstR?.rid ?? null }));
+
+  if (hostR && firstR) {
+    const del = (who, rid, body) => req(who, "DELETE", `/api/results/${rid}`, body);
+    const rowOf = async (rid) => rdb.collection("candidateresults").findOne({ _id: new ObjectId(rid) });
+    const trailOf = async (rid) => JSON.stringify(await rdb.collection("auditlogs")
+      .find({ entity: "CandidateResult", entity_id: new ObjectId(rid) }).sort({ _id: 1 }).toArray());
+    const summaryOf = async () => JSON.stringify((await req(admin, "GET", `/api/batches/${hostR.id}/results`)).data?.summary ?? null);
+
+    // A refusal must name its own reason AND leave nothing behind. "Nothing" here is three separate
+    // reads, because each can move without the others: the ROW itself (a half-delete), its AUDIT
+    // TRAIL (a door that logs before it refuses), and the batch's DERIVED FIGURES (this handler's
+    // whole point is that it calls recomputeClosureAggregates - a refusal that recomputed anyway
+    // would restate the closure off a roster it did not change).
+    const refusedClean = async (label, who, f, body, status, re) => {
+      const rowBefore = JSON.stringify(await rowOf(f.rid));
+      const trailBefore = await trailOf(f.rid);
+      const sumBefore = await summaryOf();
+      const r = await del(who, f.rid, body);
+      ok(`results.delete: ${label} - refused with ${status}, naming WHICH right is missing`,
+        r.status === status && re.test(String(r.data?.error ?? "")), `status=${r.status} ${String(r.data?.error ?? "").slice(0, 200)}`);
+      const rowAfter = JSON.stringify(await rowOf(f.rid));
+      const trailAfter = await trailOf(f.rid);
+      const sumAfter = await summaryOf();
+      ok(`results.delete: ${label} - ...and wrote NOTHING (row byte-identical, audit trail unchanged, batch figures unmoved)`,
+        rowAfter === rowBefore && rowAfter !== "null" && trailAfter === trailBefore && sumAfter === sumBefore,
+        JSON.stringify({ rowSame: rowAfter === rowBefore, present: rowAfter !== "null", trailSame: trailAfter === trailBefore, sumSame: sumAfter === sumBefore, sumBefore, sumAfter }));
+    };
+
+    // ---- Admin, the ship-day holder: allowed, and the delete really happens ----
+    {
+      const f = firstR;
+      ok("results.delete fixture: the new row really is a Pass on the batch before anything is deleted",
+        String((await rowOf(f.rid))?.result ?? "") === "Pass", JSON.stringify(await rowOf(f.rid)).slice(0, 160));
+      const r = await del(admin, f.rid, { reason: "marked on the wrong candidate" });
+      ok("results.delete: an Admin can un-mark a candidate by default (the ship-day holder, through the role bypass)",
+        r.status === 200 && r.data?.ok === true, `status=${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+      ok("results.delete: ...and the CandidateResult row is really gone from the database",
+        (await rowOf(f.rid)) === null);
+      const purged = await rdb.collection("auditlogs").find({ entity: "CandidateResult", entity_id: new ObjectId(f.rid), field: "removed" }).toArray();
+      ok("results.delete: ...and exactly one audit row records the removal, carrying the typed reason and the row that went",
+        purged.length === 1 && /marked on the wrong candidate/.test(String(purged[0]?.new_value ?? ""))
+        && String(purged[0]?.old_value?.result ?? "") === "Pass",
+        JSON.stringify(purged.map((x) => ({ n: x.new_value, o: x.old_value }))).slice(0, 240));
+    }
+
+    // ---- THE DERIVED STATE WALKS BACK. This is the half a permission pin cannot see: the handler
+    // calls recomputeClosureAggregates, so deleting a Pass must take the batch's Passed figure down
+    // with it. Asserted as a DECOMPOSITION (before-1 === after) rather than "after is smaller",
+    // which would be true of a handler that zeroed the batch. ----
+    {
+      // TWO Passes, and only one is deleted. The handler recomputes only `if (left > 0)` - deleting
+      // the LAST row deliberately hands the batch back to its stored batch-level figures (Rule 41
+      // `legacy`), so a one-row fixture would measure the skip and call it the walk-back. That is
+      // exactly how this arm read on its first run: served figures moved, the stored Closure did
+      // not, and the pin was measuring a branch it did not name. The two-row shape is what makes
+      // the recompute reachable at all, and the `legacy` branch gets its own arm below.
+      const fKeep = await mkResultOn(hostR);
+      const f = await mkResultOn(hostR);
+      ok("results.delete fixture: TWO Passes are marked, so deleting one leaves the batch on per-candidate figures",
+        !!fKeep && !!f, JSON.stringify({ keep: fKeep?.rid ?? null, probe: f?.rid ?? null }));
+      if (fKeep && f) {
+        const sumBefore = (await req(admin, "GET", `/api/batches/${hostR.id}/results`)).data?.summary ?? {};
+        const closBefore = await rdb.collection("closures").findOne({ batch: new ObjectId(hostR.id) });
+        const r = await del(admin, f.rid, { reason: "walk-back probe" });
+        const sumAfter = (await req(admin, "GET", `/api/batches/${hostR.id}/results`)).data?.summary ?? {};
+        const closAfter = await rdb.collection("closures").findOne({ batch: new ObjectId(hostR.id) });
+        ok("results.delete: deleting a Pass walks the batch's derived PASSED figure back by exactly one",
+          r.status === 200 && Number(sumAfter.passed ?? -1) === Number(sumBefore.passed ?? -2) - 1,
+          JSON.stringify({ status: r.status, before: sumBefore, after: sumAfter }));
+        ok("results.delete: ...and the APPEARED figure walks back with it - the row is gone, not merely blanked",
+          Number(sumAfter.appeared ?? -1) === Number(sumBefore.appeared ?? -2) - 1,
+          JSON.stringify({ before: sumBefore.appeared, after: sumAfter.appeared }));
+        // The response says what the caller now has to know, and it is read back off the batch
+        // rather than trusted: rows_left_on_batch is what decides whether the batch falls back to
+        // batch-level figures (`legacy`), which is the irreversible-feeling part of this verb.
+        const liveRows = await rdb.collection("candidateresults").countDocuments({ batch: new ObjectId(hostR.id) });
+        ok("results.delete: ...and the response's rows_left_on_batch matches what is really left on the batch",
+          Number(r.data?.rows_left_on_batch ?? -1) === liveRows, JSON.stringify({ said: r.data?.rows_left_on_batch, really: liveRows }));
+        // The two pins above read the SERVED summary, which `summarizeBatchResults` computes live
+        // from the rows - so they move the moment the row is gone, whether or not anything was
+        // restated. The STORED Closure document is the half that only `recomputeClosureAggregates`
+        // writes, and it is what the invoice flow and the dashboards read. Without this pin, a
+        // handler that deleted the row and skipped the recompute would leave a signed-off figure
+        // standing on a roster it no longer matches, and every assertion above would stay green.
+        ok("results.delete fixture: the batch carries a STORED Closure with figures derived from the rows",
+          !!closBefore && Number(closBefore.passed ?? -1) >= 1, JSON.stringify({ appeared: closBefore?.appeared, passed: closBefore?.passed }));
+        ok("results.delete: ...and the STORED Closure figures are restated too - recomputeClosureAggregates really runs",
+          !!closAfter && Number(closAfter.passed ?? -1) === Number(closBefore?.passed ?? -2) - 1
+          && Number(closAfter.appeared ?? -1) === Number(closBefore?.appeared ?? -2) - 1,
+          JSON.stringify({ before: { a: closBefore?.appeared, p: closBefore?.passed }, after: { a: closAfter?.appeared, p: closAfter?.passed } }));
+
+        // The OTHER branch, named rather than left implicit: taking the LAST row off a batch does
+        // not restate the Closure - it hands the batch back to its stored batch-level figures. The
+        // handler says so in its response, and this asserts that the stored figures are left exactly
+        // where they were rather than being zeroed under the operator.
+        const closKeep = await rdb.collection("closures").findOne({ batch: new ObjectId(hostR.id) });
+        const rLast = await del(admin, fKeep.rid, { reason: "last row off the batch" });
+        const closLast = await rdb.collection("closures").findOne({ batch: new ObjectId(hostR.id) });
+        ok("results.delete: taking the LAST row off a batch says so - rows_left_on_batch 0 and batch_returns_to_legacy true",
+          rLast.status === 200 && Number(rLast.data?.rows_left_on_batch ?? -1) === 0 && rLast.data?.batch_returns_to_legacy === true,
+          `status=${rLast.status} ${JSON.stringify(rLast.data).slice(0, 160)}`);
+        ok("results.delete: ...and the stored Closure figures are LEFT ALONE on that path, not zeroed under the operator",
+          Number(closLast?.passed ?? -1) === Number(closKeep?.passed ?? -2) && Number(closLast?.appeared ?? -1) === Number(closKeep?.appeared ?? -2),
+          JSON.stringify({ before: { a: closKeep?.appeared, p: closKeep?.passed }, after: { a: closLast?.appeared, p: closLast?.passed } }));
+      }
+    }
+
+    // ---- Operations: refused by default, granted from the matrix, revoked again ----
+    // Operations holds `closure.manage` already, so the ONLY thing that can refuse them here is the
+    // new key - which is what makes this arm a test of `results.delete` and not of authentication.
+    {
+      const f1 = await mkResultOn(hostR);
+      ok("results.delete fixture: a result exists for the Operations arm", !!f1, JSON.stringify(f1?.rid ?? null));
+      if (f1) {
+        const surface = await req(ops, "GET", `/api/batches/${hostR.id}/results`);
+        ok("results.delete precondition: Operations CAN reach the marking surface - so the refusal below is about the delete right, not the door",
+          surface.status === 200, `status=${surface.status}`);
+        await refusedClean("Operations WITHOUT the right", ops, f1, { reason: "should not happen" }, 403, /Delete a candidate's result row/);
+
+        await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: [...opsBaseR, "results.delete"] }, 200);
+        await new Promise((r) => setTimeout(r, 5500)); // role-permission cache TTL
+        const g = await del(ops, f1.rid, { reason: "granted from the matrix" });
+        ok("results.delete: ...Operations GRANTED the right from the matrix can un-mark - the key is a real toggle, not decoration",
+          g.status === 200 && (await rowOf(f1.rid)) === null, `status=${g.status} ${JSON.stringify(g.data).slice(0, 160)}`);
+
+        await req(admin, "PUT", "/api/permissions", { role: "Operations", permissions: opsBaseR }, 200);
+        await new Promise((r) => setTimeout(r, 5500));
+        const f2 = await mkResultOn(hostR);
+        ok("results.delete fixture: a result exists for the revoked arm", !!f2, JSON.stringify(f2?.rid ?? null));
+        if (f2) {
+          await refusedClean("Operations after the right is REVOKED", ops, f2, { reason: "should not happen" }, 403, /Delete a candidate's result row/);
+          await del(admin, f2.rid, { reason: "tidy" });
+        }
+      }
+    }
+
+    // ---- BOTH keys are required, and this arm is the only one that can prove it. ----
+    // Enrollment does NOT hold closure.manage. Granting them `results.delete` alone must still
+    // refuse - and be refused by the SURFACE right, not the new one. Without this, a route that had
+    // dropped `closure.manage` and kept only `results.delete` would pass every arm above.
+    {
+      const f = await mkResultOn(hostR);
+      ok("results.delete fixture: a result exists for the both-keys arm", !!f, JSON.stringify(f?.rid ?? null));
+      if (f) {
+        await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: [...enrBaseR, "results.delete"] }, 200);
+        await new Promise((r) => setTimeout(r, 5500));
+        await refusedClean("a role holding results.delete but NOT closure.manage", enroll, f,
+          { reason: "should not happen" }, 403, /Assessment, certification & closure/);
+        await req(admin, "PUT", "/api/permissions", { role: "Enrollment", permissions: enrBaseR }, 200);
+        await new Promise((r) => setTimeout(r, 5500));
+        await del(admin, f.rid, { reason: "tidy" });
+      }
+    }
+
+    // ---- The safety refusals this door already carried are unchanged. Widening who may press a
+    // verb is the reason to prove what it still refuses, not to relax it (ARCHITECTURE §3.2b). ----
+    {
+      const f = await mkResultOn(hostR);
+      ok("results.delete fixture: a result exists for the reason-required arm", !!f, JSON.stringify(f?.rid ?? null));
+      if (f) {
+        await refusedClean("an Admin with NO reason", admin, f, {}, 400, /reason is required/i);
+        await refusedClean("an Admin with a BLANK reason", admin, f, { reason: "   " }, 400, /reason is required/i);
+        await del(admin, f.rid, { reason: "tidy" });
+      }
+    }
+
+    // ---- Restore Enrollment and Operations exactly as found, so no later suite inherits a grant ----
+    const backOps = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Operations")?.permissions ?? [];
+    const backEnr = ((await req(admin, "GET", "/api/permissions")).data.roles ?? []).find((r) => r.role === "Enrollment")?.permissions ?? [];
+    ok("results.delete: Operations' and Enrollment's rights are restored exactly as found - this block leaves no residue",
+      JSON.stringify([...backOps].sort()) === JSON.stringify([...opsBaseR].sort())
+      && JSON.stringify([...backEnr].sort()) === JSON.stringify([...enrBaseR].sort()),
+      JSON.stringify({ opsWas: opsBaseR.length, opsNow: backOps.length, enrWas: enrBaseR.length, enrNow: backEnr.length }));
+  }
+  await rmc.close();
+}
+
 // ---- QA-1211: the CREATE door validated two fields and then threw them away ----
 // `POST /api/users` read `body.extra_permissions` to decide whether the request needed an Admin
 // (the escalation guard), and then `User.create` did not list it. Same for `revoked_permissions`.

@@ -48,6 +48,20 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "batches.manage", label: "Plan/edit batches & transitions", group: "Batches" },
   { key: "batches.daily_log", label: "Enter daily logs & evidence", group: "Batches" },
   { key: "closure.manage", label: "Assessment, certification & closure", group: "Batches" },
+  // Sub-unit C (qa-delete-c-result-delete, Umesh 2026-09-17, qa/specs/manish-delete-surfaces.md
+  // sections 2b + 9 answer 1): un-marking a candidate — DELETE /api/results/[id] — used to ride
+  // `closure.manage` alone, i.e. the same key that MARKS a result also DESTROYED one. That is the
+  // exact conflation §3.2b of ARCHITECTURE.md exists to refuse: "editing a record and destroying it
+  // are different powers." `closure.manage` is held by Operations, Location AND Trainer by default,
+  // so every marker could also erase an assessment history including its reassessment attempts.
+  //
+  // This is the narrower destructive right ON TOP of that surface — the same relationship
+  // `batches.delete_with_data` has to `batches.delete` — so the route asks for BOTH. Default
+  // holders: **Admin only** (Umesh's answer 1). Admin gets it through the role bypass because the
+  // key is not in NO_ADMIN_BYPASS and DEFAULT_ROLE_PERMISSIONS.Admin is computed from PERMISSIONS;
+  // no other role's default list names it, so nothing any other role can do changes on day one.
+  // Granting it further is the ordinary matrix PUT / extra_permissions path, not a new mechanism.
+  { key: "results.delete", label: "Delete a candidate's result row (un-mark) — destroys the assessment history including reassessment attempts", group: "Batches" },
   { key: "attendance.govt", label: "Import & reconcile government portal attendance", group: "Batches" },
   { key: "costs.manage", label: "Enter costs", group: "Finance" },
   // QA-1838 (checker, cycle 1): `invoices.manage` was REMOVED here. After QA-1825 moved the invoice

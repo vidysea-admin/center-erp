@@ -59,11 +59,27 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 //     reason), so this can never orphan an object in the bucket.
 //   - A reason is required, and the audit carries the whole row, because un-marking destroys the
 //     assessment history including every reassessment attempt.
+//
+// Sub-unit C (qa-delete-c-result-delete, Umesh 2026-09-17, qa/specs/manish-delete-surfaces.md §2b
+// + §9 answer 1): this door used to be gated by `closure.manage` ALONE — the same right that marks
+// a result. Operations, Location and Trainer all hold `closure.manage` by default, so every person
+// who could enter a mark could also destroy one, which is the "editing and destroying are different
+// powers" rule in ARCHITECTURE.md §3.2b being broken on the one door whose deletion is least
+// recoverable (the audit snapshot is all that is left of the attempts). It now requires BOTH keys:
+// `closure.manage` for the marking surface, `results.delete` as the narrower destructive right on
+// top of it — the same relationship `batches.delete_with_data` has to `batches.delete`. Default
+// holder at ship is Admin only; widening is a matrix PUT, not a code change.
+//
+// Order matters and is deliberate: `closure.manage` is asked FIRST so a user with neither key is
+// refused by the surface right, and the `results.delete` refusal can only be reached by someone who
+// genuinely holds the marking surface. That makes "which refusal fired" answerable from the message
+// rather than guessable — QA-2457's lesson, applied at the door instead of in the test.
 export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
   await requirePerm(user, "closure.manage");
+  await requirePerm(user, "results.delete");
   const { id } = await ctx.params;
   await assertResultInScope(user, id); // Rule 38
 
