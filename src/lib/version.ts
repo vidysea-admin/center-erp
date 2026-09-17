@@ -161,8 +161,14 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // (origin/master 2a11aac..this bump: 67da001 qa-candidates-purge checked-PASS c2, verdict ce238141).
 // [C1] no counts. Every clause is scoped to what the cycle-2 verdict measured, not to what the unit
 // intends: grantable = permissions.ts candidates.purge + e2e-roles default/grant/revoke arms; typed
-// name + reason = checker Mode D 41/41 (Confirm disabled until both); the five blockers = the refusal
-// arms the checker re-ran; masked fields = its own DB read-back plus /api/audit/Candidate/<id> as
+// name + reason = checker Mode D 41/41 (Confirm disabled until both); the blockers named are exactly
+// the PurgeBlocker keys in candidate-archive.ts:52 (not_archived, batch_history, results, govt_rows,
+// documents) - the first draft of this note claimed a COST-ENTRY refusal that cannot exist (CostEntry
+// carries no candidate field, :51) and omitted DOCUMENTS, the blocker Umesh himself ruled on in spec
+// section 9 answer 2; caught pre-push by erp-d7 as QA-2781 (S3, 82f11e0f) and corrected here.
+// 'attendance' is kept: DailyLog.present_member_ids holds BatchMember ids, so attendance is refused
+// through the batch-history query (:49-50) - true to what a user meets, with no query of its own.
+// masked fields = the checker's own DB read-back plus /api/audit/Candidate/<id> as
 // Admin AND Operations; 'kept, with who acted, which field changed and when' = row count and
 // field/actor/created_at untouched; sheet clauses = its own two-marker probe (old phone not
 // re-created, a genuinely new row still created, review names the row by number).
@@ -174,7 +180,8 @@ export const RELEASE_NOTE_CURRENT =
   "-316 adds a permanent delete for a student record that has already been archived. An Admin, or "  +
   "a user an Admin grants the right to, can delete such a record from the Candidates screen after "  +
   "typing the student's name and a reason. The delete is refused while the record is still active, "  +
-  "and while it is attached to a batch, a result, attendance, a government row or a cost entry. The "  +
+  "while it is attached to a batch, a result, attendance or a government row, and while any "  +
+  "documents are still on file - those are removed first. The "  +
   "activity trail and the mail records for that student are kept, with who acted, which field "  +
   "changed and when, but the name, phone number, email, date of birth and government id numbers "  +
   "they carried are replaced by a masked form; the records of changes that came from a watched "  +
