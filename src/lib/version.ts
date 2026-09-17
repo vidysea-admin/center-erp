@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-314";
+export const RELEASE = "2026.08.14-315";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,6 +157,27 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -315. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master aa89d6d..this bump: 880444b qa-2761-save-button-feedback checked-PASS c1, verdict
+// 181c14fa). [C1] no counts. Screens named = the manifest's wired-button list; check mark / red scoped
+// to buttons with the feedback prop (maker mutants M3/M5/M6 + checker Mode D DefaultsTab, forced-500
+// Add Program); 'stay open' = QA-2763 1-4 (H1-H5); parked 202 = H9 + checker probe; not-yet list =
+// QA-2773. Closure Saves return to active on failure rather than red (disclosed) - so the note does
+// not name closure; batch status buttons = Mark Ready/Start/Record it/Complete/Cancel/Reopen (feedback prop).
+export const RELEASE_NOTE_CURRENT =
+  "-315 is about what a save button shows after it is pressed. On the batch, plan, location, Admin, "  +
+  "Costs and Trainers screens and in the candidate edit form, a button that sends a save is disabled "  +
+  "and shows that it is working until the server answers, so pressing it twice does not send the "  +
+  "save twice. On Admin Defaults, the batch status buttons, bulk enrollment and the attendance grid, the plan editor, "  +
+  "location details and contacts, and the Costs page, a save that succeeds shows a check mark on a "  +
+  "green button, and a save that fails turns the button red while the error is shown. The batch "  +
+  "status forms, the plan milestone editor, location contacts and the batch round and daily log "  +
+  "editors used to close or clear what had been typed when a save was refused; they now stay open "  +
+  "with the error. A save that is sent for approval instead of being applied does not show a check "  +
+  "mark. Save buttons on the Candidates and Finance screens and on approvals do not show a check "  +
+  "mark yet.";
+
+// -315: the -314 note moved here as its own literal string, never an alias (the -310 defect).
 // -314. Written against qa/contracts/public-release-note.md over the whole delta production receives
 // (origin/master 33989fa..this bump: fb09cda qa-2736 checked-PASS c2, verdict b4ba1d2a+11d63526;
 // 89aa4f9 cost-head checked-PASS c5, verdict e0ffb328). [C1] no counts. Clauses: label predicate and
@@ -166,7 +187,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // results are entered (disclosed + pinned, K8_M11); cost-head plain head offered + (inactive) on a
 // selected retired row (cost-head c5 Mode D 8/8). [C2] boundary words read: 'every candidate's result'
 // is the derivation's own condition; 'Operations and Trainer' names only the refused personas measured.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_314 =
   "-314 changes the batch screens and the Finance screen. A batch in the Closing stage whose "  +
   "assessment has not been signed off, and has not been recorded as held, is now labelled "  +
   "Assessment sign-off pending instead of Result Awaited. That label is shown on the batches list, "  +
@@ -1782,6 +1803,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -312: ARCHIVE_311 wired in here in the SAME bump that declared it.
   // -313: ARCHIVE_312 wired in here in the SAME bump that declared it.
   // -314: ARCHIVE_313 wired in here in the SAME bump that declared it.
+  // -315: ARCHIVE_314 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_314 + " " +
   RELEASE_NOTE_ARCHIVE_313 + " " +
   RELEASE_NOTE_ARCHIVE_312 + " " +
   RELEASE_NOTE_ARCHIVE_311 + " " +
