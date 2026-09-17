@@ -2,7 +2,7 @@
 import { Suspense, use, useEffect, useState } from "react";
 import { api, fmtDate, offerable } from "@/lib/client";
 import { useSearchParams } from "next/navigation";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Notice, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import Link from "next/link";
@@ -76,13 +76,15 @@ function Overview({ loc, onSaved, setError }: any) {
       }
       const res = await api(`/api/locations/${loc._id}`, { method: "PATCH", json: patch });
       // R-F: a centre login's edit parks for Admin approval — the 202 carries the message.
-      if (res?.error) setError(res.error);
+      // QA-2761 (review): resolving normally here would put a green check mark beside that message.
+      // Nothing was saved yet, so the button goes back to active instead.
+      if (res?.error) { setError(res.error); onSaved(); return false; }
       onSaved();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   return (
-    <Section title="Master fields" actions={<Btn small onClick={save}>Save</Btn>}>
+    <Section title="Master fields" actions={<Btn small feedback resetKey={JSON.stringify(form)} onClick={save}>Save</Btn>}>
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Name"><input className={inputCls} value={form.name ?? ""} onChange={(e) => set("name", e.target.value)} /></Field>
         <Field label="External ID"><input className={inputCls} value={form.external_id ?? ""} onChange={(e) => set("external_id", e.target.value)} /></Field>
@@ -166,15 +168,19 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
       // through to `next` here would display an unsaved, un-minted-id draft as if it had gone
       // through - the exact QA-627 staleness this function exists to prevent, reopened by the
       // one save path that never reaches `res.item` at all.
-      if (res?.error) { setError(res.error); return; }
+      if (res?.error) { setError(res.error); return false; }
       setContacts(res?.item?.contacts ?? next); onSaved();
-    } catch (e: any) { setError(e.message); }
+      // QA-2763: rethrows now. It used to swallow, so addContact() below went on to clear the form
+      // after a refused save - the name the person had typed vanished along with the write.
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   async function addContact() {
-    if (!cForm.name?.trim()) { setError("Contact name is required."); return; }
-    await saveContacts([...contacts, { ...cForm, name: cForm.name.trim() }]);
+    if (!cForm.name?.trim()) { setError("Contact name is required."); return false; }
+    const saved = await saveContacts([...contacts, { ...cForm, name: cForm.name.trim() }]);
     setCForm({ role_label: "Contact" });
+    // A parked (approval) save clears the form as it always did, but is not shown as saved.
+    return saved;
   }
 
   async function addNote() {
@@ -182,7 +188,7 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
       await api(`/api/locations/${loc._id}/notes`, { method: "POST", json: nForm });
       setNForm({ meeting_date: new Date().toISOString().slice(0, 10) });
       loadNotes();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   return (
@@ -196,7 +202,7 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
               {["SPOC", "Principal", "Cluster Head", "Contact"].map((r) => <option key={r}>{r}</option>)}
             </select>
           </Field>
-          <div className="flex items-end"><Btn onClick={addContact}>Add contact</Btn></div>
+          <div className="flex items-end"><Btn feedback resetKey={JSON.stringify(cForm)} onClick={addContact}>Add contact</Btn></div>
         </div>
         <DataTable rows={[
           ...(loc.spoc_name ? [{ _id: "_spoc", name: loc.spoc_name, phone: loc.spoc_phone, role_label: "SPOC (primary)", legacy: true }] : []),
@@ -208,7 +214,7 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
             { key: "name", label: "Name" },
             { key: "role_label", label: "Role" },
             { key: "phone", label: "Phone", render: (r: any) => r.phone || "—" },
-            { key: "_rm", label: "", render: (r: any) => r.legacy ? <span className="text-[11px] text-gray-400">from master fields</span> : <Btn small kind="ghost" onClick={() => saveContacts(contacts.filter((_, i) => i !== r._idx))}>Remove</Btn> },
+            { key: "_rm", label: "", render: (r: any) => r.legacy ? <span className="text-[11px] text-gray-400">from master fields</span> : <Btn small kind="ghost" feedback onClick={() => saveContacts(contacts.filter((_, i) => i !== r._idx))}>Remove</Btn> },
           ]} empty="No contacts yet — add SPOCs and location contacts here." />
       </Section>
 
@@ -217,7 +223,7 @@ function ContactsNotes({ loc, onSaved, setError }: any) {
           <Field label="Date"><input type="date" className={inputCls} value={nForm.meeting_date} onChange={(e) => setNForm({ ...nForm, meeting_date: e.target.value })} /></Field>
           <Field label="Met with"><input className={inputCls} value={nForm.met_with ?? ""} onChange={(e) => setNForm({ ...nForm, met_with: e.target.value })} placeholder="Principal, SPOC…" /></Field>
           <Field label="Notes" required><input className={inputCls} value={nForm.note ?? ""} onChange={(e) => setNForm({ ...nForm, note: e.target.value })} placeholder="What was discussed / agreed" /></Field>
-          <div className="flex items-end"><Btn onClick={addNote} disabled={!nForm.note?.trim()}>Add note</Btn></div>
+          <div className="flex items-end"><Btn feedback resetKey={JSON.stringify(nForm)} onClick={addNote} disabled={!nForm.note?.trim()}>Add note</Btn></div>
         </div>
         <div className="space-y-2">
           {notes.length === 0 && <p className="py-6 text-center text-sm text-gray-400">No meeting notes yet.</p>}
@@ -272,13 +278,17 @@ function Targets({ locationId, setError }: any) {
   ]).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [locationId]);
 
+  // QA-2763 (6): "sent for approval" is a success and used to be written into the RED error banner,
+  // which read as a failed save. It is a green notice now.
+  const [targetNotice, setTargetNotice] = useState("");
   async function save() {
+    setTargetNotice("");
     try {
       const res = await api(`/api/locations/${locationId}/targets`, { method: "PUT", json: form });
       // R-F: a centre login's target change parks for Admin approval (202, queued).
-      if (res?.queued) setError(`Sent to the Admin for approval — the target updates once approved.`);
+      if (res?.queued) setTargetNotice(`Sent to the Admin for approval — the target updates once approved.`);
       setForm({}); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   // QA-496: a MOVE, not a delete-and-retype — the row carries its own tc_id, tc_status and the
@@ -407,6 +417,7 @@ function Targets({ locationId, setError }: any) {
         />
       </Section>
       <Section title="Set / update target">
+        {targetNotice && <Notice kind="success" onDismiss={() => setTargetNotice("")}>{targetNotice}</Notice>}
         <div className="grid gap-3 md:grid-cols-4">
           <Field label="Program" required>
             <select className={inputCls} value={form.program ?? ""} onChange={(e) => setForm({ ...form, program: e.target.value })}>
@@ -421,7 +432,7 @@ function Targets({ locationId, setError }: any) {
               form — a centre working without the sheet could never key them. */}
           <Field label="Enrolled (client-reported)"><input type="number" className={inputCls} value={form.enrolled_reported ?? ""} onChange={(e) => setForm({ ...form, enrolled_reported: e.target.value === "" ? undefined : +e.target.value })} /></Field>
           <Field label="Pending (client-reported)"><input type="number" className={inputCls} value={form.pending_reported ?? ""} onChange={(e) => setForm({ ...form, pending_reported: e.target.value === "" ? undefined : +e.target.value })} /></Field>
-          <div className="flex items-end"><Btn onClick={save} disabled={!form.program}>Save target</Btn></div>
+          <div className="flex items-end"><Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!form.program}>Save target</Btn></div>
         </div>
       </Section>
       {/* QA-496. The drawer says what is actually happening — a government approval is being moved
@@ -488,18 +499,18 @@ function TrainersInfra({ locationId, setError }: any) {
 
   async function addRoom() {
     try { await api(`/api/locations/${locationId}/rooms`, { method: "POST", json: roomForm }); setRoomForm({ type: "Classroom" }); load(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
   }
   async function saveRoom() {
     try {
       const { _id, ...patch } = roomEdit;
       await api(`/api/rooms/${_id}`, { method: "PATCH", json: { ...patch, capacity: patch.capacity === "" ? undefined : patch.capacity } });
       setRoomEdit(null); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
   async function addRequest() {
     try { await api("/api/trainer-requests", { method: "POST", json: { ...reqForm, location: locationId } }); setReqForm({}); load(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
   }
   // F-A9: one click turns this centre's empty trainer slots into TrainerRequests —
   // the endpoint refuses halted/unapproved centres and never doubles an Open request.
@@ -642,7 +653,7 @@ function TrainersInfra({ locationId, setError }: any) {
               </select>
             </Field>
             <div className="flex items-end gap-2">
-              <Btn small onClick={saveRoom} disabled={!roomEdit.name}>Save</Btn>
+              <Btn small feedback onClick={saveRoom} disabled={!roomEdit.name}>Save</Btn>
               <Btn small kind="ghost" onClick={() => setRoomEdit(null)}>Cancel</Btn>
             </div>
           </div>
@@ -655,7 +666,7 @@ function TrainersInfra({ locationId, setError }: any) {
             </select>
           </Field>
           <Field label="Capacity"><input type="number" className={inputCls} value={roomForm.capacity ?? ""} onChange={(e) => setRoomForm({ ...roomForm, capacity: +e.target.value })} /></Field>
-          <div className="flex items-end"><Btn onClick={addRoom} disabled={!roomForm.name}>Add Room</Btn></div>
+          <div className="flex items-end"><Btn feedback resetKey={JSON.stringify(roomForm)} onClick={addRoom} disabled={!roomForm.name}>Add Room</Btn></div>
         </div>
       </Section>
       <Section title="Trainer requests (hiring / TOT pipeline)">
@@ -677,7 +688,7 @@ function TrainersInfra({ locationId, setError }: any) {
           </Field>
           <Field label="Required by" required><input type="date" className={inputCls} value={reqForm.required_by_date ?? ""} onChange={(e) => setReqForm({ ...reqForm, required_by_date: e.target.value })} /></Field>
           <Field label="Expected available from"><input type="date" className={inputCls} value={reqForm.expected_available_from ?? ""} onChange={(e) => setReqForm({ ...reqForm, expected_available_from: e.target.value })} /></Field>
-          <div className="flex items-end"><Btn onClick={addRequest} disabled={!reqForm.program || !reqForm.required_by_date}>Raise Request</Btn></div>
+          <div className="flex items-end"><Btn feedback resetKey={JSON.stringify(reqForm)} onClick={addRequest} disabled={!reqForm.program || !reqForm.required_by_date}>Raise Request</Btn></div>
         </div>
       </Section>
     </div>

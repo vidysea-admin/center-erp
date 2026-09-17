@@ -285,7 +285,8 @@ function BatchesInner() {
       const res = await api("/api/batches", { method: "POST", json: { ...form, trainer: form.trainer || undefined, room: form.room || undefined } });
       if (res.warning) setInfo(res.warning);
       setDrawer(false); setForm({ session: "Full Day" }); load();
-    } catch (e: any) { setError(e.message); }
+      // QA-2761: rethrows so Create Batch shows red rather than a check mark when the server refuses.
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   // -174 (QA-501): this drawer asked for a DATE and nothing else, so everything -164, -165 and
@@ -764,7 +765,7 @@ function BatchesInner() {
               -196: the second button now carries what this form already knows into the Planning
               strip, which is the one place that both plans and creates. */}
           <div className="flex gap-2">
-            <Btn onClick={save} disabled={!form.location || !form.program || !form.planned_start}>Create Batch</Btn>
+            <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!form.location || !form.program || !form.planned_start}>Create Batch</Btn>
             <Btn kind="ghost" disabled={!form.planned_start}
               onClick={() => { setDrawer(false); setTab("Planning"); runPlanner({ start: form.planned_start, location: form.location, program: form.program }); }}>
               Create backward plan

@@ -112,6 +112,10 @@ const SUITES = [
   // QA-2651: an earlier version of this comment said 21/1 and "ten assertions" - both were true
   // mid-commit and false by the end of it.
   "e2e-proxy.mjs",
+  // QA-2761 / QA-2763: the save-button feedback states (pending, check mark, reset on change, error)
+  // and the handlers that used to swallow their own failures. A browser suite, in its own file
+  // because e2e-rendered-candidates.mjs was locked by another unit when this was written.
+  "e2e-save-feedback.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

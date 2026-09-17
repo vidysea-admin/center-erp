@@ -169,7 +169,7 @@ export function CandidateEditDrawer({
 
   // QA-141 rider (-72): in-flight guard against double-submit.
   async function saveCandidate() {
-    if (savingC) return;
+    if (savingC) return false;
     setSavingC(true);
     try {
       if (mode === "edit" && candidateId) {
@@ -189,8 +189,10 @@ export function CandidateEditDrawer({
       }
       onSaved();
       onClose();
-    } catch (e: any) { setError(e.message); }
-    setSavingC(false);
+      // QA-2761: rethrows so the Save button shows red rather than a check mark; the drawer was
+      // already kept open on failure and still is.
+    } catch (e: any) { setError(e.message); throw e; }
+    finally { setSavingC(false); }
   }
 
   return (
@@ -370,7 +372,7 @@ export function CandidateEditDrawer({
         )}
         {/* Edit mode: location/program may legitimately be blank on a sheet-imported row — the
             save must not be held hostage to fields the user is not correcting. */}
-        <Btn onClick={saveCandidate} disabled={savingC || (mode === "add" ? (!form.name || !form.phone || !form.program) : (!form.name || !form.phone))
+        <Btn feedback resetKey={JSON.stringify(form)} onClick={saveCandidate} disabled={savingC || (mode === "add" ? (!form.name || !form.phone || !form.program) : (!form.name || !form.phone))
           || !!phoneError(form.phone) || !!phoneError(form.alt_phone, { optional: true }) || !!emailError(form.email, { optional: true })}>
           {mode === "edit" ? "Save changes" : "Add"}
         </Btn>

@@ -26,10 +26,14 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
   const load = () => api(`/api/batches/${id}/plan`).then(setData).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // QA-2763: patch() used to swallow its failure, so the inline editors below - which do
+  // `await patch(...); setAdding(null)` - closed on a refused write as if it had saved, and took the
+  // typed row with them. It still shows the message and now rethrows. The two fire-and-forget callers
+  // (the Done checkbox and "remove") catch explicitly, because nothing else awaits them.
   async function patch(json: any) {
     setBusy(true);
     try { await api(`/api/batches/${id}/milestones`, { method: "PATCH", json }); await load(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
     finally { setBusy(false); }
   }
   // REQ-392: a share is to a PERSON now, so the recipient travels with the request. Re-sharing to
@@ -98,7 +102,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
               {/* QA-607: mirrors PLAN_CREATE_STATUSES in lib/rules.ts (unimportable here — mongoose).
                   The API is the gate; this only decides whether to show the button. */}
               {canEdit && ["Planning", "Active"].includes(b.status) && (
-                <div className="mt-3"><Btn disabled={busy} onClick={() => patch({ create: true })}>Create backward plan</Btn></div>
+                <div className="mt-3"><Btn feedback disabled={busy} onClick={() => patch({ create: true })}>Create backward plan</Btn></div>
               )}
             </Section>
           ) : (
@@ -108,7 +112,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                   <a className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50" href={`${BASE_PATH}/api/batches/${id}/plan/export`}>⬇ Download Excel</a>
                   <Btn small kind="ghost" onClick={() => copy(asText(), "text")}>{copied === "text" ? "Copied ✓" : "Copy as text"}</Btn>
                   <a className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium hover:bg-gray-50" target="_blank" rel="noreferrer" href={`https://wa.me/?text=${encodeURIComponent(asText())}`}>WhatsApp</a>
-                  {canEdit && b.status === "Planning" && <Btn small kind="ghost" disabled={busy} onClick={() => patch({ regenerate: true })}>Regenerate from defaults</Btn>}
+                  {canEdit && b.status === "Planning" && <Btn small kind="ghost" feedback disabled={busy} onClick={() => patch({ regenerate: true })}>Regenerate from defaults</Btn>}
                   {canEdit && <Btn small disabled={busy} onClick={() => setAdding({ label: "", due_date: "", notes: "", owner_label: "" })}>+ Add row</Btn>}
                 </span>
               }>
@@ -125,7 +129,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                     <Field label="Owner"><input className={inputCls} value={adding.owner_label} onChange={(e) => setAdding({ ...adding, owner_label: e.target.value })} placeholder="who does this" /></Field>
                     <Field label="Notes"><input className={inputCls} value={adding.notes} onChange={(e) => setAdding({ ...adding, notes: e.target.value })} /></Field>
                     <div className="flex gap-2 md:col-span-4">
-                      <Btn small disabled={busy || !adding.label.trim() || !adding.due_date} onClick={async () => { await patch({ add: adding }); setAdding(null); }}>Add</Btn>
+                      <Btn small feedback disabled={busy || !adding.label.trim() || !adding.due_date} onClick={async () => { await patch({ add: adding }); setAdding(null); }}>Add</Btn>
                       <Btn small kind="ghost" onClick={() => setAdding(null)}>Cancel</Btn>
                     </div>
                   </div>
@@ -142,7 +146,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                           <tr key={m.key} className="border-t align-top">
                             <td className="py-2 pr-2">
                               <input type="checkbox" checked={!!m.done_on} disabled={!canEdit || busy || ["Completed", "Cancelled"].includes(b.status)}
-                                onChange={(e) => patch({ key: m.key, done: e.target.checked })} />
+                                onChange={(e) => patch({ key: m.key, done: e.target.checked }).catch(() => {})} />
                             </td>
                             {isEditing ? (
                               <>
@@ -152,7 +156,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                                 <td className="py-2 pr-2"><input className={inputCls} value={editing.notes} onChange={(e) => setEditing({ ...editing, notes: e.target.value })} /></td>
                                 <td className="py-2 pr-2 text-xs text-gray-400">editing…</td>
                                 <td className="py-2 whitespace-nowrap">
-                                  <Btn small disabled={busy} onClick={async () => { await patch({ edit: editing }); setEditing(null); }}>Save</Btn>{" "}
+                                  <Btn small feedback disabled={busy} onClick={async () => { await patch({ edit: editing }); setEditing(null); }}>Save</Btn>{" "}
                                   <Btn small kind="ghost" onClick={() => setEditing(null)}>Cancel</Btn>
                                 </td>
                               </>
@@ -169,7 +173,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
                                   <td className="py-2 whitespace-nowrap text-xs">
                                     <button className="text-blue-700 underline" onClick={() => setEditing({ key: m.key, label: m.label, due_date: toInputDate(m.due_date), notes: m.notes ?? "", owner_label: m.owner_label ?? "" })}>edit</button>
                                     {" · "}
-                                    <button className="text-red-700 underline" onClick={() => { if (window.confirm(`Remove "${m.label}" from the plan?`)) patch({ remove: m.key }); }}>remove</button>
+                                    <button className="text-red-700 underline" onClick={() => { if (window.confirm(`Remove "${m.label}" from the plan?`)) patch({ remove: m.key }).catch(() => {}); }}>remove</button>
                                   </td>
                                 )}
                               </>

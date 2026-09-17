@@ -312,17 +312,17 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // beside it, which the server contradicts: POST /transition {target:"Completed"} succeeds for them
   // today. Only the FORCE door is Admin-only.
   async function completeOrdinary() {
-    if (!completeReason.trim()) { setError("Say why this batch is being completed - it is recorded on the batch."); return; }
+    if (!completeReason.trim()) { setError("Say why this batch is being completed - it is recorded on the batch."); return false; }
     setCompleting(true); setError("");
     try {
       await transition("Completed", { reason: completeReason.trim() });
       setCompleteOpen(false); setCompleteReason("");
-    } catch (e: any) { setError(e?.message ?? String(e)); onChanged(); }
+    } catch (e: any) { setError(e?.message ?? String(e)); onChanged(); throw e; }
     finally { setCompleting(false); }
   }
 
   async function completeAsAdmin() {
-    if (!completeReason.trim()) { setError("Say why this batch is being completed — it is recorded against every row it settles."); return; }
+    if (!completeReason.trim()) { setError("Say why this batch is being completed — it is recorded against every row it settles."); return false; }
     setCompleting(true);
     try {
       // -206: `force` is what makes this the SECOND press. The door refuses a bare press whenever
@@ -340,6 +340,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
       // on screen is what is in the database.
       setError(e.message);
       onChanged();
+      throw e;
     }
     finally { setCompleting(false); }
   }
@@ -356,11 +357,16 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     ...(!money?.closure?.dues_settled ? ["dues not attested as settled"] : []),
   ];
 
+  // QA-2763: this used to SWALLOW its own failure (setError and resolve), so every caller that did
+  // `await transition(); close()` closed its drawer on a refused press - "Record it", completeOrdinary
+  // and the exam-held confirmation - and a Btn awaiting it would have shown a check mark. It still
+  // shows the message, and now it also rethrows; every caller either awaits it inside its own
+  // try/catch or hands the promise to Btn, which owns the rejection.
   async function transition(target: string, extra: Record<string, unknown> = {}) {
     try {
       await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target, reason, ...extra } });
       setConfirmCancel(false); setReason(""); onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   // -81 (Umesh, 15/08 — Gurugram DST-02 began 30-07, entered 15-08): a batch whose planned
@@ -383,13 +389,13 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const [enrollOverrideReason, setEnrollOverrideReason] = useState("");
   const [backdating, setBackdating] = useState(false);
   async function recordBackdatedStart() {
-    if (!startDate) return;
+    if (!startDate) return false;
     setBackdating(true);
     try {
       // `extra` is spread last inside transition(), so this reason wins over the page-level one.
       await transition("Active", { actual_start: startDate, backdate_override: true, reason: backdateReason.trim() || undefined });
       setBackdateOpen(false); setBackdateReason("");
-    } catch (e: any) { setError(e.message); onChanged(); }
+    } catch (e: any) { setError(e.message); onChanged(); throw e; }
     finally { setBackdating(false); }
   }
 
@@ -401,18 +407,19 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // and is deliberately left alone rather than half-migrated inside an unrelated unit.
   const [restoreOpen, setRestoreOpen] = useState(false);
   // QA-2736: the Closing -> Active reopen. Same pattern as restoreBatch below and for the same reason:
-  // not routed through transition(), which swallows the refusal while the drawer closes anyway.
+  // not routed through transition(), which swallowed the refusal while the drawer closed anyway (it
+  // rethrows since QA-2763; this door stays separate because it sends no page-level reason).
   const [reopenOpen, setReopenOpen] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
   const [reopening, setReopening] = useState(false);
   async function reopenToActive() {
     const why = reopenReason.trim();
-    if (!why) return;
+    if (!why) return false;
     setReopening(true);
     try {
       await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target: "Active", reason: why } });
       setReopenOpen(false); setReopenReason(""); onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setReopening(false); }
   }
   const [restoreTarget, setRestoreTarget] = useState("Planning");
@@ -433,16 +440,16 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   };
   async function restoreBatch() {
     const why = restoreReason.trim();
-    if (!why || restoreBlocked[restoreTarget]) return;
+    if (!why || restoreBlocked[restoreTarget]) return false;
     setRestoring(true);
     try {
-      // Not routed through transition() on purpose: that helper SWALLOWS the failure (:256) and its
+      // Not routed through transition() on purpose: that helper SWALLOWED the failure (until QA-2763) and its
       // callers then close their drawer regardless, so a refusal would take itself off screen along with
       // the control that caused it. Here the refusal — Admin-only, readiness, "never started" — IS the
       // point of the confirmation, so it stays up and the drawer only closes on success.
       await api(`/api/batches/${b._id}/transition`, { method: "POST", json: { target: restoreTarget, reason: why } });
       setRestoreOpen(false); setRestoreReason(""); onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setRestoring(false); }
   }
 
@@ -478,6 +485,9 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   const [roomPick, setRoomPick] = useState("");
   const [newRoom, setNewRoom] = useState<{ name: string; type: string } | null>(null);
   const [roomBusy, setRoomBusy] = useState(false);
+  // QA-2763 (6): a queued room suggestion is a SUCCESS - it went to the Admin. It used to be written
+  // into the red error banner, which told the person their press had failed.
+  const [roomNotice, setRoomNotice] = useState("");
   // -205 (Umesh, 23/08): "overview mai jo Complete Batch button hai, that must be come beside
   // these above buttons in the same card, not anywhere else. am i really clear ?" He is clear.
   // -204 put these controls back on the screen by lifting them out of the collapsed readiness
@@ -488,8 +498,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
   // second literal would be the drift this repo's ARCHITECTURE.md section 3 is a list of.
   const statusActions = canTransition ? (
     <>
-      {b.status === "Planning" && <Btn small onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
-      {b.status === "Ready" && !beganAlready && <Btn small onClick={() => transition("Active")}>Start Batch</Btn>}
+      {b.status === "Planning" && <Btn small feedback onClick={() => transition("Ready")} disabled={!r.ready}>Mark Ready</Btn>}
+      {b.status === "Ready" && !beganAlready && <Btn small feedback onClick={() => transition("Active")}>Start Batch</Btn>}
       {/* QA-1973 (Umesh, 07/09, AVP-GURU-RPLAVP-DST-03 on its own start date): when the ONLY thing
           failing is the enrolment threshold, offer the documented way past it instead of leaving the
           centre with nothing but a global Defaults change that quietly weakens the check everywhere.
@@ -513,7 +523,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           <Btn small onClick={() => setBackdateOpen(true)} disabled={!startDate || backdating}>Record start from that date</Btn>
         </span>
       )}
-      {b.status === "Ready" && <Btn small kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
+      {b.status === "Ready" && <Btn small feedback kind="ghost" onClick={() => transition("Planning")}>Back to Planning</Btn>}
       {showEnrollOverride && b.status === "Ready" && !beganAlready && !r.enrollment_ok && (
         <span className="mt-2 flex w-full flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 p-2">
           <span className="text-xs text-amber-900">
@@ -528,6 +538,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           />
           <Btn
             small
+            feedback
             disabled={enrollOverrideReason.trim().length < 10}
             onClick={() => transition("Active", { enrollment_override: true, reason: enrollOverrideReason.trim() })}
             data-testid="enroll-override-start">
@@ -541,10 +552,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           -207 ruling ("vo double confirmation pop up card khule properly"), because it records a
           fact under the presser's name rather than just moving a status. */}
       {b.status === "Active" && (
-        <Btn small kind="ghost" onClick={() => {
+        <Btn small kind="ghost" feedback onClick={() => {
           if (window.confirm("Move this batch to Assessment Awaited? Daily hour-log reminders will stop, and you can record the assessment date when it is assigned.")) {
-            transition("Assessment Awaited");
+            return transition("Assessment Awaited");
           }
+          return false;
         }}>Training done → Assessment Awaited</Btn>
       )}
       {["Active", "Assessment Awaited"].includes(b.status) && <Btn small onClick={() => setExamHeldOpen(true)}>Assessment done → {statusLabel("Closing")}</Btn>}
@@ -572,9 +584,10 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
       {/* -113: completing is one press now, so it needs an undo. Admin only, reason required,
           audited — and never offered on a CLOSED batch, which is a settlement, not a record. */}
       {isAdmin && b.status === "Completed" && (
-        <Btn small kind="ghost" onClick={() => {
+        <Btn small kind="ghost" feedback onClick={() => {
           const why = window.prompt("Reopen this completed batch? Results and certificates become editable again. Reason:");
-          if (why && why.trim()) transition("Closing", { reason: why.trim() });
+          if (why && why.trim()) return transition("Closing", { reason: why.trim() });
+          return false;
         }}>Reopen (Admin)</Btn>
       )}
       {/* QA-2736 (Manish item 4; Umesh 2026-09-16): the way back out of Result Awaited, one rung below
@@ -588,7 +601,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
       {/* Rule 52: Completed = training over; Closed = money over (cert + invoice PAID + no dues). */}
       {b.status === "Completed" && (
         <span title={closeBlockers.length ? `Still needed before the batch can close: ${closeBlockers.join("; ")}` : "All dues settled — the batch can close"} className="inline-flex flex-col gap-0.5">
-          <Btn small onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
+          <Btn small feedback onClick={() => transition("Closed")} disabled={money !== null && closeBlockers.length > 0}>Close Batch (no dues)</Btn>
           {money !== null && closeBlockers.length > 0 && (
             <span className="text-[10px] font-medium text-amber-700">needs: {closeBlockers.join(" · ")}</span>
           )}
@@ -613,21 +626,21 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
     api(`/api/locations/${locId}/rooms`).then((d) => setRooms(d.items ?? [])).catch(() => setRooms([]));
   }, [canAssignRoom, locId]);
   async function assignRoom(roomId: string) {
-    if (roomBusy || !roomId) return;
+    if (roomBusy || !roomId) return false;
     setRoomBusy(true);
     try { await api(`/api/batches/${b._id}`, { method: "PATCH", json: { room: roomId } }); setRoomPick(""); onChanged(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
     finally { setRoomBusy(false); }
   }
   async function createAndAssignRoom() {
-    if (roomBusy || !newRoom?.name) return;
-    setRoomBusy(true);
+    if (roomBusy || !newRoom?.name) return false;
+    setRoomBusy(true); setRoomNotice("");
     try {
       const res = await api(`/api/locations/${locId}/rooms`, { method: "POST", json: { name: newRoom.name, type: newRoom.type || "Classroom" } });
-      if (res.queued) { setError("Room suggestion sent for approval — an Admin will add it."); setNewRoom(null); return; }
+      if (res.queued) { setRoomNotice("Room suggestion sent for approval — an Admin will add it."); setNewRoom(null); return; }
       await api(`/api/batches/${b._id}`, { method: "PATCH", json: { room: res.item._id } });
       setNewRoom(null); onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setRoomBusy(false); }
   }
 
@@ -763,7 +776,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                         <option value="">Assign room…</option>
                         {rooms.map((rm: any) => <option key={rm._id} value={rm._id}>{rm.name} ({rm.type})</option>)}
                       </select>
-                      <Btn small disabled={!roomPick || roomBusy} onClick={() => assignRoom(roomPick)}>Assign</Btn>
+                      <Btn small feedback disabled={!roomPick || roomBusy} onClick={() => assignRoom(roomPick)}>Assign</Btn>
                     </>
                   )}
                   {rooms && rooms.length === 0 && !newRoom && <span className="text-amber-700">This centre has no rooms yet.</span>}
@@ -775,11 +788,14 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                         <select className="rounded-lg border border-gray-300 px-2 py-1 text-xs" value={newRoom.type} onChange={(e) => setNewRoom({ ...newRoom, type: e.target.value })}>
                           <option>Classroom</option><option>Lab</option>
                         </select>
-                        <Btn small disabled={!newRoom.name.trim() || roomBusy} onClick={createAndAssignRoom}>{roomBusy ? "…" : "Add & assign"}</Btn>
+                        <Btn small feedback disabled={!newRoom.name.trim() || roomBusy} onClick={createAndAssignRoom}>{roomBusy ? "…" : "Add & assign"}</Btn>
                         <button className="text-gray-500 underline" onClick={() => setNewRoom(null)}>cancel</button>
                       </span>
                     )}
                 </span>
+              )}
+              {k === "room_assigned" && roomNotice && (
+                <span className="w-full"><Notice kind="success" onDismiss={() => setRoomNotice("")}>{roomNotice}</Notice></span>
               )}
             </li>
           ))}
@@ -822,7 +838,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
               value={reopenReason} onChange={(e) => setReopenReason(e.target.value)} />
           </Field>
           <div className="flex flex-wrap items-center gap-2">
-            <Btn onClick={reopenToActive} disabled={reopening || !reopenReason.trim()}>{reopening ? "Reopening…" : "Reopen to Active"}</Btn>
+            <Btn feedback onClick={reopenToActive} disabled={reopening || !reopenReason.trim()}>{reopening ? "Reopening…" : "Reopen to Active"}</Btn>
             <Btn kind="ghost" onClick={() => setReopenOpen(false)}>Cancel</Btn>
           </div>
         </div>
@@ -857,7 +873,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
             <input className={inputCls} placeholder="e.g. cancelled by mistake" value={restoreReason} onChange={(e) => setRestoreReason(e.target.value)} />
           </Field>
           <div className="flex flex-wrap items-center gap-2">
-            <Btn onClick={restoreBatch} disabled={restoring || !restoreReason.trim() || !!restoreBlocked[restoreTarget]}>{restoring ? "Restoring…" : "Restore batch"}</Btn>
+            <Btn feedback onClick={restoreBatch} disabled={restoring || !restoreReason.trim() || !!restoreBlocked[restoreTarget]}>{restoring ? "Restoring…" : "Restore batch"}</Btn>
             <Btn kind="ghost" onClick={() => setRestoreOpen(false)}>Cancel</Btn>
           </div>
         </div>
@@ -884,8 +900,11 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Btn
+              feedback
               onClick={async () => {
                 setExamHeldBusy(true);
+                // QA-2763: transition() rethrows now, so a refused press skips setExamHeldOpen(false) and
+                // the confirmation stays up with the refusal in it. It used to close as if recorded.
                 try { await transition("Closing", { exam_held: true }); setExamHeldOpen(false); }
                 finally { setExamHeldBusy(false); }
               }}
@@ -917,7 +936,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
           )}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <input className={inputCls + " max-w-md"} placeholder="Reason (optional — kept on the batch history)" value={backdateReason} onChange={(e) => setBackdateReason(e.target.value)} />
-            <Btn onClick={recordBackdatedStart} disabled={backdating || !startDate}>{backdating ? "Recording…" : "Record it"}</Btn>
+            <Btn feedback onClick={recordBackdatedStart} disabled={backdating || !startDate}>{backdating ? "Recording…" : "Record it"}</Btn>
             <Btn kind="ghost" onClick={() => setBackdateOpen(false)}>Cancel</Btn>
           </div>
         </div>
@@ -996,7 +1015,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                 permission rule is worse than one that offers nothing, because the person believes it.
                 Non-Admins get the ordinary door, which enforces Rule 18 and the approval matrix; the
                 override stays Admin-only and the label says which of the two this press is. */}
-            <Btn onClick={isAdmin ? completeAsAdmin : completeOrdinary} disabled={completing || !completeReason.trim()}>
+            <Btn feedback onClick={isAdmin ? completeAsAdmin : completeOrdinary} disabled={completing || !completeReason.trim()}>
               {completing ? "Completing…" : !isAdmin
                 ? "Complete batch"
                 : completePlan?.can_complete_cleanly && !(completePlan?.no_portal_id_blocks && (completePlan?.no_portal_id?.length ?? 0))
@@ -1146,7 +1165,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
         <div className="space-y-3">
           <p className="text-sm text-gray-600">This is destructive. A batch with daily logs can only be force-closed by Admin, with a reason.</p>
           <Field label="Reason" required><input className={inputCls} value={reason} onChange={(e) => setReason(e.target.value)} /></Field>
-          <Btn kind="danger" onClick={() => transition("Cancelled")} disabled={!reason}>Confirm Cancel</Btn>
+          <Btn kind="danger" feedback onClick={() => transition("Cancelled")} disabled={!reason}>Confirm Cancel</Btn>
         </div>
       </Drawer>
     </div>
@@ -1220,7 +1239,7 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
       setSaved("Saved.");
       if (res?.warning) setWarn(res.warning);
       onChanged();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setSaving(false); }
   }
 
@@ -1346,7 +1365,7 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
           ⚠ {warn} <button className="ml-2 font-bold" onClick={() => setWarn("")}>×</button>
         </div>
       )}
-      <Btn onClick={save} disabled={saving}>{saving ? "Saving…" : "Save details"}</Btn>
+      <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={saving}>{saving ? "Saving…" : "Save details"}</Btn>
     </div>
   );
 }
@@ -1458,7 +1477,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
 
   async function add(candidateId: string) {
     try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId, joined_on: joinOn || undefined } }); load(); onChanged(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
   }
   const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons, drop } =
     useDropMember(() => { load(); onChanged(); }, setError);
@@ -1650,7 +1669,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
           {pool.map((c) => (
             <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
               <span>{c.name} <span className="text-gray-400">· {c.phone}</span></span>
-              <Btn small onClick={() => add(c._id)}>Add</Btn>
+              <Btn small feedback onClick={() => add(c._id)}>Add</Btn>
             </div>
           ))}
           {pool.length === 0 && <p className="text-sm text-gray-400">No unassigned candidates at this location.</p>}
@@ -1889,9 +1908,9 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   const pending = shown.filter((m) => m.enrollment_status !== "Completed");
   const ENROL_STEP_ORDER = ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const;
   async function bulk(step: string) {
-    if (bulkBusy) return;
+    if (bulkBusy) return false;
     const targets = selected.size ? [...selected] : pending.map((m) => m._id);
-    if (!targets.length) return;
+    if (!targets.length) return false;
     const what = step === "all" ? "complete enrollment (all four steps)" : `mark ${step === "reg_done" ? "Registration" : step === "kyc_done" ? "e-KYC" : step === "enroll_done" ? "Enrollment" : "Batch Accept"}`;
     // Rule 55 (QA-1824): same step-order gate the single-card toggle hits (see `update` above),
     // precomputed here so a selection spanning several gapped candidates costs ONE confirm, not
@@ -1906,14 +1925,14 @@ function Enrollment({ batchId, batch, error, setError }: any) {
     const confirmMsg = needsBackfill
       ? `${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}? Some of them are missing an earlier step (Registration/e-KYC/Enrollment) — those will be marked done too.`
       : `${what} for ${targets.length} candidate${targets.length > 1 ? "s" : ""}?`;
-    if (!confirm(confirmMsg)) return;
+    if (!confirm(confirmMsg)) return false;
     setBulkBusy(true); setBulkMsg("");
     try {
       const r = await api(`/api/batches/${batchId}/members/bulk-enroll`, { method: "POST", json: { step, member_ids: targets, ...(needsBackfill ? { confirm_backfill: true } : {}) } });
       setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${r.failed?.length ? `, ${r.failed.length} failed` : ""}`);
       setSelected(new Set());
       await load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setBulkBusy(false); }
   }
 
@@ -1966,11 +1985,11 @@ function Enrollment({ batchId, batch, error, setError }: any) {
       {canEnrol && pending.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs">
           <span className="font-medium text-blue-900">Bulk ({scope}):</span>
-          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("reg_done")}>Mark Registration</Btn>
-          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("kyc_done")}>Mark e-KYC</Btn>
-          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("enroll_done")}>Mark Enrollment</Btn>
-          <Btn small kind="ghost" disabled={bulkBusy} onClick={() => bulk("accept_done")}>Mark Batch Accept</Btn>
-          <Btn small disabled={bulkBusy} onClick={() => bulk("all")}>{bulkBusy ? "Working…" : "Complete enrollment"}</Btn>
+          <Btn small kind="ghost" feedback resetKey={[...selected].join()} disabled={bulkBusy} onClick={() => bulk("reg_done")}>Mark Registration</Btn>
+          <Btn small kind="ghost" feedback resetKey={[...selected].join()} disabled={bulkBusy} onClick={() => bulk("kyc_done")}>Mark e-KYC</Btn>
+          <Btn small kind="ghost" feedback resetKey={[...selected].join()} disabled={bulkBusy} onClick={() => bulk("enroll_done")}>Mark Enrollment</Btn>
+          <Btn small kind="ghost" feedback resetKey={[...selected].join()} disabled={bulkBusy} onClick={() => bulk("accept_done")}>Mark Batch Accept</Btn>
+          <Btn small feedback resetKey={[...selected].join()} disabled={bulkBusy} onClick={() => bulk("all")}>{bulkBusy ? "Working…" : "Complete enrollment"}</Btn>
           <button className="ml-auto text-blue-700 underline" onClick={() => setSelected(selected.size === pending.length ? new Set() : new Set(pending.map((m) => m._id)))}>
             {selected.size === pending.length ? "Clear selection" : "Select all pending"}
           </button>
@@ -2385,7 +2404,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
     setGrid(next);
   };
   async function saveGrid() {
-    if (!grid || !gridDays.length) return;
+    if (!grid || !gridDays.length) return false;
     setGridBusy(true); setGridResult(null);
     try {
       const days = gridDays.map((day) => ({
@@ -2396,7 +2415,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
       const res = await api(`/api/batches/${batchId}/logs/bulk`, { method: "POST", json: { days } });
       setGridResult(res.results ?? []);
       await load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
     finally { setGridBusy(false); }
   }
   // QA-151 (Umesh, 15/08 — Gurugram DST-02): "Attendance tab me upload ka option nahi hai,
@@ -2578,7 +2597,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
               </span>
             )}
             <span className="ml-auto flex gap-2 pb-0.5">
-              <Btn small disabled={gridBusy || !gridDays.length} onClick={saveGrid}>{gridBusy ? "Saving…" : `Save ${gridDays.length} day${gridDays.length === 1 ? "" : "s"}`}</Btn>
+              <Btn small feedback resetKey={JSON.stringify(grid, (_k, v) => (v instanceof Set ? [...v] : v))} disabled={gridBusy || !gridDays.length} onClick={saveGrid}>{gridBusy ? "Saving…" : `Save ${gridDays.length} day${gridDays.length === 1 ? "" : "s"}`}</Btn>
               <Btn small kind="ghost" onClick={() => { setGrid(null); setGridResult(null); }}>Close</Btn>
             </span>
           </div>
@@ -3090,7 +3109,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
         setForm({ log_date: toInputDate(new Date()), present: new Set(), biometric: new Set(), photos: [], videos: [], attendance_sheet: [] });
       }
       load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setBusy(false); setError(e.message); throw e; }
     setBusy(false);
   }
 
@@ -3244,7 +3263,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
           </div>
           <Field label="Note"><input className={inputCls} value={form.note ?? ""} onChange={(e) => setForm({ ...form, note: e.target.value })} /></Field>
           <div className="flex items-center gap-3">
-            <Btn onClick={save} disabled={busy}>{busy ? "Saving…" : dayLog ? `Update ${fmtDate(dayLog.log_date)} log` : "Save Daily Log"}</Btn>
+            <Btn feedback resetKey={JSON.stringify(form, (_k, v) => (v instanceof Set ? [...v] : v))} onClick={save} disabled={busy}>{busy ? "Saving…" : dayLog ? `Update ${fmtDate(dayLog.log_date)} log` : "Save Daily Log"}</Btn>
             {uploadNote && <span className="text-xs text-gray-500" title="What the server stored (compressed at the storage door)">{uploadNote}</span>}
             <VideoRecorder open={recOpen} onClose={() => setRecOpen(false)} onRecorded={(f) => { setRecOpen(false); uploadFile(f, "videos"); }} />
             {queued > 0 && (
@@ -3350,10 +3369,14 @@ function RoundDrawer({ log, members, onClose, onSaved, error, setError }: any) {
     setBiometric(b);
   };
   async function save() {
+    setError("");
     try {
       await api(`/api/logs/${log._id}/sessions`, { method: "POST", json: { present_member_ids: [...present], biometric_member_ids: [...biometric] } });
       onSaved();
-    } catch (e: any) { setError(e.message); onClose(); }
+      // QA-2763: the catch used to call onClose() - which unmounted this drawer, and with it the
+      // error prop the refusal had just been written into. A failed round now stays open, shows why,
+      // and keeps every tick so it can be retried.
+    } catch (e: any) { setError(e.message); throw e; }
   }
   return (
     <Drawer open onClose={onClose} title={`Marking round — ${fmtDate(log.log_date)}`} wide error={error}>
@@ -3382,7 +3405,7 @@ function RoundDrawer({ log, members, onClose, onSaved, error, setError }: any) {
             </button>
           ))}
         </div>
-        <Btn onClick={save} disabled={present.size === 0 && biometric.size === 0}>Save round ({present.size} present · {biometric.size} bio)</Btn>
+        <Btn feedback onClick={save} disabled={present.size === 0 && biometric.size === 0}>Save round ({present.size} present · {biometric.size} bio)</Btn>
       </div>
     </Drawer>
   );
@@ -3416,6 +3439,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
   };
 
   async function save() {
+    setError("");
     try {
       await api(`/api/logs/${log._id}`, {
         method: "PATCH",
@@ -3429,7 +3453,8 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
         },
       });
       onSaved();
-    } catch (e: any) { setError(e.message); onClose(); }
+      // QA-2763: same defect as RoundDrawer above - onClose() in the catch hid the error it had set.
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   return (
@@ -3467,7 +3492,7 @@ function LogEditDrawer({ log, members, onClose, onSaved, error, setError }: any)
             ))}
           </div>
         </div>
-        <Btn onClick={save}>Save changes</Btn>
+        <Btn feedback onClick={save}>Save changes</Btn>
       </div>
     </Drawer>
   );
@@ -4158,7 +4183,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
         <div className="mt-3 flex items-start gap-2">
           <span className="inline-flex flex-col gap-0.5">
             <Btn small kind="ghost" disabled={closed || closureBusy}
-              onClick={() => saveClosure(
+              feedback resetKey={JSON.stringify(form)} onClick={() => saveClosure(
                 { ...closureDatePatch(form), ...(legacy && !perCandidate && showLegacyEntry ? { appeared: form.appeared, passed: form.passed } : {}) },
                 "assessment", "Assessment information saved.")}>Save</Btn>
             <span className="text-[10px] font-medium text-gray-500">{closureSaving === "assessment" ? "Saving…" : "saves the dates — not a sign-off"}</span>
@@ -4266,7 +4291,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
                 The permission half still refuses. Unchanged frozen dates ride along at their stored
                 values and the server treats them as the no-ops they are (sameStoredValue). */}
             <Btn small kind="ghost" disabled={!mayMarkTab || closureBusy}
-              onClick={() => saveClosure(
+              feedback resetKey={JSON.stringify(form)} onClick={() => saveClosure(
                 { ...closureDatePatch(form), ...(legacy ? { certificates_issued: form.certificates_issued } : {}) },
                 "certification", "Certification information saved.")}>Save</Btn>
             <span className="text-[10px] font-medium text-gray-500">{closureSaving === "certification" ? "Saving…" : "saves the dates — not a sign-off"}</span>
@@ -4410,7 +4435,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
               <input className={inputCls} disabled={!mayMarkTab || closureBusy} placeholder="Dues note (optional — what was settled, references)"
                 value={form.dues_note ?? ""} onChange={(e) => updateClosureForm({ dues_note: e.target.value })} />
               <Btn small kind="ghost" disabled={!mayMarkTab || closureBusy}
-                onClick={() => saveClosure({ dues_note: form.dues_note ?? "" }, "dues-note", "Dues note saved.")}>Save note</Btn>
+                feedback resetKey={form.dues_note ?? ""} onClick={() => saveClosure({ dues_note: form.dues_note ?? "" }, "dues-note", "Dues note saved.")}>Save note</Btn>
             </div>
             <p className="mt-2 text-xs text-gray-500">
               Batch closes from the Overview tab once certification is Completed, the invoice is
@@ -5832,7 +5857,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
   async function addSuggested() {
     // F-B17: case-insensitive — production carried "Trainer fee" alongside "Trainer Fee".
     const cat = cats.find((c: any) => c.name?.toLowerCase() === "trainer fee");
-    if (!cat) { setError('Cost category "Trainer Fee" not found — add it in Admin → Master Lists.'); return; }
+    if (!cat) { setError('Cost category "Trainer Fee" not found — add it in Admin → Master Lists.'); return false; }
     try {
       await api("/api/costs", {
         method: "POST",
@@ -5843,7 +5868,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
         },
       });
       setSuggest(null); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   function openEdit(r: any) {
@@ -5881,7 +5906,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
       }
       await api("/api/costs", { method: "POST", json: { ...form, batch: batchId, location: batch.location?._id ?? batch.location } });
       setForm({ entry_date: toInputDate(new Date()) }); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
   const total = items.reduce((s, i) => s + (i.amount ?? 0), 0);
 
@@ -5892,7 +5917,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
       {suggest && !hasTrainerFee && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
           <span>Trainer fee suggestion: <b>₹{suggest.amount.toLocaleString("en-IN")}</b> — {suggest.basis} ({suggest.name})</span>
-          <Btn small onClick={addSuggested}>Add as cost entry</Btn>
+          <Btn small feedback onClick={addSuggested}>Add as cost entry</Btn>
         </div>
       )}
       <DataTable rows={items} loading={!loaded}
@@ -5976,7 +6001,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             two buttons today so it has not overflowed YET, which is the reason to fix it in the same
             change rather than wait for the third one to be added. */}
         <div className="flex flex-wrap items-end gap-2 md:col-span-5">
-          <Btn onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
           {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
         </div>
       </div>

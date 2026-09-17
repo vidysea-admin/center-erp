@@ -103,7 +103,7 @@ function CostsInner() {
         if (res.queued) setNotice("Sent to the Admin for approval — it will leave My submissions once decided.");
       }
       setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   // Sheet-imported cost rows (Batch_Master's cost columns) can carry wrong amounts — row click
@@ -144,7 +144,7 @@ function CostsInner() {
   }
 
   async function markPaymentDone() {
-    if (!editId) return;
+    if (!editId) return false;
     try {
       await api(`/api/costs/${editId}`, {
         method: "PATCH",
@@ -156,7 +156,7 @@ function CostsInner() {
       });
       setNotice("Payment recorded with its date, reference and actor.");
       setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   const total = costs.reduce((s, c) => s + (c.amount ?? 0), 0);
@@ -254,11 +254,11 @@ function CostsInner() {
                   immediately beside the primary Save, while an ordinary frequent action was stranded
                   at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
               <div className="flex flex-wrap items-end gap-2 md:col-span-6">
-                <Btn onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
+                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && canApproveCosts && (
                   <span className="flex flex-wrap items-end gap-2 md:ml-auto">
-                    {form.payment_status !== "Paid" && <Btn kind="ghost" onClick={markPaymentDone}>Mark payment done</Btn>}
+                    {form.payment_status !== "Paid" && <Btn kind="ghost" feedback onClick={markPaymentDone}>Mark payment done</Btn>}
                     <Btn kind="danger" onClick={deleteCost}>Delete</Btn>
                   </span>
                 )}

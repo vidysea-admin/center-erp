@@ -92,7 +92,7 @@ function Programs({ error, setError }: any) {
       if (edit) await api(`/api/programs/${edit._id}`, { method: "PATCH", json: form });
       else await api("/api/programs", { method: "POST", json: form });
       setDrawer(false); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
   async function remove() {
     if (!edit) return;
@@ -219,7 +219,7 @@ function Programs({ error, setError }: any) {
           </Field>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active ?? true} onChange={(e) => set("active", e.target.checked)} /> Active</label>
           <div className="flex items-center gap-2">
-            <Btn onClick={save} disabled={!form.code || !form.name || !form.trainer_skill}>{edit ? "Save" : "Add Program"}</Btn>
+            <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!form.code || !form.name || !form.trainer_skill}>{edit ? "Save" : "Add Program"}</Btn>
             {edit && canDeleteProgram && <Btn kind="danger" onClick={remove}>Delete Program</Btn>}
           </div>
         </div>
@@ -408,7 +408,7 @@ function Users({ error, setError }: any) {
   // QA-141 rider (-72): in-flight guard against double-submit.
   const [savingU, setSavingU] = useState(false);
   async function save() {
-    if (savingU) return;
+    if (savingU) return false;
     setSavingU(true);
     try {
       const json = { ...form };
@@ -416,7 +416,7 @@ function Users({ error, setError }: any) {
       if (edit) await api(`/api/users/${edit._id}`, { method: "PATCH", json });
       else await api("/api/users", { method: "POST", json });
       setDrawer(false); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setSavingU(false); setError(e.message); throw e; }
     setSavingU(false);
   }
 
@@ -646,7 +646,7 @@ function Users({ error, setError }: any) {
               <Btn kind="danger" onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { approval: "reject" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Reject</Btn>
             </div>
           )}
-          <Btn onClick={save} disabled={savingU || !form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{savingU ? "Saving…" : edit ? "Save" : "Add User"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={savingU || !form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{savingU ? "Saving…" : edit ? "Save" : "Add User"}</Btn>
         </div>
       </Drawer>
     </Section>
@@ -885,7 +885,7 @@ function SyncSources({ error, setError }: any) {
       if (edit) await api(`/api/sync-sources/${edit._id}`, { method: "PATCH", json });
       else await api("/api/sync-sources", { method: "POST", json });
       setEdit(null); setForm({ frequency: "Manual only" }); load();
-    } catch (e: any) { setError(e.message.includes("JSON") ? "Field mappings must be valid JSON" : e.message); }
+    } catch (e: any) { setError(e.message.includes("JSON") ? "Field mappings must be valid JSON" : e.message); throw e; }
   }
   async function run(id: string) {
     setRunning(id); setResult("");
@@ -958,7 +958,7 @@ function SyncSources({ error, setError }: any) {
           </>
         )}
         <div className="mt-2 flex gap-2">
-          <Btn onClick={save} disabled={!form.name || !form.source_url}>{edit ? "Save" : "Add source"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form) + mapping} onClick={save} disabled={!form.name || !form.source_url}>{edit ? "Save" : "Add source"}</Btn>
           {edit && <Btn kind="ghost" onClick={() => open()}>New</Btn>}
         </div>
       </Section>
@@ -1201,7 +1201,7 @@ function MasterLists({ error, setError }: any) {
 
   async function add(list: string) {
     try { await api(`/api/master-lists/${list}`, { method: "POST", json: { name: names[list] } }); setNames({ ...names, [list]: "" }); load(); }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); throw e; }
   }
   async function saveScheme(id: string, patch: any) {
     try { await api(`/api/master-lists/schemes/${id}`, { method: "PATCH", json: patch }); load(); }
@@ -1236,7 +1236,7 @@ function MasterLists({ error, setError }: any) {
           {list !== "cost-categories" && (
             <div className="flex gap-2">
               <input className={inputCls} placeholder="New entry…" value={names[list] ?? ""} onChange={(e) => setNames({ ...names, [list]: e.target.value })} />
-              <Btn small onClick={() => add(list)} disabled={!names[list]}>Add</Btn>
+              <Btn small feedback resetKey={names[list] ?? ""} onClick={() => add(list)} disabled={!names[list]}>Add</Btn>
             </div>
           )}
         </Section>
@@ -1268,7 +1268,7 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
       await api("/api/master-lists/cost-categories", { method: "POST", json: { ...f, parent: f.parent || undefined } });
       setF({ name: "", code: "", parent: "", description: "", head_type: "" });
       reload();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
   async function save(id: string, patch: any) {
     try { await api(`/api/master-lists/cost-categories/${id}`, { method: "PATCH", json: patch }); reload(); }
@@ -1311,7 +1311,7 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
           <option value="Indirect">Indirect</option>
         </select>
         <input className={`${inputCls} md:col-span-2`} placeholder="Description — what belongs under this head" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
-        <div className="md:col-span-2"><Btn small onClick={add} disabled={!f.name}>Add cost head</Btn></div>
+        <div className="md:col-span-2"><Btn small feedback resetKey={JSON.stringify(f)} onClick={add} disabled={!f.name}>Add cost head</Btn></div>
       </div>
       <p className="mt-2 text-xs text-gray-500">
         Two levels only: a head, and subheads under it. Entries are deactivated, never deleted — a head something was once filed against is history.
@@ -1403,11 +1403,22 @@ function SchemeRow({ s, onSave }: { s: any; onSave: (id: string, patch: any) => 
 function DefaultsTab({ error, setError }: any) {
   const [form, setForm] = useState<any>(null);
   useEffect(() => { api("/api/defaults").then((d) => setForm(d.item)).catch((e: any) => setError(e.message)); }, []);
+  // QA-2761 / QA-2763 (5): Umesh's exact complaint. Six Save buttons, and this handler gave no busy
+  // state, no reload and no message - a Save that worked and a Save that did nothing looked the same.
+  // It clears the old banner, re-reads what the server now serves (GET, not the PUT body: the PUT
+  // answers with the raw document, the GET with the merged defaults this form was loaded from), and
+  // rethrows, so each Save button can show pending, a check mark, or red. A change to any field puts
+  // the buttons back to active (resetKey).
   async function save() {
-    try { await api("/api/defaults", { method: "PUT", json: form }); }
-    catch (e: any) { setError(e.message); }
+    setError("");
+    try {
+      await api("/api/defaults", { method: "PUT", json: form });
+      const d = await api("/api/defaults");
+      if (d?.item) setForm(d.item);
+    } catch (e: any) { setError(e.message); throw e; }
   }
   if (!form) return null;
+  const formKey = JSON.stringify(form);
   const FIELDS: [string, string][] = [
     ["batch_size", "Default batch size"], ["duration_days", "Duration days"], ["buffer_days", "Buffer days"],
     ["completion_deadline_days", "Completion deadline days"], ["mobilisation_lead_days", "Mobilisation lead days"],
@@ -1435,7 +1446,7 @@ function DefaultsTab({ error, setError }: any) {
   ];
   return (
     <div className="space-y-4">
-      <Section title="Planning defaults (§8)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Planning defaults (§8)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <div className="grid gap-3 md:grid-cols-3">
           {FIELDS.map(([k, label]) => (
             <Field key={k} label={label}>
@@ -1444,7 +1455,7 @@ function DefaultsTab({ error, setError }: any) {
           ))}
         </div>
       </Section>
-      <Section title="Candidate eligibility (2026-08-11)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Candidate eligibility (2026-08-11)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <div className="grid gap-3 md:grid-cols-3">
           {ELIGIBILITY.map(([k, label]) => (
             <Field key={k} label={label}>
@@ -1464,7 +1475,7 @@ function DefaultsTab({ error, setError }: any) {
           </Field>
         </div>
       </Section>
-      <Section title="Backward batch plan — lead times (2026-08-11)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Backward batch plan — lead times (2026-08-11)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <div className="grid gap-3 md:grid-cols-3">
           {LEADS.map(([k, label]) => (
             <Field key={k} label={label}>
@@ -1476,7 +1487,7 @@ function DefaultsTab({ error, setError }: any) {
 
       {/* -87 (QA-157, Umesh 15/08): every stored file passes one compression door; these are its
           numbers. Turn them after looking at ONE sample — faces and text must stay readable. */}
-      <Section title="Media compression (-87)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Media compression (-87)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <p className="mb-3 text-xs text-gray-500">
           Applied on the server to every upload (photos, scans, certificates) — no screen can bypass it. Faces and text must stay
           readable for the NSDC audit: change a value, upload one sample, look at it. Video is compressed on the device before upload (coming next).
@@ -1505,7 +1516,7 @@ function DefaultsTab({ error, setError }: any) {
 
       {/* 2026-08-12 — Manish confirmed these against the scheme guidelines. They are settings
           rather than constants because a circular can move them without a deploy. */}
-      <Section title="Scheme timing guidelines (Manish, 2026-08-12)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Scheme timing guidelines (Manish, 2026-08-12)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <p className="mb-3 text-xs text-gray-500">
           Batch time slots are validated against these. Confirmed: the day runs 9 to 6, a session may be up to
           4 hours, and two 4-hour batches a day is the sanctioned pattern (three 3-hour batches was refused).
@@ -1529,7 +1540,7 @@ function DefaultsTab({ error, setError }: any) {
         </div>
       </Section>
 
-      <Section title="Client contract & uploads (Manish, 2026-08-12)" actions={<Btn small onClick={save}>Save</Btn>}>
+      <Section title="Client contract & uploads (Manish, 2026-08-12)" actions={<Btn small feedback resetKey={formKey} onClick={save}>Save</Btn>}>
         <div className="space-y-3">
           <label className="flex items-start gap-2 text-sm">
             <input type="checkbox" className="mt-1" checked={form.absent_counts_as_appeared !== false}

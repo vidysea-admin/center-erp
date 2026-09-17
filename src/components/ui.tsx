@@ -169,17 +169,102 @@ export function Chip({ value, label }: { value?: string | null; label?: string |
   );
 }
 
-export function Btn({ children, onClick, kind = "primary", disabled, type = "button", small }: {
-  children: ReactNode; onClick?: () => void; kind?: "primary" | "ghost" | "danger"; disabled?: boolean; type?: "button" | "submit"; small?: boolean;
+// QA-2761 (Umesh, 2026-09-17): "click mai user ko pta hi nhi chal rha ki click ho gyaa hai ya kya hua
+// ... atleast there should some check mark come or slight color change and after any kinda change this
+// active button appears again". Btn used to be fire-and-forget, so it could not know a save started,
+// finished or failed. It now watches what onClick RETURNS:
+//   - nothing (a synchronous handler): exactly the old behaviour, no state at all.
+//   - a Promise: the button is PENDING (disabled, spinner) until it settles. That alone stops a
+//     double submit, and it is safe for every async handler because it claims nothing.
+//   - with `feedback` set, the settled promise is also REPORTED: resolved = SUCCESS (a check mark and
+//     a green tint, held until `resetKey` changes or the next click); rejected = ERROR (red for a
+//     moment, then active again); resolved `false` = the handler decided nothing was saved (a
+//     cancelled prompt, a validation message it already showed) and the button simply returns to
+//     active.
+// `feedback` is opt-in and not automatic ON PURPOSE. Most handlers in this app catch their own error,
+// call setError and RESOLVE. A button that turned every resolved promise into a check mark would claim
+// "saved" after a failed write (the QA-2470 class). A call site sets `feedback` only once its handler
+// rethrows; the manifest for qa-2761-save-button-feedback lists every one.
+// The spinner and the check mark are aria-hidden SVGs with no text node, so the accessible name and the
+// textContent stay exactly the children. Tests match names like "Save" and /^(Save|Add|Add Cost)$/.
+// There is deliberately NO dirty gate: a plain Save stays clickable before anything is saved.
+type BtnState = "idle" | "pending" | "success" | "error";
+const BTN_ERROR_MS = 2500;
+const BTN_UNSET = Symbol("unset");
+export function Btn({ children, onClick, kind = "primary", disabled, type = "button", small, feedback, resetKey }: {
+  children: ReactNode; onClick?: (...args: any[]) => unknown; kind?: "primary" | "ghost" | "danger"; disabled?: boolean; type?: "button" | "submit"; small?: boolean;
+  feedback?: boolean; resetKey?: string | number | boolean | null;
 }) {
+  const [state, setState] = useState<BtnState>("idle");
+  // React's `disabled` is not synchronous: two clicks in one tick both land before it paints. The ref
+  // is what makes a same-tick double click a single call.
+  const inFlight = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  // The key the form had when the result was shown. Recorded AFTER that render, so a handler that
+  // clears or reloads its own form before resolving does not immediately wipe its own check mark.
+  const settledKey = useRef<unknown>(BTN_UNSET);
+  useEffect(() => {
+    if (state !== "success" && state !== "error") { settledKey.current = BTN_UNSET; return; }
+    if (settledKey.current === BTN_UNSET) { settledKey.current = resetKey; return; }
+    if (resetKey !== settledKey.current) setState("idle");
+  }, [state, resetKey]);
+  useEffect(() => {
+    if (state !== "error") return;
+    const t = setTimeout(() => { if (alive.current) setState((s) => (s === "error" ? "idle" : s)); }, BTN_ERROR_MS);
+    return () => clearTimeout(t);
+  }, [state]);
+
+  function handle(e: any) {
+    if (!onClick) return;
+    if (inFlight.current) return;
+    const out = onClick(e);
+    if (!out || typeof (out as any).then !== "function") {
+      if (state !== "idle") setState("idle");
+      return;
+    }
+    inFlight.current = true;
+    setState("pending");
+    (out as Promise<unknown>).then(
+      (v) => { inFlight.current = false; if (alive.current) setState(feedback && v !== false ? "success" : "idle"); },
+      () => { inFlight.current = false; if (alive.current) setState(feedback ? "error" : "idle"); },
+    );
+  }
+
   const base = small ? "px-2.5 py-1 text-xs" : "px-3.5 py-2 text-sm";
-  const styles = {
+  const styles = (state === "success" ? {
+    primary: "bg-green-600 text-white hover:bg-green-700 disabled:bg-green-300",
+    ghost: "border border-green-400 bg-green-50 text-green-800 hover:bg-green-100 disabled:text-green-300",
+    danger: "bg-green-600 text-white hover:bg-green-700 disabled:bg-green-300",
+  } : state === "error" ? {
+    primary: "bg-red-600 text-white ring-2 ring-red-300 hover:bg-red-700 disabled:bg-red-300",
+    ghost: "border border-red-400 bg-red-50 text-red-700 hover:bg-red-100 disabled:text-red-300",
+    danger: "bg-red-700 text-white ring-2 ring-red-300 hover:bg-red-800 disabled:bg-red-300",
+  } : {
     primary: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300",
     ghost: "border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:text-gray-300",
     danger: "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300",
-  }[kind];
+  })[kind];
+  const icon = small ? "h-3 w-3" : "h-3.5 w-3.5";
   return (
-    <button type={type} onClick={onClick} disabled={disabled} className={`${base} ${styles} rounded-lg font-medium transition-colors whitespace-nowrap`}>
+    <button type={type} onClick={handle} disabled={disabled || state === "pending"} aria-busy={state === "pending" ? true : undefined}
+      data-save-state={state} className={`${base} ${styles} rounded-lg font-medium transition-colors whitespace-nowrap`}>
+      {state === "pending" && (
+        <svg aria-hidden="true" data-btn-icon="spinner" className={`${icon} mr-1.5 inline-block animate-spin align-[-2px]`} viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.3" strokeWidth="3" />
+          <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      )}
+      {state === "success" && (
+        <svg aria-hidden="true" data-btn-icon="check" className={`${icon} mr-1.5 inline-block align-[-2px]`} viewBox="0 0 24 24" fill="none">
+          <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+      {state === "error" && (
+        <svg aria-hidden="true" data-btn-icon="error" className={`${icon} mr-1.5 inline-block align-[-2px]`} viewBox="0 0 24 24" fill="none">
+          <path d="M12 7v6M12 17h.01" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        </svg>
+      )}
       {children}
     </button>
   );

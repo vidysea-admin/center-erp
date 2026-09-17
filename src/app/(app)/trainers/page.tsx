@@ -202,7 +202,7 @@ function TrainersInner() {
   // unique index only when the phone string matched exactly).
   const [savingT, setSavingT] = useState(false);
   async function save() {
-    if (savingT) return;
+    if (savingT) return false;
     setSavingT(true);
     try {
       const json = {
@@ -219,7 +219,8 @@ function TrainersInner() {
       if (edit) await api(`/api/trainers/${edit._id}`, { method: "PATCH", json });
       else await api("/api/trainers", { method: "POST", json });
       setDrawer(false); setEdit(null); setForm({ max_concurrent_batches: 4, status: "Available" }); load();
-    } catch (e: any) { setError(e.message); }
+      // QA-2761: rethrows so the Save button shows red instead of a check mark on a refused save.
+    } catch (e: any) { setSavingT(false); setError(e.message); throw e; }
     setSavingT(false);
   }
 
@@ -237,7 +238,7 @@ function TrainersInner() {
     try {
       await api(`/api/trainer-requests/${reqEdit._id}`, { method: "PATCH", json: { ...reqForm, fulfilled_by_trainer: reqForm.fulfilled_by_trainer || null } });
       setReqEdit(null); setReqForm({}); load();
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   return (
@@ -817,7 +818,7 @@ function TrainersInner() {
             <Field label="Max concurrent batches"><input type="number" className={inputCls} value={form.max_concurrent_batches ?? 4} onChange={(e) => set("max_concurrent_batches", +e.target.value)} /></Field>
           </div>
           <Field label="Performance incentive note"><input className={inputCls} placeholder="e.g. ₹500/batch completion bonus" value={form.incentive_note ?? ""} onChange={(e) => set("incentive_note", e.target.value)} /></Field>
-          <Btn onClick={save} disabled={savingT || !form.name || !form.phone || !!phoneError(form.phone) || !!emailError(form.email, { optional: true })}>{savingT ? "Saving…" : edit ? "Save changes" : "Add Trainer"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={savingT || !form.name || !form.phone || !!phoneError(form.phone) || !!emailError(form.email, { optional: true })}>{savingT ? "Saving…" : edit ? "Save changes" : "Add Trainer"}</Btn>
         </div>
       </Drawer>
 
@@ -842,7 +843,7 @@ function TrainersInner() {
             </select>
           </Field>
           <Field label="Note"><input className={inputCls} value={reqForm.note ?? ""} onChange={(e) => setReq("note", e.target.value)} /></Field>
-          <Btn onClick={saveReq}>Save request</Btn>
+          <Btn feedback resetKey={JSON.stringify(reqForm)} onClick={saveReq}>Save request</Btn>
         </div>
       </Drawer>
     </div>

@@ -32,7 +32,8 @@ function LocationsInner() {
     try {
       await api("/api/locations", { method: "POST", json: form });
       setDrawer(false); setForm({ approval_status: "Pending" }); load();
-    } catch (e: any) { setError(e.message); }
+      // QA-2761: rethrows so Create Location shows red rather than a check mark when the server refuses.
+    } catch (e: any) { setError(e.message); throw e; }
   }
 
   // 2026-08-14 (Umesh: "sheet mein dekho kitni beautifully handled hai — club mat karo"):
@@ -405,7 +406,7 @@ function LocationsInner() {
             <Field label="Principal name"><input className={inputCls} value={form.principal_name ?? ""} onChange={(e) => set("principal_name", e.target.value)} /></Field>
             <Field label="Principal phone"><input className={inputCls} value={form.principal_phone ?? ""} onChange={(e) => set("principal_phone", e.target.value)} /></Field>
           </div>
-          <Btn onClick={save} disabled={!form.code || !form.name}>Create Location</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!form.code || !form.name}>Create Location</Btn>
         </div>
       </Drawer>
     </div>
