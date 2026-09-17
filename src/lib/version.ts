@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-313";
+export const RELEASE = "2026.08.14-314";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,6 +157,29 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -314. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master 33989fa..this bump: fb09cda qa-2736 checked-PASS c2, verdict b4ba1d2a+11d63526;
+// 89aa4f9 cost-head checked-PASS c5, verdict e0ffb328). [C1] no counts. Clauses: label predicate and
+// screens (qa-2736 manifest consumer inventory, checker probe 47/47 + browser 31/31); filter pill
+// unchanged on purpose (same inventory); Admin-only reopen with reason, audit row, actual_start kept,
+// Ops + Trainer refused (checker probe); Assessment Awaited->Closing without the press when all
+// results are entered (disclosed + pinned, K8_M11); cost-head plain head offered + (inactive) on a
+// selected retired row (cost-head c5 Mode D 8/8). [C2] boundary words read: 'every candidate's result'
+// is the derivation's own condition; 'Operations and Trainer' names only the refused personas measured.
+export const RELEASE_NOTE_CURRENT =
+  "-314 changes the batch screens and the Finance screen. A batch in the Closing stage whose "  +
+  "assessment has not been signed off, and has not been recorded as held, is now labelled "  +
+  "Assessment sign-off pending instead of Result Awaited. That label is shown on the batches list, "  +
+  "on the batch page and its plan page, and where the batch is listed on a programme, location or "  +
+  "trainer page. The status filter on the batches list still calls the stage Result Awaited. An "  +
+  "Admin can move a batch in the Closing stage back to Active from the batch page by giving a "  +
+  "reason. The reason is recorded in the batch's activity and the batch keeps its actual start "  +
+  "date; Operations and Trainer users are refused. A batch waiting for its assessment can now move "  +
+  "to Closing once every candidate's result has been entered, without the Assessment done step. On "  +
+  "the Finance screen, the cost head filter offers a cost head that has no subheads, and a retired "  +
+  "head or subhead that is already chosen is shown with (inactive) after its name.";
+
+// -314: the -313 note moved here as its own literal string, never an alias (the -310 defect).
 // -313. Written against qa/contracts/public-release-note.md over the whole delta production receives
 // (origin/master a4fe6a8..173bba1, one commit, unit qa-selfreg-fields-drop, checked-PASS cycle 2).
 // [C1] no counts - the only digits are the release's own name. Every clause is scoped to what
@@ -165,7 +188,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // change still saving (Mode D, mother's name), and no personal fields on the toggle response for a
 // user with no candidates.manage key or view-only (arms 4/4b). Scoped to the Enrollment tab because
 // that is the only door the verdict drove, although the drawer component is shared.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_313 =
   "-313 is about editing a student from a batch's Enrollment tab. After one of a student's "  +
   "enrollment steps is ticked there, opening Edit on that student shows the details the student "  +
   "gave when registering, such as father's and mother's name, date of birth, gender, education "  +
@@ -1758,6 +1781,8 @@ const RELEASE_NOTE_ARCHIVE =
   // that. A comment warning about a defect does not prevent it; only an assertion does.
   // -312: ARCHIVE_311 wired in here in the SAME bump that declared it.
   // -313: ARCHIVE_312 wired in here in the SAME bump that declared it.
+  // -314: ARCHIVE_313 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_313 + " " +
   RELEASE_NOTE_ARCHIVE_312 + " " +
   RELEASE_NOTE_ARCHIVE_311 + " " +
   RELEASE_NOTE_ARCHIVE_310 + " " +
