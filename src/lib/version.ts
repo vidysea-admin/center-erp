@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-316";
+export const RELEASE = "2026.08.14-317";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -157,6 +157,32 @@ const RELEASE_NOTE_ARCHIVE_283 =
   "or added now appears immediately, rather than only after the page is reloaded. Nothing else "  +
   "about how a candidate is dropped from a batch has changed.";
 
+// -317. Written against qa/contracts/public-release-note.md over the whole delta production receives
+// (origin/master 1abd96b..this bump: 736f7ca qa-delete-a-batch-drawer checked-PASS c1, verdict
+// d2bd12b7; d2434e5 qa-delete-c-result-delete checked-PASS c1, verdict 3b93a851). [C1] no counts.
+// Batch clauses = the A checker's own Mode D run (Confirm disabled until BOTH the exact code and a
+// reason; Cancel writes nothing, read back through the API) and its own mutant widening the force
+// gate, which went red - so 'who may delete is unchanged' is measured, not argued. The snapshot
+// fields named are exactly what route.ts records (code, status, location, programme, planned dates).
+// [C2] boundary words, and the reason this note is worded the way it is: the C checker CONFIRMED
+// that Operations, Location and Trainer lose the un-mark capability on deploy, and bounded it -
+// `grep -rn "api/results/" src` at d2434e5 finds NO client caller, so nothing on any screen changes
+// (QA-2789). An unbounded 'three roles can no longer remove a result' would read as a visible
+// feature being withdrawn, which is this project's own repeat failure (QA-2019/-294, QA-2047/-295,
+// QA-2058/-297, QA-2088/-298). Hence 'no screen in the product offers this yet'. The per-result
+// control, its Drawer and its live check are still owed (spec section 2b stays open).
+export const RELEASE_NOTE_CURRENT =
+  "-317 changes how a batch is deleted, and who may remove a result that has already been recorded. "  +
+  "Deleting a batch no longer asks for confirmation in a browser dialog: the delete opens a panel "  +
+  "where the batch code has to be typed exactly as it is, together with a reason, and Confirm stays "  +
+  "unavailable until both are given. What the batch was - its code, stage, location, programme and "  +
+  "planned dates - is recorded alongside the deletion, because a deleted batch cannot be brought "  +
+  "back. Who is allowed to delete a batch has not changed. Removing a result that has been recorded "  +
+  "now needs a right of its own, held by an administrator; until this release any role that can mark "  +
+  "results could send that request. No screen in the product offers this result delete yet, so "  +
+  "nothing on any page changes: the right guards the request itself.";
+
+// -317: the -316 note moved here as its own literal string, never an alias (the -310 defect).
 // -316. Written against qa/contracts/public-release-note.md over the whole delta production receives
 // (origin/master 2a11aac..this bump: 67da001 qa-candidates-purge checked-PASS c2, verdict ce238141).
 // [C1] no counts. Every clause is scoped to what the cycle-2 verdict measured, not to what the unit
@@ -176,7 +202,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // came from a watched sheet' names ONLY the three stores the verdict read back. Workbook snapshots,
 // notification and follow-up text, unattached uploads and mail logged under other entities are NOT
 // masked (manifest disclosure) - so the note says nothing like 'everywhere' or 'all records'.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_316 =
   "-316 adds a permanent delete for a student record that has already been archived. An Admin, or "  +
   "a user an Admin grants the right to, can delete such a record from the Candidates screen after "  +
   "typing the student's name and a reason. The delete is refused while the record is still active, "  +
@@ -1837,6 +1863,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -314: ARCHIVE_313 wired in here in the SAME bump that declared it.
   // -315: ARCHIVE_314 wired in here in the SAME bump that declared it.
   // -316: ARCHIVE_315 wired in here in the SAME bump that declared it.
+  // -317: ARCHIVE_316 wired in here in the SAME bump that declared it.
+  RELEASE_NOTE_ARCHIVE_316 + " " +
   RELEASE_NOTE_ARCHIVE_315 + " " +
   RELEASE_NOTE_ARCHIVE_314 + " " +
   RELEASE_NOTE_ARCHIVE_313 + " " +
