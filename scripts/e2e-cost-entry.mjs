@@ -876,10 +876,18 @@ for (const variant of ["ordinary", "mark_paid"]) {
         JSON.stringify({ first: first.status, state: claim?.deletion_state, retry: retry.status, auditCount,
           batch: !!(await rawBatches.findOne({ _id: crashBatch })), cost: !!(await rawCosts.findOne({ batch: crashBatch })) }));
       const audit = claim?.deletion_audit_event_id ? await rawAudits.findOne({ _id: new ObjectId(String(claim.deletion_audit_event_id)) }) : null;
+      // QA-2791: 736f7ca (qa-delete-a-batch-drawer) turned this row's new_value from a plain
+      // string into {summary, snapshot} - String(audit.new_value) now stringifies the OBJECT
+      // ("[object Object]") instead of reading the reason, so this pin compared a placeholder.
+      // Read .summary (which still carries the reason text) and fall back to the bare string for
+      // any row written before the shape change (production has both).
+      const auditText = String(
+        audit?.new_value && typeof audit.new_value === "object" ? (audit.new_value.summary ?? "") : (audit?.new_value ?? "")
+      );
       ok(`batch deletion recovery [${label}]: retry preserves the original actor/reason audit input, not its new reason`,
-        String(audit?.new_value ?? "").includes(`cycle 12 ${label} crash original reason`)
-          && !String(audit?.new_value ?? "").includes("different retry reason"),
-        String(audit?.new_value ?? ""));
+        auditText.includes(`cycle 12 ${label} crash original reason`)
+          && !auditText.includes("different retry reason"),
+        auditText);
     }
   } else {
     ok("batch materialization [precondition]: batch/category fixture exists", false,
