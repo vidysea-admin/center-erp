@@ -201,10 +201,34 @@ ok("[precondition] the browser is logged in (not sitting on the login screen)", 
   if (delRes.status === 200 && actorId) {
     await page.goto(`${BASE}/admin?tab=Users`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
+    // QA-2804: this precondition read `found=false` on the -317 release wall AND on a quiet
+    // re-run against the same server, so it is neither load-dependent timing nor a product
+    // defect — it is this assertion assuming a flat list. `DataTable` (components/ui.tsx,
+    // `const slice = view.slice((cur - 1) * pageSize, cur * pageSize)`) defaults to
+    // `pageSize = 25`, and the Users table passes no override, so only 25 rows are ever in the
+    // DOM. Measured on the wall's own database: 80 users, 69 in the rendered set, 3 pages, and
+    // the actor — named "ZZ QA2792 Actor <stamp>", sorted by name ascending — at index 64, i.e.
+    // page 3. The row could never be on page 1 on any database with 25+ users sorting before
+    // "ZZ", which is every seeded one. That mattered because the four assertions this unit
+    // actually exists for sit behind `if (rowVisible)`: they did not fail, they never RAN
+    // (QA-2805). Admin > Users & Access has no search box, so paging is the only route to it.
     const actorRow = page.locator("tr", { hasText: actorEmail }).first();
-    const rowVisible = await actorRow.count().then((c) => c > 0).catch(() => false);
+    let rowVisible = await actorRow.count().then((c) => c > 0).catch(() => false);
+    let landedOnPage = 1;
+    for (let hop = 0; !rowVisible && hop < 20; hop++) {
+      // `:visible` because DataTable renders a desktop table AND a mobile card list, each with
+      // its own pager — an unqualified locator resolves to the hidden one and the click hangs
+      // for the full 30 s timeout instead of failing (measured, first attempt at this fix).
+      const next = page.locator('button:has-text("›"):visible').first();
+      if (!(await next.count().then((c) => c > 0).catch(() => false))) break;
+      if (await next.isDisabled().catch(() => true)) break;
+      await next.click();
+      await page.waitForTimeout(250);
+      landedOnPage++;
+      rowVisible = await actorRow.count().then((c) => c > 0).catch(() => false);
+    }
     ok("QA-2792 [precondition]: the second Admin actor's row is visible in Admin > Users & Access",
-      rowVisible, `row for ${actorEmail} found=${rowVisible}`);
+      rowVisible, `row for ${actorEmail} found=${rowVisible} on page ${landedOnPage}`);
     if (rowVisible) {
       await actorRow.locator('button:has-text("Activity")').click();
       await page.getByText(new RegExp("Activity . ZZ QA2792 Actor " + q2792s)).waitFor({ timeout: 10000 }).catch(() => {});
