@@ -166,8 +166,14 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // fields named are exactly what route.ts records (code, status, location, programme, planned dates).
 // [C2] boundary words, and the reason this note is worded the way it is: the C checker CONFIRMED
 // that Operations, Location and Trainer lose the un-mark capability on deploy, and bounded it -
-// `grep -rn "api/results/" src` at d2434e5 finds NO client caller, so nothing on any screen changes
-// (QA-2789). An unbounded 'three roles can no longer remove a result' would read as a visible
+// nothing on any screen changes (QA-2789).
+//   CORRECTED 2026-09-21: this line used to cite `grep -rn "api/results/" src` at d2434e5 as finding
+//   NO client caller. That grep is the wrong instrument and its stated result is false - it matches
+//   five callers in batches/[id]/page.tsx (a DELETE on the `/certificate` SUB-route at :1497 and
+//   :5177, and PATCHes at :4825, :4846, :5752). None of them is the bare `DELETE /api/results/[id]`
+//   that this right guards, so the NOTE's sentence still holds - but the evidence under it did not,
+//   and a false supporting claim is how the next reader gets misled about a true one. Re-derived at
+//   80abcb6 by looking for the bare DELETE specifically: still no client caller. An unbounded 'three roles can no longer remove a result' would read as a visible
 // feature being withdrawn, which is this project's own repeat failure (QA-2019/-294, QA-2047/-295,
 // QA-2058/-297, QA-2088/-298). Hence 'no screen in the product offers this yet'. The per-result
 // control, its Drawer and its live check are still owed (spec section 2b stays open).
@@ -203,7 +209,9 @@ export const RELEASE_NOTE_CURRENT =
   "results could send that request. No screen in the product offers this result delete yet, so "  +
   "nothing on any page changes: the right guards the request itself. "  +
   "A candidate who was dropped from a batch can now be taken back into that same batch. Until this "  +
-  "release the attempt ended in a database error and there was no way through it. Their original "  +
+  "release the attempt ended in a database error, and the only way round it was for an "  +
+  "administrator to erase the earlier membership outright - which the product refuses once any "  +
+  "attendance, result or government-portal row has been recorded against it. Their original "  +
   "place on the roster is restored rather than a second one being created, so the attendance and "  +
   "results already recorded against them stay attached, the joining date is set afresh, and the "  +
   "reason they were dropped is kept in the record of what changed. "  +
