@@ -155,6 +155,90 @@ if (await emailBox.count()) {
 }
 ok("[precondition] the browser is logged in (not sitting on the login screen)", !/login/i.test(page.url()), page.url());
 
+// Moved to run right after login, BEFORE the QA-2420/QA-2441 crash-prone browser journey
+// (the suite's known pre-existing crash point, unrelated to this unit) — see this unit's
+// manifest for why: a fatal uncaught exception later in this file calls process.exit via
+// e2e-lib.mjs finish(), which would silently prevent this block from ever running if it sat
+// after that point, as it originally did.
+// ---- QA-2792 (S3) — a batch's force/empty-delete audit row went from a plain string to a
+// `{ summary, snapshot }` object (QA-2736), and both activity renderers used to JSON.stringify
+// the whole value. That is a RENDERED-STATE bug — the fix lives in what a screen shows, not in
+// what gets written — so this belongs in this suite rather than in a static assertion on
+// `fmtAuditValue`'s source. It reads the line the SAME two components a person actually looks at
+// produce: `components/activity.tsx` (the batch/location/trainer Activity tab) and
+// `admin/page.tsx`'s per-user Activity drawer both call the same `fmtAuditValue` (client.ts), and
+// only the second is reachable here without navigating to a batch that the delete itself removed
+// (batches/[id]/page.tsx never resolves past "Loading…" once its own GET 404s) — so this exercises
+// the admin/page.tsx renderer directly and relies on both call sites sharing one function, which
+// the next assertion (QA-2792/shared) also checks structurally.
+//
+// admin/page.tsx (:566-568) deliberately does not render the Activity button on the SIGNED-IN
+// admin's own row (`myId` check, QA-2110's "your own row is refused for being yours" comment) — so
+// the delete must be performed by a SECOND Admin account, not by admin@vidysea.com, or there is no
+// row in the UI to click at all.
+{
+  const q2792s = stamp("Q2792");
+  const q2792Loc = (await req(admin, "POST", "/api/locations", { code: "L" + q2792s, name: "TEST-QA2792 Loc " + q2792s, approval_status: "Approved", operational_status: "Active", city: "Jaipur" }, 201)).data.item;
+  const q2792Prog = (await req(admin, "POST", "/api/programs", { code: q2792s, name: "QA2792 Prog " + q2792s, trainer_skill: "Q2792Skill" + q2792s }, 201)).data.item;
+  const q2792Room = (await req(admin, "POST", `/api/locations/${q2792Loc._id}/rooms`, { name: "CR-" + q2792s, type: "Classroom" }, 201)).data.item;
+  const q2792Trainer = (await req(admin, "POST", "/api/trainers", { name: "TEST-QA2792 Trainer " + q2792s, phone: phone("6"), skills: ["Q2792Skill" + q2792s] }, 201)).data.item;
+  const q2792Batch = (await req(admin, "POST", "/api/batches", { location: q2792Loc._id, program: q2792Prog._id, trainer: q2792Trainer._id, room: q2792Room._id, planned_start: today(), target_size: 2 }, 201)).data.item;
+  ok("QA-2792 [precondition]: the empty-shell batch fixture (its snapshot carries raw ObjectIds + ISO dates) was created",
+    !!q2792Batch?._id && !!q2792Loc?._id && !!q2792Prog?._id, JSON.stringify({ batch: q2792Batch?._id, loc: q2792Loc?._id, prog: q2792Prog?._id }));
+
+  const actorEmail = `zzcheck.qa2792.${q2792s}@vidysea-test.local`;
+  const actorPw = "Q2792Only@123";
+  const madeActor = await req(admin, "POST", "/api/users", { name: `ZZ QA2792 Actor ${q2792s}`, email: actorEmail, password: actorPw, role: "Admin", can_edit: true, location_scope: [] }, 201);
+  const actorId = madeActor.data?.item?._id;
+  const actorCookie = actorId ? await login(actorEmail, actorPw) : "";
+  ok("QA-2792 [precondition]: a second Admin actor exists and signs in (so its own delete is not filtered off admin@vidysea.com's own Activity row)",
+    madeActor.status === 201 && !!actorId && !!actorCookie, JSON.stringify({ user: madeActor.status, actorId: !!actorId, cookie: !!actorCookie }));
+
+  const delRes = actorCookie ? await req(actorCookie, "DELETE", `/api/batches/${q2792Batch._id}`, { reason: "QA-2792 rendered-activity fixture" }, 200) : { status: 0 };
+  ok("QA-2792 [precondition]: the empty-shell batch was deleted by the second Admin actor (writes the { summary, snapshot } AuditLog row under test)",
+    delRes.status === 200, JSON.stringify(delRes.data));
+
+  if (delRes.status === 200 && actorId) {
+    await page.goto(`${BASE}/admin?tab=Users`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(800);
+    const actorRow = page.locator("tr", { hasText: actorEmail }).first();
+    const rowVisible = await actorRow.count().then((c) => c > 0).catch(() => false);
+    ok("QA-2792 [precondition]: the second Admin actor's row is visible in Admin > Users & Access",
+      rowVisible, `row for ${actorEmail} found=${rowVisible}`);
+    if (rowVisible) {
+      await actorRow.locator('button:has-text("Activity")').click();
+      await page.getByText(new RegExp("Activity . ZZ QA2792 Actor " + q2792s)).waitFor({ timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      const deleteLi = page.locator("li", { hasText: "delete:" }).first();
+      const hasDeleteLine = await deleteLi.count().then((c) => c > 0).catch(() => false);
+      const lineText = hasDeleteLine ? await deleteLi.innerText() : "";
+      ok("QA-2792 [precondition]: the actor's Activity drawer shows the batch-delete row (field \"delete\")",
+        hasDeleteLine, lineText.slice(0, 300));
+
+      // THE ASSERTIONS THAT MATTER. A weaker "some readable text appeared" check stays green over
+      // the raw blob too (the summary's own words sit inside the JSON string) — the QA-2470 trap
+      // named in this unit's brief. So the positive check (readable sentence, no surrounding
+      // quotes) and the negative checks (no blob markers) are BOTH required, and it is the negative
+      // ones that actually go red under the pre-fix code.
+      ok("QA-2792: the rendered delete line carries no raw ObjectId (24 hex chars, from snapshot.location/snapshot.program)",
+        hasDeleteLine && !/\b[0-9a-f]{24}\b/i.test(lineText), lineText.slice(0, 300));
+      ok("QA-2792: the rendered delete line carries no raw ISO timestamp (from snapshot.planned_start/planned_end)",
+        hasDeleteLine && !/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(lineText), lineText.slice(0, 300));
+      ok("QA-2792: the rendered delete line carries no JSON object markers (\"summary\":, \"snapshot\":, or a leading brace)",
+        hasDeleteLine && !/"summary"\s*:|"snapshot"\s*:|:\s*\{/.test(lineText), lineText.slice(0, 300));
+      ok("QA-2792: the rendered delete line reads as the plain sentence (batch code + \"deleted\" + \"empty shell\"), not a quoted JSON string",
+        hasDeleteLine && lineText.includes(q2792Batch.code) && /deleted/i.test(lineText) && /empty shell/i.test(lineText)
+          && !lineText.includes('"' + q2792Batch.code),
+        lineText.slice(0, 300));
+      // old_value for a delete row is `null` (audit.ts: `maskSensitive(...) ?? null`) — fmtAuditValue
+      // does not touch this shape (no `.summary` on a scalar/null), so it renders exactly as it did
+      // before this unit: unchanged behaviour for the half of every row this fix does not own.
+      ok("QA-2792: old_value (always null for a delete row) still renders as the literal word \"null\" — unchanged by this fix",
+        hasDeleteLine && /\bnull\s*→/.test(lineText), lineText.slice(0, 300));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // QA-2420 — Closure Save is an EDIT, not a lifecycle transition. These are browser assertions
 // because the bug was what an operator could press/observe while React and the network raced; an
@@ -2861,6 +2945,7 @@ for (const r of results) {
     await fctx.close();
   }
 }
+
 
 
 await browser.close();

@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { api, fmtDT } from "@/lib/client";
+import { api, fmtAuditValue, fmtDT } from "@/lib/client";
 import { Section } from "@/components/ui";
 
 export function Activity({ entity, id }: { entity: string; id: string }) {
@@ -28,7 +28,7 @@ export function Activity({ entity, id }: { entity: string; id: string }) {
           {items.map((a: any) => (
             <li key={a._id} className="py-2">
               <span className="text-xs text-gray-400">{fmtDT(a.created_at)} · {a.actor?.name ?? a.actor_type}</span>
-              <div>{a.field ?? "event"}: <span className="text-gray-500">{JSON.stringify(a.old_value)} → {JSON.stringify(a.new_value)}</span></div>
+              <div>{a.field ?? "event"}: <span className="text-gray-500">{fmtAuditValue(a.old_value)} → {fmtAuditValue(a.new_value)}</span></div>
             </li>
           ))}
         </ul>

@@ -110,3 +110,35 @@ export function toInputDate(d?: string | Date | null): string {
   const x = new Date(d);
   return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
 }
+
+// QA-2792: an AuditLog old_value/new_value used to always be a plain scalar, so JSON.stringify-ing
+// it read as one quoted sentence. QA-2736's batch-delete widened new_value to
+// `{ summary, snapshot }` (AuditLog.new_value is Schema.Types.Mixed) — richer on disk for an
+// auditor, but the two activity renderers (components/activity.tsx, admin/page.tsx) JSON.stringify'd
+// the whole object, so the line a person actually reads went from a sentence to a raw blob:
+// ObjectIds, ISO timestamps, nested counts. A batch delete is exactly the event someone goes
+// looking for, because the record itself is gone — that is the one line that most needs to stay
+// readable.
+//
+// Went and looked, per this unit's brief, rather than assuming batch-delete is the only
+// object-valued audit: it is not. approvals.ts stages `{ deleted: true, reason }` and
+// `{ decision, approved_amount }`, rules.ts stages `{ joined_on, enrollment_status }`,
+// members/[id]/route.ts stages `{ status, reg, kyc, enroll, accept, issue }`,
+// results/[id]/(reassess/)route.ts stage assessment/certificate fields, approvals/route.ts stages
+// `{ enabled, approver_role, approver_users }`, bulk-enroll stages step counts — NONE of those carry
+// a `summary` string, and none of them carry raw ObjectIds or Date instances either (they are
+// short-field decision/status objects, not entity snapshots). Only the two batch-delete sites
+// (QA-2736) opted into the richer `{ summary, snapshot }` shape, specifically so a human sentence
+// could keep riding alongside the auditor's structured snapshot.
+//
+// So the rule this function encodes is narrow on purpose: prefer `.summary` when the value is an
+// object that actually carries one (a string on that exact key); every other shape — string,
+// number, null, array, or a plain field-diff object with no summary — renders exactly as it did
+// before this fix (JSON.stringify), which is a readable one-line diff for those smaller shapes and
+// an unchanged, non-regressing rendering for every audit row this unit does not own.
+export function fmtAuditValue(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v) && typeof (v as { summary?: unknown }).summary === "string") {
+    return (v as { summary: string }).summary;
+  }
+  return JSON.stringify(v);
+}

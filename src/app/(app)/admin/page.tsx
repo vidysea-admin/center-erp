@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { api, fmtDT, fmtDate, offerable } from "@/lib/client";
+import { api, fmtAuditValue, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { usePerms } from "@/components/shell";
@@ -592,7 +592,7 @@ function Users({ error, setError }: any) {
             {actRows.map((a: any) => (
               <li key={a._id} className="py-2">
                 <span className="text-xs text-gray-400">{fmtDT(a.created_at)} · {a.entity}</span>
-                <div>{a.field ?? "event"}: <span className="text-gray-500">{JSON.stringify(a.old_value)} → {JSON.stringify(a.new_value)}</span></div>
+                <div>{a.field ?? "event"}: <span className="text-gray-500">{fmtAuditValue(a.old_value)} → {fmtAuditValue(a.new_value)}</span></div>
               </li>
             ))}
           </ul>
