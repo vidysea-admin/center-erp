@@ -171,8 +171,29 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // feature being withdrawn, which is this project's own repeat failure (QA-2019/-294, QA-2047/-295,
 // QA-2058/-297, QA-2088/-298). Hence 'no screen in the product offers this yet'. The per-result
 // control, its Drawer and its live check are still owed (spec section 2b stays open).
+// -317, REWRITTEN 2026-09-21 because the release grew after the bump and the note did not.
+// The first version of this string described sub-units A and C alone. Four more user-visible
+// changes then landed on the same unpushed bump (QA-2792, QA-2793, QA-2794, QA-2796), and QA-2058
+// (-297) is the standing lesson that a note must be judged over WHAT USERS RECEIVE, not over the
+// author's own push range - a narrow framing is favourable by construction. Scoping of the four
+// new clauses, each to a checker's measurement and not to the unit's intent:
+//   - dropped candidate re-add: qa-2794 verdict (own mutants 7/14, 1/14, 1/14; "exactly one row",
+//     attendance-survives and result-survives are assertions, not claims). The note says the place
+//     is restored rather than duplicated because that is the shape Umesh chose over widening the
+//     index, and it is what the one-row assertion pins.
+//   - the fee setting: qa-2793 verdict. The guard refuses ARMING only. A deployment where the
+//     setting is ALREADY on is untouched by this release, so the note says exactly that instead of
+//     implying the refusal is gone - QA-2088's boundary-deletion shape, avoided on purpose.
+//   - raw database text: qa-2796 verdict. The bulk door leaked E11000 verbatim inside a 200; the
+//     single door translated but garbled the compound index name. Both measured, both fixed.
+//   - the activity line: qa-2792 verdict, AND QA-2803, which disproved the manifest's claim that
+//     only the two batch-delete sites carry a summary key - approvals.ts:700 stages one too. So the
+//     clause names both surfaces rather than saying "only", which would have been false as written.
+// No clause here describes QA-2791, QA-2797 or QA-2798: those are test-harness repairs and a user
+// receives nothing from them.
 export const RELEASE_NOTE_CURRENT =
-  "-317 changes how a batch is deleted, and who may remove a result that has already been recorded. "  +
+  "-317 changes how a batch is deleted, who may remove a result that has already been recorded, and "  +
+  "what happens when someone who left a batch is taken back into it. "  +
   "Deleting a batch no longer asks for confirmation in a browser dialog: the delete opens a panel "  +
   "where the batch code has to be typed exactly as it is, together with a reason, and Confirm stays "  +
   "unavailable until both are given. What the batch was - its code, stage, location, programme and "  +
@@ -180,7 +201,21 @@ export const RELEASE_NOTE_CURRENT =
   "back. Who is allowed to delete a batch has not changed. Removing a result that has been recorded "  +
   "now needs a right of its own, held by an administrator; until this release any role that can mark "  +
   "results could send that request. No screen in the product offers this result delete yet, so "  +
-  "nothing on any page changes: the right guards the request itself.";
+  "nothing on any page changes: the right guards the request itself. "  +
+  "A candidate who was dropped from a batch can now be taken back into that same batch. Until this "  +
+  "release the attempt ended in a database error and there was no way through it. Their original "  +
+  "place on the roster is restored rather than a second one being created, so the attendance and "  +
+  "results already recorded against them stay attached, the joining date is set afresh, and the "  +
+  "reason they were dropped is kept in the record of what changed. "  +
+  "The setting that requires a candidate's fee to be recorded before their enrollment can be "  +
+  "completed can no longer be switched on, because the product has had nowhere to record that fee "  +
+  "since fees were withdrawn. Where the setting is already on, this release does not change it and "  +
+  "it has to be switched off in Admin settings. "  +
+  "When candidates are added to a batch from the candidates list, a failure no longer shows raw "  +
+  "database text; where a record already exists, the message names what clashed. "  +
+  "In the activity trail, deleting a batch reads as a sentence again rather than as a block of "  +
+  "stored data, and so does the line recorded when an approval is created; the full detail is still "  +
+  "kept underneath for anyone auditing it.";
 
 // -317: the -316 note moved here as its own literal string, never an alias (the -310 defect).
 // -316. Written against qa/contracts/public-release-note.md over the whole delta production receives
