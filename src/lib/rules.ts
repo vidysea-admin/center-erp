@@ -671,6 +671,22 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
     throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
   }
 
+  // QA-2794 (S2, Umesh's 2026-09-20 recording): a candidate dropped from THIS batch keeps their
+  // BatchMember row (dropMemberChecked sets left_on + lifecycle_status "Dropped"; the row is never
+  // deleted). The pool picker at batches/[id]/page.tsx:1515 whitelists "Dropped" exactly so a centre
+  // can bring such a candidate back in — but until now the only door back was BatchMember.create,
+  // which collided with the `{batch, candidate}` unique index (models/index.ts:941) the instant it
+  // ran, surfacing as a raw "Duplicate key error" with no recovery.
+  //
+  // Umesh's decision (AskUserQuestion, 2026-09-20, qa/gates/video-2026-09-20-fee-switch.md): REVIVE
+  // the existing row rather than widen the unique index to allow a second one — two rows for one
+  // person in one batch would double-count on the roster, attendance, results and closure, and he
+  // explicitly declined that path. So: look for THIS batch's own dropped row for this candidate
+  // before falling through to create. A row dropped in a DIFFERENT batch is irrelevant here — the
+  // `existing` check above already refused anyone active elsewhere, and a stale row in some other
+  // batch has its own `{batch, candidate}` pair, so it can never collide with this one.
+  const droppedHere = await BatchMember.findOne({ batch: batchId, candidate: candidateId, left_on: { $ne: null } });
+
   // QA-945 (-230, Umesh 24/08): "jo future interested hai unka status jab tak update nhi hoga tho vo
   // batch mai register nhi hongee aur select krne mai aana chaiye ki phle status update kro."
   //
@@ -805,7 +821,55 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   const resolvedJoin = joined_on
     ? dayKey(joined_on)
     : backdated && began && began < istToday() ? began : istToday();
-  const member = await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: resolvedJoin });
+  // QA-2794: revive the dropped row for this batch+candidate instead of inserting a second one —
+  // both unique indexes on BatchMember (models/index.ts:941/943) still hold either way: this branch
+  // is an UPDATE, never an insert, so `{batch, candidate}` cannot collide; the partial `{candidate}`
+  // index (left_on: null) cannot collide either, because the `existing` check above (:669-672)
+  // already refused anyone with an active membership anywhere.
+  const member = droppedHere
+    ? await (async () => {
+        // Snapshot the drop being reversed BEFORE clearing it, so the audit row can say what it was.
+        const prevLeftOn = droppedHere.left_on;
+        const prevDropReason = droppedHere.drop_reason;
+        droppedHere.left_on = null;
+        droppedHere.drop_reason = undefined;
+        // dayKey, matching resolvedJoin above and F-008 (:145): both encode "today"/the join date
+        // in UTC-midnight terms, so a revived row cannot end up on a different footing than a fresh
+        // one would have.
+        droppedHere.joined_on = resolvedJoin;
+        // OPEN QUESTION this brief asked NOT to answer by assumption: are the four enrollment-step
+        // booleans (reg_done/kyc_done/enroll_done/accept_done) kept or reset on revive?
+        //
+        // ANSWER: KEPT. This is not a guess — it is the one precedent already in this codebase for
+        // "un-failing" a member. `updateEnrollment`'s "Clear failure" path (:876 sets Failed without
+        // ever touching the four booleans; :883-886 clears Failed by RECOMPUTING enrollment_status
+        // from whatever the booleans already hold, never zeroing them) already treats a member's
+        // recorded step-work as surviving a Failed detour. A drop-then-revive is the same shape: the
+        // registration/KYC/enrollment/batch-accept work that was actually done on the government
+        // portal did not become undone because the centre dropped and re-added them in the ERP, and
+        // resetting it would make the operator re-walk steps that are already true on the ground —
+        // exactly the kind of silent, unrecoverable data loss REQ-117's "can be retried or moved"
+        // is written against. Closure/attendance/deriveCompletion/Rule 48 do not read these four
+        // booleans directly (checked: deriveCompletion works off CandidateResult rows via
+        // assessmentCompleteness/certificationCompleteness; Rule 48 in updateEnrollment reads
+        // enrollment_status, not the booleans themselves) — the booleans' only consumer is this same
+        // derivation, so keeping them changes nothing else.
+        if (droppedHere.enrollment_status === "Failed") {
+          const done = [droppedHere.reg_done, droppedHere.kyc_done, droppedHere.enroll_done, droppedHere.accept_done].filter(Boolean).length;
+          droppedHere.enrollment_status = done === 0 ? "Not Started" : done === 4 ? "Completed" : "In Progress";
+          droppedHere.issue = null;
+          droppedHere.issue_note = undefined;
+        }
+        await droppedHere.save();
+        await audit({
+          entity: "BatchMember", entityId: droppedHere._id, field: "revived_member",
+          oldValue: { left_on: prevLeftOn, drop_reason: prevDropReason },
+          newValue: { joined_on: resolvedJoin, enrollment_status: droppedHere.enrollment_status },
+          actor: null, actorType: "SYSTEM", // addMemberChecked has never threaded an actor through (no other write in this function audits one either)
+        });
+        return droppedHere;
+      })()
+    : await BatchMember.create({ batch: batchId, candidate: candidateId, joined_on: resolvedJoin });
   await Candidate.findByIdAndUpdate(candidateId, { lifecycle_status: "Assigned" }); // Rule 21
   // Both notes ride the ONE `warning` field the two roster routes already surface (members/route.ts
   // returns it, candidates/assign collects it per candidate). Adding a second field would mean two

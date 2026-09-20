@@ -1991,9 +1991,26 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
   await req("PUT", "/api/defaults", { fee_required_for_enrollment: false }, 200); // default OFF for the rest of the wall
 }
 // re-assignable after drop (Rule 20/22 spirit)
-await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 409); // same batch: unique(batch,candidate)
+// QA-2794 (S2, 2026-09-20): this pin used to assert 409 here, quoting "unique(batch,candidate)" as
+// the reason — that comment was describing the BUG, not a rule. Re-adding a candidate dropped from
+// THIS SAME batch used to crash straight into that unique index with a raw "Duplicate key error",
+// which is exactly what Umesh hit live on KAU-ITI-RPLAVP-BSRT-02. His decision (AskUserQuestion,
+// qa/gates/video-2026-09-20-fee-switch.md): revive the existing row rather than widen the index for
+// a second one. So the same-batch re-add now succeeds (201) and REVIVES mem4 — the row the drop
+// left behind, not a second one — which is what the two assertions below actually pin.
+const readdSameBatch = await req("POST", `/api/batches/${batch2._id}/members`, { candidate: cand4._id }, 201);
+ok("QA-2794: re-adding into the SAME batch after a drop revives the row (was 409 Duplicate key)",
+  String(readdSameBatch.data?.item?._id) === String(mem4._id), JSON.stringify({ before: mem4._id, after: readdSameBatch.data?.item?._id }));
+ok("QA-2794: exactly one BatchMember row for cand4 in batch2 — no second row alongside the revived one",
+  (await req("GET", `/api/batches/${batch2._id}/members`)).data.items.filter((i) => String(i.candidate?._id ?? i.candidate) === String(cand4._id)).length === 1);
+// cand4 is ACTIVE again in batch2 now that the revive succeeded (unlike before this fix, where the
+// failed re-add left them still Dropped) — so joining a DIFFERENT batch must go back through the
+// ordinary drop first, same as any other active member. Dropping again here, deliberately, is what
+// makes "different batch OK" a real assertion again instead of one that only held by the old bug's
+// side effect.
+await req("POST", `/api/members/${mem4._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
 const batch3 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 3, session: "Morning" }, 201)).data.item;
-await req("POST", `/api/batches/${batch3._id}/members`, { candidate: cand4._id }, 201); // different batch OK
+await req("POST", `/api/batches/${batch3._id}/members`, { candidate: cand4._id }, 201); // different batch OK, once no longer active anywhere
 
 // ---- Rule 1: location-status gating (2026-08) ----
 const gateLoc = (await req("POST", "/api/locations", { code: "GATE" + stamp, name: "Gate Location " + stamp, approval_status: "Approved" }, 201)).data.item;
@@ -5914,6 +5931,117 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
 
     await mcg.close();
   }
+}
+
+// ---- QA-2794 (S2, Umesh's 2026-09-20 screen-recorded video): dropping a candidate from a batch and
+// then re-adding them into the SAME batch used to crash into BatchMember's unique {batch, candidate}
+// index with a raw "Duplicate key error" — dropMemberChecked keeps the row (left_on set), and the
+// pool picker whitelists "Dropped" so the product offers back exactly what it could not accept.
+// Umesh's decision (AskUserQuestion, qa/gates/video-2026-09-20-fee-switch.md): REVIVE the existing
+// row rather than widen the unique index for a second one — two rows per person per batch would
+// double-count roster/attendance/results/closure, which he explicitly declined. Runs on its own
+// batch/trainer/room/candidates so nothing here can move a shared fixture's numbers.
+{
+  const dayN2794 = (n) => new Date(Date.now() + n * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const q94T = (await req("POST", "/api/trainers", { name: "Revive Trainer " + stamp, phone: "5910" + stamp, skills: ["rv94" + stamp] }, 201)).data.item;
+  const q94R = (await req("POST", `/api/locations/${loc._id}/rooms`, { name: "Revive Room " + stamp, type: "Classroom", capacity: 10 }, 201)).data.item;
+  // target_size 1: Ready needs roster_80pct (defaults.roster_threshold_pct = 80) and this batch
+  // never carries more than the one revived member, so the roster must read 100% of target.
+  // planned/actual_start 3 days back so the attendance day logged below (day -2) sits BEFORE
+  // today's drop — F-007's own tidy-up (rules.ts, dropMemberChecked) strips a member from any log
+  // dated ON OR AFTER their left_on, which is existing, correct, unrelated behaviour; a log on the
+  // drop day itself would be stripped regardless of QA-2794 and prove nothing about the revive.
+  const q94B = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: q94T._id, room: q94R._id, planned_start: dayN2794(-3), target_size: 1 }, 201)).data.item;
+  // No trainer/room here (both optional on Batch) — q94B2 exists only to be the OTHER batch in the
+  // Rule 20 refusal below, and sharing q94B's room/trainer 3 days into a 15+5-day program batch
+  // collided with the room-double-booking guard (q94B spans well past "tomorrow").
+  const q94B2 = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: dayN2794(1), target_size: 5 }, 201)).data.item;
+  const q94C = (await req("POST", "/api/candidates", { name: `Revive Cand ${stamp}`, phone: "5920" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
+  const q94C2 = (await req("POST", "/api/candidates", { name: `Revive Elsewhere ${stamp}`, phone: "5930" + stamp, location: loc._id, program: prog._id }, 201)).data.item;
+
+  const q94M = (await req("POST", `/api/batches/${q94B._id}/members`, { candidate: q94C._id }, 201)).data.item;
+  // Step-work already done, then marked Failed — the reported shape (Jitendra: enrollment-Failed,
+  // then dropped).
+  await req("PATCH", `/api/members/${q94M._id}`, { reg_done: true, kyc_done: true }, 200);
+  await req("PATCH", `/api/members/${q94M._id}`, { failed: true, issue: "KYC failed", issue_note: "pending verification" }, 200);
+  await req("POST", `/api/batches/${q94B._id}/transition`, { target: "Ready" }, 200);
+  // the one member is Failed, not Completed, so Rule 16's enrollment_ok fails — the fixture only
+  // needs a running batch to hold attendance and a result, not a real enrolment count.
+  await req("POST", `/api/batches/${q94B._id}/transition`, { target: "Active", actual_start: dayN2794(-3), enrollment_override: true, reason: "QA-2794 fixture: attendance/results only" }, 200);
+  const q94Log = (await req("POST", `/api/batches/${q94B._id}/logs`, { log_date: dayN2794(-2), present_member_ids: [q94M._id], govt_present: 1, trainer_present: true, actual_topic: "QA-2794 fixture day" }, 201)).data.item;
+  // eligibility_override_reason rides along harmlessly if the member IS eligible (A-09 only reads
+  // it on the not_eligible branch) — with a single day of attendance this fixture is more likely
+  // than not to be under the attendance bar, and the PUT must not fail on that unrelated gate.
+  await req("PUT", `/api/batches/${q94B._id}/results`, { rows: [{ member: String(q94M._id), result: "Pass", score: 80, max_score: 100, assessed_on: today, eligibility_override_reason: "QA-2794 fixture: attendance bar not the thing under test" }] }, 200);
+  const beforeResults = (await req("GET", `/api/batches/${q94B._id}/results`)).data.items.find((i) => String(i.member) === String(q94M._id));
+  // QA-2457 shape: check the setup actually REACHED "Failed", not just that later requests
+  // returned 200 — an earlier draft of this fixture sent an invalid `issue` enum value, the PATCH
+  // came back 400, the member silently stayed "In Progress", and every later "was cleared from
+  // Failed" assertion below would have passed VACUOUSLY (nothing was ever Failed to clear).
+  const beforeMember = (await req("GET", `/api/batches/${q94B._id}/members`)).data.items.find((i) => String(i._id) === String(q94M._id));
+  ok("QA-2794 fixture: candidate has step-work, a Failed status, attendance and a result before dropping",
+    beforeResults?.result?.result === "Pass" && !!q94Log?._id && beforeMember?.enrollment_status === "Failed"
+      && beforeMember?.reg_done === true && beforeMember?.kyc_done === true,
+    JSON.stringify({ result: beforeResults?.result?.result, log: q94Log?._id, status: beforeMember?.enrollment_status, reg: beforeMember?.reg_done, kyc: beforeMember?.kyc_done }));
+
+  // ---- the drop, then Umesh's reported action: try to take them back into the SAME batch ----
+  await req("POST", `/api/members/${q94M._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
+  const readd = await req("POST", `/api/batches/${q94B._id}/members`, { candidate: q94C._id }, 201);
+  ok("QA-2794: re-adding a dropped candidate into the SAME batch succeeds (was a raw Duplicate key error)",
+    readd.status === 201, JSON.stringify(readd.data));
+
+  const rosterAfter = (await req("GET", `/api/batches/${q94B._id}/members`)).data.items.filter((i) => String(i.candidate?._id ?? i.candidate) === String(q94C._id));
+  ok("QA-2794: exactly ONE BatchMember row for this candidate in this batch — revived, not duplicated",
+    rosterAfter.length === 1 && rosterAfter[0]?.left_on == null,
+    JSON.stringify(rosterAfter.map((r) => ({ id: r._id, left_on: r.left_on }))));
+  ok("QA-2794: the SAME row id survived — this is an update, not a delete+insert",
+    String(rosterAfter[0]?._id) === String(q94M._id), JSON.stringify({ before: q94M._id, after: rosterAfter[0]?._id }));
+  ok("QA-2794: joined_on is restamped to the revive date",
+    String(rosterAfter[0]?.joined_on ?? "").slice(0, 10) === today, JSON.stringify(rosterAfter[0]?.joined_on));
+
+  // attendance and results survive — same member id, so both stay keyed off something unchanged
+  const afterLog = (await req("GET", `/api/batches/${q94B._id}/logs`)).data.items.find((l) => String(l._id) === String(q94Log._id));
+  ok("QA-2794: the revived member's attendance (the daily log marking them present) survives",
+    (afterLog?.present_member_ids ?? []).map(String).includes(String(q94M._id)), JSON.stringify(afterLog?.present_member_ids));
+  const afterResults = (await req("GET", `/api/batches/${q94B._id}/results`)).data.items.find((i) => String(i.member) === String(q94M._id));
+  ok("QA-2794: the revived member's result survives",
+    afterResults?.result?.result === "Pass", JSON.stringify(afterResults?.result));
+
+  // enrollment_status: was Failed; reg_done/kyc_done were already true (KEPT, not reset — the answered
+  // open question), so clearing Failed derives "In Progress" from those two true steps, same as the
+  // existing "Clear failure" derivation in updateEnrollment.
+  const afterMember = (await req("GET", `/api/batches/${q94B._id}/members`)).data.items.find((i) => String(i._id) === String(q94M._id));
+  ok("QA-2794: Failed is cleared on revive, deriving from step-work that survives (kept, not reset)",
+    afterMember?.enrollment_status === "In Progress" && afterMember?.reg_done === true && afterMember?.kyc_done === true,
+    JSON.stringify({ st: afterMember?.enrollment_status, reg: afterMember?.reg_done, kyc: afterMember?.kyc_done }));
+
+  const q94Audit = ((await req("GET", `/api/audit/BatchMember/${q94M._id}`)).data.items ?? []);
+  ok("QA-2794: a revived_member audit row exists, naming the previous drop",
+    q94Audit.some((a) => a.field === "revived_member" && a.old_value?.drop_reason === "Other"),
+    JSON.stringify(q94Audit.filter((a) => a.field === "revived_member")));
+
+  const q94CandAfter = (await req("GET", `/api/candidates/${q94C._id}`)).data.item;
+  ok("QA-2794: the candidate's lifecycle_status returns to Assigned",
+    q94CandAfter?.lifecycle_status === "Assigned", q94CandAfter?.lifecycle_status);
+
+  // ---- someone ACTIVE in another batch still hits the old Rule 20 refusal, naming that batch ----
+  // No "Rule 20" text in the assertion below — -111 (user-copy.ts `plain()`) deliberately strips
+  // ledger codes from every error the client can read, chokepointed in apiHandler, and check-user-
+  // copy.mjs fails the wall if one leaks. The 409 status + the named batch code IS the refusal.
+  await req("POST", `/api/batches/${q94B._id}/members`, { candidate: q94C2._id }, 201);
+  const elsewhere = await req("POST", `/api/batches/${q94B2._id}/members`, { candidate: q94C2._id }, 409);
+  ok("QA-2794: a candidate ACTIVE in another batch is still refused Rule 20, naming that batch — the revive path does not widen this",
+    /already active/i.test(elsewhere.data?.error ?? "") && String(elsewhere.data?.error ?? "").includes(q94B.code),
+    JSON.stringify(elsewhere.data));
+
+  // ---- joined_on cannot be pushed before the batch's own start rules allow, even on a revive ----
+  await req("POST", `/api/members/${q94M._id}/drop`, { left_on: today, drop_reason: "Other" }, 200);
+  const tooEarly = await req("POST", `/api/batches/${q94B._id}/members`, { candidate: q94C._id, joined_on: dayN2794(-30) }, 400);
+  ok("QA-2794: reviving with a joined_on before the batch actually began is still refused (Rule 26's floor, untouched by the revive path)",
+    /began on|cannot join/.test(tooEarly.data?.error ?? ""), JSON.stringify(tooEarly.data));
+
+  await req("POST", `/api/batches/${q94B._id}/transition`, { target: "Cancelled", reason: "QA-2794 fixture done" }, 200);
+  await req("POST", `/api/batches/${q94B2._id}/transition`, { target: "Cancelled", reason: "QA-2794 fixture done" }, 200);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
