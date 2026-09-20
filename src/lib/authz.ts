@@ -140,93 +140,122 @@ export function assertLocationInScope(user: SessionUser, locationId: string) {
   }
 }
 
+// QA-2796 (S2, Umesh's 2026-09-20 recording): Mongo's raw E11000 driver text — collection name,
+// storage-engine index identifier, an ObjectId dump — reached the screen through TWO doors. The
+// single-add door (members/route.ts, via apiHandler below) ran it through a translator but the
+// translator itself mis-read a COMPOUND index name: MongoDB names an index by concatenating each
+// key's field name with its sort direction ("_1"/"-1") and joining those with "_" again, so
+// `batch_1_candidate_1` has no character that reliably marks where one field's name ends and the
+// next begins once you try to split it back apart with a regex — `/index: (\w+)_/` read it as
+// field "batch_1_candidate" (verified: scripts/e2e-rendered-candidates.mjs QA-2796 pin). The bulk
+// assign door (candidates/assign/route.ts) was worse: it caught per-candidate and pushed
+// `e.message` straight into a 200 response, never reaching this translator at all, so the FULL
+// "E11000 duplicate key error collection: ...batchmembers index: batch_1_candidate_1 dup key: {...}"
+// string landed in the toast verbatim.
+//
+// Fix: read the field names from `dup key: { ... }` instead of the index name. That document is
+// written by the driver with the real, unmangled field names as its keys — unambiguous regardless
+// of how many fields the index has or whether a field name itself contains an underscore. And
+// export this whole translator so the bulk door can call the SAME function on its own caught
+// errors, rather than keeping (or re-inventing) a second copy — exactly the "second copy didn't
+// get the fix" shape ARCHITECTURE.md §3 exists to name.
+function duplicateKeyMessage(msg: string): string {
+  const dupKey = msg.match(/dup key:\s*\{([^}]*)\}/)?.[1] ?? "";
+  const fields = Array.from(dupKey.matchAll(/"?([A-Za-z0-9_]+)"?\s*:/g)).map((m) => m[1].replace(/_/g, " "));
+  if (fields.length === 1) return `That ${fields[0]} is already in use.`;
+  if (fields.length > 1) return `A record with this ${fields.join(" + ")} combination already exists.`;
+  return "This record already exists.";
+}
+
+// Translate any thrown error into a { status, message } safe to hand a user — never the raw driver
+// text, a stack trace, or an internal path. Both doors that write a BatchMember (and every other
+// apiHandler-wrapped route) go through this ONE function so a message written here reaches every
+// caller instead of only the one that happened to import it first.
+export function translateError(e: unknown): { status: number; message: string } {
+  if (e instanceof HttpError) {
+    // -111: every error a user can read passes through plain() — the ledger codes ("Rule 45",
+    // "DEC-6") stay in code and audit, never on a screen. Chokepoint, so a message written
+    // tomorrow with a code in it is still clean at the door.
+    return { status: e.status, message: plain(e.message) };
+  }
+  const msg = e instanceof Error ? e.message : "Internal error";
+  // Mongo duplicate key → readable 409 naming the field, without leaking the raw driver text.
+  if (typeof msg === "string" && msg.includes("E11000")) {
+    return { status: 409, message: duplicateKeyMessage(msg) };
+  }
+  // QA-244 (checker) — the same argument as ValidationError below, for the id itself. A route that
+  // is handed "<objectId>:0" (a grid's composite row key), a truncated paste or a stray path
+  // segment used to hit Mongoose, come back as a CastError, and be reported as "Something went
+  // wrong on our side. Please try again." Nothing had gone wrong on our side and retrying could
+  // never help. This sits in apiHandler rather than in crud.ts alone because half the detail
+  // routes here are hand-written (batches, closure, results) and a guard only the CRUD routes
+  // inherit is a guard with holes — which is exactly what the wall caught on the first cut.
+  // The submitted value is NOT echoed: that is what made the original leak dangerous.
+  if (e instanceof Error && e.name === "CastError" && (e as unknown as { kind?: string }).kind === "ObjectId") {
+    return { status: 404, message: "Not found — that is not a valid id." };
+  }
+  // QA-1880 (checker on qa-1877-1879): THERE IS NO SyntaxError BRANCH HERE, and that is
+  // deliberate — one stood here for a few hours and had to come out.
+  //
+  // QA-1878 was real: a body that is not legal JSON answered "Something went wrong on our side"
+  // on every write route. But fixing it *here* meant asking "is this SyntaxError about JSON?" at
+  // a chokepoint EVERY route passes through, and the handler cannot tell whose error it is. A
+  // rotated GCS credential made `storage.ts` throw exactly that shape, and a valid multipart
+  // upload came back 400 "The request body is not valid JSON." — a total upload outage reported
+  // as the caller's mistake and hidden from anything watching 5xx. My own argument for the fix,
+  // turned against it.
+  //
+  // The read site knows whose body it is; the chokepoint never can. So `readJson` below throws
+  // an HttpError(400) itself and this handler sees an ordinary refusal. The lesson is narrower
+  // than "don't sniff errors": a classifier belongs where the CONTEXT is, not where the traffic
+  // is. And it was found by the mutant I declined to write, calling it theatre.
+  //
+  // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
+  // The S2-15 masking below swept it up with genuine server faults, and the result actively
+  // misled: sending an out-of-enum operational_status answered "Something went wrong on our
+  // side. Please try again." — nothing had gone wrong on our side, and retrying could never
+  // help. Found 2026-08-12 by the RPL blindspot probe, which hit it with a wrong enum value.
+  //
+  // What made the original leak dangerous was the ECHOED VALUE and the full internal path
+  // ("Cast to ObjectId failed for value ... at path ..."), not the field name — field names
+  // are already public, since the caller just sent them. So: name the field and, for an enum,
+  // the permitted values; never repeat what was submitted.
+  if (e instanceof Error && e.name === "ValidationError") {
+    const errs = (e as unknown as { errors?: Record<string, { kind?: string; properties?: { enumValues?: string[]; message?: string } }> }).errors ?? {};
+    const parts = Object.entries(errs).slice(0, 4).map(([path, err]) => {
+      const allowed = err?.properties?.enumValues;
+      if (allowed?.length) return `${path} must be one of: ${allowed.join(", ")}`;
+      if (err?.kind === "required") return `${path} is required`;
+      // QA-1505: a schema-authored message, when the schema wrote one. `properties.message` is
+      // where Mongoose puts a CUSTOM validator's own text — ours, written in models/index.ts,
+      // never anything the caller submitted (the enum and required branches above still win, so
+      // no existing refusal changes wording). Without this, the one schema rule that has a real
+      // explanation to give — two contacts sharing an id, which makes a plan link unable to say
+      // whose it is — arrived at the screen as "contacts is not valid", and a refusal that does
+      // not say what to do is the defect this file already documents twice.
+      if (err?.properties?.message) return err.properties.message;
+      return `${path} is not valid`;
+    });
+    return { status: 400, message: parts.length ? parts.join("; ") : "Some of the submitted values are not valid." };
+  }
+
+  // 2026-08-12 audit (auth S2-15): the raw exception text used to go straight to the client.
+  // A connection failure prints the database host and port, and a cast error reveals the
+  // schema — none of which a browser needs, and all of which help someone map the system. The
+  // detail stays in the server log where it is useful; the client gets a stable, unhelpful-to-
+  // an-attacker message. HttpError above is deliberate and human-written, so it still passes.
+  console.error(e);
+  return { status: 500, message: "Something went wrong on our side. Please try again." };
+}
+
 // Wrap an API handler: converts HttpError/other errors into JSON responses.
 export function apiHandler<T extends unknown[]>(fn: (...args: T) => Promise<Response>) {
   return async (...args: T): Promise<Response> => {
     try {
       return await fn(...args);
     } catch (e: unknown) {
-      if (e instanceof HttpError) {
-        // -111: every error a user can read passes through plain() — the ledger codes ("Rule 45",
-        // "DEC-6") stay in code and audit, never on a screen. Chokepoint, so a message written
-        // tomorrow with a code in it is still clean at the door.
-        return NextResponse.json({ error: plain(e.message) }, { status: e.status });
-      }
-      const msg = e instanceof Error ? e.message : "Internal error";
-      // Mongo duplicate key → readable 409 naming the field, without leaking the raw driver text.
-      if (typeof msg === "string" && msg.includes("E11000")) {
-        const field = msg.match(/index: (\w+)_/)?.[1] ?? msg.match(/dup key: \{ (\w+):/)?.[1];
-        return NextResponse.json(
-          { error: field ? `That ${field.replace(/_/g, " ")} is already in use.` : "This record already exists." },
-          { status: 409 },
-        );
-      }
-      // QA-244 (checker) — the same argument as ValidationError below, for the id itself. A route that
-      // is handed "<objectId>:0" (a grid's composite row key), a truncated paste or a stray path
-      // segment used to hit Mongoose, come back as a CastError, and be reported as "Something went
-      // wrong on our side. Please try again." Nothing had gone wrong on our side and retrying could
-      // never help. This sits in apiHandler rather than in crud.ts alone because half the detail
-      // routes here are hand-written (batches, closure, results) and a guard only the CRUD routes
-      // inherit is a guard with holes — which is exactly what the wall caught on the first cut.
-      // The submitted value is NOT echoed: that is what made the original leak dangerous.
-      if (e instanceof Error && e.name === "CastError" && (e as unknown as { kind?: string }).kind === "ObjectId") {
-        return NextResponse.json({ error: "Not found — that is not a valid id." }, { status: 404 });
-      }
-      // QA-1880 (checker on qa-1877-1879): THERE IS NO SyntaxError BRANCH HERE, and that is
-      // deliberate — one stood here for a few hours and had to come out.
-      //
-      // QA-1878 was real: a body that is not legal JSON answered "Something went wrong on our side"
-      // on every write route. But fixing it *here* meant asking "is this SyntaxError about JSON?" at
-      // a chokepoint EVERY route passes through, and the handler cannot tell whose error it is. A
-      // rotated GCS credential made `storage.ts` throw exactly that shape, and a valid multipart
-      // upload came back 400 "The request body is not valid JSON." — a total upload outage reported
-      // as the caller's mistake and hidden from anything watching 5xx. My own argument for the fix,
-      // turned against it.
-      //
-      // The read site knows whose body it is; the chokepoint never can. So `readJson` below throws
-      // an HttpError(400) itself and this handler sees an ordinary refusal. The lesson is narrower
-      // than "don't sniff errors": a classifier belongs where the CONTEXT is, not where the traffic
-      // is. And it was found by the mutant I declined to write, calling it theatre.
-      //
-      // A ValidationError is the CALLER's mistake, not ours, so it must not be masked as a 500.
-      // The S2-15 masking below swept it up with genuine server faults, and the result actively
-      // misled: sending an out-of-enum operational_status answered "Something went wrong on our
-      // side. Please try again." — nothing had gone wrong on our side, and retrying could never
-      // help. Found 2026-08-12 by the RPL blindspot probe, which hit it with a wrong enum value.
-      //
-      // What made the original leak dangerous was the ECHOED VALUE and the full internal path
-      // ("Cast to ObjectId failed for value ... at path ..."), not the field name — field names
-      // are already public, since the caller just sent them. So: name the field and, for an enum,
-      // the permitted values; never repeat what was submitted.
-      if (e instanceof Error && e.name === "ValidationError") {
-        const errs = (e as unknown as { errors?: Record<string, { kind?: string; properties?: { enumValues?: string[]; message?: string } }> }).errors ?? {};
-        const parts = Object.entries(errs).slice(0, 4).map(([path, err]) => {
-          const allowed = err?.properties?.enumValues;
-          if (allowed?.length) return `${path} must be one of: ${allowed.join(", ")}`;
-          if (err?.kind === "required") return `${path} is required`;
-          // QA-1505: a schema-authored message, when the schema wrote one. `properties.message` is
-          // where Mongoose puts a CUSTOM validator's own text — ours, written in models/index.ts,
-          // never anything the caller submitted (the enum and required branches above still win, so
-          // no existing refusal changes wording). Without this, the one schema rule that has a real
-          // explanation to give — two contacts sharing an id, which makes a plan link unable to say
-          // whose it is — arrived at the screen as "contacts is not valid", and a refusal that does
-          // not say what to do is the defect this file already documents twice.
-          if (err?.properties?.message) return err.properties.message;
-          return `${path} is not valid`;
-        });
-        return NextResponse.json(
-          { error: parts.length ? parts.join("; ") : "Some of the submitted values are not valid." },
-          { status: 400 },
-        );
-      }
-
-      // 2026-08-12 audit (auth S2-15): the raw exception text used to go straight to the client.
-      // A connection failure prints the database host and port, and a cast error reveals the
-      // schema — none of which a browser needs, and all of which help someone map the system. The
-      // detail stays in the server log where it is useful; the client gets a stable, unhelpful-to-
-      // an-attacker message. HttpError above is deliberate and human-written, so it still passes.
-      console.error(e);
-      return NextResponse.json({ error: "Something went wrong on our side. Please try again." }, { status: 500 });
+      const { status, message } = translateError(e);
+      return NextResponse.json({ error: message }, { status });
     }
   };
 }

@@ -2866,4 +2866,110 @@ for (const r of results) {
 await browser.close();
 }
 
+// ---- QA-2796 (S2, Umesh's 2026-09-20 recording): neither the bulk-assign door nor the single
+// roster-add door may show a user the raw Mongo E11000 driver text on a duplicate-key collision.
+//
+// Both doors' own preconditions (addMemberChecked's `existing` / `droppedHere` reads, rules.ts:669
+// and :688) already refuse an ordinary duplicate with a friendly HttpError before Mongo is ever
+// asked to write — so E11000 itself can only reach `BatchMember.create` (rules.ts:872) through the
+// genuine TOCTOU race those preconditions cannot close: two requests whose precondition READ both
+// land before either request's WRITE commits, same as two operators clicking Assign on the same
+// candidate at once. This block reproduces that race for real, on both doors, by firing several
+// concurrent identical requests rather than asserting on the translator function in isolation —
+// the translator is only correct if the actual HTTP response it produces is clean.
+{
+  const raceStamp = stamp("q2796");
+  const raceProg = (await req(admin, "POST", "/api/programs", { code: raceStamp, name: "QA2796 Prog " + raceStamp, trainer_skill: "Skill" + raceStamp }, 201)).data.item;
+  const raceLoc = (await req(admin, "POST", "/api/locations", { code: "L" + raceStamp, name: "QA2796 Loc " + raceStamp, approval_status: "Approved", operational_status: "Active", city: "Jaipur" }, 201)).data.item;
+  const raceRoom = (await req(admin, "POST", `/api/locations/${raceLoc._id}/rooms`, { name: "CR-" + raceStamp, type: "Classroom" }, 201)).data.item;
+  const raceTrainer = (await req(admin, "POST", "/api/trainers", { name: "QA2796 Trainer " + raceStamp, phone: phone("9"), skills: ["Skill" + raceStamp] }, 201)).data.item;
+  const raceBatch = (await req(admin, "POST", "/api/batches", { location: raceLoc._id, program: raceProg._id, trainer: raceTrainer._id, room: raceRoom._id, planned_start: today(), target_size: 10 }, 201)).data.item;
+
+  const driverTextRx = /E11000|duplicate key error|collection:\s*\S|ndex:\s*\S|ObjectId\(/i;
+  const dupKeyPhraseRx = /combination already exists|is already in use/i;
+  // The loop below must recognise "the race actually hit BatchMember.create's unique-index collision"
+  // WITHOUT assuming the translator did its job — otherwise a mutant that breaks the translator also
+  // breaks the loop's own ability to notice the branch fired, and it burns all its retries reporting
+  // "never observed the dup-key branch" instead of failing on the one assertion that matters. Raw
+  // driver text is exactly as valid a "we hit it" signal as the translated phrase.
+  const dupKeyOccurredRx = /combination already exists|is already in use|E11000|duplicate key error/i;
+  const N = 20;
+
+  // N concurrent identical requests for the SAME (batch, candidate) pair produce TWO legitimate
+  // outcomes, not one: most lose the race and are refused by addMemberChecked's own precondition
+  // ("Candidate already active in batch ...", rules.ts:671) before Mongo is ever asked to write; a
+  // genuine minority reach BatchMember.create at the same instant and collide on the unique index —
+  // the E11000 path this unit exists to fix. Which outcome a given attempt produces is real
+  // scheduler timing, not something this script controls, so a single attempt at N=20 is not always
+  // enough to observe the E11000 branch (measured live: one run raced 3-for-3 into the E11000
+  // branch, the next raced 0-for-10 — all nine that run lost to the precondition instead). Retrying
+  // with a FRESH candidate each attempt (so the precondition state resets) makes the observation
+  // reliable without pretending the race itself is deterministic — the same shape CLAUDE.md's own
+  // claim.mjs --selftest race documents ("a smoke test... its power is measured, not assumed").
+  async function raceUntilDupKey(label, mkCand, fire, maxAttempts = 6) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const cand = await mkCand(attempt);
+      const results = await Promise.all(Array.from({ length: N }, () => fire(cand)));
+      const failMsgs = results
+        .flatMap((r) => (r.data?.results ? r.data.results.filter((row) => !row.ok).map((row) => String(row.error ?? "")) : r.status >= 400 ? [String(r.data?.error ?? "")] : []));
+      if (failMsgs.some((m) => dupKeyOccurredRx.test(m))) return { attempt, failMsgs };
+      if (attempt === maxAttempts) {
+        ok(`QA-2796/${label} setup: the E11000 race fired at least once in ${maxAttempts} attempts (${N} concurrent requests each)`,
+          false, `never observed the dup-key branch — last attempt's messages: ${JSON.stringify(failMsgs.slice(0, 5))}`);
+        return { attempt, failMsgs };
+      }
+    }
+  }
+
+  // ---- bulk door: POST /api/candidates/assign, per-candidate {ok:false, error} shape ----
+  const bulkRace = await raceUntilDupKey("bulk",
+    (attempt) => req(admin, "POST", "/api/candidates", { name: `QA2796 Bulk Race ${attempt} ${raceStamp}`, phone: phone("77" + attempt), location: raceLoc._id, program: raceProg._id }, 201).then((r) => r.data.item),
+    (cand) => req(admin, "POST", "/api/candidates/assign", { batch: raceBatch._id, candidate_ids: [cand._id] }));
+  if (bulkRace.failMsgs.some((m) => dupKeyOccurredRx.test(m))) {
+    const bulkMsgs = bulkRace.failMsgs;
+    ok("QA-2796/bulk: the bulk-assign door's duplicate-key failure carries no raw Mongo driver text",
+      bulkMsgs.every((m) => !driverTextRx.test(m)), JSON.stringify(bulkMsgs.slice(0, 5)));
+    // A weaker "non-empty, no bare code" check would stay green over the raw driver-text leak too
+    // (that string is non-empty and carries no Rule/DEC/QA code) — the QA-2470 shape this manifest
+    // must not repeat. This asserts the PRESENCE of the translated phrasing, not just the absence.
+    ok("QA-2796/bulk: every failure — precondition refusal AND E11000 collision alike — reads as an actionable 'already ...' sentence",
+      bulkMsgs.every((m) => /already (in use|exists|active)/i.test(m)),
+      JSON.stringify(bulkMsgs.slice(0, 5)));
+    // The two checks above are not enough on their own: a message garbled by the OLD index-name
+    // regex ("That batch 1 candidate is already in use.", the pre-fix `batch_1_candidate_1` mis-
+    // split) carries no driver text and still matches "already in use" — it would pass both checks
+    // while still being unreadable, which is exactly the defect this unit fixes. Isolate the
+    // dup-key-translated messages specifically (excluding the addMemberChecked precondition's own
+    // "already active in batch ..." refusal, a different and already-correct message) and assert
+    // they carry no stray digit — the tell-tale of an index-name split gone wrong, since a batch's
+    // OWN code (e.g. "L...-01") never appears in this particular translated sentence — and that
+    // they actually NAME the candidate, not a mangled fragment of the index name.
+    const bulkDupKeyMsgs = bulkMsgs.filter((m) => dupKeyPhraseRx.test(m));
+    ok("QA-2796/bulk setup: at least one raced failure is the dup-key TRANSLATED message (not only the precondition refusal or the raw leak)",
+      bulkDupKeyMsgs.length > 0, JSON.stringify(bulkMsgs.slice(0, 5)));
+    ok("QA-2796/bulk: the dup-key message names the field(s) correctly — no stray digit from a mis-split compound index name",
+      bulkDupKeyMsgs.every((m) => !/\d/.test(m) && /candidate/i.test(m)),
+      JSON.stringify(bulkDupKeyMsgs.slice(0, 5)));
+  }
+
+  // ---- single door: POST /api/batches/[id]/members, top-level apiHandler 409 shape ----
+  const singleRace = await raceUntilDupKey("single",
+    (attempt) => req(admin, "POST", "/api/candidates", { name: `QA2796 Single Race ${attempt} ${raceStamp}`, phone: phone("78" + attempt), location: raceLoc._id, program: raceProg._id }, 201).then((r) => r.data.item),
+    (cand) => req(admin, "POST", `/api/batches/${raceBatch._id}/members`, { candidate: cand._id }));
+  if (singleRace.failMsgs.some((m) => dupKeyOccurredRx.test(m))) {
+    const singleMsgs = singleRace.failMsgs;
+    ok("QA-2796/single: the single-add door's duplicate-key failure carries no raw Mongo driver text",
+      singleMsgs.every((m) => !driverTextRx.test(m)), JSON.stringify(singleMsgs.slice(0, 5)));
+    ok("QA-2796/single: every failure — precondition refusal AND E11000 collision alike — reads as an actionable 'already ...' sentence",
+      singleMsgs.every((m) => /already (in use|exists|active)/i.test(m)),
+      JSON.stringify(singleMsgs.slice(0, 5)));
+    const singleDupKeyMsgs = singleMsgs.filter((m) => dupKeyPhraseRx.test(m));
+    ok("QA-2796/single setup: at least one raced failure is the dup-key TRANSLATED message (not only the precondition refusal or the raw leak)",
+      singleDupKeyMsgs.length > 0, JSON.stringify(singleMsgs.slice(0, 5)));
+    ok("QA-2796/single: the dup-key message names the field(s) correctly — no stray digit from a mis-split compound index name",
+      singleDupKeyMsgs.every((m) => !/\d/.test(m) && /candidate/i.test(m)),
+      JSON.stringify(singleDupKeyMsgs.slice(0, 5)));
+  }
+}
+
 finish();

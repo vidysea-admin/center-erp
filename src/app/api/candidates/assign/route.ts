@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Candidate } from "@/models";
 import { addMemberChecked, candidateEligibility } from "@/lib/rules";
@@ -101,7 +101,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
         ...(warnings.length ? { warning: warnings.join(" · ") } : {}),
       });
     } catch (e) {
-      results.push({ candidate: cid, ok: false, error: e instanceof Error ? e.message : String(e) });
+      // QA-2796: this used to be `e.message` verbatim. That reached the client on a 200 (the bulk
+      // shape reports per-candidate, it never throws to apiHandler), so a duplicate-key collision —
+      // real if two operators assign the same candidate to the same batch at once, since the
+      // preconditions above only refuse what THIS request can already see — put the raw Mongo
+      // E11000 driver text straight into the toast. translateError() is the SAME function the
+      // single-add door's apiHandler wrapper uses; only its .message is used here because this
+      // door's response is always 200 with a per-candidate ok/error shape, not a top-level status.
+      results.push({ candidate: cid, ok: false, error: translateError(e).message });
     }
   }
   return NextResponse.json({
