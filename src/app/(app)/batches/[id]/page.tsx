@@ -1829,6 +1829,14 @@ function PortalIdChip({ candidate, value, className = "" }: { candidate?: any; v
 
 function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCandidate = false, onEditCandidate }: any) {
   const who = m.candidate?.name || m.candidate?.email || m.candidate?.phone || "(unnamed candidate)";
+  // QA-2795: a departed member reaches this card now (see `load`/ENROL_FILTERS' "Dropped" pill
+  // above). The server's own door (rules.ts `updateEnrollment`) refuses every write here with a
+  // 409 the instant `m.left_on` is set, regardless of what the patch says — so `editable` below
+  // is not a cosmetic choice, it is this card agreeing with the door it is standing in front of.
+  // Where it cannot act, it says why (the notice at the bottom) rather than rendering a control
+  // that would just come back refused.
+  const left = hasLeft(m);
+  const editable = canEdit && !left;
   return (
     <div className={`space-y-3 rounded-xl border bg-white p-4 ${selected ? "ring-2 ring-blue-200" : ""}`}>
       <div className="flex items-center justify-between gap-2">
@@ -1839,7 +1847,7 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
               lazy state, it's this condition. Selection is independent of status now; a
               Completed candidate is selectable too (the bulk route already no-ops safely on
               anyone already done for the targeted step — bulk-enroll/route.ts's `skipped`). */}
-          {canEdit && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
+          {editable && <input type="checkbox" className="mt-1" checked={!!selected} onChange={() => onSelect(m._id)} />}
           <div className="min-w-0">
             <div className="truncate font-semibold" title={who}>{who}</div>
             <div className="text-sm text-gray-500">{m.candidate?.phone}{m.candidate?.email && m.candidate?.name ? ` · ${m.candidate.email}` : ""}</div>
@@ -1855,25 +1863,40 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
           {canEditCandidate && m.candidate?._id && (
             <Btn small kind="ghost" onClick={() => onEditCandidate(m.candidate, m)}>Edit</Btn>
           )}
+          {left && <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium text-gray-700">Left {fmtDate(m.left_on)}</span>}
           <Chip value={m.enrollment_status} />
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={canEdit} />
-        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={canEdit} />
-        <EnrolStepToggle m={m} field="enroll_done" label="Enrollment" onUpdate={onUpdate} canEdit={canEdit} />
-        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={canEdit} />
+        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={editable} />
+        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={editable} />
+        <EnrolStepToggle m={m} field="enroll_done" label="Enrollment" onUpdate={onUpdate} canEdit={editable} />
+        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={editable} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400" value={m.issue ?? ""} disabled={!canEdit}
-          title={canEdit ? undefined : "You do not have the right to change enrolment on this batch."}
+        <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400" value={m.issue ?? ""} disabled={!editable}
+          title={editable ? undefined : left ? "This member has left the batch." : "You do not have the right to change enrolment on this batch."}
           onChange={(e) => e.target.value ? onUpdate(m, { failed: true, issue: e.target.value }) : onUpdate(m, { failed: false, issue: null })}>
           <option value="">No issue</option>
           {["OTP not received", "Already registered", "KYC failed", "Portal error", "Duplicate", "Other"].map((i) => <option key={i}>{i}</option>)}
         </select>
-        {canEdit && m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => onUpdate(m, { failed: false, issue: null })}>Clear failure</Btn>}
+        {editable && m.enrollment_status === "Failed" && <Btn small kind="ghost" onClick={() => onUpdate(m, { failed: false, issue: null })}>Clear failure</Btn>}
         <span className="ml-auto text-xs text-gray-400">{m.source}</span>
       </div>
+      {/* Where it cannot act, it must say why rather than render nothing — same rule as the
+          Closure tab's identical notice (this file, ~5120). QA-2795's whole complaint was that
+          this card simply vanished; the replacement tells Umesh exactly where the working door is
+          (re-adding the candidate on the Candidates tab revives them AND auto-clears a Failed
+          status — rules.ts `addMemberChecked`'s `droppedHere` branch — the door this unit does not
+          re-open here because the working one already exists one tab over). */}
+      {left && (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] leading-4 text-gray-600">
+          Read-only — {who} left this batch on {fmtDate(m.left_on)}{m.drop_reason ? ` (${m.drop_reason})` : ""}.
+          {m.enrollment_status === "Failed"
+            ? " To clear this failure, re-add them to the batch from the Candidates tab — rejoining clears it automatically."
+            : ""} Full log on the Candidates tab.
+        </div>
+      )}
     </div>
   );
 }
@@ -1916,7 +1939,15 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   // component, same file — both now share useDropMember/DropMemberDrawer from
   // @/components/drop-member) rather than inventing a second delete path — Rule 25 stays the
   // one way a candidate leaves a batch.
-  const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(activeOnly(d.items))).catch((e: any) => setError(e.message));
+  // QA-2795: this used to filter to activeOnly() at load time, so a member who left the batch
+  // was gone from `members` entirely and every downstream screen (including a Failed one whose
+  // contract says the failure "overrides until cleared" — REQ-135) had no card left to clear it
+  // from. The full roster is kept now; activeOnly() is applied at the POINTS that need it
+  // (the summary counts below, the bulk-action target list) instead of at the door, so a departed
+  // member can still be found and rendered — read-only, per REQ-417's own rule ("a left member
+  // appears only where they have a record of their own") — without silently changing every count
+  // on this tab that assumed an active-only list.
+  const load = () => api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)).catch((e: any) => setError(e.message));
   useEffect(() => { load(); }, [batchId]);
 
   const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons, drop } = useDropMember(load, setError);
@@ -1943,22 +1974,36 @@ function Enrollment({ batchId, batch, error, setError }: any) {
   // chahiye enrollment wale tab par bhi" + "top par analytics... kitno ka registration ho gaya,
   // kitno ka ekyc". Mirrors Closure tab's own search+pill pattern (this file, 3873-3922) instead
   // of inventing a second one — pill counts double as the requested per-step analytics.
+  // QA-2795: every pill except the new "Dropped" one is scoped to `!hasLeft(m)` now that
+  // `members` carries the whole roster (see `load` above) — otherwise a departed member of any
+  // status would silently start showing up under "Completed"/"In Progress"/etc, which nobody
+  // asked for and REQ-417 does not call for either (only a Failed departed member has "a record
+  // of their own" this tab renders; the rest stay exactly as invisible here as before).
   const ENROL_FILTERS: { value: string; label: string; test: (m: any) => boolean }[] = [
-    { value: "all", label: "All", test: () => true },
-    { value: "not_started", label: "Not Started", test: (m) => m.enrollment_status === "Not Started" },
-    { value: "in_progress", label: "In Progress", test: (m) => m.enrollment_status === "In Progress" },
-    { value: "completed", label: "Completed", test: (m) => m.enrollment_status === "Completed" },
-    { value: "failed", label: "Failed", test: (m) => m.enrollment_status === "Failed" },
+    { value: "all", label: "All", test: (m) => !hasLeft(m) },
+    { value: "not_started", label: "Not Started", test: (m) => !hasLeft(m) && m.enrollment_status === "Not Started" },
+    { value: "in_progress", label: "In Progress", test: (m) => !hasLeft(m) && m.enrollment_status === "In Progress" },
+    { value: "completed", label: "Completed", test: (m) => !hasLeft(m) && m.enrollment_status === "Completed" },
+    { value: "failed", label: "Failed", test: (m) => !hasLeft(m) && m.enrollment_status === "Failed" },
+    // QA-2795 (Umesh, screen recording over batch KAU-ITI-RPLAVP-BSRT-02, Jitendra): "कोई ऑप्शन
+    // ही नहीं आ रहा" — once dropped, a Failed member's card had no door back at all, even though
+    // REQ-135 says Failed "overrides until cleared". This pill is that door: read-only (the server
+    // still refuses any write to a departed member — rules.ts updateEnrollment's `if (m.left_on)`
+    // 409 — so the card explains where the real door is instead of offering a button that 409s).
+    { value: "dropped", label: "Dropped", test: (m) => hasLeft(m) && m.enrollment_status === "Failed" },
   ];
   const q = search.trim().toLowerCase();
   const matchesSearch = (m: any) => !q || [m.candidate?.name, m.candidate?.phone, m.candidate?.sidh_candidate_id, m.candidate?.apaar_id]
     .some((v) => String(v ?? "").toLowerCase().includes(q));
-  const shown = members.filter((m) => (ENROL_FILTERS.find((f) => f.value === statusFilter)?.test ?? (() => true))(m) && matchesSearch(m));
+  const shown = members.filter((m) => (ENROL_FILTERS.find((f) => f.value === statusFilter)?.test ?? ((m: any) => !hasLeft(m)))(m) && matchesSearch(m));
   // QA-779's lesson, same file: narrowing the list must put the pager back at the start.
   useEffect(() => { setIdx(0); }, [statusFilter, search]);
   // Bulk actions act on what is actually visible, not the whole batch — searching for one
   // candidate and clicking "Select all pending" must not silently reach the ones off-screen.
-  const pending = shown.filter((m) => m.enrollment_status !== "Completed");
+  // QA-2795: `!hasLeft(m)` stays explicit here even though every filter above already excludes a
+  // departed member except "Dropped" — if that pill is the active one, `shown` is departed-only,
+  // and bulk must never target a member the server would 409 on (nor a member who left at all).
+  const pending = shown.filter((m) => !hasLeft(m) && m.enrollment_status !== "Completed");
   const ENROL_STEP_ORDER = ["reg_done", "kyc_done", "enroll_done", "accept_done"] as const;
   async function bulk(step: string) {
     if (bulkBusy) return false;
@@ -1982,29 +2027,60 @@ function Enrollment({ batchId, batch, error, setError }: any) {
     setBulkBusy(true); setBulkMsg("");
     try {
       const r = await api(`/api/batches/${batchId}/members/bulk-enroll`, { method: "POST", json: { step, member_ids: targets, ...(needsBackfill ? { confirm_backfill: true } : {}) } });
-      setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${r.failed?.length ? `, ${r.failed.length} failed` : ""}`);
+      // QA-2795: the route's `failed[]` entries are `"<memberId>: <message>"` (bulk-enroll/route.ts
+      // does not populate a candidate name — its own scope this wave belongs to QA-2799, not this
+      // unit). The id is still resolvable HERE, client-side, against the roster this tab already
+      // has loaded — so the bare ObjectId a bulk failure used to show never has to reach the
+      // screen, without touching the route at all.
+      const failedDetail = (r.failed ?? []).map((f: string) => {
+        const sep = f.indexOf(": ");
+        const rawId = sep === -1 ? f : f.slice(0, sep);
+        const msg = sep === -1 ? "" : f.slice(sep + 2);
+        const mm = members.find((x) => String(x._id) === rawId.trim());
+        const who = mm?.candidate?.name || mm?.candidate?.phone || rawId;
+        return msg ? `${who}: ${msg}` : who;
+      });
+      setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${failedDetail.length ? `, ${failedDetail.length} failed (${failedDetail.join("; ")})` : ""}`);
       setSelected(new Set());
       await load();
     } catch (e: any) { setError(e.message); throw e; }
     finally { setBulkBusy(false); }
   }
 
-  if (!members.length) return <p className="p-6 text-center text-sm text-gray-400">No active members to enroll.</p>;
-  const done = members.filter((m) => m.enrollment_status === "Completed").length;
+  // QA-2795: `members` now carries the whole roster (see `load`), so every count below reads
+  // `activeMembers` — REQ-418's rule ("a count and the list beneath it must never answer
+  // different questions") applied here means these numbers must stay EXACTLY what they were
+  // before this fix, not grow to include departed members nobody asked to be counted in "done".
+  const activeMembers = activeOnly(members);
+  const droppedFailed = members.filter((m) => hasLeft(m) && m.enrollment_status === "Failed");
+  if (!activeMembers.length && !droppedFailed.length) return <p className="p-6 text-center text-sm text-gray-400">No active members to enroll.</p>;
+  const done = activeMembers.filter((m) => m.enrollment_status === "Completed").length;
   const scope = selected.size ? `${selected.size} selected` : `all ${pending.length} pending`;
   const cur = shown[Math.min(idx, shown.length - 1)];
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600">
-        <span>{done}/{members.length} enrolled · Failed: {members.filter((m) => m.enrollment_status === "Failed").length}</span>
+        <span>{done}/{activeMembers.length} enrolled · Failed: {activeMembers.filter((m) => m.enrollment_status === "Failed").length}</span>
         <span className="text-gray-300">·</span>
-        <span>Registration: {members.filter((m) => m.reg_done).length}/{members.length}</span>
-        <span>e-KYC: {members.filter((m) => m.kyc_done).length}/{members.length}</span>
-        <span>Enrollment: {members.filter((m) => m.enroll_done).length}/{members.length}</span>
-        <span>Batch Accept: {members.filter((m) => m.accept_done).length}/{members.length}</span>
+        <span>Registration: {activeMembers.filter((m) => m.reg_done).length}/{activeMembers.length}</span>
+        <span>e-KYC: {activeMembers.filter((m) => m.kyc_done).length}/{activeMembers.length}</span>
+        <span>Enrollment: {activeMembers.filter((m) => m.enroll_done).length}/{activeMembers.length}</span>
+        <span>Batch Accept: {activeMembers.filter((m) => m.accept_done).length}/{activeMembers.length}</span>
         {bulkMsg && <span className="text-green-700">✓ {bulkMsg}</span>}
       </div>
+      {/* REQ-418: a surface that hides departed members must say how many it hid and where their
+          record lives. QA-2795 stops hiding the Failed ones (see the "Dropped" pill above), so
+          this line only needs to name what is STILL not on this tab. */}
+      {members.some(hasLeft) && (
+        <div className="text-xs text-gray-500">
+          {members.filter(hasLeft).length} {members.filter(hasLeft).length === 1 ? "member" : "members"} left this batch
+          {droppedFailed.length > 0
+            ? ` — ${droppedFailed.length} with a Failed enrollment ${droppedFailed.length === 1 ? "is" : "are"} shown under "Dropped" below, read-only.`
+            : "."}
+          {" "}Full log on the Candidates tab.
+        </div>
+      )}
       {/* QA-748's search+pill pattern (Closure tab, this file 3873-3922), mirrored here so the
           same interaction works the same way on both tabs; pill counts read against the full
           batch, so they double as the analytics Umesh asked for. */}
