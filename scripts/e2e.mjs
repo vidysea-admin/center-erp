@@ -49,6 +49,44 @@ const session = setCookies.flat().filter(Boolean).map((c) => c.split(";")[0]).fi
 ok("login issues session cookie", !!session);
 cookie = [csrfCookie, session].join("; ");
 
+// QA-2798/QA-2801 (checker, 2026-09-20): the sample-seed personas below (enroll@vidysea.com and
+// its siblings in scripts/seed-sample.mjs) are never created by this file - only seed-sample.mjs
+// creates them. ci.yml runs `npm run seed` THEN `npm run seed:sample` before `npm test`; an
+// isolated-copy recipe that runs only the first (as two independent checkers' recipes did, five
+// times across QA-2793 and QA-2797) leaves loginAs() returning null for every persona call below.
+// A null return does not throw - the `cookie` header this file then sends is the literal string
+// "undefined", the server reads no session, and every persona-scoped "role X -> 403, anonymous ->
+// 401" pin in this suite (-98/-113/-124/-102/-97 x2/QA-115/QA-2736/QA-2764/QA-399/QA-526/QA-398/
+// QA-614, a batch-deletion message check, an approval-actions-disabled check - 16 in all) flips:
+// the persona read comes back 401 (unauthenticated) instead of 403 (authenticated but forbidden),
+// because there was never a session to forbid. That produced a stable-looking 16-row cluster that
+// survived two checkers' fresh-server/fresh-database rebuilds and was wrongly suspected as
+// flaky/order-dependent or session-count-dependent (QA-2798's own filed hypothesis). It is
+// neither: reproduced twice here, deterministically, by the presence or absence of ONE seed step.
+// Refuse loudly instead of failing quietly sixteen different ways downstream - same standard this
+// project already applies to run-e2e.mjs's own preconditions (QA-1065/QA-1771/QA-851: "a warning
+// here would be read past") and to QA-1214's "preconditions are assertions, not skips".
+{
+  const fixtureCheck = await loginAs("enroll@vidysea.com", "CiOnly@123");
+  if (!fixtureCheck) {
+    console.error("");
+    console.error("################################################################");
+    console.error("##  E2E REFUSED TO START (QA-2798)");
+    console.error("##  The sample-seed personas (enroll@vidysea.com and its siblings in");
+    console.error("##  scripts/seed-sample.mjs) do not exist on this database, or their");
+    console.error("##  password does not match CiOnly@123.");
+    console.error("##  This file's persona-scoped pins (403-vs-401 checks that log in as");
+    console.error("##  Enrollment, Operations, a scoped Location user, or a Trainer) depend");
+    console.error("##  on them, and without this guard they fail as a MISLEADING 401-vs-403");
+    console.error("##  cluster (16 rows) rather than as a plainly-named missing fixture.");
+    console.error("##  Run BOTH seed steps, in order (this is what ci.yml does):");
+    console.error("##    npm run seed && npm run seed:sample");
+    console.error("################################################################");
+    console.error("");
+    process.exit(2);
+  }
+}
+
 const stamp = Date.now().toString().slice(-6);
 
 // ---- masters ----
