@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, createDailyLogChecked } from "@/lib/rules";
 import { audit } from "@/lib/audit";
-import { plain } from "@/lib/user-copy";
 
 // -82 (Umesh, 15/08): "batch ke andar Attendance tab se bhi us batch ki attendance fill karne
 // ka option, that too bulk." The Attendance tab's grid posts many days in one call. Each day
@@ -30,8 +29,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       const doc = await createDailyLogChecked(user, id, { ...d, log_date });
       results.push({ log_date, status: "created", id: doc._id });
     } catch (e: any) {
-      const msg = e?.message ?? String(e);
-      results.push({ log_date, status: /Rule 27/.test(msg) ? "exists" : "error", message: plain(msg) });
+      // QA-2799: the raw message used to reach `plain()` directly, which strips ONLY known ledger
+      // code markers ("Rule 27") — not Mongo driver text (E11000/CastError/ValidationError), so a
+      // collision on this door's own path could still leak the full driver string into a 200/201.
+      // Classification below still reads the RAW message (the "Rule 27" tag createDailyLogChecked's
+      // HttpError carries) before translateError() strips/rewrites it for display — same split
+      // QA-2796 used on candidates/assign.
+      const rawMsg = e?.message ?? String(e);
+      results.push({ log_date, status: /Rule 27/.test(rawMsg) ? "exists" : "error", message: translateError(e).message });
     }
   }
   const created = results.filter((r) => r.status === "created").length;

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson, readFormData } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BASE_PATH } from "@/lib/base-path";
 import { Batch, BatchMember, CandidateResult, Closure, StoredFile } from "@/models";
@@ -289,7 +289,8 @@ async function attachPairs(opts: {
       // operator, and what the late-arrival pin asserts on.
       attached.push({ candidate: candName, member: String(member._id), result: resultId, file: url, original: sf.original_name, ...(lateCreate ? { created_result: true } : {}) });
     } catch (e: any) {
-      refuse(`${candName}: ${e?.message ?? "attach failed"}`, candName);
+      // QA-2799: sibling of QA-2796 — this used to be `e?.message` verbatim into a 200 response.
+      refuse(`${candName}: ${translateError(e).message}`, candName);
     }
   }
 

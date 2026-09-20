@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readFormData } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Batch, Location, Program } from "@/models";
 import { audit } from "@/lib/audit";
@@ -147,7 +147,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
       created.push(doc.code);
       if (!firstId) firstId = doc._id;
     } catch (e: any) {
-      refused.push(`${b.location.name} × ${b.program.name}: ${e?.message ?? "create failed"}`);
+      // QA-2799: sibling of QA-2796 — this used to be `e?.message` verbatim into a 201 response.
+      refused.push(`${b.location.name} × ${b.program.name}: ${translateError(e).message}`);
     }
   }
   if (firstId) {

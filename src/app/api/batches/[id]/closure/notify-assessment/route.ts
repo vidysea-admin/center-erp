@@ -64,7 +64,17 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
     });
     const result = await sendMail({ to, subject: `Your assessment date is ${dateStr}`, html, text, entity: "BatchMember", entity_id: l.batch_member._id });
     if (result.status === "sent") sent++;
-    else skipped.push({ name, label: personLabel(candidate) || name, reason: result.reason ?? result.status });
+    else skipped.push({
+      name, label: personLabel(candidate) || name,
+      // QA-2799: found alongside the six named sibling doors, one layer down — `sendMail`'s own
+      // "failed" branch (lib/mailer.ts:139) logs `e.message` from the SMTP client verbatim as
+      // `reason`, and this per-candidate loop forwarded that straight into a 200 response. Every
+      // other "skipped" reason above it is a hand-written, safe internal string (no valid
+      // recipient / suppressed / not configured) — only "failed" ever carries raw driver/SMTP
+      // text, so only that branch needs rewriting. Not touching lib/mailer.ts itself (shared by
+      // every other sendMail caller; out of this unit's owned files).
+      reason: result.status === "failed" ? "could not send — mail delivery failed, try again shortly" : (result.reason ?? result.status),
+    });
   }
 
   await audit({

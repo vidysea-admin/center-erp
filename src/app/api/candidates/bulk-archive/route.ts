@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 import { archiveCandidate } from "@/lib/candidate-archive";
@@ -32,7 +32,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       await archiveCandidate(c, user, { reason, confirmBatchHistory: !!confirm_batch_history });
       results.push({ candidate: cid, ok: true });
     } catch (e) {
-      results.push({ candidate: cid, ok: false, error: e instanceof Error ? e.message : String(e) });
+      // QA-2799: sibling of QA-2796's fix on candidates/assign — this used to be `e.message`
+      // verbatim into a 200 per-candidate result, so a duplicate-key or cast collision put raw
+      // driver text in the toast. Same translator, same reason.
+      results.push({ candidate: cid, ok: false, error: translateError(e).message });
     }
   }
   return NextResponse.json({ results, archived: results.filter((r) => r.ok).length });

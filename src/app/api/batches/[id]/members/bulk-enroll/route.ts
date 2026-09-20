@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertBatchInScope, updateEnrollment } from "@/lib/rules";
 import { BatchMember } from "@/models";
@@ -50,7 +50,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     // Already there for every step we would set → nothing to do (idempotent).
     if (Object.keys(patch).every((k) => m[k] === true)) { skipped++; continue; }
     try { await updateEnrollment(String(m._id), patch); updated++; }
-    catch (e: any) { failed.push(`${m._id}: ${e?.message ?? "error"}`); }
+    // QA-2799: sibling of QA-2796 — this used to be `e?.message` verbatim into a 200 response.
+    // Note: this route's separate `failed: false` omission defect (rules.ts:883 guard) is NOT
+    // this unit's scope — filed separately if no ledger row exists for it.
+    catch (e: any) { failed.push(`${m._id}: ${translateError(e).message}`); }
   }
   await audit({
     entity: "Batch", entityId: id, field: "enrollment_bulk",

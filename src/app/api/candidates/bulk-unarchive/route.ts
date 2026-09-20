@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 import { unarchiveCandidate } from "@/lib/candidate-archive";
@@ -30,7 +30,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
       await unarchiveCandidate(c, user);
       results.push({ candidate: cid, ok: true });
     } catch (e) {
-      results.push({ candidate: cid, ok: false, error: e instanceof Error ? e.message : String(e) });
+      // QA-2799: sibling of QA-2796's fix — see bulk-archive/route.ts for the same note.
+      results.push({ candidate: cid, ok: false, error: translateError(e).message });
     }
   }
   return NextResponse.json({ results, restored: results.filter((r) => r.ok).length });
