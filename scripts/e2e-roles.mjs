@@ -140,6 +140,51 @@ ok("Rule 40: non-Admin cannot create Program (403)", opsPrograms.status === 403,
 const enrollDefaults = await req(enroll, "PUT", "/api/defaults", { batch_size: 99 });
 ok("Rule 40: non-Admin cannot edit Defaults (403)", enrollDefaults.status === 403, `got ${enrollDefaults.status}`);
 
+// ---- QA-2793 (S2): fee_required_for_enrollment cannot be armed while no fee-capture UI
+// exists. Rule 54 (src/lib/rules.ts) refuses enrollment completion on an unpaid fee once the
+// toggle is ON, and tells the operator to "Record the payment on the candidate first" — but the
+// candidates-page fee UI was removed 14 Aug (231e687) and never restored. Arming the toggle with
+// nowhere on screen to satisfy it reproduces that dead end, so src/app/api/defaults/route.ts now
+// refuses the ARM itself. This is a THIRD guard from a THIRD mechanism (403 role check above,
+// Rule 54's candidate-fee 409 inside rules.ts, and this arm-time 409) — each arm below is checked
+// against ITS OWN status and message, not a bare non-2xx, so a mutant that deletes one guard
+// cannot hide behind either of the other two.
+{
+  // Read the current value first so this fixture can put it back — the toggle defaults false,
+  // but a stray true left by an earlier failed run would make the "ON" arm below a false PASS
+  // (it would find fee_required_for_enrollment already true from the previous unrelated toggle,
+  // never actually exercising the arm-time refusal this block exists to test).
+  const defBefore = (await req(admin, "GET", "/api/defaults")).data?.item ?? {};
+  ok("QA-2793 fixture: fee_required_for_enrollment starts OFF for this block",
+    defBefore.fee_required_for_enrollment === false, JSON.stringify(defBefore.fee_required_for_enrollment));
+
+  const armAttempt = await req(admin, "PUT", "/api/defaults", { fee_required_for_enrollment: true });
+  ok("QA-2793: arming fee_required_for_enrollment is refused (409) while no fee-capture UI exists",
+    armAttempt.status === 409, `got ${armAttempt.status} ${JSON.stringify(armAttempt.data?.error ?? "")}`);
+  ok("QA-2793: the refusal NAMES the missing surface (fee-capture UI on the candidate screen), not a bare refusal",
+    /fee-capture UI/i.test(String(armAttempt.data?.error ?? "")) && /candidate/i.test(String(armAttempt.data?.error ?? "")),
+    JSON.stringify(armAttempt.data?.error ?? ""));
+
+  const afterArmAttempt = (await req(admin, "GET", "/api/defaults")).data?.item ?? {};
+  ok("QA-2793: the refused arm did not silently persist — toggle is still OFF",
+    afterArmAttempt.fee_required_for_enrollment === false, JSON.stringify(afterArmAttempt.fee_required_for_enrollment));
+
+  const disarmAttempt = await req(admin, "PUT", "/api/defaults", { fee_required_for_enrollment: false });
+  ok("QA-2793: setting the toggle to false always succeeds (200) — only arming it is gated",
+    disarmAttempt.status === 200, `got ${disarmAttempt.status}`);
+
+  // A non-boolean value for the field must not slip the arm guard by avoiding a strict `=== true`
+  // comparison — Mongoose casts a string like "true" to a real boolean true on write for a
+  // Boolean-typed schema field, so a naive check would let this through and land the toggle
+  // armed anyway. It must be refused (400) before ever reaching the update.
+  const truthyString = await req(admin, "PUT", "/api/defaults", { fee_required_for_enrollment: "true" });
+  ok("QA-2793: a non-boolean value for the field is refused outright (400), not cast-and-armed",
+    truthyString.status === 400, `got ${truthyString.status}`);
+  ok("QA-2793: …and it did not silently persist as an armed toggle either",
+    ((await req(admin, "GET", "/api/defaults")).data?.item ?? {}).fee_required_for_enrollment !== true,
+    JSON.stringify(((await req(admin, "GET", "/api/defaults")).data?.item ?? {}).fee_required_for_enrollment));
+}
+
 // Enrollment role CAN update enrollment steps
 const anyBatch = spocBatches.data.items.find((b) => b.status === "Active");
 if (anyBatch) {
