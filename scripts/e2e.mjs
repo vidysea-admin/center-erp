@@ -1978,7 +1978,35 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
   // (the pre-wipe 75-Enrolled-never-Assigned rows were seed artifacts, not a code path).
   ok("QA-032: assignment stamps the middle of the journey (Assigned)",
     (await req("GET", `/api/candidates/${cand5._id}`)).data.item.lifecycle_status === "Assigned");
-  await req("PUT", "/api/defaults", { fee_required_for_enrollment: true }, 200);
+
+  // QA-2797: QA-2793 (b1db0f1) added a 409 guard on PUT /api/defaults that refuses arming
+  // fee_required_for_enrollment while no fee-capture UI exists (src/lib/fee-capture.ts). That
+  // guard is correct and wanted (Umesh, qa/gates/video-2026-09-20-fee-switch.md) — it is not
+  // reopened here. But it means the API can no longer be used to ARM the toggle, which is how
+  // this pin used to reach the ON state to exercise Rule 54 itself (src/lib/rules.ts). Seed the
+  // toggle directly in Mongo instead, the same direct-collection pattern this file already uses
+  // elsewhere (storedfiles/publictokens/locations, above and below) — never a bypass inside the
+  // product route (that would put a hole in the guard in production to keep a test green).
+  //
+  // Hardened per dispatch: requireLocalBase (db-guard.mjs, imported above) guards BASE_URL, not
+  // the Mongo URL, so a direct MongoClient write here has no protection from that guard. Assert
+  // the database name is a local center_erp_ci* database before writing anything.
+  const seedDbName = process.env.MONGODB_DB || "center_erp_ci";
+  if (!/^center_erp_ci/.test(seedDbName)) {
+    console.error(`QA-2797 Rule 54 seed refused: MONGODB_DB="${seedDbName}" is not a local center_erp_ci* database. Nothing written.`);
+    process.exit(1);
+  }
+  {
+    const { MongoClient } = await import("mongodb");
+    const mc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc.connect();
+    const setRes = await mc.db(seedDbName).collection("defaults")
+      .updateOne({ _singleton: "defaults" }, { $set: { fee_required_for_enrollment: true } }, { upsert: true });
+    ok("Rule 54 seed: fee_required_for_enrollment armed directly in Mongo (bypassing the QA-2793 API guard)",
+      setRes.matchedCount === 1 || setRes.upsertedCount === 1, JSON.stringify(setRes));
+    await mc.close();
+  }
+
   const blocked = await req("PATCH", `/api/members/${mem5._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true });
   ok("Rule 54: toggle ON — enrollment refuses without a fee on record",
     blocked.status === 409 && /no fee payment on record/.test(blocked.data?.error ?? ""), `got ${blocked.status} ${blocked.data?.error ?? ""}`);
@@ -1988,6 +2016,17 @@ ok("R-J: per-position numbering keeps the centre × course prefix",
   const cand5b = (await req("GET", `/api/candidates/${cand5._id}`)).data.item;
   ok("R-J: the fee travels on the candidate", cand5b.fee_amount === 500 && !!cand5b.fee_paid_on && cand5b.fee_reference === "UPI-" + stamp,
     JSON.stringify({ a: cand5b.fee_amount, r: cand5b.fee_reference }));
+
+  // QA-2797: pin QA-2793's guard itself — arming the toggle THROUGH THE API is refused, and the
+  // refusal names the missing surface. New behaviour since -302, pinned before now only in
+  // e2e-roles.mjs; this suite is where the Rule 54 story lives, so it belongs here too.
+  const guardBlocked = await req("PUT", "/api/defaults", { fee_required_for_enrollment: true });
+  ok("QA-2793: PUT /api/defaults refuses arming fee_required_for_enrollment — no fee-capture UI",
+    guardBlocked.status === 409 && /fee-capture UI/.test(guardBlocked.data?.error ?? ""),
+    `got ${guardBlocked.status} ${JSON.stringify(guardBlocked.data)}`);
+
+  // Turning the toggle OFF still goes through the API fine (the guard only blocks arming it ON) —
+  // reset it there for the rest of the wall.
   await req("PUT", "/api/defaults", { fee_required_for_enrollment: false }, 200); // default OFF for the rest of the wall
 }
 // re-assignable after drop (Rule 20/22 spirit)
