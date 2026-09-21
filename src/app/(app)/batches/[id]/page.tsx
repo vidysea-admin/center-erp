@@ -1758,14 +1758,19 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
 // now; a click updates one card in place and the scroll position stays. (2) Bulk actions —
 // mark one step, or complete enrollment, for every pending member in ONE request. (3) The
 // card names the person in every state (Completed included) with a name→email→phone chain.
-function EnrolStepToggle({ m, field, label, onUpdate, canEdit = true }: any) {
+function EnrolStepToggle({ m, field, label, onUpdate, canEdit = true, left = false }: any) {
   // QA-1363: DISABLED rather than hidden, and it says WHY. A step that vanishes leaves a viewer
   // unable to read the state at all - and reading is not what the server refuses. The three steps
   // are the record of where this person has reached, so they stay legible to everyone and editable
   // only by whoever holds the right.
+  // QA-2813 (cycle 2 of QA-2795): `canEdit` here is really `editable` from EnrolCard, i.e.
+  // `canEdit && !left` — so a departed member's toggle was disabled for the SAME reason as a
+  // plain no-permission viewer's, and rendered the SAME hardcoded string, even for a user who
+  // genuinely holds candidates.assign. The `left` flag lets this button distinguish the two
+  // causes the same way the adjacent issue <select> already does two lines below in EnrolCard.
   return (
     <button onClick={() => onUpdate(m, { [field]: !m[field] })} disabled={!canEdit}
-      title={canEdit ? undefined : "You do not have the right to change enrolment on this batch."}
+      title={canEdit ? undefined : left ? "This member has left the batch." : "You do not have the right to change enrolment on this batch."}
       className={`rounded-lg border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60 ${m[field] ? "border-green-300 bg-green-50 text-green-700" : "border-gray-300 bg-white text-gray-500"}`}>
       {m[field] ? "✓ " : ""}{label}
     </button>
@@ -1868,10 +1873,10 @@ function EnrolCard({ m, onUpdate, selected, onSelect, canEdit = true, canEditCan
         </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={editable} />
-        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={editable} />
-        <EnrolStepToggle m={m} field="enroll_done" label="Enrollment" onUpdate={onUpdate} canEdit={editable} />
-        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={editable} />
+        <EnrolStepToggle m={m} field="reg_done" label="Registration" onUpdate={onUpdate} canEdit={editable} left={left} />
+        <EnrolStepToggle m={m} field="kyc_done" label="e-KYC" onUpdate={onUpdate} canEdit={editable} left={left} />
+        <EnrolStepToggle m={m} field="enroll_done" label="Enrollment" onUpdate={onUpdate} canEdit={editable} left={left} />
+        <EnrolStepToggle m={m} field="accept_done" label="Batch Accept" onUpdate={onUpdate} canEdit={editable} left={left} />
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select className="rounded-lg border border-gray-300 px-2 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400" value={m.issue ?? ""} disabled={!editable}
