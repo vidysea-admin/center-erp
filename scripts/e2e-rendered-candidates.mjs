@@ -1756,6 +1756,148 @@ if (await card.count() > 0) {
   await tr.c.close().catch(() => {});
 }
 
+// ---------------------------------------------------------------------------------------------
+// QA-2816 - the regression pin QA-2813 never got.
+//
+// QA-2813: on a departed member's card the four enrolment step buttons said "You do not have the
+// right to change enrolment on this batch." That sentence was FALSE for anyone holding
+// candidates.assign - the buttons were disabled because the MEMBER had left, not because the
+// reader lacked anything. Fixed in qa-2795 cycle 2 by threading `left` into EnrolStepToggle
+// (page.tsx:1773 and :1883). It shipped in -318 with no assertion anywhere in the tracked tree:
+// the pin that caught it lived in a checker's isolated copy and died with the teardown.
+//
+// THE PERSONA IS THE WHOLE TEST. Run this as someone WITHOUT candidates.assign and the permission
+// sentence is CORRECT, the assertion passes, and it proves nothing about the defect - this
+// project's own QA-2470 failure, an assertion that writes the bug down as the right answer. So it
+// runs as Admin and carries a CONTROL arm proving the right is actually held: on a member who has
+// NOT left, the same four buttons must be live. If the control fails, the pin below is vacuous,
+// and it says so rather than scoring green.
+//
+// Own try/catch on purpose: an unguarded await here reaches the file-level onFatal and takes every
+// later block with it (the QA-2509 pattern).
+{
+  try {
+    // Local copies: the QA-1363 block above declares `asRole`/`openTab` INSIDE its own braces, so
+    // they are not in scope here. Duplicated deliberately rather than hoisting theirs - moving a
+    // helper out of a block that five assertions depend on is a bigger change than this pin is.
+    const asRole2816 = async (email, pw) => {
+      const c = await browser.newContext({ viewport: { width: 1536, height: 900 } });
+      const pg = await c.newPage();
+      await pg.goto(BASE, { waitUntil: "domcontentloaded" });
+      await pg.waitForTimeout(800);
+      const box = pg.locator('input[type="email"], input[name="email"]').first();
+      if (await box.count()) {
+        await box.fill(email);
+        await pg.locator('input[type="password"]').first().fill(pw);
+        await pg.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+        await pg.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+      }
+      return { c, pg, ok: !/login/i.test(pg.url()) };
+    };
+    const openTab2816 = async (pg, name) => {
+      const tab = pg.getByRole("button", { name }).first();
+      if (await tab.count()) { await tab.click().catch(() => {}); await pg.waitForTimeout(1200); }
+    };
+
+    const list2816 = (await req(admin, "GET", "/api/batches?limit=50")).data.items || [];
+    const b2816 = list2816.find((x) => ["Active", "Ready", "Planning"].includes(x.status));
+    if (!b2816) {
+      ok("[QA-2816 fixture] an Active/Ready/Planning batch exists to hang the fixture on", false,
+        `batches seen=${list2816.length}`);
+    } else {
+      const full2816 = (await req(admin, "GET", `/api/batches/${b2816._id}`)).data.item;
+      const mk2816 = async (tag) => {
+        const c = (await req(admin, "POST", "/api/candidates", {
+          name: `TEST-2816 ${tag} ${s}`, phone: phone("77"),
+          location: full2816.location?._id ?? full2816.location,
+          program: full2816.program?._id ?? full2816.program,
+        }, 201)).data.item;
+        return (await req(admin, "POST", `/api/batches/${b2816._id}/members`, { candidate: c._id }, 201)).data.item;
+      };
+
+      // ORDER MATTERS AND IT IS NOT COSMETIC. The "Dropped" pill tests
+      // `hasLeft(m) && enrollment_status === "Failed"` (page.tsx:1998). Drop first and the card
+      // never renders at all - and a pin that cannot find a button would report a missing button
+      // as a passing absence, which is the failure this whole file keeps re-learning.
+      const gone2816 = await mk2816("gone");
+      await req(admin, "PATCH", `/api/members/${gone2816._id}`, { failed: true, issue: "Portal error" }, 200);
+      await req(admin, "POST", `/api/members/${gone2816._id}/drop`,
+        { left_on: new Date().toISOString().slice(0, 10), drop_reason: "Other" }, 200);
+      const stay2816 = await mk2816("stay");
+
+      const ad2816 = await asRole2816("admin@vidysea.com", ADMIN_PASSWORD);
+      if (!ad2816.ok) {
+        ok("[QA-2816] the Admin login works - without it every arm below is vacuous", false, ad2816.pg.url());
+      } else {
+        const pg = ad2816.pg;
+        await pg.goto(BASE + "/batches/" + b2816._id, { waitUntil: "domcontentloaded" });
+        await pg.waitForFunction(() => /Overview|Enrollment|Candidates/i.test(document.body.innerText),
+          undefined, { timeout: 30000 }).catch(() => {});
+        await pg.waitForTimeout(800);
+        await openTab2816(pg, /^Enrollment$/);
+
+        // Read the four step buttons for one named member: their disabled state and their title.
+        const readSteps = async (memberName) => pg.evaluate((nm) => {
+          const LABELS = ["Registration", "e-KYC", "Enrollment", "Batch Accept"];
+          const cards = Array.from(document.querySelectorAll("*")).filter(
+            (el) => el.children.length && (el.textContent || "").includes(nm));
+          const card = cards.length ? cards[cards.length - 1] : null;
+          if (!card) return { found: false, buttons: [] };
+          const buttons = Array.from(card.querySelectorAll("button"))
+            .filter((b) => LABELS.some((l) => (b.textContent || "").trim().startsWith(l)))
+            .map((b) => ({
+              label: (b.textContent || "").trim().slice(0, 24),
+              disabled: b.disabled === true || b.getAttribute("aria-disabled") === "true",
+              title: b.getAttribute("title") || "",
+            }));
+          return { found: true, buttons };
+        }, memberName);
+
+        // CONTROL: the reader genuinely holds the right. A live member's step buttons must be
+        // usable. If they are not, this persona cannot change enrolment at all and the pin below
+        // would be measuring a permission refusal while claiming to measure a departure notice.
+        const live = await readSteps(`TEST-2816 stay ${s}`);
+        const liveUsable = live.found && live.buttons.length > 0 &&
+          live.buttons.some((b) => !b.disabled) &&
+          !live.buttons.some((b) => /do not have the right/i.test(b.title));
+        ok("[QA-2816 control] the reader HOLDS enrolment rights - a member who has NOT left shows live step buttons, so a permission message below would be false rather than merely disabled",
+          liveUsable, JSON.stringify(live).slice(0, 320));
+
+        await openTab2816(pg, /^Enrollment$/);
+        const dropPill = pg.getByRole("button", { name: /^Dropped/ }).first();
+        const pillFound = (await dropPill.count()) > 0;
+        if (pillFound) { await dropPill.click().catch(() => {}); await pg.waitForTimeout(900); }
+        ok("[QA-2816 fixture] the Dropped pill exists and the departed-Failed member is reachable behind it (QA-2795's surface) - without it this pin has nothing to read",
+          pillFound, `pill=${pillFound}`);
+
+        const departed = await readSteps(`TEST-2816 gone ${s}`);
+        const haveButtons = departed.found && departed.buttons.length > 0;
+        ok("[QA-2816 fixture] the departed member's four step buttons render - a missing button must not read as a passing absence",
+          haveButtons, JSON.stringify(departed).slice(0, 320));
+
+        if (liveUsable && haveButtons) {
+          // THE PIN: the tooltip names the real reason.
+          ok("[QA-2816] a departed member's disabled step buttons say the MEMBER has left - this is what QA-2813 got wrong and it is asserted against a reader who provably holds the right",
+            departed.buttons.every((b) => !b.disabled || /has left the batch/i.test(b.title)),
+            JSON.stringify(departed.buttons).slice(0, 320));
+
+          // THE NEGATIVE, which is the half that fails if anyone collapses the ternary back.
+          // Without it, deleting the `left` branch entirely would still pass the arm above for
+          // any button that happened to be enabled.
+          ok("[QA-2816] ...and none of them blames the reader's permissions - the false sentence QA-2813 filed must not come back",
+            !departed.buttons.some((b) => /do not have the right/i.test(b.title)),
+            JSON.stringify(departed.buttons.map((b) => b.title)).slice(0, 320));
+        }
+        await ad2816.c.close().catch(() => {});
+      }
+    }
+  } catch (e) {
+    ok("[QA-2816] the departed-member tooltip pin ran at all - a crash here is a failure, never a skip",
+      false, String((e && e.message) || e).slice(0, 300));
+  }
+}
+
+
 console.log(`\n--- rendered-state summary (${results.length} URLs) ---`);
 for (const r of results) {
   console.log(`  ${(decodeURIComponent(r.qs.split("=")[1] || "(none)")).padEnd(24)} | ${r.kind.padEnd(11)} | ${r.bucket.padEnd(9)} | tab ${r.activeTab.padEnd(26)} | pill ${(r.activePills[0] || "-").padEnd(22)} | announced ${String(r.announced).padStart(4)} | rows ${String(r.rows).padStart(4)}`);
