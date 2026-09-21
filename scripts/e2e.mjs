@@ -3594,6 +3594,20 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       f365.length > 0 && f365bad.length === 0,
       JSON.stringify({ checked: f365.length, mismatched: f365bad.length, first: f365bad.slice(0, 3) }));
 
+    // QA-2734 (QA-767's own written check-on-ship, middle clause): "target minus approved par mile."
+    // The per-row split puts each row's target into exactly ONE of the three buckets, so
+    // not_approved + unknown === target - approved holds by construction - but that is an invariant
+    // of the build, not an assertion: if a future edit ever allowed a target row to feed two
+    // buckets, or dropped one, every existing equality above would keep passing (the sum would just
+    // no longer be the remainder) while the figure the CEO reads as "target minus approved par mile"
+    // silently became something else. So the remainder form is asserted on its own name, on the same
+    // cells the sum above walks.
+    const f365rem = f365.filter(([, c]) =>
+      Number(c?.not_yet_approved) !== Number(c?.target ?? 0) - Number(c?.approved ?? 0));
+    ok("QA-2734: 'Not approved yet' also equals Target MINUS Approved on the same cells - QA-767's 'target minus approved par mile' is mechanical",
+      f365rem.length === 0,
+      JSON.stringify({ checked: f365.length, mismatched: f365rem.length, first: f365rem.slice(0, 3) }));
+
     // Umesh's EXPLICIT condition in REQ-365f: the combined line must not be called "Not approved",
     // because that name repeats the exact false claim REQ-365d exists to prevent. A rename to that
     // string is a contract violation, not a cosmetic change, so it is pinned rather than trusted.
@@ -3992,6 +4006,37 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
       // because the first draft did exactly that, on production.
       ok("QA-530 (-176) [source pin]: and it refuses a target on the SAME HOST as the source",
         /SAME HOST as the source/.test(mir) && /MIRROR_TARGET_URL/.test(mir), JSON.stringify({ ok: /SAME HOST/.test(mir) }));
+    }
+
+    // ---- QA-2733 (REQ-367): the info tab explains EVERY column the data sheet carries ----
+    // The download above is parsed here rather than trusted: the workbook is the one artifact
+    // that outlives the screen, and its "where the numbers come from" tab had seven of the
+    // eight measures while the data sheet carried all eight. Pinning the mapping off the
+    // PARSED FILE means the assertion sees what a reader sees, not what the route intended -
+    // a row added to the wrong sheet, or under a renamed Column cell, fails here exactly as
+    // the missing row did. The provenance text is asserted to be non-empty and to name the
+    // client sheet, since REQ-367's label is the column whose origin is being disclosed; and
+    // the on-screen name must agree with the payload's REPORT_LABELS, which is the third of
+    // the three places that label has to agree (route comment: "the tile, the table header
+    // and this row").
+    {
+      let infoCols = null, infoRow = null;
+      if (xlBuf.length > 4 && xlBuf.slice(0, 2).toString() === "PK") {
+        try {
+          const XLSXmod = (await import("xlsx"));
+          const wbi = XLSXmod.read(xlBuf, { type: "buffer" });
+          infoCols = XLSX.utils.sheet_to_json(wbi.Sheets["where the numbers come from"]).map((r) => String(r.Column ?? ""));
+          infoRow = XLSX.utils.sheet_to_json(wbi.Sheets["where the numbers come from"]).find((r) => r.Column === "Not approved yet");
+        } catch { /* left null - the assertions below fail loudly rather than crash the suite */ }
+      }
+      ok("QA-2733: the info tab lists every measure the data sheet carries - 'Not approved yet' included, not seven of eight",
+        !!infoCols && ["Target", "Approved", "Not approved", "Not approved yet", "No verdict", "Mobilised", "In training", "Passed"].every((c) => infoCols.includes(c)),
+        JSON.stringify({ infoColumns: infoCols }));
+      ok("QA-2733: the eighth row carries its provenance - shown-as name from REPORT_LABELS, source text non-empty and naming the client sheet",
+        !!infoRow && String(infoRow["Shown on screen as"] ?? "").trim().length > 0
+          && String(infoRow["Where it comes from"] ?? "").trim().length > 0
+          && /client sheet/i.test(String(infoRow["Where it comes from"] ?? "")),
+        JSON.stringify(infoRow ?? null));
     }
 
     // ---- -176 (QA-552): an unrecognised status is NAMED, never absorbed ----

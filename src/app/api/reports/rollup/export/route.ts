@@ -96,6 +96,11 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     { Column: "Target", "Shown on screen as": REPORT_LABELS.target.label, "Where it comes from": sources.target },
     { Column: "Approved", "Shown on screen as": REPORT_LABELS.approved.label, "Where it comes from": sources.approved },
     { Column: "Not approved", "Shown on screen as": REPORT_LABELS.not_approved.label, "Where it comes from": sources.not_approved },
+    // QA-2733 (REQ-367): the eighth column travelled here with the figure - the export route
+    // renders `Not approved yet` on its data sheet (one line per job role plus Grand Total)
+    // while this tab explained only the other seven. A reader who could see the column could
+    // not read where it came from, on the one surface that outlives the screen.
+    { Column: "Not approved yet", "Shown on screen as": REPORT_LABELS.not_yet_approved.label, "Where it comes from": sources.not_yet_approved },
     { Column: "No verdict", "Shown on screen as": REPORT_LABELS.unknown.label, "Where it comes from": sources.unknown },
     { Column: "Mobilised", "Shown on screen as": REPORT_LABELS.mobilised.label, "Where it comes from": sources.mobilised },
     { Column: "In training", "Shown on screen as": REPORT_LABELS.in_training.label, "Where it comes from": sources.in_training },
