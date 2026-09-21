@@ -2045,7 +2045,17 @@ function Enrollment({ batchId, batch, error, setError }: any) {
         const who = mm?.candidate?.name || mm?.candidate?.phone || rawId;
         return msg ? `${who}: ${msg}` : who;
       });
-      setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${failedDetail.length ? `, ${failedDetail.length} failed (${failedDetail.join("; ")})` : ""}`);
+      // QA-2811: members already marked Failed are returned under their own key and were NOT
+      // touched — the bulk action deliberately leaves the status and the recorded reason alone
+      // (Umesh, 2026-09-21: "Bulk Failed ko haath na lagaye, sirf saaf bole";
+      // qa/gates/qa-2811-bulk-clear-failed.md). They must not be folded into "already done" — that
+      // sentence would be false about exactly the members this message exists to explain — so they
+      // get their own clause, named, with the way forward in it.
+      const needsClearDetail = (r.needs_clear ?? []).map((rawId: string) => {
+        const mm = members.find((x) => String(x._id) === String(rawId).trim());
+        return mm?.candidate?.name || mm?.candidate?.phone || String(rawId);
+      });
+      setBulkMsg(`${r.updated} updated${r.skipped ? `, ${r.skipped} already done` : ""}${needsClearDetail.length ? `, ${needsClearDetail.length} left unchanged because they are marked Failed — use "Clear failure" on each first (${needsClearDetail.join("; ")})` : ""}${failedDetail.length ? `, ${failedDetail.length} failed (${failedDetail.join("; ")})` : ""}`);
       setSelected(new Set());
       await load();
     } catch (e: any) { setError(e.message); throw e; }

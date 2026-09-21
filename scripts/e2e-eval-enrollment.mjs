@@ -67,6 +67,50 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
   const wl = (await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items ?? [];
   const both = wl.filter((m) => [String(mA._id), String(mB._id)].includes(String(m._id)));
   ok("QA-147: both members read back Completed via the same Rule 24 derivation", both.length === 2 && both.every((m) => m.enrollment_status === "Completed"), JSON.stringify(both.map((m) => m.enrollment_status)));
+
+  // ---- QA-2811: bulk does not touch a member marked Failed, and says so plainly. ----
+  // Umesh, 2026-09-21, verbatim: "Bulk Failed ko haath na lagaye, sirf saaf bole"
+  // (qa/gates/qa-2811-bulk-clear-failed.md). Before this, bulk sent the four booleans and no
+  // `failed` key, so the recompute guard at rules.ts:947 never fired: the member saved with four
+  // `true` booleans while keeping a "Failed" status, and was counted as `updated` - reported as a
+  // success. Confirmed live by the qa-2799 cycle-1 checker.
+  //
+  // THE BOOLEANS ARM IS THE ONE THAT SEPARATES THE TWO BUILDS, and it is worth saying why the
+  // obvious assertion does not. On a REVERTED build the status is ALSO still "Failed" - that is
+  // precisely the defect - so "status is still Failed" passes on broken and fixed alike: an
+  // assertion that cannot fail. What actually differs is whether the four booleans were written.
+  // Broken writes four `true`; fixed writes none. Mutate the `continue` away and that arm goes red.
+  //
+  // Uses its own candidate rather than a free slot in `cands`: later fixtures in this file index
+  // into that array by position, and borrowing one would couple two unrelated tests.
+  {
+    const cx2811 = (await req(admin, "POST", "/api/candidates", {
+      name: "TEST-EE 2811 " + s, phone: phone("86"), location: loc._id, program: prog._id,
+    }, 201)).data.item;
+    const mC = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cx2811._id }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${mC._id}`,
+      { failed: true, issue: "Portal error", issue_note: "TEST-EE 2811 reason" }, 200);
+
+    const res2811 = (await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`,
+      { step: "all", member_ids: [mC._id] }, 200)).data;
+    ok("QA-2811: bulk reports a Failed member under needs_clear and does not count it as updated",
+      (res2811.needs_clear ?? []).map(String).includes(String(mC._id)) && res2811.updated === 0,
+      JSON.stringify(res2811));
+    ok("QA-2811: ...and not as 'already done' either - that bucket means the work was done, which would be a second false statement about the same member",
+      res2811.skipped === 0, JSON.stringify(res2811));
+
+    const back2811 = ((await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items ?? [])
+      .find((m) => String(m._id) === String(mC._id));
+    ok("QA-2811: the four step booleans were NOT written - the arm that tells a fixed build from a reverted one, since the status reads Failed on both",
+      !!back2811 && ![back2811.reg_done, back2811.kyc_done, back2811.enroll_done, back2811.accept_done].some(Boolean),
+      JSON.stringify(back2811 && { r: back2811.reg_done, k: back2811.kyc_done, e: back2811.enroll_done, a: back2811.accept_done }));
+    ok("QA-2811: the status is left exactly as it was",
+      !!back2811 && back2811.enrollment_status === "Failed", String(back2811 && back2811.enrollment_status));
+    ok("QA-2811: the recorded failure reason survives - preserving it is the whole reason this option was chosen over auto-clearing",
+      !!back2811 && back2811.issue === "Portal error" && back2811.issue_note === "TEST-EE 2811 reason",
+      JSON.stringify(back2811 && { issue: back2811.issue, note: back2811.issue_note }));
+  }
+
   // Blocker text (Manish: "Not ready: room assigned" read backwards). Health on a Planning
   // batch missing a room must SAY "room not assigned".
   const noRoomBatch = (await req(admin, "POST", "/api/batches", { location: loc2._id, program: prog2._id, planned_start: today(), target_size: 5 }, 201)).data.item;

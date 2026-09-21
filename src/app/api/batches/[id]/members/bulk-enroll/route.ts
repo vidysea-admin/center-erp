@@ -46,19 +46,40 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     : { [step]: true, ...(body.confirm_backfill ? { confirm_backfill: true } : {}) };
   let updated = 0, skipped = 0;
   const failed: string[] = [];
+  const needs_clear: string[] = [];
   for (const m of members) {
+    // QA-2811. A member marked Failed is left EXACTLY as it is — status and booleans both — and
+    // reported under its own name. Decided by Umesh, 2026-09-21, verbatim: "Bulk Failed ko haath na
+    // lagaye, sirf saaf bole" (qa/gates/qa-2811-bulk-clear-failed.md).
+    //
+    // What this route did before: it sent the four booleans and no `failed` key, so `patch.failed`
+    // was `undefined`, the recompute guard at rules.ts:947 (`enrollment_status !== "Failed" ||
+    // patch.failed === false`) never fired, and the member was saved with four `true` booleans and
+    // a "Failed" status — counted as `updated`, reported as success. The contract does not settle
+    // whether completing four steps CLEARS a Failed (REQ-136 makes setting one deliberate; REQ-135
+    // says Failed overrides "until cleared" without saying what clears it), so the question went to
+    // Umesh rather than being decided here.
+    //
+    // Ticking the booleans while leaving the status is the one thing NOT to do: it manufactures the
+    // 4/4-and-Failed row that made this confusing. `continue` before the patch, not after.
+    //
+    // And it is NOT `skipped`: that bucket means "already done", which would be a second false
+    // statement about the same member. Clearing stays the per-member door's deliberate act.
+    if (m.enrollment_status === "Failed") { needs_clear.push(String(m._id)); continue; }
     // Already there for every step we would set → nothing to do (idempotent).
+    // NOTE (QA-2820): a member corrupted by the old behaviour — four `true` booleans still carrying
+    // a "Failed" status — is caught by the Failed branch above now, so it reports honestly instead
+    // of falling in here and being counted as already done. This route still does not REPAIR it;
+    // that needs the explicit clear, same as any other Failed member.
     if (Object.keys(patch).every((k) => m[k] === true)) { skipped++; continue; }
     try { await updateEnrollment(String(m._id), patch); updated++; }
     // QA-2799: sibling of QA-2796 — this used to be `e?.message` verbatim into a 200 response.
-    // Note: this route's separate `failed: false` omission defect (rules.ts:883 guard) is NOT
-    // this unit's scope — filed separately if no ledger row exists for it.
     catch (e: any) { failed.push(`${m._id}: ${translateError(e).message}`); }
   }
   await audit({
     entity: "Batch", entityId: id, field: "enrollment_bulk",
-    newValue: { step, requested: members.length, updated, skipped, failed: failed.length },
+    newValue: { step, requested: members.length, updated, skipped, failed: failed.length, needs_clear: needs_clear.length },
     actor: user.id, actorType: "USER",
   });
-  return NextResponse.json({ step, requested: members.length, updated, skipped, failed });
+  return NextResponse.json({ step, requested: members.length, updated, skipped, failed, needs_clear });
 });
