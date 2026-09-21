@@ -161,7 +161,19 @@ export function assertLocationInScope(user: SessionUser, locationId: string) {
 // get the fix" shape ARCHITECTURE.md §3 exists to name.
 function duplicateKeyMessage(msg: string): string {
   const dupKey = msg.match(/dup key:\s*\{([^}]*)\}/)?.[1] ?? "";
-  const fields = Array.from(dupKey.matchAll(/"?([A-Za-z0-9_]+)"?\s*:/g)).map((m) => m[1].replace(/_/g, " "));
+  // QA-2825: the scan above read `{ ... }` as a flat string, so a colon INSIDE a quoted VALUE was
+  // taken for another key. `Batch.source` is literally `Import: <file name>` (batches/import
+  // route.ts:143), so the very first real collision on it reported "A record with this source +
+  // Import combination already exists." — a user-facing message naming a field that does not exist.
+  // The 2026-08 fix above moved the scan off the INDEX NAME and onto the dup-key document precisely
+  // to stop guessing at field boundaries; this finishes that by making the scan respect the
+  // document's own structure. Two changes, both necessary:
+  //   1. blank out quoted values before looking for keys, so their contents cannot be read as keys;
+  //   2. anchor a key to the start of the document or to a comma, so nothing mid-value qualifies.
+  // Found by the qa-2812 checker while verifying an arm that was too loose to catch it — both the
+  // correct and the wrong message matched `/already in use|already exists/`.
+  const keysOnly = dupKey.replace(/:\s*"(?:[^"\\]|\\.)*"/g, ': ""');
+  const fields = Array.from(keysOnly.matchAll(/(?:^|,)\s*"?([A-Za-z0-9_.]+)"?\s*:/g)).map((m) => m[1].replace(/_/g, " "));
   if (fields.length === 1) return `That ${fields[0]} is already in use.`;
   if (fields.length > 1) return `A record with this ${fields.join(" + ")} combination already exists.`;
   return "This record already exists.";

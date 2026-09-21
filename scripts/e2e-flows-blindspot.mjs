@@ -759,8 +759,19 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
           !/E11000|dup key|index:|qa2812_tmp_unique_source|\.batches |collection:/i.test(refD[0]),
         JSON.stringify(refD));
 
-      ok("QA-2812: ...and what it says instead names the conflicting field as a sentence, rather than a generic apology",
-        refD.length === 1 && /already in use|already exists/i.test(refD[0]),
+      // QA-2825, and this arm is the reason the bug existed unseen: the cycle-1 version of it read
+      // `/already in use|already exists/i`, which BOTH the correct message and the wrong one match.
+      // The wrong one was "A record with this source + Import combination already exists." - a field
+      // named "Import" that does not exist, invented because `duplicateKeyMessage` scanned inside
+      // the quoted VALUE ("Import: batches-2812-dup.xlsx") for keys. A loose assertion over a door
+      // you have just driven for the first time is worse than none: it reports coverage.
+      // So this now asserts the EXACT sentence, and separately that no phantom second field is named.
+      ok("QA-2825/QA-2812: the duplicate message names ONLY the real field - exactly 'That source is already in use.', not a combination invented from the value's own colon",
+        refD.length === 1 && /: That source is already in use\.$/.test(refD[0]),
+        JSON.stringify(refD));
+
+      ok("QA-2825/QA-2812: ...and it does NOT report a compound key - a single-field index must never produce a 'combination' sentence",
+        refD.length === 1 && !/combination already exists/i.test(refD[0]) && !/ \+ /.test(refD[0]),
         JSON.stringify(refD));
     } catch (e) {
       // This block owns its own failure. An unguarded throw here would take the whole file down
