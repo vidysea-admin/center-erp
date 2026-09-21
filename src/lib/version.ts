@@ -7,7 +7,7 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-317";
+export const RELEASE = "2026.08.14-318";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -197,7 +197,53 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     clause names both surfaces rather than saying "only", which would have been false as written.
 // No clause here describes QA-2791, QA-2797 or QA-2798: those are test-harness repairs and a user
 // receives nothing from them.
+// -318 provenance. Every clause below is traced to a verdict on disk, and the BOUNDARIES are the
+// part that took the work - four of the last five public notes shipped a false clause, and each
+// time the sentence came from the work intended rather than the evidence measured (QA-2019, -2047,
+// -2058, -2088). This note is judged over the whole delta production receives, not a push range.
+//   - the Dropped filter: qa-2795 verdict, cycle 1 (design ruled contract-correct) and cycle 2
+//     (PASS). The pill shows a departed member whose enrollment was marked FAILED. A departed
+//     member who was not Failed stays hidden - the cycle-1 checker verified that live - so the
+//     clause says "marked as failed" rather than "anyone who left", which would be false.
+//   - the unchanged-population clause: the unit kept the other filters and the counts on the active
+//     population deliberately, and the checker measured that. Said plainly because a visibility
+//     change is exactly what readers assume moved their numbers. It was DRAFTED as "Nothing else on
+//     that tab changed" and that lead clause was deleted before shipping: the tab demonstrably did
+//     change (a pill and a disclosure line were added), so as written it claimed more than was
+//     measured while the specific sentence after it already carried the whole meaning. Deleting a
+//     quantifier that adds nothing is cheaper than defending it.
+//   - the four step buttons: QA-2813, found by the cycle-1 checker and fixed in cycle 2. The old
+//     text claimed the reader lacked permission; it was shown to a persona who HELD the right.
+//   - bulk failure messages: qa-2799 verdict (PASS, cycle 1). The clause NAMES the seven actions
+//     instead of saying "bulk actions", because only those seven were changed. It does not say
+//     "every failure now reads as a sentence": QA-2812 records that one of the seven, importing
+//     batches, was never driven to a real failure by either the maker or the checker, and QA-2811
+//     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
+//     in bulk still leaves a member marked Failed after all four steps are ticked.
+// No clause describes the test-harness work: a user receives nothing from it.
 export const RELEASE_NOTE_CURRENT =
+  "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
+  "says when several things are done at once and some of them fail. "  +
+  "A candidate who was dropped from a batch, and whose enrollment had been marked as failed, can "  +
+  "now be found again on that batch's Enrollment tab, under a new Dropped filter. Their card is "  +
+  "read-only: it shows the date they left and the reason recorded for it, and it names the way to "  +
+  "bring them back, which is to add them to the batch again. "  +
+  "The other filters, the counts and the actions that work on several people at once still cover "  +
+  "only the people currently in the batch, and someone who left without their enrollment being "  +
+  "marked as failed is not shown, as before. "  +
+  "On that card, the four enrollment step buttons now say that the member has left the batch. "  +
+  "Until this release they said the person looking at them did not have permission to change "  +
+  "enrollment, which was wrong for everyone who did have it. "  +
+  "When several items are handled at once and some of them fail, the reason now reads as a "  +
+  "sentence rather than as raw text from the database or the mail server. The actions this covers "  +
+  "are attaching certificates, sending the assessment-completion notice, adding daily logs in "  +
+  "bulk, completing enrollment in bulk, importing batches, and archiving or restoring candidates "  +
+  "in bulk. "  +
+  "One thing this release does not change: completing enrollment in bulk still leaves a candidate "  +
+  "marked as failed even after all four of their enrollment steps are ticked. Clearing that is "  +
+  "done by adding them to the batch again.";
+
+const RELEASE_NOTE_ARCHIVE_317 =
   "-317 changes how a batch is deleted, who may remove a result that has already been recorded, and "  +
   "what happens when someone who left a batch is taken back into it. "  +
   "Deleting a batch no longer asks for confirmation in a browser dialog: the delete opens a panel "  +
@@ -1907,6 +1953,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -315: ARCHIVE_314 wired in here in the SAME bump that declared it.
   // -316: ARCHIVE_315 wired in here in the SAME bump that declared it.
   // -317: ARCHIVE_316 wired in here in the SAME bump that declared it.
+  // -318: ARCHIVE_317 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_317 + " " +
   RELEASE_NOTE_ARCHIVE_316 + " " +
   RELEASE_NOTE_ARCHIVE_315 + " " +
   RELEASE_NOTE_ARCHIVE_314 + " " +
