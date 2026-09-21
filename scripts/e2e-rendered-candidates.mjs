@@ -1926,6 +1926,21 @@ if (await card.count() > 0) {
             haveButtons, JSON.stringify(departedAdmin).slice(0, 300));
 
           if (haveButtons) {
+            // QA-2824, filed by the cycle-2 checker AGAINST this block and it was right. The two
+            // arms below read `!b.disabled || <title>`, so an ENABLED button passes them trivially
+            // whatever its title says. That left the suite's only real defence against an Admin
+            // being offered edit controls on a departed member BORROWED from the invariant arm
+            // further down - an arm that exists for a different purpose and could be weakened
+            // later, taking the borrowed coverage with it and nobody noticing.
+            //
+            // So the property gets its own assertion, standing on its own: a departed member's
+            // step buttons are DISABLED, full stop. This is the arm that goes red on its own when
+            // EnrolCard stops collapsing `editable` (page.tsx:1844), instead of that defect being
+            // caught only as a side effect of a persona comparison.
+            ok("[QA-2816/QA-2824] a departed member's four step buttons are DISABLED - asserted on its own rather than borrowed from the persona arm, because `!b.disabled || title` lets an enabled button pass trivially",
+              departedAdmin.buttons.every((b) => b.disabled),
+              JSON.stringify(departedAdmin.buttons.map((b) => ({ l: b.label, d: b.disabled }))).slice(0, 300));
+
             // THE PIN. Mutation-killing: collapsing the `left` ternary turns this and the next red.
             ok("[QA-2816] a departed member's disabled step buttons say the MEMBER has left - the sentence QA-2813 got wrong",
               departedAdmin.buttons.every((b) => !b.disabled || /has left the batch/i.test(b.title)),

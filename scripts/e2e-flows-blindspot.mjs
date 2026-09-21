@@ -616,6 +616,172 @@ console.log("\n--- FL10: batch import (QA-028) — centres/roles by name, unknow
   // cleanup so room/trainer fixtures elsewhere stay unaffected
   await req(admin, "POST", `/api/batches/${listed?._id}/transition`, { target: "Cancelled", reason: "FL10 fixture cleanup" }, 200);
 
+// ---- QA-2812: the import door's refused[] path, actually driven. ----
+// QA-2799 fixed six bulk doors that pushed raw driver/SMTP text into a 200/201. Five of the six
+// were exercised; this one - batches/import's per-row catch, route.ts:149 - was source-verified
+// only, and the ledger row says so. An unexercised catch is an assertion nobody has watched fail.
+//
+// DRIVING IT NEEDED A REAL FAILURE INSIDE createBatchWithCode, AND TWO OBVIOUS ROUTES DO NOT WORK:
+//   - pre-creating codes to force an E11000 cannot work: nextBatchCode (rules.ts:3789-3800) scans
+//     the same range and simply mints the next free number, so a code you plant is skipped.
+//   - starving target_size cannot work either: the importer falls back to prog.default_batch_size
+//     (route.ts:95), which the schema gives a default of 45, so it is never missing.
+// What DOES fail inside the loop is the scope check at route.ts:132, and it fails for a reason
+// that happens to be the realistic one: a centre-scoped user importing a sheet that contains
+// another centre's rows. `isScoped` (authz.ts:127) is true for the Location role, and the route
+// gate needs batches.manage, which that role lacks by default - so the user carries it as an
+// `extra_permissions` grant, which is exactly how a SPOC would be given import rights for their
+// own centre.
+//
+// The sheet carries one row for each centre on purpose: `created` and `refused` must BOTH be
+// non-empty, or this proves a total refusal rather than the partial-failure path the fix is about.
+{
+  const impEmail = `test.imp.scoped${stamp}@vidysea-test.local`;
+  await req(admin, "POST", "/api/users", {
+    name: "FL-QA2812 scoped importer", email: impEmail, password: "Test@12345",
+    role: "Location", can_edit: true, active: true,
+    location_scope: [loc._id], extra_permissions: ["batches.manage"],
+  }, 201);
+  const imp = await login(impEmail, "Test@12345");
+
+  const rows2812 = [
+    { "Centre": loc.name, "Job Role": prog.name, "Start": "2027-05-04", "Size": "20", "Session": "Full Day" },
+    { "Centre": otherLoc.name, "Job Role": prog.name, "Start": "2027-05-04", "Size": "20", "Session": "Full Day" },
+  ];
+  const wb2812 = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb2812, XLSX.utils.json_to_sheet(rows2812), "S1");
+  const file2812 = new File([XLSX.write(wb2812, { type: "buffer", bookType: "xlsx" })], "batches-2812.xlsx",
+    { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const map2812 = JSON.stringify({ "Centre": "location", "Job Role": "program", "Start": "planned_start", "Size": "target_size", "Session": "session" });
+
+  // PRECONDITION, and it is the one that makes the rest mean anything: BOTH centres must be
+  // matched by name, so both rows reach the per-row loop. If the out-of-scope centre were merely
+  // unmatched, it would be counted in `skipped` upstream and never touch route.ts:149 at all -
+  // the assertion below would then pass while measuring nothing (QA-2457's shape).
+  const prev2812 = await multipart(imp, "/api/batches/import", { file: file2812, mapping: map2812 }, 200);
+  ok("QA-2812 [precondition] both rows are IMPORTABLE, so both reach the per-row loop - an unmatched centre would be skipped upstream and never exercise the catch this unit is about",
+    prev2812.data.valid === 2 && (prev2812.data.location_unmatched ?? []).length === 0,
+    JSON.stringify({ valid: prev2812.data.valid, unmatched: prev2812.data.location_unmatched }));
+
+  const conf2812 = await multipart(imp, "/api/batches/import", { file: file2812, mapping: map2812, confirm: "1" }, 201);
+  const refused2812 = conf2812.data.refused ?? [];
+  const created2812 = conf2812.data.created ?? [];
+
+  ok("QA-2812: the import partially succeeds - the in-scope row is created and the out-of-scope row is refused, which is the partial-failure path route.ts:149 exists for",
+    created2812.length === 1 && refused2812.length === 1,
+    JSON.stringify({ created: created2812, refused: refused2812 }));
+
+  ok("QA-2812: the refusal names the centre and the reason as a sentence",
+    refused2812.length === 1 && refused2812[0].includes(otherLoc.name) && /out of scope/i.test(refused2812[0]),
+    JSON.stringify(refused2812));
+
+  // THE ARM THIS UNIT EXISTS FOR. QA-2799 replaced `e?.message` with `translateError(e).message`
+  // here and nobody ever watched the branch run. Raw driver text is what that fix was about, so
+  // the refusal must carry none of its fingerprints.
+  // WHAT THIS ARM CAN AND CANNOT PROVE, stated rather than implied. On the SCOPE path the thrown
+  // error is an app-authored HttpError, so `translateError` returns it via its first branch and
+  // this assertion would stay green even if the call were reverted to `e?.message` - it cannot
+  // fail here (QA-2457's shape). It is kept because a future refactor could put raw text into this
+  // response by a different route, but the arm that actually exercises translateError's DRIVER
+  // branch is the E11000 block below, and that is the one the mutant turns red.
+  ok("QA-2812: the scope refusal carries no raw driver or stack text - necessary but NOT sufficient, see the E11000 block below for the arm that can fail",
+    refused2812.length === 1 &&
+      !/E11000|dup key|index:|__v|MongoServerError|ValidationError:|at Object\.|\bat .*\(.*:\d+:\d+\)/.test(refused2812[0]),
+    JSON.stringify(refused2812));
+
+  // And the in-scope row still really landed - a refusal that took the whole import with it would
+  // satisfy every assertion above about `refused` while destroying the feature.
+  ok("QA-2812: the in-scope row was genuinely written, not merely reported - the partial import is partial",
+    created2812.length === 1 && /^[A-Za-z0-9]/.test(String(created2812[0] ?? "")),
+    JSON.stringify(created2812));
+
+  // ---- THE ARM THAT CAN ACTUALLY FAIL: a REAL E11000 inside createBatchWithCode. ----
+  // Everything above refuses through an app-authored HttpError, which translateError passes
+  // straight out - so none of it distinguishes `translateError(e).message` from the `e?.message`
+  // QA-2799 replaced. To reach the DRIVER branch (authz.ts:183) the failure has to come from Mongo
+  // itself, and the importer validates every field it reads upstream (session enum at route.ts:92,
+  // target_size falling back to prog.default_batch_size at :95), so no sheet content can produce
+  // one. A temporary unique index on `batches.source` can: route.ts:143 gives EVERY row of one
+  // import the same `source` string, so the second row of a two-row sheet collides. The retry loop
+  // at rules.ts:3822 rethrows because the message does not contain "code", and the rethrow lands in
+  // the catch this unit is about.
+  // QA-2057: the index is dropped in a `finally` and its removal is READ BACK - a leftover unique
+  // index would poison every suite that runs after this one.
+  {
+    const { MongoClient } = await import("mongodb");
+    // The app reads MONGODB_URL (see .github/workflows/ci.yml); an earlier draft of this block used
+    // MONGODB_URI and died at `new MongoClient` before the try, which is the only reason it left no
+    // index behind. Refuse loudly rather than connect to a default.
+    const MURL = process.env.MONGODB_URL || process.env.MONGODB_URI;
+    if (!MURL) throw new Error("QA-2812: MONGODB_URL is not set - refusing to guess a connection string");
+    const mc = new MongoClient(MURL, { serverSelectionTimeoutMS: 8000 });
+    const IXNAME = "qa2812_tmp_unique_source";
+    let dropped = null;
+    try {
+      await mc.connect();
+      const coll = mc.db(process.env.MONGODB_DB).collection("batches");
+      // A BARE unique index on `source` CANNOT be built here, and the reason is worth recording:
+      // most existing batches carry `source: null`, so the build itself dies with E11000 on
+      // `{ source: null }` before any import runs. The index is therefore PARTIAL, filtered to the
+      // one source string this block's own file produces - so it covers exactly the two rows under
+      // test, can never collide with a pre-existing row, and cannot affect any other suite even in
+      // the window before the teardown.
+      await coll.createIndex({ source: 1 }, {
+        unique: true, name: IXNAME,
+        partialFilterExpression: { source: "Import: batches-2812-dup.xlsx" },
+      });
+
+      const rowsDup = [
+        { "Centre": loc.name, "Job Role": prog.name, "Start": "2027-06-07", "Size": "20", "Session": "Full Day" },
+        { "Centre": loc.name, "Job Role": prog.name, "Start": "2027-06-14", "Size": "20", "Session": "Full Day" },
+      ];
+      const wbD = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbD, XLSX.utils.json_to_sheet(rowsDup), "S1");
+      const fileD = new File([XLSX.write(wbD, { type: "buffer", bookType: "xlsx" })], "batches-2812-dup.xlsx",
+        { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+      const mapD = JSON.stringify({ "Centre": "location", "Job Role": "program", "Start": "planned_start", "Size": "target_size", "Session": "session" });
+
+      const confD = await multipart(admin, "/api/batches/import", { file: fileD, mapping: mapD, confirm: "1" }, 201);
+      const refD = confD.data.refused ?? [];
+      const crD = confD.data.created ?? [];
+
+      // PRECONDITION: the collision must really have happened inside the loop. If both rows were
+      // created, the index never bound and every assertion below would be measuring nothing.
+      ok("QA-2812 [precondition] the temporary unique index really bound - one row created, one refused by a genuine driver error",
+        crD.length === 1 && refD.length === 1,
+        JSON.stringify({ created: crD, refused: refD }));
+
+      // THE MUTABLE ARM. With translateError this reads "That source is already in use."
+      // (authz.ts:162-167 extracts the field from `dup key:` and never echoes the rest).
+      // Revert route.ts:149 to `e?.message` and this goes RED on the raw driver string.
+      ok("QA-2812: a REAL E11000 from inside createBatchWithCode is translated, not echoed - no 'E11000', no 'dup key', no index name, no collection namespace",
+        refD.length === 1 &&
+          !/E11000|dup key|index:|qa2812_tmp_unique_source|\.batches |collection:/i.test(refD[0]),
+        JSON.stringify(refD));
+
+      ok("QA-2812: ...and what it says instead names the conflicting field as a sentence, rather than a generic apology",
+        refD.length === 1 && /already in use|already exists/i.test(refD[0]),
+        JSON.stringify(refD));
+    } catch (e) {
+      // This block owns its own failure. An unguarded throw here would take the whole file down
+      // before the summary line, which is how the two earlier drafts of it hid their own results.
+      ok("QA-2812: the E11000 block ran to completion", false, String(e?.message ?? e).slice(0, 300));
+    } finally {
+      try {
+        const coll = mc.db(process.env.MONGODB_DB).collection("batches");
+        await coll.dropIndex(IXNAME).catch(() => {});
+        const ixs = await coll.indexes().catch(() => []);
+        dropped = !ixs.some((ix) => ix.name === IXNAME);
+      } catch { dropped = false; }
+      await mc.close().catch(() => {});
+    }
+    // Read back, not assumed: a unique index left on `batches.source` makes every later import
+    // suite fail for a reason that has nothing to do with the code under test.
+    ok("QA-2812 [teardown] the temporary unique index is gone - read back from the live index list, not inferred from dropIndex's exit",
+      dropped === true, JSON.stringify({ dropped }));
+  }
+}
+
   // 15/08 (Umesh): custom columns ride the batch importer too.
   const wbB = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wbB, XLSX.utils.json_to_sheet([{ "Centre": loc.name, "Job Role": prog.name, "Start": "2027-05-01", "Funding": "CSR-2026" }]), "S1");
