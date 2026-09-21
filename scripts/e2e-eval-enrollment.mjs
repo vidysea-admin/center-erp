@@ -81,17 +81,25 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
   // assertion that cannot fail. What actually differs is whether the four booleans were written.
   // Broken writes four `true`; fixed writes none. Mutate the `continue` away and that arm goes red.
   //
-  // Uses its own candidate rather than a free slot in `cands`: later fixtures in this file index
-  // into that array by position, and borrowing one would couple two unrelated tests.
+  // OWN BATCH AND OWN CANDIDATE, and the batch is not a nicety - the first version of this block
+  // hung its member on the shared `batch` and turned three unrelated assertions red. That batch is
+  // created with `target_size: 5` under the comment "the 80% roster gate needs exactly 4", so its
+  // roster count is load-bearing for the Rule 16 boundary test and the Ready transition below it.
+  // A baseline run of this file at HEAD~1 against the same server returned 0 failures, which is
+  // how the three were attributed here rather than to the fix. `cands` is avoided for the same
+  // reason one layer down: later fixtures index into it by position.
   {
+    const b2811 = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog._id, planned_start: today(), target_size: 5,
+    }, 201)).data.item;
     const cx2811 = (await req(admin, "POST", "/api/candidates", {
       name: "TEST-EE 2811 " + s, phone: phone("86"), location: loc._id, program: prog._id,
     }, 201)).data.item;
-    const mC = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cx2811._id }, 201)).data.item;
+    const mC = (await req(admin, "POST", `/api/batches/${b2811._id}/members`, { candidate: cx2811._id }, 201)).data.item;
     await req(admin, "PATCH", `/api/members/${mC._id}`,
       { failed: true, issue: "Portal error", issue_note: "TEST-EE 2811 reason" }, 200);
 
-    const res2811 = (await req(admin, "POST", `/api/batches/${batch._id}/members/bulk-enroll`,
+    const res2811 = (await req(admin, "POST", `/api/batches/${b2811._id}/members/bulk-enroll`,
       { step: "all", member_ids: [mC._id] }, 200)).data;
     ok("QA-2811: bulk reports a Failed member under needs_clear and does not count it as updated",
       (res2811.needs_clear ?? []).map(String).includes(String(mC._id)) && res2811.updated === 0,
@@ -99,7 +107,7 @@ ok("[worst] double-assignment refused", dupAdd.status >= 400, `got ${dupAdd.stat
     ok("QA-2811: ...and not as 'already done' either - that bucket means the work was done, which would be a second false statement about the same member",
       res2811.skipped === 0, JSON.stringify(res2811));
 
-    const back2811 = ((await req(admin, "GET", `/api/batches/${batch._id}/members`, undefined, 200)).data.items ?? [])
+    const back2811 = ((await req(admin, "GET", `/api/batches/${b2811._id}/members`, undefined, 200)).data.items ?? [])
       .find((m) => String(m._id) === String(mC._id));
     ok("QA-2811: the four step booleans were NOT written - the arm that tells a fixed build from a reverted one, since the status reads Failed on both",
       !!back2811 && ![back2811.reg_done, back2811.kyc_done, back2811.enroll_done, back2811.accept_done].some(Boolean),

@@ -1837,20 +1837,38 @@ if (await card.count() > 0) {
         await openTab2816(pg, /^Enrollment$/);
 
         // Read the four step buttons for one named member: their disabled state and their title.
+        // TWO THINGS THE FIRST VERSION OF THIS GOT WRONG, both found by running it rather than
+        // reading it, and both of which the control arm caught instead of scoring a false green:
+        //   1. It took the LAST element containing the name, which is the innermost one - usually
+        //      the name's own span, holding no buttons at all. It reported found:true, buttons:[].
+        //      What is wanted is the SMALLEST element that contains the name AND the buttons, so
+        //      the candidates are sorted by descendant count and the first usable one wins.
+        //   2. A ticked step renders `"✓ " + label` (EnrolStepToggle, page.tsx:1776), so a
+        //      startsWith match on the bare label silently drops every completed step.
         const readSteps = async (memberName) => pg.evaluate((nm) => {
           const LABELS = ["Registration", "e-KYC", "Enrollment", "Batch Accept"];
-          const cards = Array.from(document.querySelectorAll("*")).filter(
-            (el) => el.children.length && (el.textContent || "").includes(nm));
-          const card = cards.length ? cards[cards.length - 1] : null;
-          if (!card) return { found: false, buttons: [] };
-          const buttons = Array.from(card.querySelectorAll("button"))
-            .filter((b) => LABELS.some((l) => (b.textContent || "").trim().startsWith(l)))
-            .map((b) => ({
-              label: (b.textContent || "").trim().slice(0, 24),
-              disabled: b.disabled === true || b.getAttribute("aria-disabled") === "true",
-              title: b.getAttribute("title") || "",
-            }));
-          return { found: true, buttons };
+          const isStep = (b) => {
+            const t = (b.textContent || "").replace(/^\s*✓\s*/, "").trim();
+            return LABELS.some((l) => t === l || t.startsWith(l));
+          };
+          const named = Array.from(document.querySelectorAll("*"))
+            .filter((el) => (el.textContent || "").includes(nm))
+            .sort((a, b) => a.querySelectorAll("*").length - b.querySelectorAll("*").length);
+          if (!named.length) return { found: false, buttons: [], cards: 0 };
+          for (const card of named) {
+            const buttons = Array.from(card.querySelectorAll("button")).filter(isStep);
+            if (buttons.length) {
+              return {
+                found: true, cards: named.length,
+                buttons: buttons.map((b) => ({
+                  label: (b.textContent || "").trim().slice(0, 24),
+                  disabled: b.disabled === true || b.getAttribute("aria-disabled") === "true",
+                  title: b.getAttribute("title") || "",
+                })),
+              };
+            }
+          }
+          return { found: true, buttons: [], cards: named.length };
         }, memberName);
 
         // CONTROL: the reader genuinely holds the right. A live member's step buttons must be
