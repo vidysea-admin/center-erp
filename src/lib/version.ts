@@ -7,7 +7,6 @@
 // tsc was happy, the Turbopack build was not ("failed to analyze ecmascript module" -> every route
 // importing @/lib/version could not resolve), and the wall then ran against a stale .next. Romanise
 // quotes here; the Devanagari belongs in the ledger and the manifests, which are read, not compiled.
-export const RELEASE = "2026.08.14-318";
 // -127 (QA-265): this file used to be ONE constant whose continuation lines carried no `+`.
 // JS then applied automatic semicolon insertion: the first line became RELEASE_NOTE and the other
 // 329 became dead no-op expression statements. Production published a 97-character note for an
@@ -221,7 +220,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE_NOTE_CURRENT =
+export const RELEASE = "2026.08.14-319";
+const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
   "A candidate who was dropped from a batch, and whose enrollment had been marked as failed, can "  +
@@ -242,6 +242,18 @@ export const RELEASE_NOTE_CURRENT =
   "One thing this release does not change: completing enrollment in bulk still leaves a candidate "  +
   "marked as failed even after all four of their enrollment steps are ticked. Clearing that is "  +
   "done by adding them to the batch again.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-319 explains the Excel download of the main report in one more place, and makes one "  +
+  "arithmetic promise about it checkable rather than assumed. "  +
+  "The workbook's 'where the numbers come from' tab now explains the Not approved yet column, "  +
+  "which the sheet has carried since August but which that tab never mentioned - the seven other "  +
+  "columns were explained, so a reader could not tell what the eighth figure meant without "  +
+  "phoning someone. "  +
+  "The report also states, as a checked fact, that the Not approved yet figure equals the target "  +
+  "minus the approved figure on every row, every row total and the grand total. This was true "  +
+  "before by construction; now a test refuses any future edit that breaks it. "  +
+  "No other screen, figure or permission changes in this release.";
 
 const RELEASE_NOTE_ARCHIVE_317 =
   "-317 changes how a batch is deleted, who may remove a result that has already been recorded, and "  +
@@ -1954,6 +1966,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -316: ARCHIVE_315 wired in here in the SAME bump that declared it.
   // -317: ARCHIVE_316 wired in here in the SAME bump that declared it.
   // -318: ARCHIVE_317 wired in here in the SAME bump that declared it, same discipline.
+  // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_318 + " " +
   RELEASE_NOTE_ARCHIVE_317 + " " +
   RELEASE_NOTE_ARCHIVE_316 + " " +
   RELEASE_NOTE_ARCHIVE_315 + " " +
