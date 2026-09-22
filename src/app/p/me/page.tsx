@@ -13,13 +13,32 @@ export default function CandidatePortalEntry() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pool, setPool] = useState<any>(null); // real candidate, not in a batch yet
+  // qa-2809: the DOB-less path is now two-step (phone → OTP). When the lookup answers otp_required,
+  // we hold the session token and show the code field; the phone-alone token is gone.
+  const [otpToken, setOtpToken] = useState("");
+  const [otpMessage, setOtpMessage] = useState("");
+  const [code, setCode] = useState("");
+
+  function landOrPool(d: any) {
+    if (d.enrolled) window.location.href = `${BASE_PATH}${d.url}`;
+    else setPool(d);
+  }
 
   async function lookup() {
-    setBusy(true); setError(""); setPool(null);
+    setBusy(true); setError(""); setPool(null); setOtpToken(""); setCode("");
     try {
       const d = await api("/api/public/portal-lookup", { method: "POST", json: { phone, dob: dob || undefined } });
-      if (d.enrolled) window.location.href = `${BASE_PATH}${d.url}`;
-      else setPool(d);
+      if (d.otp_required) { setOtpToken(d.otp_token); setOtpMessage(d.message || "Enter the 6-digit code we sent by SMS."); }
+      else landOrPool(d);
+    } catch (e: any) { setError(e.message); }
+    setBusy(false);
+  }
+
+  async function verifyOtp() {
+    setBusy(true); setError("");
+    try {
+      const d = await api("/api/public/portal-lookup", { method: "POST", json: { action: "verify-otp", otp_token: otpToken, code } });
+      landOrPool(d);
     } catch (e: any) { setError(e.message); }
     setBusy(false);
   }
@@ -33,23 +52,46 @@ export default function CandidatePortalEntry() {
       </div>
 
       <div className="space-y-3">
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-gray-600">Mobile number (the one used at registration) *</span>
-          <input inputMode="numeric" autoComplete="tel" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-            placeholder="10 digit mobile number" value={phone} onChange={(e) => setPhone(e.target.value)} />
-        </label>
-        <label className="block">
-          {/* QA-057: "(if asked)" — but nothing ever asked. Most students have a DOB on
-              record, so the label says when it is needed instead of hinting at a prompt
-              that never comes. */}
-          <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (needed for most students — as given at registration)</span>
-          <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-            value={dob} onChange={(e) => setDob(e.target.value)} />
-        </label>
-        <button onClick={lookup} disabled={busy || phone.replace(/\D/g, "").length < 10}
-          className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">
-          {busy ? "Checking…" : "View my training"}
-        </button>
+        {!otpToken ? (
+          <>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">Mobile number (the one used at registration) *</span>
+              <input inputMode="numeric" autoComplete="tel" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                placeholder="10 digit mobile number" value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </label>
+            <label className="block">
+              {/* QA-057: "(if asked)" — but nothing ever asked. Most students have a DOB on
+                  record, so the label says when it is needed instead of hinting at a prompt
+                  that never comes. */}
+              <span className="mb-1 block text-xs font-medium text-gray-600">Date of birth (needed for most students — as given at registration)</span>
+              <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                value={dob} onChange={(e) => setDob(e.target.value)} />
+            </label>
+            <button onClick={lookup} disabled={busy || phone.replace(/\D/g, "").length < 10}
+              className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">
+              {busy ? "Checking…" : "View my training"}
+            </button>
+          </>
+        ) : (
+          // qa-2809: DOB-less second-step. A verified phone OTP replaces the old phone-alone token.
+          <>
+            <p className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">{otpMessage}</p>
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-gray-600">6-digit code (sent by SMS to your registered number) *</span>
+              <input inputMode="numeric" autoComplete="one-time-code" maxLength={6}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm tracking-widest focus:border-blue-500 focus:outline-none"
+                placeholder="••••••" value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+            </label>
+            <button onClick={verifyOtp} disabled={busy || code.length < 6}
+              className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:bg-blue-300">
+              {busy ? "Verifying…" : "Verify & view my training"}
+            </button>
+            <button onClick={() => { setOtpToken(""); setCode(""); setError(""); }} disabled={busy}
+              className="w-full rounded-lg border border-gray-300 px-4 py-2 text-xs font-medium text-gray-500 hover:bg-gray-50">
+              Use a different number
+            </button>
+          </>
+        )}
         {error && <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
         {pool && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

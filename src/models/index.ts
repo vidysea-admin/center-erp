@@ -1597,7 +1597,7 @@ StoredFileSchema.index({ entity_id: 1, staged_certificate: 1 });
 // already on this schema - hash-only storage, 10-minute expiry, attempt burn, and `active`
 // revocation. New `User.reset_token_*` columns would have been a second copy of a concept that
 // exists (ARCHITECTURE section 3), and the copy that drifts is always the one nobody is reading.
-export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "phone_otp", "plan", "password_reset"] as const; // -110: phone_otp = the same challenge over SMS
+export const PUBLIC_TOKEN_PURPOSE = ["register", "feedback", "attendance", "trainer_apply", "email_otp", "phone_otp", "plan", "password_reset", "attendance_otp"] as const; // -110: phone_otp = the same challenge over SMS. qa-2809: attendance_otp = the phone-OTP second factor for a DOB-LESS candidate on the /p/me portal door — a DISTINCT purpose from phone_otp so an attendance session token can never be replayed at the registration door.
 const PublicTokenSchema = new Schema({
   token: { type: String, required: true, unique: true },
   purpose: { type: String, enum: PUBLIC_TOKEN_PURPOSE, required: true },

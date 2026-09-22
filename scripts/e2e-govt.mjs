@@ -1660,9 +1660,27 @@ const myTok = lk.data.url?.split("/").pop();
 const myPage = await fetch(`${BASE}/api/public/attendance/${myTok}`).then((r) => r.json()).catch(() => ({}));
 ok("…and the portal payload carries the full training picture (centre/trainer/sidh/result keys)",
   "centre" in myPage && "trainer" in myPage && "sidh_status" in myPage && "result" in myPage, JSON.stringify({ c: myPage.centre, t: myPage.trainer }).slice(0, 120));
+// qa-2809 (Umesh 2026-09-22 "phone and otp ho"): a DOB-LESS candidate no longer opens the page on
+// a typed phone number alone — a phone OTP is the second factor. These pins reach into the DB to
+// prove the GUARANTEE (no attendance PublicToken minted before the OTP is verified), so a mongo
+// handle is set up here and reused by the qa-2809 block below.
+const { MongoClient: PkMongoClient, ObjectId: PkObjectId } = await import("mongodb");
+const pkMc = new PkMongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+await pkMc.connect();
+const pkDb = pkMc.db(process.env.MONGODB_DB || "center_erp_ci");
+const pkCrypto = (await import("node:crypto")).default;
+const pkSha = (s) => pkCrypto.createHash("sha256").update(s).digest("hex");
+const pkAttCount = (bmId) => pkDb.collection("publictokens").countDocuments({ purpose: "attendance", batch_member: bmId });
+
 const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} PoolPortal`, phone: `9${STAMP.slice(1)}3008`, location: loc._id, program: program._id }, 201)).data.item;
-const plk = await lookup({ phone: cPool.phone });
-ok("portal lookup: a pool candidate learns their registration status, not a dead end", plk.status === 200 && plk.data.enrolled === false && typeof plk.data.sidh_status === "string", JSON.stringify(plk.data).slice(0, 120));
+const poolPhone = String(cPool.phone).replace(/\D/g, "").slice(-10);
+const plk = await lookup({ phone: poolPhone });
+ok("qa-2809: a DOB-less pool candidate now gets an OTP challenge first (phone alone no longer opens the page)",
+  plk.status === 200 && plk.data.otp_required === true && !!plk.data.otp_token, JSON.stringify(plk.data).slice(0, 120));
+await pkDb.collection("publictokens").updateOne({ token: plk.data.otp_token }, { $set: { otp_hash: pkSha("424242"), otp_attempts: 0 } });
+const plkVerified = await lookup({ action: "verify-otp", otp_token: plk.data.otp_token, code: "424242" });
+ok("qa-2809: …and after the OTP, a pool candidate still learns their registration status, not a dead end",
+  plkVerified.status === 200 && plkVerified.data.enrolled === false && typeof plkVerified.data.sidh_status === "string", JSON.stringify(plkVerified.data).slice(0, 120));
 
 // QA-056 (S1, checker): imported DOBs sit at IST midnight = previous day 18:30 UTC, and a
 // UTC-date comparison refused every such student's REAL birthday while accepting the day
@@ -1673,6 +1691,75 @@ ok("QA-056: the REAL birthday opens the portal for an IST-midnight-stored DOB", 
 const lkPrev = await lookup({ phone: cIst.phone, dob: "1998-12-31" });
 ok("QA-056: the day BEFORE the birthday no longer works", lkPrev.status === 404, `got ${lkPrev.status}`);
 ok("QA-057: the refusal names the date-of-birth field", /date of birth/i.test(lkPrev.data?.error ?? ""), lkPrev.data?.error);
+
+// ---------------------------------------------------------------- qa-2809 (Umesh 2026-09-22, gate video-2026-09-20 sub-q): a DOB-LESS candidate needs a phone OTP, not phone alone
+// The public /p/me door mints a `PublicToken` that opens someone's attendance/certificate page.
+// A candidate WITH a DOB proves it as the second factor (pinned above, one step, unchanged). A
+// candidate with NO DOB used to get that token on the last 10 digits of a TYPED phone number
+// alone — possession of a number nobody proved. Umesh's call: "phone and otp ho". Now the DOB-less
+// path sends an OTP to the number on file and mints NOTHING until it is verified.
+{
+  // Regression guard: the DOB path is single-step and never asks for an OTP (mutating the DOB-less
+  // path must not disturb this arm — the DOB candidate cPort was already proven `enrolled` above).
+  ok("qa-2809 regression: a candidate WITH a DOB still opens in ONE step, no OTP asked",
+    lk.status === 200 && lk.data.enrolled === true && lk.data.otp_required !== true, JSON.stringify(lk.data).slice(0, 120));
+
+  // A DOB-less candidate WITH a live batch membership — exactly the class that used to be minted a
+  // token on phone alone, so completeLookup() would produce a real attendance token here.
+  const cOtp = (await req(admin, "POST", "/api/candidates", { name: `${NAME} OtpNoDob`, phone: `9${STAMP.slice(1)}3010`, location: loc._id, program: program._id }, 201)).data.item;
+  await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cOtp._id }, 201);
+  const cOtpPhone = String(cOtp.phone).replace(/\D/g, "").slice(-10);
+  const bmOtp = await pkDb.collection("batchmembers").findOne({ candidate: new PkObjectId(String(cOtp._id)), left_on: null });
+
+  // Preconditions — so neither the OTP arm nor the "no token minted" guarantee is vacuous:
+  const candDb = await pkDb.collection("candidates").findOne({ _id: new PkObjectId(String(cOtp._id)) });
+  ok("qa-2809 precondition: the fixture candidate genuinely has NO dob on file (the OTP arm actually runs)",
+    !!candDb && (candDb.dob === null || candDb.dob === undefined), JSON.stringify({ dob: candDb?.dob }));
+  ok("qa-2809 precondition: no attendance token exists for this member before the lookup",
+    !!bmOtp && (await pkAttCount(bmOtp._id)) === 0, JSON.stringify({ bm: !!bmOtp }));
+
+  // STEP 1 — phone alone. THE SECURITY PIN: an OTP is required AND no attendance token is minted.
+  // This goes RED the instant the phone-alone mint is restored: `otp_required` disappears (the
+  // mutant returns {enrolled,url}) AND the attendance-token count becomes 1. It also proves the
+  // request REACHED the OTP mechanism (a matching attendance_otp row was written), not some earlier
+  // refusal — a guard that rejected before the OTP path would fail `otp_required === true`.
+  const step1 = await lookup({ phone: cOtpPhone });
+  const otpRow = await pkDb.collection("publictokens").findOne({ purpose: "attendance_otp", phone: cOtpPhone, active: true });
+  ok("SECURITY qa-2809: a DOB-less candidate gets NO token on phone alone — an OTP is required and no PublicToken(purpose:attendance) is minted",
+    step1.status === 200 && step1.data.otp_required === true && !!step1.data.otp_token
+    && !!otpRow && String(otpRow.token) === String(step1.data.otp_token)
+    && (await pkAttCount(bmOtp._id)) === 0,
+    JSON.stringify({ st: step1.status, otp_required: step1.data.otp_required, tok: !!step1.data.otp_token, row: !!otpRow, att: await pkAttCount(bmOtp._id) }));
+
+  // Fix the code to a known value (SMS is skipped in CI, so the real one is unknowable), attempts=0.
+  await pkDb.collection("publictokens").updateOne({ token: step1.data.otp_token }, { $set: { otp_hash: pkSha("424242"), otp_attempts: 0 } });
+
+  // STEP 2a — a WRONG code is refused (400) and STILL mints nothing.
+  const wrong = await lookup({ action: "verify-otp", otp_token: step1.data.otp_token, code: "111111" });
+  ok("qa-2809: a wrong OTP is refused (400) and still mints no token",
+    wrong.status === 400 && (await pkAttCount(bmOtp._id)) === 0, JSON.stringify({ st: wrong.status, att: await pkAttCount(bmOtp._id) }));
+
+  // STEP 2b — the CORRECT code mints the token and returns the My Training url (the path still works).
+  const verify = await lookup({ action: "verify-otp", otp_token: step1.data.otp_token, code: "424242" });
+  ok("qa-2809: a correct OTP mints the attendance token and returns the My Training url",
+    verify.status === 200 && verify.data.enrolled === true && /\/p\/attendance\//.test(verify.data.url ?? "")
+    && (await pkAttCount(bmOtp._id)) === 1,
+    JSON.stringify({ st: verify.status, enrolled: verify.data.enrolled, att: await pkAttCount(bmOtp._id) }));
+
+  // The session token is single-use — replaying the verified OTP token does not mint again.
+  const replay = await lookup({ action: "verify-otp", otp_token: step1.data.otp_token, code: "424242" });
+  ok("qa-2809: the verified OTP token is single-use (replay is refused 404)", replay.status === 404, `got ${replay.status}`);
+
+  // STEP 2c — an EXPIRED code is refused (fresh candidate, so the per-phone cooldown does not bite).
+  const cOtp2 = (await req(admin, "POST", "/api/candidates", { name: `${NAME} OtpExpire`, phone: `9${STAMP.slice(1)}3011`, location: loc._id, program: program._id }, 201)).data.item;
+  const cOtp2Phone = String(cOtp2.phone).replace(/\D/g, "").slice(-10);
+  const s2 = await lookup({ phone: cOtp2Phone });
+  await pkDb.collection("publictokens").updateOne({ token: s2.data.otp_token }, { $set: { otp_hash: pkSha("424242"), otp_expires_at: new Date(Date.now() - 1000) } });
+  const expired = await lookup({ action: "verify-otp", otp_token: s2.data.otp_token, code: "424242" });
+  ok("qa-2809: an expired OTP is refused (400), even with the correct code", expired.status === 400 && /expired/i.test(expired.data?.error ?? ""), JSON.stringify({ st: expired.status, e: expired.data?.error }));
+
+  await pkMc.close();
+}
 
 // ---------------------------------------------------------------- F-N2 (2026-08-13): assessment date raises an in-app alert
 const assessDate = new Date(Date.now() + 7 * 864e5 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
