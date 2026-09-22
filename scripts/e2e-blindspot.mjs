@@ -1113,14 +1113,16 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
 // the pre-delete warning on admin/page.tsx told the Admin "0 batches, 0 candidates reference this"
 // for a program that real records still pointed at directly - a LocationTarget, a TrainerRequest,
 // a Candidate whose own `program` field names it before they ever join a batch, or a Trainer who
-// applied/was nominated for it. This program (`prog`, created at setup) already has real Candidate
-// rows created directly against it earlier in this file (eligOf() posts `program: prog._id` with
-// no batch) and NO Batch was ever created for it - exactly the undercount shape.
+// applied/was nominated for it. `prog` (created at setup) is shared by the whole file, so by the
+// time this section runs it also carries real batches from earlier sections - the pin therefore
+// does NOT claim "zero batches" (that would be a false precondition on a program every other
+// section in this file also uses). What it pins instead is the shape itself: on the OLD code the
+// response object has no `direct_candidates`/`location_targets`/`trainer_requests`/`trainers` keys
+// at all, so `typeof usage.X === "number"` is false regardless of what the DB holds - that is what
+// turns this RED pre-fix and GREEN post-fix, independent of whatever else has touched `prog`.
 {
   const usage = (await req(admin, "GET", `/api/programs/${prog._id}/usage`)).data;
-  ok("QA-2814: this program has zero batches (undercount precondition - the old count would read entirely zero)",
-    usage.batches === 0, JSON.stringify(usage));
-  ok("QA-2814: ...yet direct_candidates is non-zero - the candidates created directly against this program earlier in this file are now counted",
+  ok("QA-2814: the usage response carries a direct_candidates count (absent entirely on the old shape) and it is non-zero - the candidates created directly against this program earlier in this file (no batch involved) are now counted",
     typeof usage.direct_candidates === "number" && usage.direct_candidates > 0, JSON.stringify(usage));
 
   // Seed the three reference kinds the old count could never see, then re-check.
