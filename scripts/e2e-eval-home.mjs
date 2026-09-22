@@ -381,7 +381,11 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
     await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
     await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
     await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
-    return { loc, batch, cand, idleTrainer };
+    // The transition responses above are asserted by status code only (req()'s `expect` arg) —
+    // `batch` itself still holds the CREATE-time payload (status "Planning"). Re-fetch so the
+    // fixture check below reads the batch's actual post-transition state, not a stale local copy.
+    const batchNow = (await req(admin, "GET", `/api/batches/${batch._id}`, undefined, 200)).data.item;
+    return { loc, batch: batchNow, cand, idleTrainer };
   }
   const fA = await fixtureAt(locA, "A");
   const fB = await fixtureAt(locB, "B");
@@ -406,7 +410,12 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
     // THE GUARANTEE: exactly A + B, never one of them (a $in-collapse) and never all three (a
     // dropped filter). Each figure below is built from a DIFFERENT product code path, so a
     // regression in any one of them is caught here instead of by one lucky shared number.
-    ok("[Q400] approved_locations = exactly A+B (Location.countDocuments path)", k.approved_locations === 2, `got ${k.approved_locations}`);
+    // (approved_locations is NOT asserted here: QA-096 deliberately withholds every org-wide-shaped
+    // KPI from a lean role including Location, so it is legitimately absent on this payload — see
+    // `lean` at home/route.ts:410. pool_candidates is used instead: it is NOT lean-gated (:417) and
+    // reads straight off `scope = locationFilter(user)` with no batch-derived id resolution at all —
+    // the most direct consumer of location_scope on this page, and a fourth independent code path.)
+    ok("[Q400] pool_candidates = exactly A+B (Candidate.countDocuments path, raw locationFilter)", k.pool_candidates === 2, `got ${k.pool_candidates}`);
     ok("[Q400] active_batches = exactly A+B (Batch.countDocuments path)", k.active_batches === 2, `got ${k.active_batches}`);
     ok("[Q400] enrolled_students = exactly A+B (BatchMember.countDocuments path)", k.enrolled_students === 2, `got ${k.enrolled_students}`);
     // trainers_active_total is the ONE figure on this page built from an aggregation pipeline fed
