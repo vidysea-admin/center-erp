@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-319";
+export const RELEASE = "2026.08.14-320";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -243,7 +243,7 @@ const RELEASE_NOTE_ARCHIVE_318 =
   "marked as failed even after all four of their enrollment steps are ticked. Clearing that is "  +
   "done by adding them to the batch again.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_319 =
   "-319 explains the Excel download of the main report in one more place, and makes one "  +
   "arithmetic promise about it checkable rather than assumed. "  +
   "The workbook's 'where the numbers come from' tab now explains the Not approved yet column, "  +
@@ -253,6 +253,19 @@ export const RELEASE_NOTE_CURRENT =
   "The report also states, as a checked fact, that the Not approved yet figure equals the target "  +
   "minus the approved figure on every row, every row total and the grand total. This was true "  +
   "before by construction; now a test refuses any future edit that breaks it. "  +
+  "No other screen, figure or permission changes in this release.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-320 makes two deletions honest about what they remove. "  +
+  "When a batch is force-deleted, any pending cost-approval requests attached to that batch are "  +
+  "now counted and shown before the delete, named in the reason if the delete is refused, and "  +
+  "recorded in the permanent audit snapshot of what was removed. Before this they were deleted "  +
+  "along with the batch without appearing in that count, that warning, or that record. "  +
+  "When deleting a course, the warning shown before the delete now also counts the places that "  +
+  "reference the course without going through a batch - its centre targets, its trainer requests, "  +
+  "the candidates recorded directly against it, and the trainers who applied for it or were "  +
+  "nominated to it - so the number the administrator decides on reflects what the delete will "  +
+  "orphan, not batches alone. The delete itself is unchanged. "  +
   "No other screen, figure or permission changes in this release.";
 
 const RELEASE_NOTE_ARCHIVE_317 =
@@ -1967,6 +1980,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -317: ARCHIVE_316 wired in here in the SAME bump that declared it.
   // -318: ARCHIVE_317 wired in here in the SAME bump that declared it, same discipline.
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
+  // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_319 + " " +
   RELEASE_NOTE_ARCHIVE_318 + " " +
   RELEASE_NOTE_ARCHIVE_317 + " " +
   RELEASE_NOTE_ARCHIVE_316 + " " +
