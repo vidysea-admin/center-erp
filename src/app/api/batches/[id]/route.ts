@@ -69,7 +69,14 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   const batch = await Batch.findById(id).select("code status location program planned_start planned_end +deletion_state +deletion_actor +deletion_reason +deletion_recorded_work +deletion_requires_finance +deletion_audit_event_id").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
 
-  const [members, results, costs, logs, closures, govtRows, invoices] = await Promise.all([
+  // QA-2634/QA-2631: `approvals` counted alongside every other carried-work total so the
+  // force-delete cascade's `ApprovalRequest.deleteMany` below (unconditional, same as it always
+  // was) is no longer the one deletion in this handler with no count, no refusal reason, and no
+  // permanent audit trace. Computed here, at the same point as the other counts, so BOTH branches
+  // below (force-delete AND the empty-shell delete near :217) pick it up automatically through
+  // `carried`/`total` — a batch whose ONLY carried row was a pending ApprovalRequest used to read
+  // total===0 and be silently vaporized as an "empty shell".
+  const [members, results, costs, logs, closures, govtRows, invoices, approvals] = await Promise.all([
     BatchMember.countDocuments({ batch: id }),
     CandidateResult.countDocuments({ batch: id }),
     CostEntry.countDocuments({ batch: id }),
@@ -77,8 +84,9 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     Closure.countDocuments({ batch: id }),
     GovtAttendanceRow.countDocuments({ batch: id }),
     Invoice.countDocuments({ batch: id }),
+    ApprovalRequest.countDocuments({ batch: id }),
   ]);
-  const carried = { members, results, costs, logs, closures, govt_rows: govtRows, invoices };
+  const carried = { members, results, costs, logs, closures, govt_rows: govtRows, invoices, approvals };
   const total = Object.values(carried).reduce((a, n) => a + n, 0);
   const breakdown = Object.entries(carried).filter(([, n]) => n > 0).map(([k, n]) => `${n} ${k.replace("_", " ")}`).join(", ");
   if (total > 0 || batch.deletion_state === "Deleting") {

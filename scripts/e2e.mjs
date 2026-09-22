@@ -2579,6 +2579,38 @@ ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
   cookie = savedForDel;
 }
 
+// ---- QA-2634/QA-2631: force-delete counts + discloses destroyed ApprovalRequest rows ----
+// (pre-fix: `carried` never counted approvals, so a batch whose ONLY carried row was a pending
+// ApprovalRequest read total===0 and was deleted as an "empty shell" — no refusal, no reason
+// required, no count, no permanent audit trace of the row it erased).
+{
+  // Gate batch.cancel so a transition PARKS instead of applying, which is what creates a Pending
+  // ApprovalRequest row attached to the batch (same mechanism as the RPL M24 test above).
+  await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: true, approver_role: "Operations" }, 200);
+  const apprBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 2 }, 201)).data.item;
+  const apprParked = await req("POST", `/api/batches/${apprBatch._id}/transition`, { target: "Cancelled", reason: "gate on" }, 202);
+  ok("QA-2634 fixture: transition parked behind approval gate", apprParked.data?.pending_approval === true, JSON.stringify(apprParked.data));
+  await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: false }, 200); // restore default OFF
+  const apprRow = (await req("GET", "/api/approvals?status=Pending")).data.items.find((r) => String(r.entity_id) === String(apprBatch._id));
+  ok("QA-2634 fixture: a pending ApprovalRequest is attached to the batch", !!apprRow, JSON.stringify(apprRow));
+
+  // This batch carries no members/results/costs/logs/closure/attendance/invoice — only the
+  // ApprovalRequest above. Post-fix it must NOT be treated as an empty shell: it must land in the
+  // force-delete branch (batches.delete_with_data + a reason), same as any other carried work.
+  const apprDelNoReason = await req("DELETE", `/api/batches/${apprBatch._id}`, undefined, 400);
+  ok("QA-2634: a batch carrying only a pending approval refuses force-delete without a reason",
+    /force-delet/i.test(apprDelNoReason.data?.error ?? ""), JSON.stringify(apprDelNoReason.data));
+
+  const apprDel = await req("DELETE", `/api/batches/${apprBatch._id}`, { reason: "QA-2634 pin: approval-only batch" }, 200);
+  ok("QA-2631/QA-2634: force-delete response counts the destroyed ApprovalRequest row",
+    apprDel.data?.forced === true && apprDel.data?.carried?.approvals === 1, JSON.stringify(apprDel.data));
+
+  const apprAudit = (await req("GET", `/api/audit/Batch/${apprBatch._id}`)).data.items;
+  const apprAuditRow = apprAudit.find((a) => a.field === "delete");
+  ok("QA-2634: the permanent audit snapshot records the destroyed approval row",
+    apprAuditRow?.new_value?.snapshot?.carried?.approvals === 1, JSON.stringify(apprAuditRow?.new_value));
+}
+
 // ---- QA-048: the post-Completed money chain is visible, derived from Closure+Invoice ----
 {
   const listRows = (await req("GET", "/api/batches?limit=2000")).data.items ?? [];
