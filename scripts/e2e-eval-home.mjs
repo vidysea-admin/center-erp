@@ -338,4 +338,92 @@ await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Canc
     k.trainers_certified_free === freeOnList, JSON.stringify({ home: k.trainers_certified_free, list: freeOnList }));
 }
 
+// ---- QA-400: Owner (multi-centre Location-role) scope pin --------------------------------------
+// An "Owner" is a Location user whose location_scope names MORE THAN ONE centre (Rule 38,
+// authz.ts:122-135, models/index.ts:1685 location_scope: [ObjectId]). The shape was already live;
+// this is the missing GUARANTEE that a multi-centre user's figures cover EXACTLY their centres —
+// not the first one only ($in-collapse), not the whole org (a dropped filter, QA-302's family),
+// and not a silent zero (QA-347's family: Mongoose does NOT auto-cast inside an aggregation
+// pipeline, so a `$in` fed raw location_scope STRINGS matches nothing there even though the
+// identical filter works fine inside a find()/countDocuments()). home/route.ts:105-116 already
+// casts location_scope to ObjectId (scopeIds) before feeding Trainer.aggregate for exactly this
+// reason — this pin is what would go RED if that cast were ever removed.
+{
+  const so = stamp("Q400");
+  const mkCentre = async (tag) => (await req(admin, "POST", "/api/locations", {
+    code: `Q400${tag}${so}`, name: `Q400 ${tag} ${so}`, city: "Pune",
+    approval_status: "Approved", operational_status: "Active",
+  }, 201)).data.item;
+  const [locA, locB, locC] = await Promise.all([mkCentre("A"), mkCentre("B"), mkCentre("C")]);
+  const prog400 = (await req(admin, "POST", "/api/programs", { code: so, name: "Q400 Prog " + so, trainer_skill: "Q400Skill" + so }, 201)).data.item;
+
+  // Per centre: one Active batch with one fully-enrolled member, PLUS one IDLE certified trainer
+  // nominated for that centre and touching no batch at all — the only door that exercises the
+  // vulnerable path (Trainer.aggregate's trainerScope $or on nominated_for_location, home/route.ts
+  // :109-120). A trainer reached only via a batch link (scopedBatchTrainers, :93-95) would NOT be
+  // sensitive to the string-cast regression, so this fixture deliberately avoids that backdoor.
+  async function fixtureAt(loc, tag) {
+    const batchTrainer = (await req(admin, "POST", "/api/trainers", {
+      name: `Q400 BT${tag} ${so}`, phone: phone("7" + tag.charCodeAt(0)), skills: ["Q400Skill" + so],
+    }, 201)).data.item;
+    const idleTrainer = (await req(admin, "POST", "/api/trainers", {
+      name: `Q400 Idle${tag} ${so}`, phone: phone("8" + tag.charCodeAt(0)), skills: ["Q400Skill" + so],
+      pipeline_status: "Certified", active: true,
+      nominated_for_location: loc._id, nominated_for_program: prog400._id,
+    }, 201)).data.item;
+    const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name: `Q400 R${tag}`, type: "Classroom" }, 201)).data.item;
+    const batch = (await req(admin, "POST", "/api/batches", {
+      location: loc._id, program: prog400._id, trainer: batchTrainer._id, room: room._id,
+      planned_start: today(), target_size: 1,
+    }, 201)).data.item;
+    const cand = (await req(admin, "POST", "/api/candidates", { name: `Q400 Cand${tag} ${so}`, phone: phone("9" + tag.charCodeAt(0)), location: loc._id, program: prog400._id }, 201)).data.item;
+    const mem = (await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201)).data.item;
+    await req(admin, "PATCH", `/api/members/${mem._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+    await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Ready" }, 200);
+    await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Active" }, 200);
+    return { loc, batch, cand, idleTrainer };
+  }
+  const fA = await fixtureAt(locA, "A");
+  const fB = await fixtureAt(locB, "B");
+  const fC = await fixtureAt(locC, "C"); // control: deliberately OUT of the Owner's scope
+
+  ok("[Q400] fixture: all three centres reached Active with one enrolled member each",
+    fA.batch?.status === "Active" && fB.batch?.status === "Active" && fC.batch?.status === "Active",
+    JSON.stringify([fA.batch?.status, fB.batch?.status, fC.batch?.status]));
+
+  const ownerEmail = `q400.owner.${so}@vidysea-test.local`;
+  const mkOwner = await req(admin, "POST", "/api/users", {
+    name: "Q400 Owner " + so, email: ownerEmail, password: "Q400pass!xyz",
+    role: "Location", location_scope: [locA._id, locB._id], can_edit: false,
+  }, 201);
+  ok("[Q400] Owner (2-centre Location user) created", mkOwner.status === 201, JSON.stringify(mkOwner.data).slice(0, 200));
+  const owner = mkOwner.status === 201 ? await login(ownerEmail, "Q400pass!xyz") : null;
+  ok("[Q400] Owner can sign in", !!owner);
+
+  if (owner) {
+    const k = (await req(owner, "GET", "/api/home", undefined, 200)).data.kpis;
+
+    // THE GUARANTEE: exactly A + B, never one of them (a $in-collapse) and never all three (a
+    // dropped filter). Each figure below is built from a DIFFERENT product code path, so a
+    // regression in any one of them is caught here instead of by one lucky shared number.
+    ok("[Q400] approved_locations = exactly A+B (Location.countDocuments path)", k.approved_locations === 2, `got ${k.approved_locations}`);
+    ok("[Q400] active_batches = exactly A+B (Batch.countDocuments path)", k.active_batches === 2, `got ${k.active_batches}`);
+    ok("[Q400] enrolled_students = exactly A+B (BatchMember.countDocuments path)", k.enrolled_students === 2, `got ${k.enrolled_students}`);
+    // trainers_active_total is the ONE figure on this page built from an aggregation pipeline fed
+    // by location_scope (Trainer.aggregate + trainerScope). QA-347's bug (raw strings in an
+    // aggregate $in) reads 0 here, not merely wrong — silent, which is why it survived until this
+    // exact figure was measured directly against a known-non-zero expectation.
+    ok("[Q400] trainers_active_total = exactly A+B's idle certified trainers (Trainer.aggregate path, QA-347 class)",
+      k.trainers_active_total === 2, `got ${k.trainers_active_total}`);
+
+    // NON-VACUITY: the whole-org (Admin) view must see strictly more than the Owner — proving the
+    // three assertions above are narrowed by the scope, not just numbers that happen to read 2.
+    const kAdmin = (await req(admin, "GET", "/api/home", undefined, 200)).data.kpis;
+    ok("[Q400] NON-VACUITY: the Admin's whole-org view sees strictly more than the 2-centre Owner",
+      kAdmin.active_batches > k.active_batches && kAdmin.trainers_active_total > k.trainers_active_total,
+      JSON.stringify({ admin: { ab: kAdmin.active_batches, t: kAdmin.trainers_active_total }, owner: { ab: k.active_batches, t: k.trainers_active_total } }));
+  }
+  if (mkOwner.data?.item?._id) await req(admin, "PATCH", `/api/users/${mkOwner.data.item._id}`, { active: false }, 200);
+}
+
 finish();
