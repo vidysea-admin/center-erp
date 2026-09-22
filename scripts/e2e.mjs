@@ -6206,5 +6206,57 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
   await req("POST", `/api/batches/${q94B2._id}/transition`, { target: "Cancelled", reason: "QA-2794 fixture done" }, 200);
 }
 
+// ================= qa-location-delete-warn-impact (Umesh, 2026-09-22) =================
+// Option-B location delete: WARN + typed confirm + ALLOW, never refused, with a mandatory impact
+// preview. Built on its OWN throwaway centre (LDEL…) so deleting it — and orphaning its batch — never
+// disturbs the main `loc` the rest of this suite drives.
+{
+  const ldStamp = Date.now().toString(36) + "ld";
+  const ldLoc = (await req("POST", "/api/locations", { code: "LDEL" + ldStamp, name: "LocDel Test " + ldStamp, external_id: "LDEXT" + ldStamp, approval_status: "Approved" }, 201)).data.item;
+  const ldRoom = (await req("POST", `/api/locations/${ldLoc._id}/rooms`, { name: "LD Room " + ldStamp, type: "Classroom", capacity: 10 }, 201)).data.item;
+  await req("PUT", `/api/locations/${ldLoc._id}/targets`, { program: prog._id, approved_target: 42 }, 200);
+  await req("POST", `/api/locations/${ldLoc._id}/notes`, { note: "LD note " + ldStamp, meeting_date: today }, 201);
+  const ldBatch = (await req("POST", "/api/batches", { location: ldLoc._id, program: prog._id, trainer: trainer._id, room: ldRoom._id, planned_start: today, target_size: 3 }, 201)).data.item;
+
+  // ---- CAPABILITY: the impact preview names the batch and counts every referencing category ----
+  const ldUsage = (await req("GET", `/api/locations/${ldLoc._id}/usage`, undefined, 200)).data;
+  ok("qa-location-delete-warn-impact: usage preview names the orphaned batch by code",
+    Array.isArray(ldUsage.batch_list) && ldUsage.batch_list.some((b) => String(b.code) === String(ldBatch.code)),
+    JSON.stringify(ldUsage.batch_list));
+  ok("qa-location-delete-warn-impact: usage preview counts the room + target + meeting-note references",
+    (ldUsage.counts?.rooms ?? 0) >= 1 && (ldUsage.counts?.targets ?? 0) >= 1 && (ldUsage.counts?.meeting_notes ?? 0) >= 1,
+    JSON.stringify(ldUsage.counts));
+
+  // ---- CAPABILITY: the gate is locations.delete, SEPARATE from locations.manage ----
+  // Operations holds locations.manage but NOT locations.delete by default, so both the delete AND
+  // its impact preview must refuse Operations with 403. (Admin — this suite's login — holds it via
+  // the role bypass, which the ALLOW pins below exercise.)
+  const ldOpsCookie = await loginAs("ops@vidysea.com", "CiOnly@123");
+  const ldOpsDel = await fetch(BASE + `/api/locations/${ldLoc._id}`, { method: "DELETE", headers: { "Content-Type": "application/json", cookie: ldOpsCookie }, body: JSON.stringify({ reason: "ops try" }) });
+  ok("qa-location-delete-warn-impact: Operations (locations.manage, NOT locations.delete) is refused the delete → 403",
+    ldOpsDel.status === 403, `got ${ldOpsDel.status}`);
+  const ldOpsUsage = await fetch(BASE + `/api/locations/${ldLoc._id}/usage`, { headers: { cookie: ldOpsCookie } });
+  ok("qa-location-delete-warn-impact: the impact preview is gated at locations.delete too → 403 for Operations",
+    ldOpsUsage.status === 403, `got ${ldOpsUsage.status}`);
+
+  // ---- CAPABILITY: Option B — delete ALLOWED even with recorded work; response carries the impact ----
+  const ldDel = await req("DELETE", `/api/locations/${ldLoc._id}`, { reason: "e2e location-delete option B" }, 200);
+  ok("qa-location-delete-warn-impact: delete is allowed with a batch + room + target under it (Option B, never refused)",
+    ldDel.status === 200, JSON.stringify(ldDel.data));
+  ok("qa-location-delete-warn-impact: the delete response carries the impact (carried counts + named batch list)",
+    (ldDel.data?.carried?.batches ?? 0) >= 1 && (ldDel.data?.carried?.rooms ?? 0) >= 1
+      && Array.isArray(ldDel.data?.batch_list) && ldDel.data.batch_list.some((b) => String(b.code) === String(ldBatch.code)),
+    JSON.stringify(ldDel.data));
+
+  // ---- CAPABILITY: the centre is physically gone, and the impact is on the audit trail ----
+  const ldGone = await req("GET", `/api/locations/${ldLoc._id}`, undefined, 404);
+  ok("qa-location-delete-warn-impact: the location is physically removed after delete",
+    ldGone.status === 404, `got ${ldGone.status}`);
+  const ldAudit = ((await req("GET", `/api/audit/Location/${ldLoc._id}`)).data.items ?? []);
+  ok("qa-location-delete-warn-impact: an audit row records the delete with its impact snapshot",
+    ldAudit.some((a) => a.field === "delete" && a.new_value?.snapshot?.carried),
+    JSON.stringify(ldAudit.map((a) => a.field)));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

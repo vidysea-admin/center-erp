@@ -14,6 +14,16 @@ export const PERMISSIONS: { key: string; label: string; group: string }[] = [
   { key: "sheet.approve", label: "Approve/apply sheet changes (Sync Inbox + Sheet Watch)", group: "Sheets" },
   { key: "sheet.sources", label: "Configure sync sources", group: "Sheets" },
   { key: "locations.manage", label: "Create/edit locations, contacts, notes", group: "Locations" },
+  // qa-location-delete-warn-impact (Umesh, 2026-09-22, qa/gates/location-delete-behaviour.md):
+  // a Location had NO delete path at all (itemRoutes emits only GET+PATCH). Umesh chose Option B —
+  // WARN + typed confirmation + ALLOW, programme-style ("Admin ki marzi") — with a mandatory impact
+  // preview. Kept as its OWN key, NOT folded into locations.manage, for the same reason every other
+  // .delete verb is separate (ARCHITECTURE §3.2b): editing a centre and destroying it are different
+  // powers. No role holds it by default — Admin reaches it through the role bypass (it is not in
+  // NO_ADMIN_BYPASS, and DEFAULT_ROLE_PERMISSIONS.Admin is computed from PERMISSIONS), so nothing any
+  // other role can do changes on day one. A live grant to another role/person is the ordinary matrix
+  // PUT / extra_permissions step, not this unit's job.
+  { key: "locations.delete", label: "Delete a location/centre (warns and shows the impact first — batches and every referencing record are named/counted, but the delete itself is never refused)", group: "Locations" },
   { key: "trainers.manage", label: "Create/edit trainers & requests", group: "Trainers" },
   { key: "candidates.manage", label: "Create/edit/import candidates", group: "Candidates" },
   { key: "candidates.assign", label: "Assign candidates to batches", group: "Candidates" },

@@ -18,6 +18,7 @@ import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Fi
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
+import { TypedConfirmDeleteDrawer } from "@/components/typed-confirm-delete-drawer";
 import { useDropMember, DropMemberDrawer } from "@/components/drop-member";
 import { GovtRowResolveDrawer } from "@/components/govt-row-resolve-drawer";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
@@ -65,12 +66,11 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
   // prompt with any non-empty text proceeded. Replaced with a typed-confirmation Drawer, same
   // shape as the candidates.purge Drawer (67da001): type the batch CODE, plus a required reason,
   // Confirm stays disabled until both are present. The server gates are UNCHANGED by this unit.
+  // qa-location-delete-warn-impact: the two typed-confirm Drawers below were extracted into the
+  // shared TypedConfirmDeleteDrawer (it owns the typed code, reason and error state), so only the
+  // open flags live here now.
   const [forceDeleteOpen, setForceDeleteOpen] = useState(false);
-  const [forceDeleteForm, setForceDeleteForm] = useState<{ code: string; reason: string }>({ code: "", reason: "" });
-  const [forceDeleteError, setForceDeleteError] = useState("");
   const [emptyDeleteOpen, setEmptyDeleteOpen] = useState(false);
-  const [emptyDeleteForm, setEmptyDeleteForm] = useState<{ code: string; reason: string }>({ code: "", reason: "" });
-  const [emptyDeleteError, setEmptyDeleteError] = useState("");
 
   // QA-2420 cycle 2: child tabs await this after their own write. The old catch swallowed the
   // failure into a fulfilled Promise<void>, so Closure announced "saved" even when the header and
@@ -139,38 +139,25 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
             exactly that batch, kept out of the roster-empty banner below because a batch that
             carries data can be in any status, not only the empty-roster shape that banner covers. */}
         {canForceDeleteBatch && (
-          <Btn small kind="danger" onClick={() => { setForceDeleteForm({ code: "", reason: "" }); setForceDeleteError(""); setForceDeleteOpen(true); }}>Force-delete (has data)</Btn>
+          <Btn small kind="danger" onClick={() => setForceDeleteOpen(true)}>Force-delete (has data)</Btn>
         )}
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
-      <Drawer error={forceDeleteError} open={forceDeleteOpen} onClose={() => setForceDeleteOpen(false)} title={`Force-delete ${b.code}?`}>
-        <div className="space-y-3">
-          <p className="text-sm text-red-700">
-            This permanently removes the batch AND everything recorded on it — members, results, costs,
-            daily logs, closure, attendance, invoices. There is no recovery inside the product. Use Cancel
-            instead if you just want to stop it.
-          </p>
-          <Field label={`Type the batch code (${b.code}) to confirm`} required>
-            <input className={inputCls} value={forceDeleteForm.code} onChange={(e) => setForceDeleteForm({ ...forceDeleteForm, code: e.target.value })} />
-          </Field>
-          <Field label="Reason" required>
-            <input className={inputCls} placeholder="Why is this batch being force-deleted?" value={forceDeleteForm.reason}
-              onChange={(e) => setForceDeleteForm({ ...forceDeleteForm, reason: e.target.value })} />
-          </Field>
-          <div className="flex gap-2">
-            <Btn kind="danger"
-              disabled={forceDeleteForm.code.trim() !== String(b.code ?? "").trim() || !forceDeleteForm.reason.trim()}
-              onClick={async () => {
-                try {
-                  await api(`/api/batches/${id}`, { method: "DELETE", json: { reason: forceDeleteForm.reason.trim() } });
-                  setForceDeleteOpen(false);
-                  window.location.href = `${BASE_PATH}/batches`;
-                } catch (e: any) { setForceDeleteError(e.message); }
-              }}>Force-delete</Btn>
-            <Btn kind="ghost" onClick={() => setForceDeleteOpen(false)}>Cancel</Btn>
-          </div>
-        </div>
-      </Drawer>
+      <TypedConfirmDeleteDrawer
+        open={forceDeleteOpen} onClose={() => setForceDeleteOpen(false)}
+        title={`Force-delete ${b.code}?`}
+        confirmText={b.code} confirmHint={`Type the batch code (${b.code}) to confirm`}
+        confirmLabel="Force-delete" reasonPlaceholder="Why is this batch being force-deleted?"
+        warning={<p className="text-sm text-red-700">
+          This permanently removes the batch AND everything recorded on it — members, results, costs,
+          daily logs, closure, attendance, invoices. There is no recovery inside the product. Use Cancel
+          instead if you just want to stop it.
+        </p>}
+        onConfirm={async (reason) => {
+          await api(`/api/batches/${id}`, { method: "DELETE", json: { reason } });
+          setForceDeleteOpen(false);
+          window.location.href = `${BASE_PATH}/batches`;
+        }} />
       {/* 2026-08-14 (Umesh): a batch with nobody on it is not a batch — either its students
           get uploaded or the empty shell gets deleted. -86 (Umesh 15/08): dismissible with a
           ✕ for the session — it collapses to a one-line chip so Add/Import stay one click away. */}
@@ -217,38 +204,25 @@ export default function BatchDetail({ params }: { params: Promise<{ id: string }
                         togglable right now, and the SERVER refuses independently - this only decides
                         whether somebody is shown a button they would be allowed to press. */}
             {canDeleteBatch && (
-              <Btn small kind="danger" onClick={() => { setEmptyDeleteForm({ code: "", reason: "" }); setEmptyDeleteError(""); setEmptyDeleteOpen(true); }}>Delete this empty batch</Btn>
+              <Btn small kind="danger" onClick={() => setEmptyDeleteOpen(true)}>Delete this empty batch</Btn>
             )}
           </div>
         </div>
       )}
-      <Drawer error={emptyDeleteError} open={emptyDeleteOpen} onClose={() => setEmptyDeleteOpen(false)} title={`Delete ${b.code}?`}>
-        <div className="space-y-3">
-          <p className="text-sm text-red-700">
-            This is only allowed while the batch carries no members, results, costs, logs or attendance.
-            There is no recovery inside the product.
-          </p>
-          <Field label={`Type the batch code (${b.code}) to confirm`} required>
-            <input className={inputCls} value={emptyDeleteForm.code} onChange={(e) => setEmptyDeleteForm({ ...emptyDeleteForm, code: e.target.value })} />
-          </Field>
-          <Field label="Reason" required>
-            <input className={inputCls} placeholder="Why is this empty batch being deleted?" value={emptyDeleteForm.reason}
-              onChange={(e) => setEmptyDeleteForm({ ...emptyDeleteForm, reason: e.target.value })} />
-          </Field>
-          <div className="flex gap-2">
-            <Btn kind="danger"
-              disabled={emptyDeleteForm.code.trim() !== String(b.code ?? "").trim() || !emptyDeleteForm.reason.trim()}
-              onClick={async () => {
-                try {
-                  await api(`/api/batches/${id}`, { method: "DELETE", json: { reason: emptyDeleteForm.reason.trim() } });
-                  setEmptyDeleteOpen(false);
-                  window.location.href = `${BASE_PATH}/batches`;
-                } catch (e: any) { setEmptyDeleteError(e.message); }
-              }}>Delete this empty batch</Btn>
-            <Btn kind="ghost" onClick={() => setEmptyDeleteOpen(false)}>Cancel</Btn>
-          </div>
-        </div>
-      </Drawer>
+      <TypedConfirmDeleteDrawer
+        open={emptyDeleteOpen} onClose={() => setEmptyDeleteOpen(false)}
+        title={`Delete ${b.code}?`}
+        confirmText={b.code} confirmHint={`Type the batch code (${b.code}) to confirm`}
+        confirmLabel="Delete this empty batch" reasonPlaceholder="Why is this empty batch being deleted?"
+        warning={<p className="text-sm text-red-700">
+          This is only allowed while the batch carries no members, results, costs, logs or attendance.
+          There is no recovery inside the product.
+        </p>}
+        onConfirm={async (reason) => {
+          await api(`/api/batches/${id}`, { method: "DELETE", json: { reason } });
+          setEmptyDeleteOpen(false);
+          window.location.href = `${BASE_PATH}/batches`;
+        }} />
       {!dismissed(`erp_dismiss_health_${id}_${data.health?.score}`) && (
         <HealthBanner health={data.health} onDismiss={() => dismiss(`erp_dismiss_health_${id}_${data.health?.score}`)} />
       )}

@@ -1,9 +1,11 @@
 "use client";
 import { Suspense, use, useEffect, useState } from "react";
 import { api, fmtDate, offerable } from "@/lib/client";
+import { BASE_PATH } from "@/lib/base-path";
 import { useSearchParams } from "next/navigation";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, Notice, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
+import { TypedConfirmDeleteDrawer } from "@/components/typed-confirm-delete-drawer";
 import { usePerms } from "@/components/shell";
 import Link from "next/link";
 // QA-1749 (REQ-389a): this screen renders a numbered trainer list an operator acts on.
@@ -30,6 +32,18 @@ function LocationDetailInner({ params }: { params: Promise<{ id: string }> }) {
   const [tab, setTab] = useState(wanted && TABS.includes(wanted) ? wanted : "Overview");
   const [loc, setLoc] = useState<any>(null);
   const [error, setError] = useState("");
+  // qa-location-delete-warn-impact: Option-B delete — WARN + typed confirm + ALLOW, with a mandatory
+  // impact preview. Gated on the togglable `locations.delete` right (server refuses independently);
+  // this only decides whether the button is shown. The impact is fetched from the companion
+  // /usage endpoint when the Drawer opens, so the confirm names the blast radius before the click.
+  const { can, loaded } = usePerms();
+  const canDeleteLocation = loaded && can("locations.delete", "edit");
+  const [delOpen, setDelOpen] = useState(false);
+  const [usage, setUsage] = useState<any>(null);
+  const openDelete = async () => {
+    setUsage(null); setDelOpen(true);
+    try { setUsage(await api(`/api/locations/${id}/usage`)); } catch { /* preview optional — a fetch failure must not block the delete, only leave it un-named */ }
+  };
 
   const load = () => api(`/api/locations/${id}`).then((d) => setLoc(d.item)).catch((e) => setError(e.message));
   useEffect(() => { load(); }, [id]);
@@ -43,8 +57,27 @@ function LocationDetailInner({ params }: { params: Promise<{ id: string }> }) {
         <h1 className="text-xl font-semibold">{loc.name} <span className="text-sm font-normal text-gray-400">({loc.code})</span></h1>
         <Chip value={loc.approval_status} />
         <Chip value={loc.operational_status} />
+        {canDeleteLocation && (
+          <Btn small kind="danger" onClick={openDelete}>Delete location</Btn>
+        )}
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      <TypedConfirmDeleteDrawer
+        open={delOpen} onClose={() => setDelOpen(false)}
+        title={`Delete ${loc.name}?`}
+        confirmText={loc.code} confirmHint={`Type the centre code (${loc.code}) to confirm`}
+        confirmLabel="Delete location" reasonPlaceholder="Why is this centre being deleted?"
+        warning={<p className="text-sm text-red-700">
+          Deleting a centre is never undone inside the product. It is allowed even when work is
+          recorded under it (Admin ki marzi) — but everything named below is orphaned or wiped: its
+          batches keep existing with a centre that no longer exists.
+        </p>}
+        preview={<LocationImpactPreview usage={usage} />}
+        onConfirm={async (reason) => {
+          await api(`/api/locations/${id}`, { method: "DELETE", json: { reason } });
+          setDelOpen(false);
+          window.location.href = `${BASE_PATH}/locations`;
+        }} />
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === "Overview" && <Overview loc={loc} onSaved={load} setError={setError} />}
       {tab === "Contacts & Notes" && <ContactsNotes loc={loc} onSaved={load} setError={setError} />}
@@ -52,6 +85,42 @@ function LocationDetailInner({ params }: { params: Promise<{ id: string }> }) {
       {tab === "Trainers & Infra" && <TrainersInfra locationId={id} setError={setError} />}
       {tab === "Batches" && <LocBatches locationId={id} />}
       {tab === "Activity" && <Activity entity="Location" id={id} />}
+    </div>
+  );
+}
+
+// qa-location-delete-warn-impact: the impact preview shown inside the delete confirmation Drawer.
+// Names the batches by code (a Batch has no name) and lists a count for every OTHER category that
+// referenced the centre — the read-only `locationUsage` shape the /usage endpoint returns.
+function LocationImpactPreview({ usage }: { usage: any }) {
+  if (!usage) return <p className="text-xs text-gray-500">Checking what is recorded under this centre…</p>;
+  const c = usage.counts ?? {};
+  const LABELS: [string, string][] = [
+    ["rooms", "room"], ["targets", "capacity target"], ["meeting_notes", "meeting note"],
+    ["trainer_requests", "trainer request"], ["cost_entries", "cost entry"],
+    ["govt_imports", "govt attendance import"], ["govt_rows", "govt attendance row"],
+    ["candidates", "candidate in the pool"], ["interested_candidates", "interested candidate"],
+    ["home_trainers", "trainer (home centre)"], ["capable_trainers", "trainer (can teach here)"],
+    ["nominated_trainers", "trainer (nominated here)"], ["approvals", "approval request"],
+    ["notifications", "notification"], ["sheet_changes", "sheet change"],
+    ["public_tokens", "public link"], ["recipient_tokens", "notification link"],
+    ["users_scoped", "user scoped to this centre"],
+  ];
+  const rows = LABELS.filter(([k]) => (c[k] ?? 0) > 0);
+  const batches: any[] = usage.batch_list ?? [];
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+      <div className="font-semibold text-amber-800">What is recorded under this centre</div>
+      {batches.length > 0
+        ? <p className="mt-1 text-amber-700"><b>{batches.length}</b> batch{batches.length === 1 ? "" : "es"} will be orphaned: {batches.map((b) => b.code).join(", ")}</p>
+        : <p className="mt-1 text-amber-700">No batches reference this centre.</p>}
+      {rows.length === 0
+        ? <p className="mt-1 text-amber-700">Nothing else references it.</p>
+        : (
+          <ul className="mt-1 list-disc pl-5 text-amber-700">
+            {rows.map(([k, label]) => <li key={k}><b>{c[k]}</b> {label}{c[k] === 1 ? "" : "s"}</li>)}
+          </ul>
+        )}
     </div>
   );
 }

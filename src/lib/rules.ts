@@ -3,8 +3,8 @@
 import crypto from "crypto";
 import { Types } from "mongoose";
 import {
-  AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest,
+  ApprovalRequest, AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceImport, GovtAttendanceRow, Invoice, Location,
+  LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest, User,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
@@ -455,6 +455,53 @@ export async function programUsage(programId: string) {
     batches: batchIds.length, candidates, target_seats: targetAgg[0]?.sum ?? 0,
     location_targets, trainer_requests, direct_candidates, trainers,
   };
+}
+
+// qa-location-delete-warn-impact (Umesh, 2026-09-22, qa/gates/location-delete-behaviour.md): the
+// read-only impact preview that the Option-B location delete quotes before the typed confirm — the
+// same shape `programUsage` above has (the programme Option-B precedent) and the same
+// Promise.all(countDocuments) shape `batches/[id]/route.ts`'s force-delete uses for its `carried`
+// counts. A Location is referenced by ~19 fields across the model graph (grep `oid("Location"` in
+// models/index.ts); a required `Batch.location` and `LocationTarget`/`Room`/`MeetingNote` children
+// among them. This reaches EVERY one of them, so the warning cannot undercount what a delete
+// orphans — the exact failure QA-2814 fixed one entity over, where programUsage only reached
+// `program` through a Batch and missed the direct references. Delete behaviour is UNCHANGED by this
+// function — it is read-only counting; the DELETE route decides nothing from a refusal, only names
+// the blast radius. The batch list is returned by CODE (a Batch has no name) so the UI can name them.
+export async function locationUsage(locationId: string) {
+  const batchDocs = await Batch.find({ location: locationId }).select("code").sort({ code: 1 }).lean<any[]>();
+  const [
+    rooms, targets, meeting_notes, trainer_requests, cost_entries, govt_imports, govt_rows,
+    candidates, interested_candidates, home_trainers, capable_trainers, nominated_trainers,
+    approvals, notifications, sheet_changes, public_tokens, recipient_tokens, users_scoped,
+  ] = await Promise.all([
+    Room.countDocuments({ location: locationId }),                          // Room.location (required)
+    LocationTarget.countDocuments({ location: locationId }),                // LocationTarget.location (required)
+    MeetingNote.countDocuments({ location: locationId }),                   // MeetingNote.location (required)
+    TrainerRequest.countDocuments({ location: locationId }),               // TrainerRequest.location (required)
+    CostEntry.countDocuments({ location: locationId }),                     // CostEntry.location
+    GovtAttendanceImport.countDocuments({ location: locationId }),          // GovtAttendanceImport.location
+    GovtAttendanceRow.countDocuments({ location: locationId }),             // GovtAttendanceRow.location
+    Candidate.countDocuments({ location: locationId }),                     // Candidate.location (pool)
+    Candidate.countDocuments({ interested_locations: locationId }),         // Candidate.interested_locations[]
+    Trainer.countDocuments({ home_location: locationId }),                  // Trainer.home_location
+    Trainer.countDocuments({ capable_locations: locationId }),             // Trainer.capable_locations[]
+    Trainer.countDocuments({ nominated_for_location: locationId }),         // Trainer.nominated_for_location
+    ApprovalRequest.countDocuments({ location: locationId }),              // ApprovalRequest.location
+    Notification.countDocuments({ location: locationId }),                 // Notification.location
+    SheetChange.countDocuments({ location: locationId }),                  // SheetChange.location
+    PublicToken.countDocuments({ location: locationId }),                  // PublicToken.location
+    PublicToken.countDocuments({ recipient_location: locationId }),        // PublicToken.recipient_location
+    User.countDocuments({ location_scope: locationId }),                   // User.location_scope[]
+  ]);
+  const counts = {
+    batches: batchDocs.length, rooms, targets, meeting_notes, trainer_requests, cost_entries,
+    govt_imports, govt_rows, candidates, interested_candidates, home_trainers, capable_trainers,
+    nominated_trainers, approvals, notifications, sheet_changes, public_tokens, recipient_tokens,
+    users_scoped,
+  };
+  const total = Object.values(counts).reduce((a, n) => a + n, 0);
+  return { batch_list: batchDocs.map((b) => ({ id: String(b._id), code: b.code })), counts, total };
 }
 
 // ---------- Trainer rules ----------

@@ -1,7 +1,12 @@
+import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
+import { dbConnect } from "@/lib/db";
 import { Location } from "@/models";
-import { HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { requirePerm } from "@/lib/permissions";
 import { requireApproval } from "@/lib/approvals";
+import { locationUsage } from "@/lib/rules";
+import { audit } from "@/lib/audit";
 import { maskLocationSecrets } from "../route";
 
 export const { GET, PATCH } = itemRoutes({
@@ -68,4 +73,43 @@ export const { GET, PATCH } = itemRoutes({
       }
     }
   },
+});
+
+// qa-location-delete-warn-impact (Umesh, 2026-09-22, qa/gates/location-delete-behaviour.md):
+// itemRoutes() (src/lib/crud.ts) only ever exports {GET, PATCH}, so a Location had NO delete path at
+// all — this is the standalone export, matching the programs/[id]/route.ts DELETE pattern (its own
+// Option-B precedent). Behaviour = Option B: the delete is ALLOWED unconditionally (programme-style,
+// "Admin ki marzi") and is NEVER refused for carried work — but it is never silent either. Gated on
+// the OWN togglable right `locations.delete` (separate from locations.manage, ARCHITECTURE §3.2b),
+// and the response + audit record the full impact (`carried` counts + the named batch list), the
+// same structured snapshot the batch force-delete writes. The UI's before-the-click impact preview
+// is served by the companion GET /api/locations/[id]/usage; this door records what actually went.
+export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  await requirePerm(user, "locations.delete");
+  const { id } = await ctx.params;
+  const location = await Location.findById(id).select("code name").lean<any>();
+  if (!location) throw new HttpError(404, "Location not found");
+  // A reason is recorded on the decision, same as every other destructive verb in this codebase.
+  // Kept OPTIONAL, not a 400: the delete is never refused, and an existing caller with no body still
+  // succeeds — the UI Drawer is what makes a reason required for a human pressing the button.
+  let reason = "";
+  try { const body = await readJson(req); reason = String(body?.reason ?? "").trim().slice(0, 500); } catch { /* no body */ }
+  // The impact is computed BEFORE the delete, so the counts describe what this call orphaned/wiped
+  // rather than what happens to be there after. Read-only; it decides nothing here (Option B).
+  const usage = await locationUsage(id);
+  await Location.deleteOne({ _id: id });
+  const summary = `${location.code} (${location.name}) deleted`
+    + (usage.total > 0 ? ` — ${usage.total} referencing record(s) orphaned` : " — nothing referenced it")
+    + (reason ? ` — reason: ${reason}` : "");
+  // Structured snapshot, same shape as batches/[id]/route.ts's force-delete audit value: nothing
+  // else on disk remembers what pointed at this centre once it is gone.
+  await audit({
+    entity: "Location", entityId: id, field: "delete",
+    newValue: { summary, snapshot: { code: location.code, name: location.name, carried: usage.counts, batch_list: usage.batch_list } },
+    actor: user.id,
+  });
+  return NextResponse.json({ deleted: location.code, carried: usage.counts, batch_list: usage.batch_list, total: usage.total });
 });
