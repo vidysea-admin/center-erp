@@ -1108,6 +1108,48 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
   } finally { await mc.close(); }
 }
 
+// ---- QA-2814: programUsage() must count references that reach the Program WITHOUT a Batch ----
+// Before this fix, rules.ts's programUsage() only ever walked Program -> Batch -> BatchMember, so
+// the pre-delete warning on admin/page.tsx told the Admin "0 batches, 0 candidates reference this"
+// for a program that real records still pointed at directly - a LocationTarget, a TrainerRequest,
+// a Candidate whose own `program` field names it before they ever join a batch, or a Trainer who
+// applied/was nominated for it. This program (`prog`, created at setup) already has real Candidate
+// rows created directly against it earlier in this file (eligOf() posts `program: prog._id` with
+// no batch) and NO Batch was ever created for it - exactly the undercount shape.
+{
+  const usage = (await req(admin, "GET", `/api/programs/${prog._id}/usage`)).data;
+  ok("QA-2814: this program has zero batches (undercount precondition - the old count would read entirely zero)",
+    usage.batches === 0, JSON.stringify(usage));
+  ok("QA-2814: ...yet direct_candidates is non-zero - the candidates created directly against this program earlier in this file are now counted",
+    typeof usage.direct_candidates === "number" && usage.direct_candidates > 0, JSON.stringify(usage));
+
+  // Seed the three reference kinds the old count could never see, then re-check.
+  const lt = await req(admin, "PUT", `/api/locations/${loc._id}/targets`, { program: prog._id, approved_target: 10 });
+  ok("QA-2814 setup: LocationTarget seeded", lt.status === 200, JSON.stringify(lt));
+  const tr = await req(admin, "POST", "/api/trainer-requests", { location: loc._id, program: prog._id, required_by_date: new Date(Date.now() + 30 * 86400000).toISOString() });
+  const trOk = tr.status === 200 || tr.status === 201;
+  const trn = await req(admin, "POST", "/api/trainers", { name: "QA2814 Trainer " + stamp, phone: "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0"), skills: ["Skill" + stamp], programs_applied: [prog._id] });
+  const trnOk = trn.status === 200 || trn.status === 201;
+
+  const usage2 = (await req(admin, "GET", `/api/programs/${prog._id}/usage`)).data;
+  ok("QA-2814: location_targets reflects the seeded LocationTarget",
+    usage2.location_targets >= 1, JSON.stringify(usage2));
+  if (trOk) {
+    ok("QA-2814: trainer_requests reflects the seeded TrainerRequest",
+      usage2.trainer_requests >= 1, JSON.stringify({ usage2, trCreate: tr.data }));
+  } else {
+    ok("QA-2814: trainer_requests setup call itself failed - not asserting the count, but not silently skipping either",
+      false, `POST /api/trainer-requests -> ${tr.status} ${JSON.stringify(tr.data)}`);
+  }
+  if (trnOk) {
+    ok("QA-2814: trainers reflects the seeded Trainer.programs_applied reference",
+      usage2.trainers >= 1, JSON.stringify({ usage2, trainerCreate: trn.data }));
+  } else {
+    ok("QA-2814: trainer setup call itself failed - not asserting the count, but not silently skipping either",
+      false, `POST /api/trainers -> ${trn.status} ${JSON.stringify(trn.data)}`);
+  }
+}
+
 // ---- QA-510 / QA-514 (-167): a destructive script must not have a production DEFAULT ----
 // Eight scripts read process.env.MONGODB_DB with a FALLBACK to the production database name.
 // (Spelled out rather than quoted verbatim: the census below sweeps this file too, and a comment

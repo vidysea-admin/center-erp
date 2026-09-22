@@ -101,14 +101,24 @@ function Programs({ error, setError }: any) {
     // (2026-08-25 decision, programs/[id]/route.ts) — this only fetches the real numbers first so
     // the confirm reads them instead of a blind "are you sure". A usage-lookup failure falls back
     // to the plain sentence rather than blocking the delete on it.
+    // QA-2814: batches/candidates/target_seats only ever counted what a Batch carried. rules.ts's
+    // programUsage() now also counts LocationTarget/TrainerRequest/direct-Candidate/Trainer
+    // references that point at the program WITHOUT a Batch in between — those were invisible here
+    // before, so the gate below can no longer be "batches > 0 alone" or a program with zero
+    // batches but real location targets / candidates / trainer requests would still read "No
+    // batches reference this course".
     let msg = `Delete ${edit.code} (${edit.name})? This removes the course record permanently.`;
     try {
-      const u = await api<{ batches: number; candidates: number; target_seats: number }>(`/api/programs/${edit._id}/usage`);
-      msg = u.batches > 0
-        ? `Delete ${edit.code} (${edit.name})? ${u.batches} batch${u.batches === 1 ? "" : "es"}, ` +
-          `${u.candidates} candidate${u.candidates === 1 ? "" : "s"}, ${u.target_seats} target seat${u.target_seats === 1 ? "" : "s"} ` +
-          `reference this course — deleting it will not delete them, but they will point at a program that no longer exists.`
-        : `Delete ${edit.code} (${edit.name})? No batches reference this course — this removes the course record permanently.`;
+      const u = await api<{ batches: number; candidates: number; target_seats: number; location_targets: number; trainer_requests: number; direct_candidates: number; trainers: number }>(`/api/programs/${edit._id}/usage`);
+      const parts: string[] = [];
+      if (u.batches > 0) parts.push(`${u.batches} batch${u.batches === 1 ? "" : "es"}, ${u.candidates} candidate${u.candidates === 1 ? "" : "s"}, ${u.target_seats} target seat${u.target_seats === 1 ? "" : "s"}`);
+      if (u.direct_candidates > 0) parts.push(`${u.direct_candidates} candidate${u.direct_candidates === 1 ? "" : "s"} registered against this course`);
+      if (u.location_targets > 0) parts.push(`${u.location_targets} location target${u.location_targets === 1 ? "" : "s"}`);
+      if (u.trainer_requests > 0) parts.push(`${u.trainer_requests} trainer request${u.trainer_requests === 1 ? "" : "s"}`);
+      if (u.trainers > 0) parts.push(`${u.trainers} trainer${u.trainers === 1 ? "" : "s"} (applied/nominated)`);
+      msg = parts.length
+        ? `Delete ${edit.code} (${edit.name})? ${parts.join("; ")} reference this course — deleting it will not delete them, but they will point at a program that no longer exists.`
+        : `Delete ${edit.code} (${edit.name})? Nothing references this course — this removes the course record permanently.`;
     } catch { /* usage lookup failed - fall back to the plain confirm above, not a block */ }
     if (!confirm(msg)) return;
     try {

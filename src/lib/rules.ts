@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { Types } from "mongoose";
 import {
   AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument,
+  LocationTarget, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
 import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
@@ -425,15 +425,36 @@ export function capacitySummary(
 // admin/page.tsx never named what breaks. This is the read-only count the confirm string quotes
 // before the click — same Promise.all(countDocuments) shape as batches/[id]/route.ts's DELETE
 // handler (member/results/costs/... carried-work count), scoped to a Program instead of a Batch.
+//
+// QA-2814: the count above only ever reached `program` through Batch → BatchMember, so anything
+// that points at a Program WITHOUT going through a Batch was invisible to the warning — the Admin
+// made the delete call on a number that undercounted what actually breaks. `src/models/index.ts`
+// has five more required-or-real references to Program: LocationTarget.program (:488, required),
+// TrainerRequest.program (:676, required), Candidate.program (:741, required — a candidate can
+// carry a program before ever joining a batch), and two Trainer fields that are not required but
+// are real pointers a delete would orphan just the same: programs_applied (:553, array) and
+// nominated_for_program (:566). Each gets its own count, mirrored on the same
+// Promise.all(countDocuments)/distinct shape the batch-derived counts already use — kept SEPARATE
+// from `candidates`/`batches`/`target_seats` rather than merged into them, because a
+// batch-member candidate and a Candidate.program-only candidate are different populations (a
+// candidate can hold one without the other) and collapsing them would need a dedup query this
+// function never needed before. Delete behaviour is UNCHANGED — this is still read-only counting.
 export async function programUsage(programId: string) {
   const batchIds = await Batch.find({ program: programId }).distinct("_id");
-  const [candidates, targetAgg] = await Promise.all([
+  const [candidates, targetAgg, location_targets, trainer_requests, direct_candidates, trainers] = await Promise.all([
     batchIds.length ? BatchMember.countDocuments({ batch: { $in: batchIds } }) : 0,
     batchIds.length
       ? Batch.aggregate([{ $match: { _id: { $in: batchIds } } }, { $group: { _id: null, sum: { $sum: "$target_size" } } }])
       : [],
+    LocationTarget.countDocuments({ program: programId }),
+    TrainerRequest.countDocuments({ program: programId }),
+    Candidate.countDocuments({ program: programId }),
+    Trainer.countDocuments({ $or: [{ programs_applied: programId }, { nominated_for_program: programId }] }),
   ]);
-  return { batches: batchIds.length, candidates, target_seats: targetAgg[0]?.sum ?? 0 };
+  return {
+    batches: batchIds.length, candidates, target_seats: targetAgg[0]?.sum ?? 0,
+    location_targets, trainer_requests, direct_candidates, trainers,
+  };
 }
 
 // ---------- Trainer rules ----------
