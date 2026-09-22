@@ -33,6 +33,19 @@ type Bucket = { count: number; windowStart: number; windowMs: number };
 const buckets = new Map<string, Bucket>();
 let lastSweep = 0;
 
+// TEST-ONLY. The SMS daily cap (phoneChallengeGate below) is a SINGLE global "sms-daily" bucket
+// for the whole process, by design — a per-phone reset cannot clear it. In the full e2e wall the
+// e2e-roles suite deliberately trips this cap (the -110 toll-fraud pin) and runs BEFORE e2e-govt,
+// so qa-2809's OTP pins would inherit an already-blown global budget and fail with 429 "SMS
+// sending is paused for today". This clears ONLY the global daily bucket — no per-IP, per-phone,
+// cooldown or email bucket is touched, so it cannot weaken any other limiter or any other suite's
+// state. Reachable exclusively through /api/test/reset-sms-cap, which 404s unless MONGODB_DB is
+// the center_erp_ci test database (production is center_erp) — the same guard every _test_* hook
+// in this app uses. NEVER call this from production code.
+export function __resetSmsDailyCapForTest(): void {
+  buckets.delete("sms-daily");
+}
+
 export function rateLimit(key: string, max: number, windowMs: number): void {
   const now = Date.now();
 

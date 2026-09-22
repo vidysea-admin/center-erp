@@ -1889,8 +1889,15 @@ if (await card.count() > 0) {
         // missing button reads as a passing absence.
         const gone2816 = await mk2816("gone");
         await req(admin, "PATCH", `/api/members/${gone2816._id}`, { failed: true, issue: "Portal error" }, 200);
+        // IST-midnight fixture bug (QA-1065 class, found running the -321 wall at 01:54 IST): the
+        // member's joined_on defaults to server "now" = the IST calendar day, but `new Date()
+        // .toISOString().slice(0,10)` is the UTC date, which between 00:00 and 05:30 IST is
+        // YESTERDAY. Rule 25 then correctly refused left_on < joined_on (a real product guard, not
+        // a bug), and this fixture flaked only in that window. Compute the IST calendar date the
+        // same way istToday()/rules.ts:379 does, so the drop is deterministic at any clock time.
+        const istTodayStr2816 = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
         await req(admin, "POST", `/api/members/${gone2816._id}/drop`,
-          { left_on: new Date().toISOString().slice(0, 10), drop_reason: "Other" }, 200);
+          { left_on: istTodayStr2816, drop_reason: "Other" }, 200);
         await mk2816("stay");
 
         const ad2816 = await asRole2816("admin@vidysea.com", ADMIN_PASSWORD);

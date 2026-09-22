@@ -1672,6 +1672,12 @@ const pkCrypto = (await import("node:crypto")).default;
 const pkSha = (s) => pkCrypto.createHash("sha256").update(s).digest("hex");
 const pkAttCount = (bmId) => pkDb.collection("publictokens").countDocuments({ purpose: "attendance", batch_member: bmId });
 
+// qa-2809 wall fix (-321): the SMS daily cap is a single GLOBAL in-process bucket, and e2e-roles
+// (which runs before this suite in the same server process) deliberately trips it with its -110
+// toll-fraud pin. Without this reset the OTP lookups below inherit that blown budget and 429 with
+// "SMS sending is paused for today". The reset endpoint 404s outside the center_erp_ci test DB, so
+// it is unreachable in production; it clears ONLY the global daily counter, no other limiter.
+await req(admin, "POST", "/api/test/reset-sms-cap", {}, 200);
 const cPool = (await req(admin, "POST", "/api/candidates", { name: `${NAME} PoolPortal`, phone: `9${STAMP.slice(1)}3008`, location: loc._id, program: program._id }, 201)).data.item;
 const poolPhone = String(cPool.phone).replace(/\D/g, "").slice(-10);
 const plk = await lookup({ phone: poolPhone });

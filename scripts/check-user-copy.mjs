@@ -5353,41 +5353,71 @@ for (const file of walk(root)) {
 // rather than clause by clause: a `||`-to-`&&` flip or a dropped clause must fail loudly here, not
 // only light up a button the server will then refuse.
 {
+  // qa-location-delete-warn-impact (9830e5f, 2026-09-22) legitimately EXTRACTED both inline batch
+  // Drawers into the shared components/typed-confirm-delete-drawer.tsx (TypedConfirmDeleteDrawer),
+  // which now OWNS the typed-code + reason + disabled-until-both state and the "no recovery" copy -
+  // the ARCHITECTURE §3 "one concept, one place" move rather than a third inline copy. So the pin
+  // no longer asserts inline `setForceDeleteForm({...})`/`disabled={forceDeleteForm...}` state on
+  // the page (it MOVED, correctly); it now proves the SAME security properties at their new home,
+  // and fails just as loudly if any of them is dropped. QA-2776's whole-disabled-gate discipline is
+  // kept - the disabled expression is pinned WHOLE in the component, not clause by clause.
   const rel = "app/(app)/batches/[id]/page.tsx";
   const pageSrc = stripComments(fs.readFileSync(path.join(root, rel), "utf8"));
   const pageRead = pageSrc.length > 5000 && pageSrc.includes("function BatchDetail");
-  // Scoped to the TWO call sites this unit replaces, not to the file as a whole - this page has
-  // several OTHER window.prompt/confirm doors (Reopen, document delete, daily-log delete, cost
-  // removal) that are out of scope and must keep working exactly as they do today.
+  const compRel = "components/typed-confirm-delete-drawer.tsx";
+  const compSrc = stripComments(fs.readFileSync(path.join(root, compRel), "utf8"));
+  const compRead = compSrc.length > 500 && compSrc.includes("export function TypedConfirmDeleteDrawer");
+  // (a) The two whole-batch delete verbs must NOT fall back to window.prompt/confirm. Scoped to
+  // these two verbs - the page keeps OTHER prompt/confirm doors (Reopen, document delete, daily-log
+  // delete, cost removal) which are out of scope and must keep working exactly as they do today.
   const noPromptLeft = !pageSrc.includes("window.prompt(`Force-delete ${b.code}?")
     && !pageSrc.includes("confirm(`Delete ${b.code}?");
-  const forceOpensDrawer = /onClick=\{\(\) => \{ setForceDeleteForm\(\{ code: "", reason: "" \}\); setForceDeleteError\(""\); setForceDeleteOpen\(true\); \}\}/.test(pageSrc);
-  const emptyOpensDrawer = /onClick=\{\(\) => \{ setEmptyDeleteForm\(\{ code: "", reason: "" \}\); setEmptyDeleteError\(""\); setEmptyDeleteOpen\(true\); \}\}/.test(pageSrc);
+  // (b) The page renders TypedConfirmDeleteDrawer for BOTH verbs, each behind its UNCHANGED gate,
+  // typed against the batch CODE, calling DELETE on success. `canForceDeleteBatch`=batches.
+  // delete_with_data and `canDeleteBatch`=batches.delete (contract 2a: UI upgrade only, gates fixed).
+  const importsDrawer = /import \{ TypedConfirmDeleteDrawer \} from "@\/components\/typed-confirm-delete-drawer"/.test(pageSrc);
+  const forceGateUnchanged = /const canForceDeleteBatch = rightsLoadedB && canRightB\("batches\.delete_with_data", "edit"\)/.test(pageSrc);
+  const emptyGateUnchanged = /const canDeleteBatch = rightsLoadedB && canRightB\("batches\.delete", "edit"\)/.test(pageSrc);
+  const forceButtonGated = /\{canForceDeleteBatch && \(\s*<Btn small kind="danger" onClick=\{\(\) => setForceDeleteOpen\(true\)\}/.test(pageSrc);
+  const emptyButtonGated = /\{canDeleteBatch && \(\s*<Btn small kind="danger" onClick=\{\(\) => setEmptyDeleteOpen\(true\)\}/.test(pageSrc);
+  const forceDrawerRendered = /<TypedConfirmDeleteDrawer\s+open=\{forceDeleteOpen\} onClose=\{\(\) => setForceDeleteOpen\(false\)\}[\s\S]*?confirmText=\{b\.code\}[\s\S]*?method: "DELETE"/.test(pageSrc);
+  const emptyDrawerRendered = /<TypedConfirmDeleteDrawer\s+open=\{emptyDeleteOpen\} onClose=\{\(\) => setEmptyDeleteOpen\(false\)\}[\s\S]*?confirmText=\{b\.code\}[\s\S]*?method: "DELETE"/.test(pageSrc);
   const forceSaysNoRecovery = pageSrc.includes("There is no recovery inside the product. Use Cancel");
   const emptySaysNoRecovery = pageSrc.includes("This is only allowed while the batch carries no members, results, costs, logs or attendance.")
     && pageSrc.includes("There is no recovery inside the product.");
-  // Pinned WHOLE (QA-2776's lesson): dropping the code-match clause or the reason clause on EITHER
-  // Drawer must fail loudly rather than leave a button enabled for a wrong code or an empty reason.
-  const forceDisabledGate = pageSrc.includes(
-    'disabled={forceDeleteForm.code.trim() !== String(b.code ?? "").trim() || !forceDeleteForm.reason.trim()}');
-  const emptyDisabledGate = pageSrc.includes(
-    'disabled={emptyDeleteForm.code.trim() !== String(b.code ?? "").trim() || !emptyDeleteForm.reason.trim()}');
-  // The gates this unit must NOT touch (contract 2a: "no change to the gate, UI upgrade only").
-  const forceGateUnchanged = /const canForceDeleteBatch = rightsLoadedB && canRightB\("batches\.delete_with_data", "edit"\)/.test(pageSrc);
-  const emptyGateUnchanged = /const canDeleteBatch = rightsLoadedB && canRightB\("batches\.delete", "edit"\)/.test(pageSrc);
-  if (pageRead && noPromptLeft && forceOpensDrawer && emptyOpensDrawer && forceSaysNoRecovery && emptySaysNoRecovery
-    && forceDisabledGate && emptyDisabledGate && forceGateUnchanged && emptyGateUnchanged) passed++;
+  // Neither Drawer may weaken the reason requirement: both rely on the component default
+  // requireReason=true, so a `requireReason={false}` anywhere on THIS page would drop it.
+  const noReasonWeakening = !pageSrc.includes("requireReason={false}");
+  // (c) The component itself enforces typed-code-match + required-reason + disabled-until-both.
+  // Pinned WHOLE (QA-2776): a `||`-to-`&&` flip or a dropped clause in the disabled expression must
+  // fail loudly here, not merely light a button the server would then refuse.
+  const compReasonDefaultRequired = /requireReason = true,/.test(compSrc);
+  const compCodeMatch = compSrc.includes('const codeMismatch = typed.trim() !== String(confirmText ?? "").trim();');
+  const compDisabledGate = compSrc.includes('const disabled = busy || codeMismatch || (requireReason && !reason.trim());');
+  const compBtnUsesDisabled = /<Btn kind="danger" disabled=\{disabled\}/.test(compSrc);
+  const compTypedBound = /value=\{typed\} onChange=\{\(e\) => setTyped\(e\.target\.value\)\}/.test(compSrc);
+  const compReasonBound = /value=\{reason\}[\s\S]*?onChange=\{\(e\) => setReason\(e\.target\.value\)\}/.test(compSrc);
+  if (pageRead && compRead && noPromptLeft && importsDrawer && forceGateUnchanged && emptyGateUnchanged
+    && forceButtonGated && emptyButtonGated && forceDrawerRendered && emptyDrawerRendered
+    && forceSaysNoRecovery && emptySaysNoRecovery && noReasonWeakening
+    && compReasonDefaultRequired && compCodeMatch && compDisabledGate && compBtnUsesDisabled
+    && compTypedBound && compReasonBound) passed++;
   else {
     failed++;
-    pushStructural(rel + ": the whole-batch delete Drawer no longer matches its confirmation contract"
-      + " (page read=" + pageRead + ", no window.prompt/confirm left=" + noPromptLeft
-      + ", force button opens Drawer=" + forceOpensDrawer + ", empty button opens Drawer=" + emptyOpensDrawer
+    pushStructural(rel + " + " + compRel + ": the whole-batch delete typed-confirm Drawer no longer matches its contract"
+      + " (page read=" + pageRead + ", component read=" + compRead + ", no window.prompt/confirm left=" + noPromptLeft
+      + ", page imports TypedConfirmDeleteDrawer=" + importsDrawer
+      + ", force gate still batches.delete_with_data=" + forceGateUnchanged + ", empty gate still batches.delete=" + emptyGateUnchanged
+      + ", force button gated+opens Drawer=" + forceButtonGated + ", empty button gated+opens Drawer=" + emptyButtonGated
+      + ", force Drawer renders typed-on-code + DELETE=" + forceDrawerRendered + ", empty Drawer renders typed-on-code + DELETE=" + emptyDrawerRendered
       + ", force Drawer says no recovery=" + forceSaysNoRecovery + ", empty Drawer says no recovery=" + emptySaysNoRecovery
-      + ", force Confirm disabled until code+reason=" + forceDisabledGate + ", empty Confirm disabled until code+reason=" + emptyDisabledGate
-      + ", force gate still batches.delete_with_data=" + forceGateUnchanged + ", empty gate still batches.delete=" + emptyGateUnchanged + ")"
-      + " - qa-delete-a-batch-drawer. This unit is a UI upgrade only: the server gates are unchanged,"
-      + " but the typed-confirmation Drawer replacing window.prompt/window.confirm must ask for the"
-      + " batch CODE and a reason, and Confirm must stay disabled until both are present.");
+      + ", no requireReason={false} weakening=" + noReasonWeakening
+      + ", component reason required by default=" + compReasonDefaultRequired + ", component code-match clause=" + compCodeMatch
+      + ", component disabled gate WHOLE=" + compDisabledGate + ", component danger Btn uses disabled=" + compBtnUsesDisabled
+      + ", component typed input bound=" + compTypedBound + ", component reason input bound=" + compReasonBound + ")"
+      + " - qa-delete-a-batch-drawer / qa-location-delete-warn-impact. UI upgrade only: server gates unchanged,"
+      + " but window.prompt/window.confirm must stay replaced by the shared typed-confirm Drawer that asks for the"
+      + " batch CODE and a reason and keeps Confirm disabled until both are present.");
   }
 }
 
