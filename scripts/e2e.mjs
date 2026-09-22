@@ -2584,15 +2584,23 @@ ok("QA-042: tranche two does NOT rewrite the recorded batch-level figures",
 // ApprovalRequest read total===0 and was deleted as an "empty shell" — no refusal, no reason
 // required, no count, no permanent audit trace of the row it erased).
 {
-  // Gate batch.cancel so a transition PARKS instead of applying, which is what creates a Pending
-  // ApprovalRequest row attached to the batch (same mechanism as the RPL M24 test above).
-  await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: true, approver_role: "Operations" }, 200);
+  // Gate cost.post so a cost entry PARKS instead of applying — this is the ONE approval action
+  // whose ApprovalRequest carries a `batch` field on create (lib/approvals.ts requireApproval,
+  // called from api/costs/route.ts with `batch: body.batch`; the batch.cancel/complete transition
+  // gate does NOT pass `batch` in its ctx, so it would not have exercised the deleteMany({batch:id})
+  // cascade this unit is about). The batch stays Planning (non-terminal) so the Admin-recording
+  // bypass in costs/route.ts (QA-2462, terminal-batch-only) does not apply, and `cats[0]` is a
+  // plain, non-pre-approved category (used the same way at the R-E test above), so evaluatePreApproval
+  // returns applied:false and the request genuinely parks rather than posting straight to the ledger.
+  await req("PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" }, 200);
   const apprBatch = (await req("POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today, target_size: 2 }, 201)).data.item;
-  const apprParked = await req("POST", `/api/batches/${apprBatch._id}/transition`, { target: "Cancelled", reason: "gate on" }, 202);
-  ok("QA-2634 fixture: transition parked behind approval gate", apprParked.data?.pending_approval === true, JSON.stringify(apprParked.data));
-  await req("PUT", "/api/approvals", { action: "batch.cancel", enabled: false }, 200); // restore default OFF
-  const apprRow = (await req("GET", "/api/approvals?status=Pending")).data.items.find((r) => String(r.entity_id) === String(apprBatch._id));
-  ok("QA-2634 fixture: a pending ApprovalRequest is attached to the batch", !!apprRow, JSON.stringify(apprRow));
+  const apprPost = await req("POST", "/api/costs",
+    { category: cats[0]._id, amount: 999, batch: apprBatch._id, note: "QA-2634 pin fixture " + stamp }, 202);
+  ok("QA-2634 fixture: cost entry PARKS behind the approval gate, attached to the batch",
+    apprPost.data?.queued === true, JSON.stringify(apprPost.data));
+  await req("PUT", "/api/approvals", { action: "cost.post", enabled: false }, 200); // restore default OFF
+  const apprRow = (await req("GET", "/api/approvals?status=Pending")).data.items.find((r) => String(r.batch) === String(apprBatch._id));
+  ok("QA-2634 fixture: the pending ApprovalRequest carries this batch's id", !!apprRow, JSON.stringify(apprRow));
 
   // This batch carries no members/results/costs/logs/closure/attendance/invoice — only the
   // ApprovalRequest above. Post-fix it must NOT be treated as an empty shell: it must land in the
