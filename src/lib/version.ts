@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-320";
+export const RELEASE = "2026.08.14-321";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -255,7 +255,7 @@ const RELEASE_NOTE_ARCHIVE_319 =
   "before by construction; now a test refuses any future edit that breaks it. "  +
   "No other screen, figure or permission changes in this release.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_320 =
   "-320 makes two deletions honest about what they remove. "  +
   "When a batch is force-deleted, any pending cost-approval requests attached to that batch are "  +
   "now counted and shown before the delete, named in the reason if the delete is refused, and "  +
@@ -266,6 +266,23 @@ export const RELEASE_NOTE_CURRENT =
   "the candidates recorded directly against it, and the trainers who applied for it or were "  +
   "nominated to it - so the number the administrator decides on reflects what the delete will "  +
   "orphan, not batches alone. The delete itself is unchanged. "  +
+  "No other screen, figure or permission changes in this release.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-321 adds a way to delete a location, and closes a gap in how a candidate with no date of "  +
+  "birth is checked on the public attendance lookup. "  +
+  "An administrator who has been granted the new location-delete permission can now delete a "  +
+  "location; until this release there was no way to remove one. Before the delete goes through, "  +
+  "the screen names the batches recorded at that location and counts the other records that "  +
+  "reference it - its rooms, its centre targets, its meeting notes and the rest - and the delete "  +
+  "has to be typed to confirm. The delete is never refused: it shows what will be removed and "  +
+  "then removes it. "  +
+  "On the public attendance lookup, a candidate who has no date of birth on file is no longer "  +
+  "identified by a phone number alone. Until this release a matching phone number was enough to "  +
+  "issue that candidate an attendance link; now a second factor, a one-time code sent to the "  +
+  "phone on file, is required before any link is issued. Where text-message sending is not yet "  +
+  "switched on, no link is issued for such a candidate and they are directed to their centre "  +
+  "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
 const RELEASE_NOTE_ARCHIVE_317 =
@@ -1981,6 +1998,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -318: ARCHIVE_317 wired in here in the SAME bump that declared it, same discipline.
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
+  // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_320 + " " +
   RELEASE_NOTE_ARCHIVE_319 + " " +
   RELEASE_NOTE_ARCHIVE_318 + " " +
   RELEASE_NOTE_ARCHIVE_317 + " " +
