@@ -3,8 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { BatchMember, Candidate, Notification, PublicToken } from "@/models";
-import { clientKey, rateLimit, phoneChallengeGate } from "@/lib/rate-limit";
+import { clientKey, rateLimit, phoneChallengeGate, emailChallengeGate } from "@/lib/rate-limit";
 import { sendSms, smsTemplateFor } from "@/lib/sms";
+import { renderMail, sendMail } from "@/lib/mailer";
 
 // 2026-08-13 (Umesh: "candidate ke liye bhi ek hoga — ye requirement hai"): the /p/me entry
 // point. A candidate types the mobile number they registered with and lands on their own
@@ -14,14 +15,20 @@ import { sendSms, smsTemplateFor } from "@/lib/sms";
 // registered phone as the credential. Typing a number does NOT prove possession, so a second
 // factor is always demanded before any token is minted:
 //   - DOB on file  → the DOB is the second factor, checked in ONE step (unchanged, QA-056 IST).
-//   - NO DOB       → qa-2809 (Umesh, 2026-09-22, "phone and otp ho"): a phone OTP is the second
-//                    factor. The old behaviour minted a PublicToken on the last 10 digits of a
-//                    phone number ALONE, which is possession of a number the caller only TYPED.
-//                    Now an OTP is texted to the number on file and must be verified
-//                    (action:"verify-otp") before completeLookup() runs. The OTP apparatus is the
-//                    same one enrol-otp's SMS path uses (hash-only storage, 10-min expiry, 5-attempt
-//                    burn, phoneChallengeGate toll-fraud caps) — a distinct purpose "attendance_otp"
-//                    so an attendance session token can never be replayed at the registration door.
+//   - NO DOB       → qa-2809 (Umesh, 2026-09-22 "phone and otp ho"; 2026-09-23 "mail + otp de doo,
+//                    mail tho jayega hi naa"): a one-time code is the second factor. The old
+//                    behaviour minted a PublicToken on the last 10 digits of a phone number ALONE,
+//                    which is possession of a number the caller only TYPED. Now a code is sent to a
+//                    contact ON FILE and must be verified (action:"verify-otp") before
+//                    completeLookup() runs. CHANNEL SELECTION: EMAIL is primary — SES is live in
+//                    production today, so a DOB-less candidate WITH an email self-serves NOW; SMS is
+//                    the fallback for candidates with no email (works only once EnableX is switched
+//                    on); a candidate with NEITHER still falls to the centre-coordinator dead-end.
+//                    Both channels reuse the SAME challenge apparatus (hash-only storage, 10-min
+//                    expiry, 5-attempt burn; email uses emailChallengeGate, SMS phoneChallengeGate)
+//                    on a distinct purpose "attendance_otp" so an attendance session token can never
+//                    be replayed at the registration door. The contact is read off the MATCHED
+//                    record, never typed — a typed address/number proves nothing.
 // Every failure is the SAME generic message so the endpoint neither confirms nor denies that a
 // number is known (beyond what a DOB-less lookup already revealed by responding at all). Per-IP
 // rate-limited; the SMS send is additionally gated per-phone.
@@ -74,11 +81,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (sha(String(body.code ?? "")) !== t.otp_hash) {
       t.otp_attempts = (t.otp_attempts ?? 0) + 1;
       await t.save();
-      throw new HttpError(400, "That code is not right — check the SMS and try again.");
+      // qa-2809 email channel: point the caller at the right inbox. The token carries `email` only
+      // when the code was mailed; otherwise it went by SMS.
+      throw new HttpError(400, t.email
+        ? "That code is not right — check the mail and try again."
+        : "That code is not right — check the SMS and try again.");
     }
     t.active = false; // single use
     await t.save();
-    // Re-resolve the candidate from the VERIFIED number on the token — never a caller-supplied one.
+    // Re-resolve the candidate from the phone stored ON THE TOKEN — never a caller-supplied one, and
+    // works for BOTH channels: the email token stores the same on-file phone (a DOB-less candidate on
+    // this door was matched by phone in step 1, so one always exists). qa-2809 keeps this channel-
+    // agnostic rather than adding a candidate column the schema does not have (all changes stay in
+    // this route; attendance_otp is unchanged).
     const cand = await Candidate.findOne({ phone: { $regex: String(t.phone ?? "") + "$" } }).select("name dob sidh_status lifecycle_status").lean<any>();
     if (!cand) throw fail();
     return completeLookup(cand);
@@ -89,7 +104,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
   if (phone.length !== 10) throw fail();
-  const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob phone sidh_status lifecycle_status").lean<any>();
+  const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob phone email sidh_status lifecycle_status").lean<any>();
   if (!cand) throw fail();
 
   if (cand.dob) {
@@ -107,13 +122,59 @@ export const POST = apiHandler(async (req: NextRequest) => {
     return completeLookup(cand); // DOB was the second factor — mint in one step, unchanged.
   }
 
-  // ---- DOB-LESS PATH (qa-2809, Umesh "phone and otp ho"): phone alone NO LONGER mints. ----
-  // Instead of completeLookup(), send an OTP to the number ON FILE and return an "OTP sent" state.
-  // Every branch below RETURNS without minting, so possession of a typed number cannot open the
-  // page. QA-056 stays respected — DOB is never required; it is simply absent for these rows.
+  // ---- DOB-LESS PATH (qa-2809, Umesh "phone and otp ho" + "mail + otp de doo"): phone alone NO
+  // LONGER mints. ---- Instead of completeLookup(), send a one-time code to a contact ON FILE and
+  // return an "OTP sent" state. Every branch below RETURNS without minting, so possession of a typed
+  // number cannot open the page. QA-056 stays respected — DOB is never required; it is simply absent
+  // for these rows. The code + token are minted once and used by whichever channel wins.
   const otpPhone = (String(cand.phone ?? "").replace(/\D/g, "").slice(-10)) || phone;
-  // Toll-fraud gates keyed on the NUMBER being paid for (reused verbatim from enrol-otp's SMS
-  // path): per-phone cap, resend cooldown, global daily cap — so rotating IPs does not pump SMS.
+  const email = String(cand.email ?? "").trim().toLowerCase();
+  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+  const otpToken = crypto.randomBytes(16).toString("hex");
+
+  // ---- CHANNEL 1 (PRIMARY): EMAIL. SES is live in production TODAY, so a DOB-less candidate with an
+  // email on file can self-serve NOW — this is the whole point of qa-2809's email addition on top of
+  // -321's phone-only second factor (prod SMS is OFF, so -321 cannot actually deliver). The address
+  // is the one on the MATCHED record; it is NEVER asked for (a typed address proves nothing — same
+  // second-factor logic as the phone path). Reuses forgot-password / enrol-otp's email apparatus:
+  // emailChallengeGate (per-address cooldown + 5/hour, NO daily cap — email costs nothing),
+  // renderMail + sendMail. The response is uniform (never reveals whether an address is on file —
+  // anti-enumeration, same posture as forgot-password and the SMS branch below).
+  if (email) {
+    const gate = emailChallengeGate(email);
+    if (!gate.ok) {
+      throw new HttpError(429, gate.reason === "cooldown"
+        ? `Please wait ${gate.retryAfterSec ?? 60} seconds before requesting another code.`
+        : "Too many codes requested — please try again later.");
+    }
+    // One live challenge per address — a new request burns the old one. Store BOTH the email (the
+    // channel marker + the anti-enumeration key) and the phone on file, so the verify seam re-resolves
+    // the candidate the same way for either channel (a DOB-less candidate on this door always carries
+    // a phone — it is how step 1 matched them). No schema change: attendance_otp already has both.
+    await PublicToken.updateMany({ purpose: "attendance_otp", email, active: true }, { $set: { active: false } });
+    await PublicToken.create({
+      token: otpToken, purpose: "attendance_otp", email, phone: otpPhone,
+      otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
+    });
+    // Server-built mail; the code stays in the REAL subject (notification preview) but NEVER in the
+    // log (QA-142 — log_subject masks it). Mail is suppressed structurally in test/CI (test DB) and
+    // when SES creds are absent — sendMail records a MailLog row either way and never throws.
+    const { html, text } = renderMail({
+      title: "Your verification code",
+      lines: [`Your one-time code is:`, code, `It works for 10 minutes. If you did not ask for this, ignore this mail.`],
+    });
+    sendMail({ to: email, subject: `${code} is your Vidysea verification code`, log_subject: "****** is your Vidysea verification code", html, text, entity: "PublicToken" }).catch(() => {});
+    return NextResponse.json({
+      otp_required: true, otp_token: otpToken, channel: "email",
+      message: "We've sent a 6-digit code to the email on your record. Enter it to open your training.",
+    });
+  }
+
+  // ---- CHANNEL 2 (FALLBACK): SMS, for a candidate with NO email on file. Unchanged from -321 except
+  // it is now the SECOND choice. Works only once EnableX SMS is switched on (ops/env step —
+  // ENABLEX_SMS_* + the OTP DLT template); production today has no configured template, so this
+  // returns the "not switched on yet" copy (the centre-coordinator dead-end). Toll-fraud gates keyed
+  // on the NUMBER being paid for: per-phone cap, resend cooldown, global daily cap.
   const gate = phoneChallengeGate(otpPhone);
   if (!gate.ok) {
     if (gate.reason === "daily_cap") {
@@ -128,8 +189,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
       ? `Please wait ${gate.retryAfterSec ?? 60} seconds before requesting another code.`
       : "Too many codes sent to this number — please try again later.");
   }
-  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
-  const otpToken = crypto.randomBytes(16).toString("hex");
   // One live challenge per number — a new request burns the old one.
   await PublicToken.updateMany({ purpose: "attendance_otp", phone: otpPhone, active: true }, { $set: { active: false } });
   await PublicToken.create({

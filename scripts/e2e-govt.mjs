@@ -1764,6 +1764,88 @@ ok("QA-057: the refusal names the date-of-birth field", /date of birth/i.test(lk
   const expired = await lookup({ action: "verify-otp", otp_token: s2.data.otp_token, code: "424242" });
   ok("qa-2809: an expired OTP is refused (400), even with the correct code", expired.status === 400 && /expired/i.test(expired.data?.error ?? ""), JSON.stringify({ st: expired.status, e: expired.data?.error }));
 
+  // ---------------------------------------------------------------- qa-2809 EMAIL channel (Umesh 2026-09-23: "mail + otp de doo, mail tho jayega hi naa")
+  // -321 gave DOB-less candidates a PHONE OTP second factor, but production SMS is OFF (EnableX not
+  // switched on) so it cannot actually deliver. This adds EMAIL as the PRIMARY channel — SES is live
+  // in production — so a DOB-less candidate WITH an email on file self-serves NOW. In CI mail is
+  // SUPPRESSED (test DB) but the challenge is stored and a MailLog row is written, so these pins
+  // assert on the stored attendance_otp token + the MailLog row, never on real delivery.
+  const MASKED_OTP_SUBJECT = "****** is your Vidysea verification code";
+  // Step-1 lookups here get their OWN forwarded-for IP so they never consume the shared per-IP
+  // portal-lookup bucket (10/min on "local") that this suite's ~9 other step-1 lookups already sit
+  // near — otherwise this block's two extra lookups make the tail of the suite flaky by timing. The
+  // rightmost XFF entry is the trusted client key (lib/rate-limit clientKey); one nginx hop appends
+  // the real peer, so a single value here IS that peer.
+  const lookupFrom = (ip, json) => fetch(`${BASE}/api/public/portal-lookup`, { method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify(json) })
+    .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  {
+    const emAddr = `otpmail.${STAMP}@vidysea-test.local`;
+    const cEmail = (await req(admin, "POST", "/api/candidates", { name: `${NAME} OtpEmail`, phone: `9${STAMP.slice(1)}3012`, email: emAddr, location: loc._id, program: program._id }, 201)).data.item;
+    await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cEmail._id }, 201);
+    const cEmailPhone = String(cEmail.phone).replace(/\D/g, "").slice(-10);
+    const bmEmail = await pkDb.collection("batchmembers").findOne({ candidate: new PkObjectId(String(cEmail._id)), left_on: null });
+
+    // Precondition — DOB-less AND has an email, so the EMAIL arm actually runs (not vacuous).
+    const cEmailDb = await pkDb.collection("candidates").findOne({ _id: new PkObjectId(String(cEmail._id)) });
+    ok("qa-2809 email precondition: the fixture is genuinely DOB-less AND has an email on file (the EMAIL arm actually runs)",
+      !!cEmailDb && (cEmailDb.dob === null || cEmailDb.dob === undefined) && String(cEmailDb.email) === emAddr,
+      JSON.stringify({ dob: cEmailDb?.dob, email: cEmailDb?.email }));
+
+    // STEP 1 — phone alone, email on file. THE EMAIL PIN. Goes RED if the email branch is dropped
+    // (the candidate then falls to the SMS branch → channel "sms", no email-bearing token, no new
+    // MailLog row) — the mutant the manifest documents. It also proves the request REACHED the email
+    // path (channel + a matching attendance_otp row carrying the email), not some earlier refusal,
+    // and that the -321 security guarantee still holds (no attendance token minted before verify).
+    const mailBefore = await pkDb.collection("maillogs").countDocuments({ subject: MASKED_OTP_SUBJECT });
+    const eStep1 = await lookupFrom("10.209.2.11", { phone: cEmailPhone });
+    const eOtpRow = await pkDb.collection("publictokens").findOne({ purpose: "attendance_otp", email: emAddr, active: true });
+    const mailAfter = await pkDb.collection("maillogs").countDocuments({ subject: MASKED_OTP_SUBJECT });
+    ok("EMAIL qa-2809: a DOB-less candidate WITH an email gets an EMAIL OTP — channel:email, an attendance_otp token carries the email+on-file phone, a MailLog row for the (masked) code exists, and NO PublicToken(purpose:attendance) is minted",
+      eStep1.status === 200 && eStep1.data.otp_required === true && eStep1.data.channel === "email" && !!eStep1.data.otp_token
+      && !!eOtpRow && String(eOtpRow.token) === String(eStep1.data.otp_token) && String(eOtpRow.email) === emAddr && String(eOtpRow.phone) === cEmailPhone
+      && mailAfter === mailBefore + 1
+      && (await pkAttCount(bmEmail._id)) === 0,
+      JSON.stringify({ st: eStep1.status, ch: eStep1.data.channel, row: !!eOtpRow, email: eOtpRow?.email, phone: eOtpRow?.phone, mailDelta: mailAfter - mailBefore, att: await pkAttCount(bmEmail._id) }));
+
+    // Fix the emailed code to a known value (mail is suppressed in CI, so the real one is unknowable).
+    await pkDb.collection("publictokens").updateOne({ token: eStep1.data.otp_token }, { $set: { otp_hash: pkSha("515151"), otp_attempts: 0 } });
+
+    // A WRONG email OTP is refused (400), worded for the MAIL inbox (channel-branched copy), mints nothing.
+    const eWrong = await lookup({ action: "verify-otp", otp_token: eStep1.data.otp_token, code: "999999" });
+    ok("qa-2809 email: a wrong email OTP is refused (400), worded 'check the mail', and still mints no token",
+      eWrong.status === 400 && /mail/i.test(eWrong.data?.error ?? "") && (await pkAttCount(bmEmail._id)) === 0,
+      JSON.stringify({ st: eWrong.status, e: eWrong.data?.error, att: await pkAttCount(bmEmail._id) }));
+
+    // The CORRECT email OTP mints the attendance token and returns the My Training url — proves the
+    // SHARED verify seam resolves an EMAIL-minted token (it re-resolves the candidate by the on-file
+    // phone stored on the token), so the email channel works end-to-end and the phone channel (pinned
+    // above) still does too.
+    const eVerify = await lookup({ action: "verify-otp", otp_token: eStep1.data.otp_token, code: "515151" });
+    ok("qa-2809 email: a correct email OTP mints the attendance token and returns the My Training url (verify works for the email channel too)",
+      eVerify.status === 200 && eVerify.data.enrolled === true && /\/p\/attendance\//.test(eVerify.data.url ?? "") && (await pkAttCount(bmEmail._id)) === 1,
+      JSON.stringify({ st: eVerify.status, enrolled: eVerify.data.enrolled, att: await pkAttCount(bmEmail._id) }));
+
+    // FALLBACK arm — a DOB-less candidate with NO email falls to the SMS branch (channel "sms"), sends
+    // NO OTP mail, and still mints no attendance token on phone alone. Proves email is PREFERRED, not
+    // forced, and that dropping neither channel is required for the phone path to stay intact.
+    const noMailBefore = await pkDb.collection("maillogs").countDocuments({ subject: MASKED_OTP_SUBJECT });
+    const cNoEmail = (await req(admin, "POST", "/api/candidates", { name: `${NAME} OtpNoEmail`, phone: `9${STAMP.slice(1)}3013`, location: loc._id, program: program._id }, 201)).data.item;
+    await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cNoEmail._id }, 201);
+    const cNoEmailPhone = String(cNoEmail.phone).replace(/\D/g, "").slice(-10);
+    const bmNoEmail = await pkDb.collection("batchmembers").findOne({ candidate: new PkObjectId(String(cNoEmail._id)), left_on: null });
+    // The SMS daily cap is a single GLOBAL in-process bucket, and the many SMS-sending pins earlier in
+    // this suite exhaust it (>150 sends), so a bare fallback lookup here would 429 daily_cap and the
+    // channel:sms arm would be measuring the cap, not the fallback. Clear the global counter the same
+    // way the top of this block does (line ~1680) so this pin isolates the CHANNEL SELECTION, not the
+    // toll-fraud limiter (which the -110 pins own).
+    await req(admin, "POST", "/api/test/reset-sms-cap", {}, 200);
+    const nStep1 = await lookupFrom("10.209.2.12", { phone: cNoEmailPhone });
+    const noMailAfter = await pkDb.collection("maillogs").countDocuments({ subject: MASKED_OTP_SUBJECT });
+    ok("qa-2809 fallback: a DOB-less candidate with NO email falls to the SMS channel — channel:sms, NO OTP mail written, and no attendance token on phone alone",
+      nStep1.status === 200 && nStep1.data.otp_required === true && nStep1.data.channel === "sms" && noMailAfter === noMailBefore && (await pkAttCount(bmNoEmail._id)) === 0,
+      JSON.stringify({ st: nStep1.status, ch: nStep1.data.channel, msg: String(nStep1.data.message ?? nStep1.data.error ?? "").slice(0, 60), mailDelta: noMailAfter - noMailBefore, att: await pkAttCount(bmNoEmail._id) }));
+  }
+
   await pkMc.close();
 }
 
