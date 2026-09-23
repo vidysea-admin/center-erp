@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-321";
+export const RELEASE = "2026.08.14-322";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -268,7 +268,7 @@ const RELEASE_NOTE_ARCHIVE_320 =
   "orphan, not batches alone. The delete itself is unchanged. "  +
   "No other screen, figure or permission changes in this release.";
 
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_321 =
   "-321 adds a way to delete a location, and closes a gap in how a candidate with no date of "  +
   "birth is checked on the public attendance lookup. "  +
   "An administrator who has been granted the new location-delete permission can now delete a "  +
@@ -283,6 +283,17 @@ export const RELEASE_NOTE_CURRENT =
   "phone on file, is required before any link is issued. Where text-message sending is not yet "  +
   "switched on, no link is issued for such a candidate and they are directed to their centre "  +
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
+  "No other screen, figure or permission changes in this release.";
+
+export const RELEASE_NOTE_CURRENT =
+  "-322 lets the public attendance lookup send that second-factor code by email, not only by "  +
+  "text message. "  +
+  "A candidate with no date of birth on file needs a one-time code before an attendance link is "  +
+  "issued. Until now that code could only go by text message, which is not switched on, so those "  +
+  "candidates could not get in by themselves. From this release the code is sent to the email "  +
+  "address on file when there is one, and email is delivering; a candidate with no email on file "  +
+  "still needs text messaging, once it is switched on, or their centre coordinator, as before. "  +
+  "A candidate who has a date of birth on file is unaffected. "  +
   "No other screen, figure or permission changes in this release.";
 
 const RELEASE_NOTE_ARCHIVE_317 =
@@ -1999,6 +2010,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -322: ARCHIVE_321 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_321 + " " +
   RELEASE_NOTE_ARCHIVE_320 + " " +
   RELEASE_NOTE_ARCHIVE_319 + " " +
   RELEASE_NOTE_ARCHIVE_318 + " " +
