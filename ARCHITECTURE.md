@@ -362,6 +362,18 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   never overwrites) — the link-portal-ids contract one level up. UI: the Candidates page
   "Portal ID health" drawer.
 
+### 3.0d A trainer or room BOOKING clash — one rule, two doors (mtg-a2, meeting 2026-10-06)
+
+`assertTrainerAvailableForBatch` and `assertRoomFreeForBatch` in `lib/rules.ts` are the only code that
+refuses a double booking, and exactly two doors call them: `POST /api/batches` and `PATCH /api/batches/[id]`
+(each guards with `if (trainer)` / `if (room)`, so a resource left on "Assign later" is never checked, and
+assigning it later runs the identical rule). Every refusal is worded through `bookedUntil()` and
+`assignLaterHint()` in the same file: the holding batch's code, the date it runs until, and "Choose
+Assign later". There is **no override** (Umesh, 2026-10-06: double booking is not allowed). A third door
+that sets `Batch.trainer` or `Batch.room` must call these two functions, not re-derive the check; the
+suite `scripts/e2e-batch-assign-later.mjs` drives both doors. The two UI selects that offer "assign
+later" are the create drawer (`batches/page.tsx`) and the detail edit form (`batches/[id]/page.tsx`).
+
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.
