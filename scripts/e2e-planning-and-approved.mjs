@@ -279,7 +279,7 @@ ok("A4: Operations and Admin (not centre-scoped) see both centres' groups", [rOp
 // A5 - the stamp, through the REAL door
 // =================================================================================================
 const PH = await mkProg("HK");
-const h = async () => (await recent(admin, "?days=7")).rows.filter((r) => r.location._id === locH._id);
+const h = async () => ((await recent(admin, "?days=7")).rows ?? []).filter((r) => r.location._id === locH._id);
 ok("A5: nothing at the stamp centre before any write", (await h()).length === 0, "");
 await putT(locH, PH, { approved_target: 50, tc_status: "Approved" });
 ok("A5: a NEW row written as Approved through PUT /targets is stamped now and appears (count 1, seats 50)", (await h()).length === 1 && (await h())[0].count === 1 && (await h())[0].seats === 50, JSON.stringify(await h()));
