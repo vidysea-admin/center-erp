@@ -2456,6 +2456,49 @@ for (const variant of ["ordinary", "mark_paid"]) {
 }
 
 
+// ---------------------------------------- Q-1006a: a new head is named THROUGH Others, with a proper label
+// Umesh, 2026-10-06: *"drop down k sath new category add krenge tho vo others k though add hogi so that
+// we have proper labels"*. The typed name becomes the head's label everywhere, so the one rule the
+// server holds is that it IS a label: not "Others" again (a second unlabelled bucket), not two letters,
+// and not three spellings of one name because of stray spaces. The same rule binds an Admin naming a
+// head from the cost form; Admin master-list creation is not touched by it.
+{
+  const before = await rawCategories.countDocuments({});
+  const asOthers = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 141, note: `Q-1006a others ${stamp}` }), new_subhead: "  Others " });
+  const asMiscAdmin = await req(admin, "POST", "/api/costs", { ...baseEntry({ amount: 141, note: `Q-1006a misc ${stamp}` }), new_subhead: "misc" });
+  const tooShort = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 141, note: `Q-1006a short ${stamp}` }), new_subhead: "ab" });
+  const after = await rawCategories.countDocuments({});
+  ok("Q-1006a: nobody can NAME a new head 'Others' / 'misc' from the cost form (Operations or Admin) - 400 with the reason, and no head is created",
+    asOthers.status === 400 && asMiscAdmin.status === 400 && /not a label/i.test(String(asOthers.data?.error ?? "")) && /not a label/i.test(String(asMiscAdmin.data?.error ?? "")) && after === before,
+    `ops=${asOthers.status} ${JSON.stringify(asOthers.data?.error ?? "").slice(0, 120)} admin=${asMiscAdmin.status} heads ${before}->${after}`);
+  ok("Q-1006a: ...nor one too short to be a label",
+    tooShort.status === 400 && /at least 3/i.test(String(tooShort.data?.error ?? "")),
+    `got ${tooShort.status} ${JSON.stringify(tooShort.data?.error ?? "").slice(0, 120)}`);
+
+  const want = `ZZ Labelled Head ${stamp}`;
+  const spaced = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 142, note: `Q-1006a spaced ${stamp}` }), new_subhead: `  ZZ  Labelled   Head ${stamp} ` });
+  const made = await rawCategories.findOne({ name: want });
+  const madeReq = made ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: made._id }) : null;
+  ok("Q-1006a: a name typed with stray spaces becomes ONE clean label - created at once, not approved, with its head-approval request carrying that label",
+    spaced.status === 202 && made?.approval_status === "Pending" && madeReq?.payload?.kind === "head-approval" && madeReq?.payload?.name === want,
+    `got ${spaced.status} ${JSON.stringify(spaced.data?.error ?? "").slice(0, 120)} head=${made?.name ?? "none"} flag=${made?.approval_status} req=${madeReq?.payload?.name}`);
+  const again = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 143, note: `Q-1006a again ${stamp}` }), new_subhead: `zz labelled head ${stamp}` });
+  const sameNameCount = await rawCategories.countDocuments({ name: { $regex: `^zz labelled head ${stamp}$`, $options: "i" } });
+  // Senior review: the count alone would stay 1 if the second cost were filed somewhere else entirely.
+  const againReq = await rawApprovals.findOne({ action: "cost.post", "payload.note": `Q-1006a again ${stamp}` });
+  ok("Q-1006a: ...and naming it again (any case) files under that same head - no second copy of the label",
+    again.status === 202 && sameNameCount === 1 && !!made && String(againReq?.payload?.category ?? "") === String(made._id),
+    `got ${again.status} copies=${sameNameCount} filedUnder=${againReq?.payload?.category} head=${made?._id}`);
+
+  // The 80-character ceiling the form states, enforced by the server in the same words.
+  const tooLong = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 144, note: `Q-1006a long ${stamp}` }), new_subhead: "x".repeat(81) });
+  const longMade = await rawCategories.countDocuments({ name: "x".repeat(81) });
+  ok("Q-1006a: ...nor one longer than 80 characters - 400 with the reason, no head created",
+    tooLong.status === 400 && /at most 80/i.test(String(tooLong.data?.error ?? "")) && longMade === 0,
+    `got ${tooLong.status} ${JSON.stringify(tooLong.data?.error ?? "").slice(0, 120)} made=${longMade}`);
+}
+
+
 // ---------------- QA-2295 / QA-2296 — THE REJECTION REASON, ON A SCREEN ----------------
 //
 // Found by the live browser checker on -299, and it could not have been found any other way. The
@@ -2865,6 +2908,156 @@ for (const variant of ["ordinary", "mark_paid"]) {
         }
       } else {
         ok("QA-1977 5B UI [precondition]: the API block left a pending head and a non-Admin approver", false, JSON.stringify(qa5bUi));
+      }
+
+      // ---- Q-1006a: a new head is reached THROUGH the dropdown's Others, never typed beside it ----
+      // Umesh, 2026-10-06: *"drop down k sath new category add krenge tho vo others k though add hogi so
+      // that we have proper labels"*. Two persona walks on /costs (Operations and Admin), and the
+      // no-Other deployment, where the picker itself must offer "Others (add a new head)".
+      {
+        const signIn = async (ctx, email, pw) => {
+          const p = await ctx.newPage();
+          await p.goto(BASE, { waitUntil: "networkidle" });
+          const b = p.locator('input[type="email"], input[name="email"]').first();
+          if (await b.count()) {
+            await b.fill(email);
+            await p.locator('input[type="password"]').first().fill(pw);
+            await p.locator('button[type="submit"]').first().click();
+            await p.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          return p;
+        };
+        const openForm = async (p) => {
+          await p.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+          const cat = p.locator("label", { hasText: /^Category/ }).locator("select");
+          await cat.waitFor({ timeout: 45000 });
+          await p.waitForFunction(() => document.querySelectorAll("label select option").length > 6, undefined, { timeout: 45000 }).catch(() => {});
+          return cat;
+        };
+        const fillRest = async (p, amount, note) => {
+          // .first(): a finance.view holder (the Admin walk) also gets the ledger's own "Location"
+          // filter further down the page; the entry form's field comes first.
+          await p.locator("label", { hasText: /^Location/ }).locator("select").first().selectOption({ index: 1 });
+          await p.locator("label", { hasText: /^Amount/ }).locator("input").fill(String(amount));
+          await p.locator("label", { hasText: /^Description/ }).locator("input").fill(note);
+        };
+        const addBtn = (p) => p.getByRole("button", { name: /^Add$/ });
+        const waitHead = async (name) => {
+          for (let i = 0; i < 60; i++) {
+            const h = await rawCategories.findOne({ name });
+            if (h) return h;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+          return null;
+        };
+        const otherValue = (cat) => cat.locator("option").evaluateAll((os) =>
+          (os.find((o) => /^(others?|miscellaneous|misc)$/i.test((o.textContent ?? "").trim())) ?? { value: "" }).value);
+
+        // Operations, with the seeded "Other" head present.
+        const opsName = `ZZ Ops Walk Head ${stamp}`;
+        const octx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const op = await signIn(octx, "ops@vidysea.com", PW);
+          const cat = await openForm(op);
+          const nameBox = op.getByLabel("Name of the new cost head");
+          const hiddenAtStart = (await nameBox.count()) === 0;
+          const ov = await otherValue(cat);
+          if (ov) await cat.selectOption(ov);
+          const shown = await nameBox.waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+          const hint = shown ? await op.locator("[data-new-head-hint]").innerText() : "";
+          ok("Q-1006a UI (Operations): no head-name box until Others is chosen in the dropdown; choosing it reveals the box and a 'will be reviewed' hint",
+            hiddenAtStart && !!ov && shown && /not approved/i.test(hint) && /finance approver will review/i.test(hint),
+            `hiddenAtStart=${hiddenAtStart} other=${!!ov} shown=${shown} hint=${JSON.stringify(hint)}`);
+          if (shown) {
+            await nameBox.fill("Others");
+            const refusedHint = await op.locator("[data-new-head-hint]").innerText();
+            await fillRest(op, 321, `Q-1006a ops walk ${stamp}`);
+            const disabledOnOthers = await addBtn(op).isDisabled();
+            ok("Q-1006a UI (Operations): typing 'Others' as the name is refused on the form, in the server's words, and Add stays disabled",
+              /not a label/i.test(refusedHint) && disabledOnOthers, `hint=${JSON.stringify(refusedHint)} disabled=${disabledOnOthers}`);
+            await nameBox.fill(opsName);
+            await addBtn(op).click();
+            const h = await waitHead(opsName);
+            const hr = h ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: h._id }) : null;
+            ok("Q-1006a UI (Operations): Add creates the head under exactly the typed label, NOT approved, with its head-approval request",
+              h?.approval_status === "Pending" && hr?.payload?.kind === "head-approval" && hr?.payload?.name === opsName,
+              `head=${h?.name ?? "none"} flag=${h?.approval_status} req=${hr?.payload?.kind}`);
+          }
+        } finally {
+          try { await octx.close(); } catch {}
+        }
+
+        // The no-Other deployment (reconcile-workbook's list can lack one): the PICKER offers the route.
+        const seededOther = await rawCategories.findOne({ name: { $regex: "^(others?|miscellaneous|misc)$", $options: "i" } });
+        const parkedName = `ZZ Parked Other ${stamp}`;
+        if (seededOther) await rawCategories.updateOne({ _id: seededOther._id }, { $set: { name: parkedName } });
+        const sentName = `ZZ Sentinel Head ${stamp}`;
+        const sctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const sp = await signIn(sctx, "ops@vidysea.com", PW);
+          const cat = await openForm(sp);
+          const labels = await cat.locator("option").allTextContents();
+          const offered = labels.some((t) => t.trim() === "Others (add a new head)");
+          const nameBox = sp.getByLabel("Name of the new cost head");
+          const hiddenAtStart = (await nameBox.count()) === 0;
+          ok("Q-1006a UI (no Other head): the dropdown itself offers 'Others (add a new head)', and there is NO free-text head box until it is chosen",
+            !!seededOther && !labels.some((t) => /^(others?|miscellaneous|misc)$/i.test(t.trim())) && offered && hiddenAtStart,
+            `parkedOther=${!!seededOther} offered=${offered} hiddenAtStart=${hiddenAtStart}`);
+          if (offered) {
+            await cat.selectOption({ label: "Others (add a new head)" });
+            const shown = await nameBox.waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+            await fillRest(sp, 322, `Q-1006a sentinel walk ${stamp}`);
+            const disabledEmpty = await addBtn(sp).isDisabled();
+            ok("Q-1006a UI (no Other head): choosing it reveals the name box with its hint, and Add stays disabled until a name is typed",
+              shown && (await sp.locator("[data-new-head-hint]").count()) === 1 && disabledEmpty,
+              `shown=${shown} disabledEmpty=${disabledEmpty}`);
+            if (shown) {
+              await nameBox.fill(sentName);
+              // Senior review: the server overwrites `category` whenever a name is given, so a leaked
+              // sentinel would be silently repaired there. Read what the BROWSER actually sends.
+              const sentBodies = [];
+              sp.on("request", (r) => { if (r.method() === "POST" && /\/api\/costs(\?|$)/.test(r.url())) sentBodies.push(r.postData() ?? ""); });
+              await addBtn(sp).click();
+              const h = await waitHead(sentName);
+              const parked = h ? await rawApprovals.findOne({ action: "cost.post", "payload.category": { $in: [String(h._id), h._id] } }) : null;
+              const leaked = sentBodies.filter((b) => b.includes("__new_head__")).length + (sentBodies.length ? 0 : 1);
+              ok("Q-1006a UI (no Other head): Add creates the head (not approved) and files the cost under IT - the sentinel never reaches the server",
+                h?.approval_status === "Pending" && !!parked && leaked === 0,
+                `head=${h?.name ?? "none"} flag=${h?.approval_status} costFiledUnderIt=${!!parked} sentinelRows=${leaked}`);
+            }
+          }
+        } finally {
+          try { await sctx.close(); } catch {}
+          if (seededOther) await rawCategories.updateOne({ _id: seededOther._id }, { $set: { name: seededOther.name } });
+        }
+
+        // Admin: the same route, the truthful hint for an Admin, and the head is made approved.
+        const admName = `ZZ Admin Walk Head ${stamp}`;
+        const actx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const ap = await signIn(actx, "admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+          const cat = await openForm(ap);
+          const nameBox = ap.getByLabel("Name of the new cost head");
+          const hiddenAtStart = (await nameBox.count()) === 0;
+          const ov = await otherValue(cat);
+          if (ov) await cat.selectOption(ov);
+          const shown = await nameBox.waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+          const hint = shown ? await ap.locator("[data-new-head-hint]").innerText() : "";
+          ok("Q-1006a UI (Admin): the same Others route, and the hint says an Admin's head is made straight away (not 'will be reviewed')",
+            hiddenAtStart && shown && /made straight away/i.test(hint) && !/not approved/i.test(hint),
+            `hiddenAtStart=${hiddenAtStart} shown=${shown} hint=${JSON.stringify(hint)}`);
+          if (shown) {
+            await nameBox.fill(admName);
+            await fillRest(ap, 323, `Q-1006a admin walk ${stamp}`);
+            await addBtn(ap).click();
+            const h = await waitHead(admName);
+            const hr = h ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: h._id }) : null;
+            ok("Q-1006a UI (Admin): Add creates the head approved (no flag) and raises no head-approval request",
+              !!h && !h.approval_status && !hr, `head=${h?.name ?? "none"} flag=${h?.approval_status} req=${!!hr}`);
+          }
+        } finally {
+          try { await actx.close(); } catch {}
+        }
       }
 
       // ---- QA-2518: "No cost head matches" was unreachable in the only case that needs it ----

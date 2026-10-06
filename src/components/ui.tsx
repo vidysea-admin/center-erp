@@ -6,6 +6,8 @@ import { IconTrendDown, IconTrendUp } from "@/components/icons";
 import { sourceLink } from "@/lib/client";
 import { plain } from "@/lib/user-copy";
 import { BATCH_STATUS_LABEL, SIGNOFF_PENDING_LABEL, batchStatusLabel } from "@/lib/candidate-journey";
+import { OTHER_HEAD_RE, costHeadNameProblem } from "@/lib/validate";
+import { useSession } from "next-auth/react";
 
 // 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
 // every drill-down header carries this. Browser-back when there is history (keeps scroll
@@ -297,8 +299,14 @@ export function Field({ label, children, required }: { label: string; children: 
 // row QA-2482 keys on; an input+datalist carries only strings and would have to resolve a typed
 // label back to an id - which breaks the moment two subheads share a name under different heads,
 // and a Head -> Subhead taxonomy is a machine for producing exactly that.
-export function CostHeadPicker({ cats, value, onChange, required }: {
-  cats: any[]; value: unknown; onChange: (id: string) => void; required?: boolean;
+//
+// Q-1006a (Umesh, 2026-10-06): *"drop down k sath new category add krenge tho vo others k though add
+// hogi"*. A new head is reached THROUGH THE DROPDOWN, by choosing Others - never by typing beside it.
+// Where the head list has a real Other head that row already does this (QA-2482); where it has none,
+// `allowNew` appends an "Others (add a new head)" choice so the route exists in every deployment.
+// It is a sentinel, not a head: `costHeadPayload` strips it before anything is posted.
+export function CostHeadPicker({ cats, value, onChange, required, allowNew }: {
+  cats: any[]; value: unknown; onChange: (id: string) => void; required?: boolean; allowNew?: boolean;
 }) {
   const [q, setQ] = useState("");
   const all = cats ?? [];
@@ -343,9 +351,10 @@ export function CostHeadPicker({ cats, value, onChange, required }: {
       <select className={inputCls} value={String(value ?? "")} onChange={(e) => onChange(e.target.value)} required={required}>
         <option value="">Select...</option>
         <CostHeadOptions cats={shown} />
+        {allowNew && !hasOtherCostHead(all) && <option value={NEW_COST_HEAD}>Others (add a new head)</option>}
       </select>
       {term && matchCount === 0 && (
-        <p className="mt-1 text-xs text-amber-700">No cost head matches &quot;{q}&quot;. Clear the search, or name the head you need below.</p>
+        <p className="mt-1 text-xs text-amber-700">No cost head matches &quot;{q}&quot;. Clear the search, or choose Others to add a new head.</p>
       )}
     </>
   );
@@ -361,7 +370,7 @@ export function CostHeadPicker({ cats, value, onChange, required }: {
 // nhi hai"). BOTH vocabularies are recognised because this project's two seed scripts disagree:
 // scripts/seed.mjs seeds "Other", scripts/reconcile-workbook.mjs seeds "Miscellaneous" (CH10) and
 // wipes the other list first. A deployment can genuinely have either.
-export const OTHER_HEAD_RE = /^(others?|miscellaneous|misc)$/i;
+export { OTHER_HEAD_RE }; // Q-1006a: defined in lib/validate.ts so the server shares it
 
 export function hasOtherCostHead(cats: any[]): boolean {
   return (cats ?? []).some((c: any) => OTHER_HEAD_RE.test(String(c?.name ?? "").trim()));
@@ -372,12 +381,44 @@ export function isOtherCostHead(cats: any[], id: unknown): boolean {
   return !!picked && OTHER_HEAD_RE.test(String(picked.name ?? "").trim());
 }
 
-// The caller asks THIS, not `isOtherCostHead`, so the naming box has somewhere to live when a
-// deployment has no Other head at all. Hiding it in that case would make naming a new head
-// impossible and would do it SILENTLY - the failure would look like a tidy form. Failing back to
-// today's always-visible behaviour is the wrong-but-loud direction.
+// The caller asks THIS, not `isOtherCostHead`. QA-2482 made the box fall back to ALWAYS visible
+// when a deployment had no Other head, so that naming a head never became silently impossible.
+// Q-1006a replaces that fallback with the route Umesh asked for: with no Other head the picker
+// offers "Others (add a new head)" (NEW_COST_HEAD), so the box is reachable in every deployment
+// and appears only when somebody has chosen to add a head.
+export const NEW_COST_HEAD = "__new_head__";
 export function showNewHeadBox(cats: any[], id: unknown): boolean {
-  return !hasOtherCostHead(cats) || isOtherCostHead(cats, id);
+  return String(id ?? "") === NEW_COST_HEAD || isOtherCostHead(cats, id);
+}
+
+// Whether a cost form has a head to post: an existing head, or a name to create one from. Choosing
+// "Others (add a new head)" with no name is NOT ready - there is nothing to file the cost under.
+export function costHeadReady(form: { category?: unknown; new_subhead?: unknown }): boolean {
+  const name = String(form.new_subhead ?? "").trim();
+  if (name) return !costHeadNameProblem(name);
+  return !!form.category && String(form.category) !== NEW_COST_HEAD;
+}
+
+// The sentinel never leaves the browser: an "Others (add a new head)" choice posts no category, only
+// the name, which is exactly what the server's naming path has always taken.
+export function costHeadPayload<T extends Record<string, any>>(form: T): T {
+  return String(form.category ?? "") === NEW_COST_HEAD ? { ...form, category: undefined } : form;
+}
+
+// The inline sentence under the naming box. What happens to a typed name depends on WHO types it
+// (an Admin's head is made approved; anybody else's is made at once, marked not approved, and goes to
+// a finance approver), so it says the true thing for the reader, plus any problem with the name.
+export function NewCostHeadHint({ name }: { name?: unknown }) {
+  const { data: session } = useSession();
+  const isAdmin = (session?.user as any)?.role === "Admin";
+  const problem = costHeadNameProblem(name);
+  return (
+    <p className={`mt-1 text-xs ${problem ? "text-red-700" : "text-gray-500"}`} data-new-head-hint>
+      {problem ?? (isAdmin
+        ? "You can create heads, so this one is made straight away under the name you type."
+        : "This head is added now under the name you type, marked not approved; a finance approver will review it. You can use it straight away.")}
+    </p>
+  );
 }
 
 // QA-1977 (Umesh, 2026-10-06): a head somebody named while entering a cost exists at once but is

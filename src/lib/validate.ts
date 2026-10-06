@@ -416,3 +416,33 @@ export function exifGpsFromImage(bytes: Uint8Array): { lat: number; lng: number 
     return null;
   }
 }
+
+// ---- Cost head names (Q-1006a, Umesh 2026-10-06) ----
+// *"drop down k sath new category add krenge tho vo others k though add hogi so that we have proper
+// labels"*. A new head is named through "Others" on the cost form, and the name typed there BECOMES
+// the head's label in every picker and every report. One rule, here, so the form warns with the same
+// words the API refuses with (this file's QA-141 precedent).
+//
+// "Other" is recognised under both vocabularies this project's seeds use (seed.mjs "Other",
+// reconcile-workbook.mjs "Miscellaneous"). Moved here from components/ui.tsx, which re-exports it, so
+// the server can apply the same test without importing a client component.
+export const OTHER_HEAD_RE = /^(others?|miscellaneous|misc)$/i;
+export const COST_HEAD_NAME_MIN = 3;
+export const COST_HEAD_NAME_MAX = 80;
+
+// Whitespace collapsed and trimmed - "Assessor  travel " and "Assessor travel" are one label.
+export function normalizeCostHeadName(v: unknown): string {
+  return String(v ?? "").replace(/\s+/g, " ").trim();
+}
+
+// null = acceptable. Refuses the one name that defeats the point (a new head called "Others" is a
+// second unlabelled bucket, which is what this exists to stop) and names too short or long to be a
+// label. Applied only to heads named FROM THE COST FORM; Admin master-list creation is untouched.
+export function costHeadNameProblem(v: unknown): string | null {
+  const name = normalizeCostHeadName(v);
+  if (!name) return null;
+  if (OTHER_HEAD_RE.test(name)) return "Name the new head for what the cost actually was - \"Others\" is not a label.";
+  if (name.length < COST_HEAD_NAME_MIN) return `A new head's name needs at least ${COST_HEAD_NAME_MIN} characters.`;
+  if (name.length > COST_HEAD_NAME_MAX) return `A new head's name can be at most ${COST_HEAD_NAME_MAX} characters.`;
+  return null;
+}

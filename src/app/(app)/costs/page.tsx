@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
 
@@ -99,7 +99,7 @@ function CostsInner() {
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
         await api(`/api/costs/${editId}`, { method: "PATCH", json });
       } else {
-        const res = await api("/api/costs", { method: "POST", json: { ...form, location: form.location || undefined, trainer: form.trainer || undefined } });
+        const res = await api("/api/costs", { method: "POST", json: { ...costHeadPayload(form), location: form.location || undefined, trainer: form.trainer || undefined } });
         if (res.queued) setNotice("Sent to the Admin for approval — it will leave My submissions once decided.");
       }
       setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
@@ -196,7 +196,7 @@ function CostsInner() {
                 </select>
               </Field>
               <Field label="Category" required>
-                <CostHeadPicker cats={cats} value={form.category} onChange={(category) => {
+                <CostHeadPicker cats={cats} value={form.category} allowNew={!editId} onChange={(category) => {
                   // QA-2482: a hidden field that still posts is worse than a visible one nobody
                   // wanted. Moving off Other hides the naming box, so whatever was typed in it must
                   // go too - otherwise the next Add silently creates a cost head the person can no
@@ -254,7 +254,7 @@ function CostsInner() {
                   immediately beside the primary Save, while an ordinary frequent action was stranded
                   at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
               <div className="flex flex-wrap items-end gap-2 md:col-span-6">
-                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
+                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && canApproveCosts && (
                   <span className="flex flex-wrap items-end gap-2 md:ml-auto">
@@ -274,10 +274,11 @@ function CostsInner() {
                 *"सिस्टम पूरा बंद हो जाएगा"* is about people giving up when the head they need is not
                 offered, and the usual workaround is to file it under something close and wrong,
                 which is worse than not filing it. Naming one parks the whole entry for review. */}
-            {showNewHeadBox(cats, form.category) && (<>
-            <Field label="Cost head not in the list? Name the one you need">
-              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder={postOnly ? "e.g. Assessor travel — added now, marked not approved until an Admin approves it" : "e.g. Assessor travel — you can create heads, so this one is made straight away"}
+            {!editId && showNewHeadBox(cats, form.category) && (<>
+            <Field label="Name of the new cost head">
+              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder="e.g. Assessor travel" aria-label="Name of the new cost head"
                 onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
+              <NewCostHeadHint name={form.new_subhead} />
             </Field>
             {/* QA-1979: the replay has always accepted `new_head_parent` - the checker expected dead
                 code and found it working - so the two-level taxonomy was UNWIRED rather than absent.

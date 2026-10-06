@@ -8,6 +8,7 @@ import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, set
 import { audit } from "@/lib/audit";
 import { coerceExtras } from "@/app/api/master-lists/[list]/route";
 import { Types } from "mongoose";
+import { normalizeCostHeadName, costHeadNameProblem } from "@/lib/validate";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -94,7 +95,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // a QUEUE, not a refusal, and the WHOLE entry parks: nothing reaches the ledger until somebody has
   // decided where it belongs (Umesh, D8). `category` is therefore optional when `new_subhead` is
   // given, and Rule 37 is checked on the replay against whichever head is finally chosen.
-  const proposed = String(body.new_subhead ?? "").trim();
+  // Q-1006a (Umesh, 2026-10-06): the typed name BECOMES the head's label everywhere, so it is
+  // normalised (one label, not three spellings of it) and must be a label - not "Others" again, not
+  // two letters. Same rule and words as the form (lib/validate.ts). Applies to an Admin naming a head
+  // here as much as to anyone; Admin master-list creation does not pass through this route.
+  const proposed = normalizeCostHeadName(body.new_subhead);
+  const nameProblem = costHeadNameProblem(proposed);
+  if (proposed && nameProblem) throw new HttpError(400, nameProblem);
   // Umesh, 2026-09-07: *"head jo 2-3 ceo ne bnaaye vo rakhte hai otherwise baaki others se new head
   // bhi tho create krr skte hai naa, team kr legi"*.
   //

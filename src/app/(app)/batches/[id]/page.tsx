@@ -14,7 +14,7 @@ import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadabl
 import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
@@ -6022,7 +6022,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
         setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); load();
         return;
       }
-      await api("/api/costs", { method: "POST", json: { ...form, batch: batchId, location: batch.location?._id ?? batch.location } });
+      await api("/api/costs", { method: "POST", json: { ...costHeadPayload(form), batch: batchId, location: batch.location?._id ?? batch.location } });
       setForm({ entry_date: toInputDate(new Date()) }); load();
     } catch (e: any) { setError(e.message); throw e; }
   }
@@ -6064,7 +6064,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
       <div className="mt-3 grid gap-3 md:grid-cols-5">
         <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
         <Field label="Category" required>
-          <CostHeadPicker cats={cats} value={form.category} onChange={(category) => {
+          <CostHeadPicker cats={cats} value={form.category} allowNew={!editId} onChange={(category) => {
             // QA-2482: same trap as /costs - hiding the naming box must also empty it, or the next
             // Add Cost creates a head nobody can see they asked for. ARCHITECTURE section 3: one
             // concept, two screens; the fix belongs on both or it belongs on neither.
@@ -6092,10 +6092,11 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             hardcoded three-field list while its own comment claimed it bound the property. So the
             batch form shipped without the one field this unit added LAST, which is exactly the
             case a real parity check exists for. */}
-        {showNewHeadBox(cats, form.category) && (<>
-        <Field label="Cost head not in the list? Name the one you need">
-          <input className={inputCls} value={form.new_subhead ?? ""} placeholder="leave blank if you picked a category above"
+        {!editId && showNewHeadBox(cats, form.category) && (<>
+        <Field label="Name of the new cost head">
+          <input className={inputCls} value={form.new_subhead ?? ""} placeholder="e.g. Assessor travel" aria-label="Name of the new cost head"
             onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
+          <NewCostHeadHint name={form.new_subhead} />
         </Field>
         {/* QA-1979: the replay has always accepted `new_head_parent` - the checker expected dead
             code and found it working - so the two-level taxonomy was UNWIRED rather than absent.
@@ -6119,7 +6120,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             two buttons today so it has not overflowed YET, which is the reason to fix it in the same
             change rather than wait for the third one to be added. */}
         <div className="flex flex-wrap items-end gap-2 md:col-span-5">
-          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={(!form.category && !String(form.new_subhead ?? "").trim()) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!costHeadReady(form) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
           {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
         </div>
       </div>
