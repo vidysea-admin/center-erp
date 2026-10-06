@@ -512,7 +512,7 @@ export function FilterPills({ options, active, onChange }: {
 // whole point of a total is that it covers what you are looking at, and "Showing 1–25 of 57" means
 // the page is a window, not the answer. Filter or switch tab and it recomputes, because `view` is
 // what the table itself is filtering by.
-export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode, isSelected }: {
+export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClick, empty, cardTitle, pageSize = 25, defaultSort, searchable, initialSearch, resizable = true, loading, storageKey, totals, freeze, pickerMode, isSelected, exportAction }: {
   columns: {
     // QA-763: `render` now also gets WHERE the row sits in the list the reader is actually
     // looking at. A column that draws a repeated value as a ditto mark ("〃") has to decide that
@@ -586,6 +586,13 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   // "selected" (its own checkbox/Set — DataTable has no selection concept of its own). Optional
   // and additive; every caller that doesn't pass it renders exactly as before.
   isSelected?: (row: T) => boolean;
+  // R8 (QA-2845): a "Download Excel" button in the toolbar for a table whose caller can export what it
+  // shows. DataTable owns the column picker, the search and the funnel filters, so it is the only place
+  // that knows which columns are visible and which rows survive the filters - the caller gets exactly
+  // that, at click time: the visible LABELLED column keys in display order, and EVERY row that matches
+  // the current search and filters (not just the page on screen). Optional and additive: a table that
+  // passes nothing renders exactly as before.
+  exportAction?: { label?: string; busy?: boolean; onClick: (v: { visibleKeys: string[]; rows: T[] }) => void };
 }) {
   type Col = (typeof columns)[0];
   const [page, setPage] = useState(1);
@@ -832,6 +839,7 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
   const activeFilters = Object.entries(filters).filter(([, v]) => v.length);
   const showSearch = searchable ?? rows.length > 10;
   const hiddenCount = pickable.length - pickable.filter(isColVisible).length;
+  const userHiddenCount = pickable.filter((c) => !c.hidden && colChoice[c.key] === false).length;
   // The toolbar always renders now — the Columns picker lives on every table by design.
   const toolbar = (
     <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -848,8 +856,28 @@ export function DataTable<T extends { _id?: string }>({ columns, rows, onRowClic
       {(query || activeFilters.length > 0) && (
         <button className="text-xs font-medium text-blue-700 hover:underline" onClick={clearAll}>Clear</button>
       )}
+      {/* R1b (QA-2846, sir: "column 3 hidden kyun aa raha hai?"): a column a person hid used to leave only
+          a small "Columns (N hidden)" label behind, and the choice lives in THIS browser's storage - so
+          on a screen shared in a meeting a column simply was not there and nothing said why. The chip
+          says it in words, next to the table, and Reset is one click. It counts columns the person hid
+          from the DEFAULT view; a column that is optional (hidden by default) is not "hidden by you". */}
+      {userHiddenCount > 0 && (
+        <span data-dt-hidden-chip className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+          {userHiddenCount} column{userHiddenCount === 1 ? "" : "s"} hidden
+          <span aria-hidden="true">·</span>
+          <button type="button" data-dt-hidden-reset className="font-semibold underline hover:text-amber-900" onClick={resetCols}>Reset</button>
+        </span>
+      )}
       <span className="ml-auto flex items-center gap-2">
         {view.length !== rows.length && <span className="text-xs text-gray-400">{view.length} of {rows.length}</span>}
+        {exportAction && (
+          <button type="button" data-dt-export disabled={exportAction.busy || !view.length}
+            title="Download the columns you can see, for every row that matches the current search and filters"
+            className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => exportAction.onClick({ visibleKeys: visCols.filter((c) => c.label).map((c) => c.key), rows: view })}>
+            {exportAction.busy ? "Preparing…" : (exportAction.label ?? "Download Excel")}
+          </button>
+        )}
         <button data-dt-pop type="button" title="Choose which columns are visible"
           className={`rounded-lg border px-2.5 py-1 text-xs font-medium ${hiddenCount ? "border-blue-300 bg-blue-50 text-blue-700" : "border-gray-200 text-gray-500 hover:bg-gray-50"}`}
           onClick={(e) => {

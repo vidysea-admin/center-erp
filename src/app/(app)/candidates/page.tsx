@@ -11,6 +11,7 @@ import { Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills,
 import { useLocationCtx, usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
 import { BASE_PATH } from "@/lib/base-path";
+import { CANDIDATE_COLUMNS, CANDIDATE_COLUMN_KEYS, eligibilityTextOf } from "@/lib/candidate-columns";
 import { bulkSmsCsv, smsLink, unsendableCount, waLink } from "@/lib/messaging";
 
 // -115 (QA-221): a RETIRED programme (active === false) leaves the pickers where something new is
@@ -94,6 +95,7 @@ function CandidatesInner() {
   const [bucket, setBucket] = useState<"Fresh" | "Enrolled" | "Archived">(initialBucket);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
   const [shareLink, setShareLink] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<"" | "add" | "edit" | "import" | "assign" | "health" | "reglink">("");
@@ -274,6 +276,31 @@ function CandidatesInner() {
       await api(`/api/candidates/${c._id}`, { method: "PATCH", json: { sidh_status: "Link Sent", sidh_link_sent_at: new Date().toISOString() } });
       load();
     } catch (e: any) { setError(e.message); }
+  }
+
+  // R8 (QA-2845, Manish: "naam, number, phone, email ... download"; Umesh: "jo jo column us table mai
+  // selected ho vo download ho jaayee"). DataTable hands over the columns it is SHOWING, in order, and
+  // every row that survives its search and filters - not just the page on screen. The ids are a request:
+  // the server re-applies the centre scope and refuses anything outside the shared column list
+  // (lib/candidate-columns.ts), so this button cannot widen what the caller may see.
+  async function downloadTable(v: { visibleKeys: string[]; rows: any[] }) {
+    const cols = v.visibleKeys.filter((k) => CANDIDATE_COLUMN_KEYS.includes(k));
+    if (!cols.length) { setError("Show at least one column to download."); return; }
+    setExporting(true);
+    try {
+      const res = await fetch(`${BASE_PATH}/api/candidates/export`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cols, ids: v.rows.map((r: any) => r._id), location: fLoc || undefined }),
+      });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Download failed (${res.status})`); }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = `candidates-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      setError("");
+    } catch (e: any) { setError(e.message); }
+    finally { setExporting(false); }
   }
 
   // Bulk SMS for the filtered list — the gateway-ready CSV, since sending 60 links by hand is
@@ -577,6 +604,11 @@ function CandidatesInner() {
         initialSearch={sp.get("q") ?? ""}
         freeze={2}
         isSelected={(r: any) => selected.has(r._id)}
+        // Stable identity for the saved column choice: it used to be derived from the column list, so
+        // adding the optional columns below would have silently dropped everyone's saved picks.
+        storageKey="candidates"
+        // Archived rows never leave in a file (same rule as the SIDH export), so no button there.
+        exportAction={bucket === "Archived" ? undefined : { busy: exporting, onClick: downloadTable }}
         columns={[
           { key: "_sel", label: "", mobile: false, render: (r: any) => (
               // QA-945 (Umesh): "select krne mai aana chaiye ki phle status update kro". The server
@@ -653,7 +685,7 @@ function CandidatesInner() {
           },
           {
             key: "eligibility", label: "Eligible",
-            filterText: (r: any) => r.eligibility ? (r.eligibility.eligible ? (r.eligibility.unknown?.length ? "Unverified" : "Eligible") : "Not eligible") : "",
+            filterText: eligibilityTextOf,
             // -134 (QA-283, Umesh 19/08): "jinke training ongoing hai, wahan par unverified likha
             // hai … lekin agar training ongoing hai toh iska bhi toh kuch relevance hai?" Eligibility
             // is a question asked BEFORE somebody joins — is this person allowed on a batch. Once
@@ -713,6 +745,14 @@ function CandidatesInner() {
           ...(role === "Enrollment" ? [] : [
             { key: "source", label: "Source", mobile: false, filterable: true, filterText: (r: any) => r.source ?? "Entered in ERP", render: (r: any) => <SourceCell source={r.source} /> },
           ]),
+          // R8: the optional columns - offered in the Columns picker, hidden until ticked, and built from
+          // the SAME list the Excel door reads (lib/candidate-columns.ts), so the table can never offer a
+          // column the file cannot carry or the other way round. No government number is on that list.
+          ...CANDIDATE_COLUMNS.filter((c) => !c.defaultVisible).map((c) => ({
+            key: c.key, label: c.label, mobile: false, hidden: true, sortable: true,
+            sortValue: (r: any) => c.value(r), filterText: (r: any) => c.value(r),
+            render: (r: any) => c.value(r) || <span className="text-gray-400">—</span>,
+          })),
           {
             // 2026-08-24 (QA-904) — THE ACTUAL COMPLAINT. Umesh: "abhi candidate details edit and
             // delete nhi hoo paa rhi hai naa". Both verbs existed: the row has opened the edit drawer

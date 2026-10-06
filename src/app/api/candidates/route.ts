@@ -1,10 +1,9 @@
 import { collectionRoutes } from "@/lib/crud";
-import { BatchMember, Candidate, CandidateResult, Location, Program } from "@/models";
+import { Candidate, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
-import { candidateEligibility } from "@/lib/rules";
-import { getDefaults } from "@/lib/defaults";
+import { enrichCandidateRows } from "@/lib/rules";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { sendSms } from "@/lib/sms";
 
@@ -191,28 +190,9 @@ export const { GET, POST } = collectionRoutes({
   // effectively HAS that batch's programme even when the imported row never carried one —
   // attach the active membership (at most one: partial-unique index on {candidate, left_on:null})
   // so the list can show the real programme instead of a false "No programme".
+  // R8: the body moved to rules.ts `enrichCandidateRows` so the Excel door (api/candidates/export)
+  // builds the row the screen shows with the SAME function, not a second copy of it.
   async mapItems(items) {
-    const defaults = await getDefaults();
-    const members = await BatchMember.find({ candidate: { $in: items.map((c) => c._id) }, left_on: null })
-      .select("candidate batch")
-      .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
-      .lean();
-    const byCand = new Map(members.map((m: any) => [String(m.candidate), m.batch]));
-    // QA-069 (S1): the Enrolled journey read "Result Awaited" for people whose result WAS
-    // recorded — the journey trusted lifecycle_status, which historical imports never
-    // caught up. The recorded assessment is the truth; it rides on every row as
-    // latest_result and the journey derives from it first.
-    const results = await CandidateResult.find({ candidate: { $in: items.map((c) => c._id) }, result: { $ne: "Pending" } })
-      .select("candidate result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
-    const resByCand = new Map<string, string>();
-    for (const r of results) if (!resByCand.has(String(r.candidate))) resByCand.set(String(r.candidate), r.result);
-    return items.map((c) => {
-      const b: any = byCand.get(String(c._id));
-      return {
-        ...c, eligibility: candidateEligibility(c, defaults),
-        active_batch: b ? { code: b.code, status: b.status, program: b.program } : null,
-        latest_result: resByCand.get(String(c._id)) ?? null,
-      };
-    });
+    return enrichCandidateRows(items);
   },
 });

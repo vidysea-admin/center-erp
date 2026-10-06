@@ -329,9 +329,11 @@ function LocationsInner() {
           },
           { key: "source", label: "Source", mobile: false, filterText: (r: any) => r.loc.external_id ? "Vidysea-RPL (OneDrive)" : "Entered in ERP", render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <SourceCell source={r.loc.external_id ? "AVPL Location_Master" : ""} /> : <span className="text-gray-300">〃</span> },
           // ERP-internal columns — picker-selectable, hidden by default.
+          // R1c (QA-2847, sir: "column 3 hidden kyun aa raha hai?"): Approval (centre) is NOT one of them any more -
+          // whether a centre is approved is the first thing this screen is read for, so it opens visible.
           { key: "code", label: "Code", mobile: false, hidden: true, sortable: true, sortValue: (r: any) => r.loc.code, filterText: (r: any) => r.loc.code, render: (r: any, ctx: any) => rep(ctx, r, r.loc.code) },
           { key: "city", label: "City", mobile: false, hidden: true, sortValue: (r: any) => r.loc.city, filterText: (r: any) => r.loc.city, render: (r: any, ctx: any) => rep(ctx, r, r.loc.city) },
-          { key: "approval_status", label: "Approval (centre)", hidden: true, sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
+          { key: "approval_status", label: "Approval (centre)", sortable: true, sortValue: (r: any) => r.loc.approval_status, filterText: (r: any) => r.loc.approval_status, render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <Chip value={r.loc.approval_status} /> : <span className="text-gray-300">〃</span> },
           { key: "operational_status", label: "Operational", hidden: true, sortValue: (r: any) => r.loc.operational_status, filterText: (r: any) => r.loc.operational_status, render: (r: any, ctx: any) => firstOfCentre(ctx, r) ? <Chip value={r.loc.operational_status} /> : <span className="text-gray-300">〃</span> },
           {
             // QA-018 (-69): editing lives on the centre detail (Overview → Master fields) by

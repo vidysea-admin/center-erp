@@ -3302,6 +3302,36 @@ export function candidateEligibility(
   return { eligible: reasons.length === 0, reasons, unknown };
 }
 
+// The candidate row the Candidates SCREEN shows: eligibility computed on read (never stored - it
+// flips on its own as the cooldown lapses), the active batch attached so the list shows the real
+// programme, and the latest recorded assessment. It lived inline in api/candidates/route.ts as
+// `mapItems`; R8's Excel door (api/candidates/export) needs the very same shape, and a second copy
+// is how an export comes to disagree with the table it was downloaded from (ARCHITECTURE.md 1.4 -
+// the screen and its export read ONE function). Both doors now call this.
+export async function enrichCandidateRows(items: any[]): Promise<any[]> {
+  const defaults = await getDefaults();
+  const members = await BatchMember.find({ candidate: { $in: items.map((c) => c._id) }, left_on: null })
+    .select("candidate batch")
+    .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
+    .lean();
+  const byCand = new Map(members.map((m: any) => [String(m.candidate), m.batch]));
+  // QA-069 (S1): the Enrolled journey read "Result Awaited" for people whose result WAS recorded -
+  // the journey trusted lifecycle_status, which historical imports never caught up. The recorded
+  // assessment is the truth; it rides on every row as latest_result and the journey derives from it.
+  const results = await CandidateResult.find({ candidate: { $in: items.map((c) => c._id) }, result: { $ne: "Pending" } })
+    .select("candidate result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
+  const resByCand = new Map<string, string>();
+  for (const r of results) if (!resByCand.has(String(r.candidate))) resByCand.set(String(r.candidate), r.result);
+  return items.map((c) => {
+    const b: any = byCand.get(String(c._id));
+    return {
+      ...c, eligibility: candidateEligibility(c, defaults),
+      active_batch: b ? { code: b.code, status: b.status, program: b.program } : null,
+      latest_result: resByCand.get(String(c._id)) ?? null,
+    };
+  });
+}
+
 // ---------- Backward batch planner (2026-08-11 meeting) ----------
 // "Batch date अगर 20 अगस्त है, तो registration+enrollment 19 तक, mobilization उसके दो दिन
 // पहले, trainer एक दिन पहले trained, TOT done at least three days before" — each lead time

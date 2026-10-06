@@ -116,6 +116,11 @@ const SUITES = [
   // and the handlers that used to swallow their own failures. A browser suite, in its own file
   // because e2e-rendered-candidates.mjs was locked by another unit when this was written.
   "e2e-save-feedback.mjs",
+  // R8 + R1b + R1c (QA-2845/2846/2847, meeting 2026-10-06): the Candidates "Download Excel" door -
+  // exactly the table's visible columns, every matching row, never a government number, never another
+  // centre's candidates - plus the "N columns hidden · Reset" chip and the Locations Approval column.
+  // Its own file, with its own fixture and browser, like e2e-save-feedback.mjs above.
+  "e2e-candidate-export.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen
