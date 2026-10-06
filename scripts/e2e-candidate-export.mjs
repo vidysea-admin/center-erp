@@ -266,7 +266,7 @@ const setPick = async (page, label, on) => {
   const box = row.locator('input[type="checkbox"]');
   if ((await box.isChecked()) !== on) await box.click();
 };
-const headers = async (page) => (await page.locator("table thead th").allInnerTexts()).map((t) => t.replace(/[▲▼↕⏷]/g, "").trim()).filter(Boolean);
+const headers = async (page) => (await page.locator("table thead th").allTextContents()).map((t) => t.replace(/[▲▼↕⏷]/g, "").trim()).filter(Boolean);
 const settle = async (page, text) => {
   await page.locator("table tbody tr").first().waitFor();
   await page.waitForFunction((t) => document.body.innerText.includes(t), text, { timeout: 30000 }).catch(() => {});
