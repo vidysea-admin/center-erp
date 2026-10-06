@@ -552,7 +552,9 @@ await arm("S3 digest screen (Admin: Publish now)", async () => {
   await page.goto(`${BASE}/reports/daily?date=${PUBDAY}`, { waitUntil: "domcontentloaded" });
   await page.locator('[data-testid="digest-publish"]').waitFor();
   const before = (await digestRows(PUBDAY, recipients)).length;
-  await page.locator('[data-testid="digest-publish"]').click();
+  // the button is disabled until the figures for the chosen day have loaded; wait for the ENABLED inner button
+  // (clicking the wrapper span would land on a disabled button and do nothing)
+  await page.locator('[data-testid="digest-publish"] button:not([disabled])').click();
   await page.locator('[data-testid="digest-publish-result"]').waitFor();
   const res = await txt(page, "digest-publish-result");
   ok("S3: pressing Publish now shows the outcome in words (5 recipients attempted)", /5/.test(res) && /recipient/i.test(res), res);
