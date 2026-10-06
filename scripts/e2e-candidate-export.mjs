@@ -55,7 +55,7 @@ const GOV_PROBES = [AADHAAR, APAAR];
 // 30 candidates at A (more than one 25-row page of the table), 3 at B, 1 archived at A.
 const candsA = [];
 for (let i = 0; i < 30; i++) {
-  const body = { name: `CXA ${String(i).padStart(2, "0")} ${s}`, phone: phone("7" + String(i % 10)), location: locA._id, program: prog._id,
+  const body = { name: `CXA N${String(i).padStart(2, "0")}X ${s}`, phone: phone("7" + String(i % 10)), location: locA._id, program: prog._id,
     email: `cxa${i}.${s.toLowerCase()}@example.test`, gender: i % 2 ? "Female" : "Male", father_name: `Father ${i} ${s}`, district: "Jaipur" };
   if (i === 0) { body.aadhaar_no = AADHAAR; body.apaar_id = APAAR; }
   const r = await req(admin, "POST", "/api/candidates", body);
@@ -131,6 +131,14 @@ const missing = await post(admin, {});
 ok("C3: a body with no cols is a 400", missing.status === 400, String(missing.status));
 const badIds = await post(admin, { cols: ["name"], ids: ["not-an-id"] });
 ok("C3: a malformed id is a 400", badIds.status === 400 && !badIds.file, String(badIds.status));
+const protoCol = await post(admin, { cols: ["name", "__proto__"] });
+ok("C3: a __proto__ / wrong-case column is a 400", protoCol.status === 400 && !protoCol.file, String(protoCol.status));
+const caseCol = await post(admin, { cols: ["Name"] });
+ok("C3: a column key in the wrong case is a 400, not matched loosely", caseCol.status === 400 && !caseCol.file, String(caseCol.status));
+const badLoc = await post(admin, { cols: ["name"], location: { $ne: null } });
+ok("C3: a non-string location is a 400, not silently ignored", badLoc.status === 400 && !badLoc.file, String(badLoc.status));
+const badBody = await fetch(BASE + "/api/candidates/export", { method: "POST", headers: { "content-type": "application/json", cookie: admin }, body: "{not json" });
+ok("C3: an unparseable body is a 400 (readJson), not a 500", badBody.status === 400, String(badBody.status));
 const anon = await fetch(BASE + "/api/candidates/export?cols=name");
 ok("C3: no session answers 401", anon.status === 401, String(anon.status));
 const trRes = await post(trUser.cookie, { cols: ["name"] });
@@ -251,7 +259,7 @@ await arm("C2/C5/C1 candidates page", ui.page, async () => {
   const page = ui.page;
   // "CXA <stamp>": every token must hit, and only centre A's rows (30) carry "cxa" - centre B's three do not.
   await page.goto(`${BASE}/candidates?q=${encodeURIComponent("CXA " + s)}`, { waitUntil: "domcontentloaded" });
-  await settle(page, `CXA 00 ${s}`);
+  await settle(page, `CXA N00X ${s}`);
   const h0 = await headers(page);
   ok("C2: Email, Alt phone, Gender, Date of birth, Father's name, District, Education and SIDH candidate ID are NOT columns by default",
     ["Email", "Alt phone", "Gender", "Date of birth", "Father's name", "District", "Education", "SIDH candidate ID"].every((l) => !h0.includes(l)), h0.join(" | "));
@@ -284,11 +292,11 @@ await arm("C2/C5/C1 candidates page", ui.page, async () => {
 
   // Narrow with the table's own search: the file narrows with it.
   const search = page.getByPlaceholder("Search all columns…");
-  await search.fill(`CXA 07 ${s}`);
+  await search.fill(`CXA N07X ${s}`);
   await page.waitForTimeout(400);
   const [dl2] = await Promise.all([page.waitForEvent("download"), btn.click()]);
   const f2 = xlsxOf(readFileSync(await dl2.path()));
-  ok("C1: after searching the table down to one row, the file is that one row", f2.rows.length === 1 && f2.rows[0].includes(`CXA 07 ${s}`), JSON.stringify(f2.rows));
+  ok("C1: after searching the table down to one row, the file is that one row", f2.rows.length === 1 && f2.rows[0].includes(`CXA N07X ${s}`), JSON.stringify(f2.rows));
   await search.fill("");
 
   // ---- C5 on the same table ----
@@ -305,7 +313,7 @@ await arm("C2/C5/C1 candidates page", ui.page, async () => {
   ok("C5: two hidden columns read '2 columns hidden'", /2 columns hidden/.test((await chip.innerText()).replace(/\s+/g, " ")), await chip.allInnerTexts().then((t) => t.join("|")));
   await page.locator("[data-dt-hidden-reset]").click();
   await page.reload({ waitUntil: "domcontentloaded" });
-  await settle(page, `CXA 00 ${s}`);
+  await settle(page, `CXA N00X ${s}`);
   ok("C5: Reset persisted (no chip after a reload)", (await page.locator("[data-dt-hidden-chip]").count()) === 0);
   // Archived bucket: no download button (archived rows never leave in a file).
   await page.getByText(/Archived Candidates/).first().click();
@@ -355,7 +363,7 @@ await arm("persona Location (scoped) in the browser", ui.page, async () => {
   try {
     const page = lu.page;
     await page.goto(`${BASE}/candidates?q=${encodeURIComponent(s)}`, { waitUntil: "domcontentloaded" });
-    await settle(page, `CXA 00 ${s}`);
+    await settle(page, `CXA N00X ${s}`);
     const onScreen = await page.locator("table tbody").innerText();
     ok("C4 [persona Location]: the scoped user's table shows centre A only (no CXB row)", onScreen.includes("CXA") && !onScreen.includes("CXB"), onScreen.slice(0, 120));
     const [dl] = await Promise.all([page.waitForEvent("download"), page.locator("[data-dt-export]").first().click()]);
@@ -368,7 +376,7 @@ await arm("persona Operations in the browser", ui.page, async () => {
   try {
     const page = ou.page;
     await page.goto(`${BASE}/candidates?q=${encodeURIComponent(s)}`, { waitUntil: "domcontentloaded" });
-    await settle(page, `CXA 00 ${s}`);
+    await settle(page, `CXA N00X ${s}`);
     const [dl] = await Promise.all([page.waitForEvent("download"), page.locator("[data-dt-export]").first().click()]);
     const f = xlsxOf(readFileSync(await dl.path()));
     ok("C1 [persona Operations]: an unscoped user's file carries both centres (30 A + 3 B = 33)", f.rows.length === 33 && f.all.includes("CXB"), JSON.stringify({ n: f.rows.length }));

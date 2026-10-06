@@ -41,6 +41,7 @@ async function buildExport(user: SessionUser, input: ExportInput): Promise<NextR
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   // Same as export-sidh: an archived candidate never leaves in a file.
   filter.archived_at = null;
+  if (input.location !== undefined && input.location !== null && typeof input.location !== "string") throw new HttpError(400, "That location is not valid.");
   const loc = typeof input.location === "string" ? input.location.trim() : "";
   if (loc) {
     if (!isId(loc)) throw new HttpError(400, "That location is not valid.");
@@ -60,10 +61,12 @@ async function buildExport(user: SessionUser, input: ExportInput): Promise<NextR
   }
 
   const found = await Candidate.find(filter)
-    .sort({ createdAt: -1 }).limit(MAX_ROWS)
+    .sort({ createdAt: -1 }).limit(MAX_ROWS + 1)
     .populate("location", "name code")
     .populate("program", "name code")
     .lean<any[]>();
+  // Never a silently short file: more than the cap means the caller must narrow the table first.
+  if (found.length > MAX_ROWS) throw new HttpError(400, `Too many rows to download at once (more than ${MAX_ROWS}); narrow the table first.`);
   let rows = await enrichCandidateRows(found);
   if (order) {
     // Keep the screen's order: the file reads the way the table did.
