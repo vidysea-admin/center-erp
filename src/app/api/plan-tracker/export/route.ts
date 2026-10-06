@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
-import { planTrackerRows, trainerForLogin } from "@/lib/rules";
+import { planTrackerRows, planTrackerSummary, trainerForLogin } from "@/lib/rules";
 
 // QA-526 (-174): the planning table as an .xlsx. The report got one in -170 because Manish sir
 // asked; nobody asked for this one, and that is the reason to build it — Karunn sir keeps this
@@ -47,7 +47,7 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   // download said "TOT starts" while the screen said "Starts", and "Available & ready for TOT"
   // while the screen said "Ready for TOT". One column with two names depending on which surface
   // you looked at is precisely the defect QA-565 closed on the report; it was alive here too.
-  // Anything below that has no screen column (Scheme, TR ID, NSDC remarks, Mobilised count) is an
+  // Anything below that has no screen column (Scheme, TR ID, NSDC remarks) is an
   // extra the download carries on purpose, not a renaming.
   const flat = rows.map((r: any) => ({
     "SL#": r.sl,
@@ -69,7 +69,12 @@ export const GET = apiHandler(async (_req: NextRequest) => {
     "TOT result & certificate expected": d(r.tot_result_expected_on),
     "Trainer mapped on SIDH portal": d(r.trainer_mapped_sidh),
     "Mobilisation done for this batch": r.mobilization?.status ?? "",
-    "Mobilised count": r.mobilization?.count ?? 0,
+    // mtg-b1 (R3): Target / Mobilised / Gap are screen columns now, so they carry the screen's words.
+    // "Mobilised" is the column that used to be called "Mobilised count" here; same number, the one
+    // planTrackerRows already derives from the roster. Target and Gap come from the same rows too.
+    "Target": r.target ?? 0,
+    "Mobilised": r.mobilised ?? 0,
+    "Gap": r.gap ?? 0,
     // QA-765: the screen can OPEN this cell, so the file has to carry the same days or the two
     // answer his question differently - and the export is where a disagreement is found last.
     "Mobilised by day": (r.mobilization?.days ?? [])
@@ -87,9 +92,19 @@ export const GET = apiHandler(async (_req: NextRequest) => {
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
     { Note: "Every trainer column is read from the trainer record, not from the batch. A trainer running two batches shows the SAME dates on both rows because it is the same trainer, not two copies." },
     { Note: "\"Not needed\" means the trainer is already certified, so that step does not apply to this batch. It is not a blank waiting to be filled." },
-    { Note: "Mobilised count is counted from the batch roster each time this file is made. It is not stored anywhere." },
-    { Note: "\"Mobilised by day\" is the same roster, split by the day each candidate joined (IST). Its increments add up to Mobilised count - they are one query, not two." },
+    { Note: "Mobilised is counted from the batch roster each time this file is made. It is not stored anywhere." },
+    { Note: "\"Mobilised by day\" is the same roster, split by the day each candidate joined (IST). Its increments add up to Mobilised - they are one query, not two." },
+    { Note: "Target is the batch's planned seats. Gap is Target minus Mobilised, never below zero: a batch with more people than seats has no gap, and it does not cancel another batch's shortfall in the totals." },
   ]), "how to read this");
+  // mtg-b1 (R3): the same summary the Planning tab shows above its table, from the same function.
+  // It covers the batches that tab lists (Planning and Ready); the sheet above also carries the ones that have started.
+  const sm = planTrackerSummary(rows);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([
+    { Measure: "Batches (Planning and Ready)", "All planned": sm.total.batches, "Starting this week (IST)": sm.this_week.batches },
+    { Measure: "Target", "All planned": sm.total.target, "Starting this week (IST)": sm.this_week.target },
+    { Measure: "Mobilised", "All planned": sm.total.mobilised, "Starting this week (IST)": sm.this_week.mobilised },
+    { Measure: "Gap", "All planned": sm.total.gap, "Starting this week (IST)": sm.this_week.gap },
+  ]), "summary");
 
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
   return new NextResponse(buf, {

@@ -52,6 +52,7 @@ function BatchesInner() {
     sp.get("tab") === "Planning" || sp.get("tab") === "Preparation" ? "Planning" : "Batches",
   );
   const [track, setTrack] = useState<any[] | null>(null);
+  const [trackSummary, setTrackSummary] = useState<any>(null); // mtg-b1: computed by the API, never here
   // QA-642: this used to be an effect keyed on [tab] with `if (track) return`, and the only way to
   // ask for fresh rows was setTrack(null) - which changes state the effect does not depend on, so
   // React never re-ran it. The table went to its loading skeleton and stayed there until a tab
@@ -59,7 +60,7 @@ function BatchesInner() {
   // whose first save emptied the table it was editing. Refetching is now a FUNCTION anyone can
   // call; nothing signals "reload" by blanking state any more.
   const loadTrack = () => api("/api/plan-tracker")
-    .then((d) => setTrack(d.rows ?? []))
+    .then((d) => { setTrack(d.rows ?? []); setTrackSummary(d.summary ?? null); })
     .catch((e) => setError(String(e?.message ?? e)));
   useEffect(() => {
     if (tab !== "Planning" || track) return;
@@ -366,7 +367,7 @@ function BatchesInner() {
             planCopied={planCopied} copyPlan={copyPlan} open={planOpen} setOpen={setPlanOpen}
             onError={setError} onInfo={setInfo}
             onCreated={() => { setPlanOpen(false); loadTrack(); load(); }} />
-          <PlanningTable rows={track} onSaved={loadTrack} onError={setError} />
+          <PlanningTable rows={track} summary={trackSummary} onSaved={loadTrack} onError={setError} />
         </>
       )}
 
@@ -1161,7 +1162,7 @@ const PLAN_COLUMN_SOURCE: Record<string, string> = {
 
 // 2026-08-24 (QA-904): `role` left this signature when the delete gate stopped being a role test.
 // Removed rather than left dangling - a prop nothing reads is a question the next reader has to answer.
-function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved: () => void; onError: (m: string) => void }) {
+function PlanningTable({ rows, summary, onSaved, onError }: { rows: any[] | null; summary: any; onSaved: () => void; onError: (m: string) => void }) {
   const [editing, setEditing] = useState<{ id: string; field: string } | null>(null);
   const [value, setValue] = useState("");
   // QA-765: which batches have their roz-basis mobilisation opened. Per batch id, not per row index -
@@ -1364,6 +1365,15 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
           </div>
         );
       } },
+    // mtg-b1 (R3, Karunn sir 2026-10-06: "all reporting from the system, no Excel"). Target is the batch's
+    // own planned seats, Mobilised is the live roster count, Gap is their difference clamped at zero -
+    // all three arrive on the row from planTrackerRows, so this screen subtracts nothing itself.
+    { key: "target", label: "Target", minWidth: 90, sortable: true, sortValue: (r: any) => r.target ?? 0,
+      render: (r: any) => <span className="tabular-nums" data-testid="plan-target">{r.target ?? 0}</span> },
+    { key: "mobilised", label: "Mobilised", minWidth: 100, sortable: true, sortValue: (r: any) => r.mobilised ?? 0,
+      render: (r: any) => <span className="tabular-nums" data-testid="plan-mobilised">{r.mobilised ?? 0}</span> },
+    { key: "gap", label: "Gap", minWidth: 80, sortable: true, sortValue: (r: any) => r.gap ?? 0,
+      render: (r: any) => <span className={"tabular-nums " + ((r.gap ?? 0) > 0 ? "font-semibold text-amber-700" : "text-gray-500")} data-testid="plan-gap">{r.gap ?? 0}</span> },
     { key: "enrollment_done", label: "Registration & enrolment done on SIDH", minWidth: 250, render: (r: any) => mcell(r, "enrollment_done", "enrollment_done") },
     { key: "planned_start", label: "Expected batch start date", minWidth: 176, sortable: true, sortValue: (r: any) => r.planned_start ?? "", render: (r: any) => bcell(r, "planned_start") },
     // Rule 15 recomputes this on the server when the start moves, so a start edit refreshes both.
@@ -1391,7 +1401,9 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
   // jayega". A batch that has started is no longer being planned, so it leaves this table — the row
   // moves by itself, because its status is what moved. The Batches tab stays the full register of
   // every batch at every status, so nothing disappears from the system, only from this view.
-  const NOT_STARTED = ["Planning", "Ready"];
+  // mtg-b1: the list comes from the API summary (PLANNING_TAB_STATUSES in rules.ts) so the tiles above
+  // and this table can never count different batches; the literal is only the first-paint fallback.
+  const NOT_STARTED: string[] = summary?.statuses ?? ["Planning", "Ready"];
   const shown = (rows ?? []).filter((r: any) => NOT_STARTED.includes(r.batch?.status));
   const started = (rows ?? []).length - shown.length;
 
@@ -1415,6 +1427,22 @@ function PlanningTable({ rows, onSaved, onError }: { rows: any[] | null; onSaved
           <Btn kind="ghost" onClick={() => { window.location.href = `${BASE_PATH}/api/plan-tracker/export`; }}>Download Excel (all live batches)</Btn>
         </span>
       </div>
+      {summary && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="plan-summary">
+          {[
+            { k: "week", label: "Starting this week", v: summary.this_week.batches, sub: `Mon ${fmtDate(summary.week.start)} to Sun ${fmtDate(new Date(new Date(summary.week.end).getTime() - 1))} (IST)` },
+            { k: "target", label: "Total target", v: summary.total.target, sub: `${summary.total.batches} planned batch${summary.total.batches === 1 ? "" : "es"} · this week ${summary.this_week.target}` },
+            { k: "mobilised", label: "Total mobilised", v: summary.total.mobilised, sub: `this week ${summary.this_week.mobilised}` },
+            { k: "gap", label: "Total gap", v: summary.total.gap, sub: `this week ${summary.this_week.gap}` },
+          ].map((t) => (
+            <div key={t.k} className="rounded-xl border border-gray-100 bg-white px-3 py-2">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">{t.label}</div>
+              <div className="text-2xl font-semibold tabular-nums text-gray-900" data-testid={`plan-sum-${t.k}`}>{t.v.toLocaleString("en-IN")}</div>
+              <div className="text-[11px] text-gray-500">{t.sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-800">
         The batches that have not started yet, the way the planning sheet reads it. Each date shows what
         actually happened, and until it has, the backward plan&apos;s target for that step.

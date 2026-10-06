@@ -125,6 +125,10 @@ const SUITES = [
   // centre's candidates - plus the "N columns hidden · Reset" chip and the Locations Approval column.
   // Its own file, with its own fixture and browser, like e2e-save-feedback.mjs above.
   "e2e-candidate-export.mjs",
+  // mtg-b1 (R3 + R1a, QA-2864/2865, meeting 2026-10-06): the Planning tab's Target / Mobilised / Gap
+  // columns and this-week summary (IST week), and the /reports "Recently approved" strip (N-day window,
+  // approved only, centre-scoped, stamped through the real write door). Its own file and browser.
+  "e2e-planning-and-approved.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

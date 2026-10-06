@@ -5252,11 +5252,149 @@ export async function planTrackerRows(scope: Record<string, unknown> = {}) {
         count: memberBy.get(String(b._id)) ?? 0,
         days: mobDays(b._id),                                                    // 15, QA-765
       },
+      // mtg-b1 (R3, Karunn sir 2026-10-06: "all reporting from the system, no Excel"): target,
+      // mobilised and gap for the batch, sitting beside the mobilisation state. `target` is the
+      // batch's own planned seats (Batch.target_size, required on the model); `mobilised` is the SAME
+      // number as `mobilization.count` (live roster rows, left_on null) - read from the one map, never
+      // counted a second time; `gap` is planGap(), the one definition of the shortfall.
+      target: Number(b.target_size) || 0,
+      mobilised: memberBy.get(String(b._id)) ?? 0,
+      gap: planGap(Number(b.target_size) || 0, memberBy.get(String(b._id)) ?? 0),
       enrollment_done: ms(b, "enrollment_done")?.done_on ?? ms(b, "enrollment_done")?.due_date ?? null, // 16
       planned_start: b.planned_start ?? null,                                    // 17
       planned_end: b.planned_end ?? null,                                        // 18
     };
   });
+}
+
+// ---------- Planning tab: target / mobilised / gap and the "this week" summary (mtg-b1, R3) ----------
+// Karunn sir, 2026-10-06 meeting: "all reporting from the system, no Excel". For every planned batch
+// he wants Target, Mobilised and Gap, and above the table: how many batches start this week, and the
+// total target, mobilised and gap. ONE function each, read by the API, the screen and the export -
+// the screen never subtracts and never decides which week it is.
+//
+// The shortfall is clamped at zero: a batch that is over-filled has no gap, and letting it go negative
+// would let one over-full batch cancel out another batch's real shortfall in the summed total, which
+// is the report understating exactly what it exists to show. The surplus stays visible as
+// mobilised > target on the row itself.
+export const planGap = (target: number, mobilised: number): number =>
+  Math.max(0, (Number(target) || 0) - (Number(mobilised) || 0));
+
+// The statuses the Planning tab lists: a batch that has started has moved to the Batches tab
+// (-196). Declared once so the summary and the screen cannot count different batches; the API echoes
+// it back and the page reads it from there rather than keeping its own copy.
+export const PLANNING_TAB_STATUSES = ["Planning", "Ready"];
+
+// "This week" is the IST calendar week, Monday 00:00 inclusive to the next Monday 00:00 exclusive.
+// Computed with an explicit +05:30 offset and compared as INSTANTS, never through the process zone
+// (the QA-1065 class: a wall green under TZ=UTC and red under TZ=IST). Instants work for both ways a
+// start date is stored: a date picked on screen is UTC-midnight of the IST day (05:30 IST, inside that
+// day) and a full ISO instant lands on its true IST moment, so Sunday 23:30 IST is last week and
+// Monday 00:30 IST is this week under either.
+export function istWeekRange(now: Date = new Date()): { start: Date; end: Date } {
+  const IST_MS = 330 * 60_000;
+  const shifted = new Date(now.getTime() + IST_MS);                       // read with getUTC*: IST wall clock
+  const dow = shifted.getUTCDay();                                         // 0 = Sunday
+  const sinceMonday = (dow + 6) % 7;
+  const istMidnightUtcMs = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - IST_MS;
+  const start = new Date(istMidnightUtcMs - sinceMonday * 86_400_000);
+  return { start, end: new Date(start.getTime() + 7 * 86_400_000) };
+}
+
+export type PlanTrackerSummary = {
+  statuses: string[];
+  week: { start: string; end: string };
+  total: { batches: number; target: number; mobilised: number; gap: number };
+  this_week: { batches: number; target: number; mobilised: number; gap: number };
+};
+
+// Over the rows planTrackerRows returned (so the caller's centre scope is already applied there - this
+// adds no second filter), restricted to the batches the Planning tab lists. `total` is every listed
+// batch; `this_week` is the ones whose planned start falls in the IST week.
+export function planTrackerSummary(
+  rows: { batch: { status: string }; planned_start: Date | string | null; target: number; mobilised: number; gap: number }[],
+  now: Date = new Date(),
+): PlanTrackerSummary {
+  const { start, end } = istWeekRange(now);
+  const zero = () => ({ batches: 0, target: 0, mobilised: 0, gap: 0 });
+  const total = zero(); const wk = zero();
+  for (const r of rows) {
+    if (!PLANNING_TAB_STATUSES.includes(r.batch?.status)) continue;
+    total.batches += 1; total.target += r.target; total.mobilised += r.mobilised; total.gap += r.gap;
+    const ps = r.planned_start ? new Date(r.planned_start).getTime() : NaN;
+    if (ps >= start.getTime() && ps < end.getTime()) {
+      wk.batches += 1; wk.target += r.target; wk.mobilised += r.mobilised; wk.gap += r.gap;
+    }
+  }
+  return { statuses: PLANNING_TAB_STATUSES, week: { start: start.toISOString(), end: end.toISOString() }, total, this_week: wk };
+}
+
+// ---------- Reports: "Recently approved" (mtg-b1, R1a) ----------
+// Karunn sir, 2026-10-06: he wants to see, on the report screen itself, which centre x job-role rows
+// were approved lately. LocationTarget carried no approval date until now (the row only kept its
+// tc_status text), so the models/index.ts middleware stamps `tc_status_changed_at` whenever a write
+// CHANGES that text, and this reads it. Rows approved before the stamp existed have no date and are
+// not guessed at - they are counted in `undated_approved` so the screen can say so.
+//
+// Rule 38 as reportRollup does it: the caller hands in `locationFilter(user)` and it goes straight into
+// the LocationTarget query, so a centre login counts its own centres and nothing else. Verdict comes
+// from tcVerdict(), the one definition of "approved" (trimmed, case-insensitive), so a pending or
+// rejected row can never be counted by a second, looser reading of the same text.
+// Only the ROW's own tc_status counts. reportRollup falls back to the centre's tc_status for a blank
+// row, but a centre-level approval has no per-row date, so it is out of this strip by construction.
+export const RECENT_APPROVAL_DAYS = 7;
+export const RECENT_APPROVAL_MAX_DAYS = 90;
+
+export type RecentApprovalRow = {
+  location: { _id: string; name: string };
+  job_role: string;
+  count: number;          // approved (centre x programme) rows decided inside the window
+  seats: number;          // their summed approved_target
+  last_approved_at: string;
+};
+export type RecentApprovals = {
+  days: number; since: string; measured_at: string;
+  rows: RecentApprovalRow[];
+  total: { rows: number; count: number; seats: number };
+  undated_approved: number;   // approved rows in scope with no stamp yet - not counted, disclosed
+};
+
+export async function recentlyApprovedTargets(
+  scope: Record<string, unknown> = {},
+  opts: { days?: number; now?: Date } = {},
+): Promise<RecentApprovals> {
+  const raw = Number(opts.days);
+  const days = Number.isFinite(raw) && raw >= 1 ? Math.min(Math.floor(raw), RECENT_APPROVAL_MAX_DAYS) : RECENT_APPROVAL_DAYS;
+  const now = opts.now ?? new Date();
+  const since = new Date(now.getTime() - days * 86_400_000);
+  const inScope = await LocationTarget.find(scope)
+    .populate("location", "name")
+    .populate("program", "name")
+    .select("location program approved_target tc_status tc_status_changed_at")
+    .lean<any[]>();
+  const by = new Map<string, RecentApprovalRow>();
+  let undated = 0;
+  for (const t of inScope) {
+    if (tcVerdict(t.tc_status) !== "approved") continue;
+    if (!t.tc_status_changed_at) { undated += 1; continue; }
+    const at = new Date(t.tc_status_changed_at);
+    if (at.getTime() < since.getTime()) continue;
+    const loc = t.location;
+    const role = t.program?.name ?? "(job role not set)";
+    const k = `${String(loc?._id)}|${role}`;
+    const e = by.get(k) ?? { location: { _id: String(loc?._id), name: loc?.name ?? "" }, job_role: role, count: 0, seats: 0, last_approved_at: at.toISOString() };
+    e.count += 1;
+    e.seats += Number(t.approved_target) || 0;
+    if (at.toISOString() > e.last_approved_at) e.last_approved_at = at.toISOString();
+    by.set(k, e);
+  }
+  const rows = [...by.values()].sort((a, b) =>
+    a.last_approved_at < b.last_approved_at ? 1 : a.last_approved_at > b.last_approved_at ? -1 : a.location.name.localeCompare(b.location.name));
+  return {
+    days, since: since.toISOString(), measured_at: now.toISOString(), rows,
+    total: { rows: rows.length, count: rows.reduce((a, r) => a + r.count, 0), seats: rows.reduce((a, r) => a + r.seats, 0) },
+    undated_approved: undated,
+  };
 }
 
 // ---------- The high-level report (QA-398) ----------

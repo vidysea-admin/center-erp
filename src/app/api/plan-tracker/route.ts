@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
-import { planTrackerRows, trainerForLogin } from "@/lib/rules";
+import { planTrackerRows, planTrackerSummary, trainerForLogin } from "@/lib/rules";
 
 // QA-399 — Karunn sir's Back-dated Planning table, the second of the two things he said the whole
 // job needs. A thin door: every column's source and every rule about which grain it comes from
@@ -22,5 +22,8 @@ export const GET = apiHandler(async (_req: NextRequest) => {
       delete scope.location;
     }
   }
-  return NextResponse.json({ rows: await planTrackerRows(scope) });
+  // mtg-b1 (R3): the summary above the table is computed HERE from the same rows, by one rules.ts
+  // function, so the tiles and the table cannot answer from two different queries.
+  const rows = await planTrackerRows(scope);
+  return NextResponse.json({ rows, summary: planTrackerSummary(rows) });
 });

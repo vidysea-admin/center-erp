@@ -2,7 +2,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDT } from "@/lib/client";
+import { api, fmtDate, fmtDT } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, DataTable, Drawer, ErrorBanner } from "@/components/ui";
 import { usePerms } from "@/components/shell";
@@ -53,6 +53,21 @@ function ReportsInner() {
       .finally(() => { setLoading(false); setBusy(false); });
   }, []);
   useEffect(() => { void load(orientation); }, [load, orientation]);
+
+  // mtg-b1 (R1a): the "Recently approved" strip. Its own fetch so a failure here never blanks the
+  // report; the window, the verdict and the grouping all come from the server (recentlyApprovedTargets
+  // in rules.ts) - this screen counts nothing.
+  const [recentDays, setRecentDays] = useState(7);
+  const [recent, setRecent] = useState<any>(null);
+  const [recentErr, setRecentErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    setRecentErr("");
+    api(`/api/reports/recently-approved?days=${recentDays}`)
+      .then((d) => { if (live) setRecent(d); })
+      .catch((e) => { if (live) setRecentErr(String(e?.message ?? e)); });
+    return () => { live = false; };
+  }, [recentDays]);
 
   const roles: string[] = data?.roles ?? [];
   const s = data?.sources;
@@ -399,6 +414,44 @@ function ReportsInner() {
         </span>
       </div>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+
+      <section className="rounded-xl border border-gray-100 bg-white px-4 py-3" data-testid="recent-approved">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-gray-500">Recently approved</h2>
+          <label className="flex items-center gap-1 text-xs text-gray-500">
+            in the last
+            <select className="rounded border border-gray-200 px-1 py-0.5 text-xs text-gray-700" data-testid="recent-days"
+              value={recentDays} onChange={(e) => setRecentDays(Number(e.target.value))}>
+              {[7, 14, 30].map((n) => <option key={n} value={n}>{n} days</option>)}
+            </select>
+          </label>
+        </div>
+        {recentErr && <p className="mt-1 text-xs text-red-700">{recentErr}</p>}
+        {!recent && !recentErr && <p className="mt-1 text-xs text-gray-400">Loading…</p>}
+        {recent && recent.rows.length === 0 && (
+          <p className="mt-1 text-xs text-gray-500" data-testid="recent-empty">No centre and job role was approved in the last {recent.days} days.</p>
+        )}
+        {recent && recent.rows.length > 0 && (
+          <>
+            <p className="mt-1 text-xs text-gray-500" data-testid="recent-total">
+              {recent.total.count} approval{recent.total.count === 1 ? "" : "s"} · {recent.total.seats.toLocaleString("en-IN")} seats · {recent.total.rows} centre and job role{recent.total.rows === 1 ? "" : "s"}
+            </p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {recent.rows.map((r: any) => (
+                <div key={`${r.location._id}|${r.job_role}`} className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-1.5 text-xs" data-testid="recent-row">
+                  <div className="font-medium text-gray-900">{r.location.name} <span className="text-gray-500">· {r.job_role}</span></div>
+                  <div className="text-gray-600"><b className="tabular-nums" data-testid="recent-count">{r.count}</b> approved · {r.seats.toLocaleString("en-IN")} seats · {fmtDate(r.last_approved_at)}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+        {recent && recent.undated_approved > 0 && (
+          <p className="mt-2 text-[11px] text-gray-400">
+            {recent.undated_approved} other approved row{recent.undated_approved === 1 ? " has" : "s have"} no approval date recorded (decided before dates were kept), so {recent.undated_approved === 1 ? "it is" : "they are"} not shown here.
+          </p>
+        )}
+      </section>
 
       {t && (
         <div className="flex flex-wrap gap-3">

@@ -506,6 +506,10 @@ const LocationTargetSchema = new Schema({
   // stays as the fallback for pre-migration rows.
   tc_id: String,
   tc_status: String, // free text from the sheet ("Approved", blank, …)
+  // mtg-b1 (R1a): WHEN tc_status last changed to a different word. Stamped by the middleware below, never
+  // typed by a caller, so the "Recently approved" strip has a date to count from. Rows decided before
+  // this field existed have none.
+  tc_status_changed_at: Date,
   // 2026-08-31: the AEBAS login carried per (centre x job role), same reasoning as tc_id above —
   // the sheet's row is the unit of government registration, not the centre. See LocationSchema's
   // matching fields for the masking note (aebas_password is a live credential).
@@ -522,6 +526,27 @@ const LocationTargetSchema = new Schema({
   trainers_certified_reported: Number,
 }, { timestamps: true });
 LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
+
+// mtg-b1 (R1a): the ONE place tc_status_changed_at is written. All four LocationTarget writers
+// (the targets PUT, the approvals door, the sync apply and the revert) go through findOneAndUpdate, so
+// a query middleware sees them all and none of them has its own copy of the stamp. It stamps only when
+// the (trimmed, lower-cased) text really changes, because a sync that rewrites "Approved" with
+// "Approved" must not make a months-old approval look fresh. Read-then-write, not atomic: two writers
+// racing on one row can at worst both stamp, which only moves the date by seconds. updateMany and
+// replaceOne are not hooked - nothing in src/ writes a LocationTarget that way.
+const tcNorm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+(LocationTargetSchema as any).pre(["findOneAndUpdate", "updateOne"], async function (this: any) {
+  const raw = this.getUpdate() ?? {};
+  if (Array.isArray(raw)) return;
+  const flat: Record<string, unknown> = { ...(raw.$set ?? {}), ...(raw.$setOnInsert ?? {}) };
+  for (const [k, v] of Object.entries(raw)) if (!k.startsWith("$")) flat[k] = v;
+  const unsetting = "tc_status" in (raw.$unset ?? {});
+  if (!("tc_status" in flat) && !unsetting) return;
+  if ("tc_status_changed_at" in flat) return;                 // an explicit write wins (restore, test fixture)
+  const before = await this.model.findOne(this.getFilter()).select("tc_status").lean();
+  if (tcNorm(before?.tc_status) === tcNorm(unsetting ? "" : flat.tc_status)) return;
+  this.setUpdate({ ...raw, $set: { ...(raw.$set ?? {}), tc_status_changed_at: new Date() } });
+});
 
 // ---------- Room ----------
 const RoomSchema = new Schema({
