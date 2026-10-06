@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
-import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
+import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
@@ -15,7 +15,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   requireEdit(user);
-  await requirePerm(user, "approvals.decide"); // togglable (2026-08-11)
+  // togglable (2026-08-11). QA-1977 5B: the refusal is HELD rather than thrown here, because one kind
+  // of request - a new cost head's sign-off - is decided by the finance approve grant instead of the
+  // queue right (Umesh, 2026-10-06: any holder except whoever raised it). That can only be known
+  // once the request is read, a few lines down. Anybody WITHOUT the finance approve grant is refused
+  // right here, exactly as before (senior review: holding the refusal for them let a bad body answer
+  // 400 where it used to answer 403). For a holder, a missing id answers with this refusal, not a 404.
+  let queueDenied: unknown = null;
+  try { await requirePerm(user, "approvals.decide"); } catch (e) { queueDenied = e; }
+  if (queueDenied && !(await hasFinanceApprove(user))) throw queueDenied;
   // QA-1844 (checker, qa-1825 cycle 3, confirmed live again in cycles 4-6): the CEO's sentence has
   // TWO halves — *"कॉस्ट की **अप्रूवल** … और **विजिबिलिटी** …"* — and Unit 1 spent six cycles on the
   // second one. An Admin with `finance.view: null` POSTed `{decision:"Approved"}` to a parked cost
@@ -57,14 +65,22 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // than independently. The pins were right; nobody ran them.
   const pending = await ApprovalRequest.findById(id)
     .select("action payload status approved_amount decision_map_to_category").lean<any>();
-  if (!pending) throw new HttpError(404, "Approval request not found");
-  if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
-  await flushPendingFinanceAuditEvents().catch(() => {});
+  if (!pending) {
+    if (queueDenied) throw queueDenied;
+    throw new HttpError(404, "Approval request not found");
+  }
   // QA-1977: a HEAD-ONLY request. The head was created when the cost was entered and is already in
   // use, flagged not approved; the cost itself went through cost.post separately. Deciding this
   // request only flips that flag, so remapping (entries already point at the head) and a partial
   // amount (there is no amount) are refused rather than silently ignored.
   const headOnly = pending.action === "costcategory.create" && (pending.payload as any)?.kind === "head-approval";
+  // QA-1977 5B: for a head sign-off the finance approve grant is the whole rule - the queue right is
+  // not needed, and neither is the approver role or a named list (decideApproval honours byGrant
+  // only for this same request shape). For EVERY other action nothing changes: the queue right is
+  // still required and the money gate below still applies.
+  if (queueDenied && !(headOnly && await hasFinanceApprove(user))) throw queueDenied;
+  if (headOnly || MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
+  await flushPendingFinanceAuditEvents().catch(() => {});
   // The head this request decides: linked to it, or - if the post that created both died before the
   // link was written - still Pending with no link at all (senior review). Never a head another
   // request owns, and never one that is already decided.
@@ -138,6 +154,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     approvedAmount: sanctionedAmount,
     applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action) && !headOnly,
     ...(map_to_category !== undefined ? { mapToCategory: String(map_to_category ?? "") } : {}),
+    byGrant: headOnly,
   });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.

@@ -170,6 +170,8 @@ const stamp = Date.now().toString(36);
 const proposedHeadForMine = `ZZ Proposed ${stamp}`;
 // QA-1977: filled by the API block, read by the browser block - a head left Pending and one with no flag at all.
 const qa1977Ui = { pendingId: "", pendingName: `ZZ Pending Ui ${stamp}`, legacyId: "" };
+// QA-1977 5B: a head request raised by Operations and left Pending, for the /finance browser arm.
+const qa5bUi = { finEmail: "", headId: "", headName: "", reqId: "", ownReqId: "", ownName: "" };
 const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
 ok("[precondition] a location exists to hang entries on", !!anyLoc, "none");
 
@@ -2306,6 +2308,154 @@ for (const variant of ["ordinary", "mark_paid"]) {
   }
 }
 
+// ------------------------------------------------ QA-1977 5B: who may approve a new head
+// Umesh, 2026-10-06: *"2 person check hoga naa like jisne approve kra from shubhi, manish and karunn,
+// jisne approve kra hai uske alawa remaining 2 mai se koi bhi approve krr lee"*. The finance grant is
+// the rule, not the Admin role: ANY holder of finance.approve may decide a head-approval request,
+// except whoever raised it. Nothing else widens - a whole-entry cost.post request keeps its approver
+// rules exactly (pin d).
+//
+// The rule is switched ON here with a NAMED approver list that names only the Admin, because that is
+// the strongest shape production can be in: a head-approval request is decided by the grant, so the
+// list must not narrow it either ("ANY user holding the finance.approve grant").
+{
+  const adminRow5b = await rawUsers.findOne({ email: "admin@vidysea.com" });
+  const catOn = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: true, approver_role: "Admin", approver_users: [String(adminRow5b?._id ?? "")] });
+  const postOn = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+  const mk5b = async (tag, grants) => {
+    const email = `zz.fin5b.${tag}.${stamp}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", { name: `Fin5B ${tag} ${stamp}`, email, password: PW, role: "Operations", can_edit: true, location_scope: [] });
+    const id = made.data?.item?._id;
+    const granted = id ? await req(admin, "PATCH", `/api/users/${id}`, { extra_permissions: grants }) : { status: -1 };
+    return { id: String(id ?? ""), email, made: made.status, granted: granted.status, cookie: await login(email, PW) };
+  };
+  const finA = await mk5b("a", ["finance.view", "finance.approve"]);
+  const finB = await mk5b("b", ["finance.view", "finance.approve"]);
+  const finQ = await mk5b("q", ["finance.view", "finance.approve", "approvals.decide"]);
+  qa5bUi.finEmail = finB.email;
+  ok("QA-1977 5B [precondition]: head rule ON (named list = the Admin only), cost.post ON, and three NON-Admin finance.approve holders sign in",
+    catOn.status === 200 && postOn.status === 200 && [finA, finB, finQ].every((u) => u.made === 201 && u.granted === 200 && !!u.cookie),
+    JSON.stringify({ catOn: catOn.status, postOn: postOn.status, users: [finA, finB, finQ].map((u) => [u.made, u.granted, !!u.cookie]) }));
+
+  const raiseHead = async (cookie, name) => {
+    const r = await req(cookie, "POST", "/api/costs", { ...baseEntry({ amount: 231 }), new_subhead: name });
+    const h = await rawCategories.findOne({ name });
+    const hr = h ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: h._id }) : null;
+    return { status: r.status, head: h, request: hr };
+  };
+
+  // (a) a head raised by somebody WITHOUT the grant, decided by a non-Admin holder.
+  const h1 = await raiseHead(ops, `ZZ FiveB One ${stamp}`);
+  ok("QA-1977 5B [precondition]: Operations raised a head; it is Pending with its head-approval request",
+    h1.status === 202 && h1.head?.approval_status === "Pending" && h1.request?.status === "Pending" && h1.request?.payload?.kind === "head-approval",
+    `got ${h1.status} flag=${h1.head?.approval_status} req=${h1.request?.status}`);
+  const h2 = await raiseHead(ops, `ZZ FiveB Two ${stamp}`);
+
+  // Visibility first, while both are Pending: the queue and the bell must reach a non-Admin holder.
+  const qA = await req(finA.cookie, "GET", "/api/approvals?status=Pending");
+  const qAItems = qA.data?.items ?? [];
+  ok("QA-1977 5B: a non-Admin finance.approve holder can open the approvals queue and sees the pending head request",
+    qA.status === 200 && qAItems.some((r) => String(r._id) === String(h2.request?._id)),
+    `got ${qA.status} ${JSON.stringify(qA.data?.error ?? "").slice(0, 140)} items=${qAItems.length}`);
+  ok("QA-1977 5B: ...and that queue shows them head requests ONLY - no parked cost, no other action",
+    qA.status === 200 && qAItems.length > 0 && qAItems.every((r) => r.action === "costcategory.create" && r.payload?.kind === "head-approval"),
+    JSON.stringify(qAItems.map((r) => [r.action, r.payload?.kind]).slice(0, 8)));
+  ok("QA-1977 5B: ...and no approval-rule configuration is handed to a reader without the queue right",
+    qA.status === 200 && Array.isArray(qA.data?.config) && qA.data.config.length === 0, JSON.stringify(qA.data?.config ?? null).slice(0, 160));
+  const qAdminHeads = await req(admin, "GET", "/api/approvals?status=Pending&kind=head-approval");
+  ok("QA-1977 5B: ?kind=head-approval narrows even a full queue reader to head sign-offs (what the /finance panel asks for)",
+    qAdminHeads.status === 200 && (qAdminHeads.data?.items ?? []).length > 0
+      && (qAdminHeads.data?.items ?? []).every((r) => r.action === "costcategory.create" && r.payload?.kind === "head-approval"),
+    `got ${qAdminHeads.status} ${JSON.stringify((qAdminHeads.data?.items ?? []).map((r) => r.action).slice(0, 6))}`);
+  const bellA = (await req(finA.cookie, "GET", "/api/notifications?status=all")).data?.items ?? [];
+  ok("QA-1977 5B: ...and the 'approval needed' alert for that head reaches them",
+    bellA.some((n) => n.type === "approval_pending" && String(n.entity_id) === String(h2.request?._id)),
+    `${bellA.length} alerts, none for request ${h2.request?._id}`);
+  const opsBell = (await req(ops, "GET", "/api/notifications?status=all")).data?.items ?? [];
+  ok("QA-1977 5B: ...while the person who raised it (no grant) is not asked to approve it",
+    !opsBell.some((n) => n.type === "approval_pending" && String(n.entity_id) === String(h2.request?._id)),
+    `ops sees the approval alert for ${h2.request?._id}`);
+
+  if (h1.request) {
+    const decA = await req(finA.cookie, "POST", `/api/approvals/${h1.request._id}`, { decision: "Approved", note: "5B pin" });
+    const h1After = await rawCategories.findOne({ _id: h1.head._id });
+    ok("QA-1977 5B (a): a NON-Admin finance.approve holder approves a head somebody else raised - 200, flag Approved",
+      decA.status === 200 && h1After?.approval_status === "Approved",
+      `got ${decA.status} ${JSON.stringify(decA.data?.error ?? "").slice(0, 160)} flag=${h1After?.approval_status}`);
+  }
+
+  // (c) nobody without the grant decides a head - neither the ungranted raiser nor an ungranted Admin.
+  if (h2.request) {
+    const decOps = await req(ops, "POST", `/api/approvals/${h2.request._id}`, { decision: "Approved", note: "no grant" });
+    const decEnroll = await req(enroll, "POST", `/api/approvals/${h2.request._id}`, { decision: "Approved", note: "no grant" });
+    const ungrantedEmail = `zz.fin5b.adm.${stamp}@vidysea-test.local`;
+    await req(admin, "POST", "/api/users", { name: `Fin5B adm ${stamp}`, email: ungrantedEmail, password: PW, role: "Admin", can_edit: true, location_scope: [] });
+    const ungrantedAdmin = await login(ungrantedEmail, PW);
+    const decAdm = ungrantedAdmin ? await req(ungrantedAdmin, "POST", `/api/approvals/${h2.request._id}`, { decision: "Approved", note: "admin, no grant" }) : { status: -1, data: {} };
+    const h2After = await rawCategories.findOne({ _id: h2.head._id });
+    const r2After = await rawApprovals.findOne({ _id: h2.request._id });
+    ok("QA-1977 5B (c): a user WITHOUT finance.approve cannot approve a head - Operations, Enrollment and an ungranted Admin all 403",
+      decOps.status === 403 && decEnroll.status === 403 && decAdm.status === 403,
+      `ops=${decOps.status} enroll=${decEnroll.status} admin=${decAdm.status} ${JSON.stringify(decOps.data?.error ?? "").slice(0, 100)}`);
+    ok("QA-1977 5B (c): ...and the head and its request are untouched (still Pending)",
+      h2After?.approval_status === "Pending" && r2After?.status === "Pending", `flag=${h2After?.approval_status} req=${r2After?.status}`);
+    qa5bUi.headId = String(h2.head._id); qa5bUi.headName = h2.head.name; qa5bUi.reqId = String(h2.request._id);
+  }
+
+  // (b) the initiator holds the grant and still cannot sign off their own head; either other holder can.
+  const h3 = await raiseHead(finA.cookie, `ZZ FiveB Three ${stamp}`);
+  if (h3.request) {
+    const self = await req(finA.cookie, "POST", `/api/approvals/${h3.request._id}`, { decision: "Approved", note: "my own head" });
+    const h3Mid = await rawCategories.findOne({ _id: h3.head._id });
+    ok("QA-1977 5B (b): a finance.approve holder cannot approve a head THEY raised - refused by the self-approval rule itself",
+      self.status === 403 && /cannot approve your own request/i.test(String(self.data?.error ?? "")) && h3Mid?.approval_status === "Pending",
+      `got ${self.status} ${JSON.stringify(self.data?.error ?? "").slice(0, 160)} flag=${h3Mid?.approval_status}`);
+    const finABell = (await req(finA.cookie, "GET", "/api/notifications?status=all")).data?.items ?? [];
+    ok("QA-1977 5B (b): ...and they are not sent the 'approval needed' alert for their own head",
+      !finABell.some((n) => n.type === "approval_pending" && String(n.entity_id) === String(h3.request._id)),
+      `initiator was alerted about ${h3.request._id}`);
+    const other = await req(finB.cookie, "POST", `/api/approvals/${h3.request._id}`, { decision: "Approved", note: "second person" });
+    const h3After = await rawCategories.findOne({ _id: h3.head._id });
+    ok("QA-1977 5B (b): ...while another holder approves it - 200, flag Approved",
+      other.status === 200 && h3After?.approval_status === "Approved",
+      `got ${other.status} ${JSON.stringify(other.data?.error ?? "").slice(0, 160)} flag=${h3After?.approval_status}`);
+  } else {
+    ok("QA-1977 5B (b) [precondition]: a finance holder could raise a head", false, `got ${h3.status}`);
+  }
+  // For the browser arm: a head finB raised and leaves Pending, so finB's own panel must offer no buttons.
+  const h4 = await raiseHead(finB.cookie, `ZZ FiveB Own ${stamp}`);
+  if (h4.request) { qa5bUi.ownReqId = String(h4.request._id); qa5bUi.ownName = h4.head.name; }
+
+  // (d) NO WIDENING: a non-Admin holder still cannot decide a whole-entry cost.post request - with or
+  // without approvals.decide - and the parked cost stays exactly where it was.
+  const normal5b = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false && !c.approval_status);
+  const parked5b = normal5b ? await req(ops, "POST", "/api/costs", baseEntry({ category: normal5b._id, amount: 777, note: `5B widen guard ${stamp}` })) : { status: -1, data: {} };
+  const parkedId5b = parked5b.data?.item?._id;
+  ok("QA-1977 5B (d) [precondition]: an ordinary cost parks on cost.post", parked5b.status === 202 && !!parkedId5b, `got ${parked5b.status}`);
+  if (parkedId5b) {
+    const ledgerBefore = await rawCosts.countDocuments({});
+    const dA = await req(finA.cookie, "POST", `/api/approvals/${parkedId5b}`, { decision: "Approved", note: "not mine to decide" });
+    const dQ = await req(finQ.cookie, "POST", `/api/approvals/${parkedId5b}`, { decision: "Approved", note: "not mine to decide" });
+    const dR = await req(finA.cookie, "POST", `/api/approvals/${parkedId5b}`, { decision: "Rejected", note: "not mine to decide" });
+    const after5b = await rawApprovals.findOne({ _id: new ObjectId(String(parkedId5b)) });
+    const ledgerAfter = await rawCosts.countDocuments({});
+    ok("QA-1977 5B (d): a NON-Admin finance holder still cannot decide a whole-entry cost.post request (approve or reject; with or without approvals.decide) - 403",
+      dA.status === 403 && dQ.status === 403 && dR.status === 403,
+      `approve=${dA.status} withDecide=${dQ.status} reject=${dR.status} ${JSON.stringify(dQ.data?.error ?? "").slice(0, 120)}`);
+    ok("QA-1977 5B (d): ...the parked cost is still Pending and no ledger row was written",
+      after5b?.status === "Pending" && ledgerAfter === ledgerBefore, `req=${after5b?.status} ledger ${ledgerBefore}->${ledgerAfter}`);
+    const finAQueue = (await req(finA.cookie, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
+    ok("QA-1977 5B (d): ...and it is not shown to them in the queue either",
+      !finAQueue.some((r) => String(r._id) === String(parkedId5b)), `cost.post ${parkedId5b} visible to a non-Admin holder`);
+    const adminDec = await req(admin, "POST", `/api/approvals/${parkedId5b}`, { decision: "Approved", note: "5B cleanup" });
+    ok("QA-1977 5B (d) [control]: the Admin approver still decides it as before", adminDec.status === 200, `got ${adminDec.status}`);
+  }
+  // Leave the rule as the next blocks expect it: ON for cost heads, role-only.
+  await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: true, approver_role: "Admin", approver_users: [] });
+}
+
+
 // ---------------- QA-2295 / QA-2296 — THE REJECTION REASON, ON A SCREEN ----------------
 //
 // Found by the live browser checker on -299, and it could not have been found any other way. The
@@ -2672,6 +2822,49 @@ for (const variant of ["ordinary", "mark_paid"]) {
         }
       } else {
         ok("QA-1977 UI [precondition]: the API block left a Pending head and an unflagged head to look at", false, JSON.stringify(qa1977Ui));
+      }
+
+      // ---- QA-1977 5B: a NON-Admin finance approver can find and sign off a pending head ----
+      // /admin (and with it the Approvals tab) is Admin-only, so an approve right that only the API
+      // honours would be a right nobody can use from the product. Driven as the non-Admin holder.
+      if (qa5bUi.finEmail && qa5bUi.headId && qa5bUi.reqId) {
+        const fctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const fp = await fctx.newPage();
+          await fp.goto(BASE, { waitUntil: "networkidle" });
+          const fb = fp.locator('input[type="email"], input[name="email"]').first();
+          if (await fb.count()) {
+            await fb.fill(qa5bUi.finEmail);
+            await fp.locator('input[type="password"]').first().fill(PW);
+            await fp.locator('button[type="submit"]').first().click();
+            await fp.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          await fp.goto(`${BASE}/finance`, { waitUntil: "networkidle" });
+          const own = fp.locator(`[data-head-approval="${qa5bUi.ownReqId}"]`);
+          const ownSeen = qa5bUi.ownReqId ? await own.waitFor({ timeout: 45000 }).then(() => true).catch(() => false) : false;
+          const ownText = ownSeen ? await own.innerText() : "";
+          ok("QA-1977 5B UI: on a head they added THEMSELVES the approver gets no Approve/Reject - only the note that someone else must sign it off",
+            ownSeen && ownText.includes(qa5bUi.ownName) && /another finance approver must sign it off/i.test(ownText)
+              && (await own.getByRole("button").count()) === 0,
+            `own row seen=${ownSeen} text=${JSON.stringify(ownText.slice(0, 200))}`);
+          const row = fp.locator(`[data-head-approval="${qa5bUi.reqId}"]`);
+          const seen = await row.waitFor({ timeout: 45000 }).then(() => true).catch(() => false);
+          const rowText = seen ? await row.innerText() : "";
+          ok("QA-1977 5B UI: a non-Admin finance approver sees the pending head on /finance, named, with an Approve control",
+            seen && rowText.includes(qa5bUi.headName) && (await row.getByRole("button", { name: /^Approve$/ }).count()) === 1,
+            `row seen=${seen} text=${JSON.stringify(rowText.slice(0, 200))}`);
+          if (seen) {
+            await row.getByRole("button", { name: /^Approve$/ }).click();
+            const gone = await row.waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
+            const after = await rawCategories.findOne({ _id: new ObjectId(qa5bUi.headId) });
+            ok("QA-1977 5B UI: ...and approving it there flips the head to Approved and clears it from the list",
+              gone && after?.approval_status === "Approved", `gone=${gone} flag=${after?.approval_status}`);
+          }
+        } finally {
+          try { await fctx.close(); } catch {}
+        }
+      } else {
+        ok("QA-1977 5B UI [precondition]: the API block left a pending head and a non-Admin approver", false, JSON.stringify(qa5bUi));
       }
 
       // ---- QA-2518: "No cost head matches" was unreachable in the only case that needs it ----

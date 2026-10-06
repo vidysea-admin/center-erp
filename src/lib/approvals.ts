@@ -6,7 +6,7 @@ import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit, changedFields } from "@/lib/audit";
 import { mailUsers, mailUsersByRole } from "@/lib/mailer";
-import { redactMoneyInText, redactFiguresInText } from "@/lib/permissions";
+import { redactMoneyInText, redactFiguresInText, financeApprovers } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
 import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
@@ -570,6 +570,14 @@ export async function requireApproval(
     // role with no named approvers. An enabled rule still wins, so a configured approver list is
     // honoured. Every other caller leaves it unset and keeps "no rule = nothing changes".
     fallbackApproverRole?: string;
+    // QA-1977 5B (Umesh, 2026-10-06): a NEW COST HEAD is signed off by any holder of the finance
+    // approve right except its raiser - the grant is the rule, not the role and not a named list.
+    // With this set the request snapshots no named approvers, and its bell + mail go to every such
+    // holder other than the raiser (whatever their role), so a non-Admin approver actually hears
+    // about it. Only the head-approval call in /api/costs sets it; every other request keeps its
+    // configured role/named-list audience exactly. With no holder at all the old role audience is
+    // used, so the request is never addressed to nobody.
+    decidedByGrant?: boolean;
   },
 ): Promise<ApprovalOutcome> {
   const configured = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
@@ -602,7 +610,12 @@ export async function requireApproval(
   // enabled rule nothing changes" — is untouched above: a disabled action still returns null.
 
   // QA-1827: the named list, snapshotted. An empty list means the role decides, exactly as before.
-  const approverUsers = (rule.approver_users ?? []).map(String).filter(Boolean);
+  const approverUsers = ctx.decidedByGrant ? [] : (rule.approver_users ?? []).map(String).filter(Boolean);
+  // QA-1977 5B: the grant holders, minus the raiser (they can never decide it, so alerting them would
+  // only invite a refusal). Computed before the request exists only to keep it beside its sibling.
+  const grantHolders = ctx.decidedByGrant
+    ? (await financeApprovers()).filter((h) => h.id !== String(user.id))
+    : [];
   const request = await ApprovalRequest.create({
     action,
     entity: ctx.entity, entity_id: ctx.entity_id,
@@ -668,6 +681,31 @@ export async function requireApproval(
   // own INVOICE_MONEY_FIELDS rule. So the collateral is a room capacity of 100+ and a 3-digit run
   // inside a batch code, on the bell only, for a reader who can open the request and see both.
   const safeSummary = redactFiguresInText(redactMoneyInText(ctx.summary, ctx.payload));
+  if (grantHolders.length) {
+    // QA-1977 5B: addressed person by person. `role_target` carries every role among them because
+    // the inbox query matches on role first and user second; `user_target` is what narrows it to
+    // the holders. The link is /finance, because /admin (the Approvals tab) is Admin-only and most
+    // holders may not be Admins.
+    await Notification.create({
+      type: "approval_pending",
+      severity: "warning",
+      message: `Approval needed: ${safeSummary} (requested by ${user.name})`,
+      entity: "ApprovalRequest", entity_id: request._id,
+      link: "/finance",
+      role_target: [...new Set(grantHolders.map((h) => h.role))],
+      user_target: grantHolders.map((h) => h.id),
+      location: ctx.location,
+    });
+    mailUsers({
+      userIds: grantHolders.map((h) => h.id),
+      subject: `Approval needed: ${safeSummary}`,
+      title: "A new cost head is waiting for your approval",
+      lines: [`${safeSummary}`, `Requested by ${user.name}.`],
+      link: "/finance", entity: "ApprovalRequest", entity_id: request._id,
+    }).catch(() => {});
+    await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: { summary: ctx.summary, payload: ctx.payload }, actor: user.id });
+    return { request };
+  }
   await Notification.create({
     type: "approval_pending",
     severity: "warning",
@@ -717,21 +755,35 @@ export async function decideApproval(
   user: SessionUser,
   decision: "Approved" | "Rejected",
   note?: string,
-  decisionData: { approvedAmount?: number; applying?: boolean; mapToCategory?: string } = {},
+  decisionData: { approvedAmount?: number; applying?: boolean; mapToCategory?: string; byGrant?: boolean } = {},
 ) {
   const request = await ApprovalRequest.findById(requestId);
   if (!request) throw new HttpError(404, "Approval request not found");
   const resuming = request.status === "Applying" && decision === "Approved" && decisionData.applying;
   if (request.status !== "Pending" && !resuming) throw new HttpError(409, `Already ${request.status}.`);
-  if (user.role !== request.approver_role && user.role !== "Admin") {
-    throw new HttpError(403, `Only ${request.approver_role} may decide this request.`);
-  }
-  // QA-1827: a named list NARROWS the role, never widens it — the role check above still had to
-  // pass. The list is the one snapshotted when the request was parked, so a rule edited afterwards
-  // cannot retroactively change who was entitled to decide something already in the queue.
-  const named = (request.approver_users ?? []).map(String).filter(Boolean);
-  if (named.length && !named.includes(String(user.id))) {
-    throw new HttpError(403, "This request is assigned to named approvers; you are not one of them.");
+  // QA-1977 5B: a head-approval request is decided by the finance approve GRANT, which the caller
+  // (POST /api/approvals/[id]) has already asserted with requireFinance(user, "approve"). The role
+  // and named-list checks below therefore do not apply to it - "ANY user holding finance.approve,
+  // regardless of role". Re-checked here from the stored request, not trusted from the flag alone,
+  // so a caller passing byGrant for any other request still gets the full role rule.
+  // An old whole-entry request stored the poster's raw body as its payload, so it could in principle
+  // carry a typed `kind`; the server-built head-approval payload never has an amount, and that is
+  // required too (senior review), so such a row keeps the full role rule.
+  const byGrant = decisionData.byGrant === true
+    && request.action === "costcategory.create"
+    && (request.payload as any)?.kind === "head-approval"
+    && (request.payload as any)?.amount === undefined;
+  if (!byGrant) {
+    if (user.role !== request.approver_role && user.role !== "Admin") {
+      throw new HttpError(403, `Only ${request.approver_role} may decide this request.`);
+    }
+    // QA-1827: a named list NARROWS the role, never widens it — the role check above still had to
+    // pass. The list is the one snapshotted when the request was parked, so a rule edited afterwards
+    // cannot retroactively change who was entitled to decide something already in the queue.
+    const named = (request.approver_users ?? []).map(String).filter(Boolean);
+    if (named.length && !named.includes(String(user.id))) {
+      throw new HttpError(403, "This request is assigned to named approvers; you are not one of them.");
+    }
   }
   // RPL M24: an initiator can never approve their own request.
   if (String(request.initiator) === String(user.id)) {

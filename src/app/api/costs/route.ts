@@ -163,6 +163,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
             summary: `New cost head "${proposed}" added by ${user.name} — not approved yet`,
             payload: { kind: "head-approval", category: String(headId), name: proposed, ...(extras.parent ? { parent: String(extras.parent) } : {}) },
             fallbackApproverRole: "Admin",
+            // QA-1977 5B: signed off by any finance approve holder except this raiser; alerted to them.
+            decidedByGrant: true,
           });
         } catch (e) {
           // No request means nobody would ever be asked about this head, so it must not exist either.

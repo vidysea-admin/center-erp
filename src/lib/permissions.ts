@@ -232,6 +232,15 @@ export function parseLevel(entry: string): { key: string; level: PermLevel } {
 // leaves view standing. Rule 39 stays exactly itself as a cap: can_edit=false ⇒ nothing
 // above view. Admin: always edit on everything (bypass, as today).
 export async function getEffectiveLevels(user: SessionUser): Promise<Map<string, PermLevel>> {
+  const doc = await User.findById(user.id).select("extra_permissions revoked_permissions can_edit").lean<any>();
+  return levelsFromDoc(user.role, doc, await getRolePermissions(user.role));
+}
+
+// QA-1977 5B: the body of getEffectiveLevels, split out so a caller that must ask the question of
+// MANY users (financeApprovers, below) applies the identical rule to each without a lookup per
+// user. There is still exactly one statement of how role + grants + revokes + Rule 39 + the Admin
+// bypass combine; getEffectiveLevels is now a one-user wrapper around it.
+function levelsFromDoc(role: string, doc: any, rolePerms: Iterable<string>): Map<string, PermLevel> {
   const levels = new Map<string, PermLevel>();
   // QA-1825: an Admin used to return here with every key at edit and never read their own User
   // row. Now the ordinary path runs for them too, and the bypass is applied at the BOTTOM of this
@@ -244,8 +253,7 @@ export async function getEffectiveLevels(user: SessionUser): Promise<Map<string,
     const cur = levels.get(key);
     if (!cur || LEVEL_RANK[level] > LEVEL_RANK[cur]) levels.set(key, level);
   };
-  for (const e of await getRolePermissions(user.role)) bump(e);
-  const doc = await User.findById(user.id).select("extra_permissions revoked_permissions can_edit").lean<any>();
+  for (const e of rolePerms) bump(e);
   for (const e of doc?.extra_permissions ?? []) bump(e);
   for (const e of doc?.revoked_permissions ?? []) {
     const { key } = parseLevel(e);
@@ -255,7 +263,7 @@ export async function getEffectiveLevels(user: SessionUser): Promise<Map<string,
   if (doc && doc.can_edit === false) {
     for (const [k, l] of levels) if (l === "edit") levels.set(k, "view");
   }
-  if (user.role === "Admin") {
+  if (role === "Admin") {
     for (const p of PERMISSIONS) if (!NO_ADMIN_BYPASS.has(p.key)) levels.set(p.key, "edit");
   }
   return levels;
@@ -316,6 +324,33 @@ export async function requirePerm(user: SessionUser, perm: string): Promise<void
 export async function requireFinance(user: SessionUser, level: "view" | "approve"): Promise<void> {
   await requireView(user, FINANCE_VIEW);
   if (level === "approve") await requirePerm(user, FINANCE_APPROVE);
+}
+
+// QA-1977 5B: the non-throwing mirror of `requireFinance(user, "approve")` - the same two checks,
+// read the same way, so "may this person decide money" still has one meaning. It exists because a
+// GET (the approvals queue) has to ASK the question to decide what to list, and a refusal is not the
+// answer there.
+export async function hasFinanceApprove(user: SessionUser): Promise<boolean> {
+  return (await hasPermission(user, FINANCE_VIEW)) && (await hasEditLevel(user, FINANCE_APPROVE));
+}
+
+// QA-1977 5B (Umesh, 2026-10-06): *"jisne approve kra hai uske alawa remaining 2 mai se koi bhi approve
+// krr lee"* - a new cost head is signed off by ANY holder of the finance approve right, whatever their
+// role, except whoever raised it. This is who that is, computed by the same rule `requireFinance`
+// applies (levelsFromDoc), over the accounts that can actually sign in. Names are never hardcoded:
+// granting or revoking finance.approve is the only way onto or off this list.
+export async function financeApprovers(): Promise<{ id: string; role: string }[]> {
+  const docs = await User.find({ active: true, dropped: { $ne: true }, approval_status: { $ne: "Pending" } })
+    .select("role extra_permissions revoked_permissions can_edit").lean<any[]>();
+  const out: { id: string; role: string }[] = [];
+  const byRole = new Map<string, Set<string>>();
+  for (const d of docs) {
+    const role = String(d.role ?? "");
+    if (!byRole.has(role)) byRole.set(role, await getRolePermissions(role));
+    const levels = levelsFromDoc(role, d, byRole.get(role)!);
+    if (levels.has(FINANCE_VIEW) && levels.get(FINANCE_APPROVE) === "edit") out.push({ id: String(d._id), role });
+  }
+  return out;
 }
 
 // ---- QA-1834 / QA-1835 / QA-1836 (cycle 2): the FIELD rule, beside the KEY rule ----

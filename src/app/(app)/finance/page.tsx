@@ -5,6 +5,7 @@ import { api, fmtDT, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
 import { Btn, DataTable, ErrorBanner } from "@/components/ui";
 import { usePerms } from "@/components/shell";
+import { useSession } from "next-auth/react";
 
 // QA-1830 — the finance dashboard. Manish sir's workbook and his HTML mock, as one screen fed by
 // one server function (`costRollup`), so the screen and the .xlsx cannot disagree about a figure.
@@ -199,6 +200,8 @@ function FinanceInner() {
       </div>
 
       <ErrorBanner msg={error} />
+
+      {canApproveCosts && <HeadApprovals />}
 
       {/* ONE filter object, applied server-side to every table below and to the export
           (developer note #4) — never a per-table filter, which is how two tables on one screen
@@ -512,6 +515,72 @@ function FinanceInner() {
             }] : []),
           ]} />
       </Section>
+    </div>
+  );
+}
+
+// QA-1977 5B (Umesh, 2026-10-06): *"jisne approve kra hai uske alawa remaining 2 mai se koi bhi approve
+// krr lee"*. A new cost head is signed off by ANY holder of the finance approve right except whoever
+// added it. The Approvals tab lives under /admin, which is Admin-only, so a holder who is not an
+// Admin had nowhere to do it - this panel is that place, on the screen their right already opens.
+// It lists head sign-offs only (the API returns nothing else to a reader without the queue right,
+// and this filters to the same shape for one who has it), and offers no buttons on your own head.
+function HeadApprovals() {
+  const { data: session } = useSession();
+  const me = String((session?.user as any)?.id ?? "");
+  const [rows, setRows] = useState<any[] | null>(null);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const load = useCallback(async () => {
+    try {
+      const r = await api("/api/approvals?status=Pending&kind=head-approval");
+      setRows((r?.items ?? []).filter((x: any) => x.action === "costcategory.create" && x.payload?.kind === "head-approval" && x.status === "Pending"));
+    } catch (e: any) { setErr(e.message); setRows([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const decide = async (r: any, decision: "Approved" | "Rejected") => {
+    let note = "";
+    if (decision === "Rejected") {
+      const n = window.prompt("Why is this head being rejected? The person who added it will see this.");
+      if (n === null) return;
+      note = n.trim();
+    }
+    setBusy(String(r._id)); setErr("");
+    try {
+      await api(`/api/approvals/${r._id}`, { method: "POST", json: { decision, ...(note ? { note } : {}) } });
+      await load();
+    } catch (e: any) { setErr(e.message); }
+    finally { setBusy(""); }
+  };
+  if (!rows || rows.length === 0) return err ? <ErrorBanner msg={err} /> : null;
+  return (
+    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-3" data-head-approvals>
+      <div>
+        <h2 className="text-sm font-bold text-gray-800">New cost heads waiting for approval</h2>
+        <p className="text-[11px] text-gray-500">Added from the cost form and already in use, marked not approved. Any finance approver except the person who added a head can sign it off.</p>
+      </div>
+      <ErrorBanner msg={err} />
+      <ul className="divide-y divide-amber-100">
+        {rows.map((r) => {
+          const mine = me && String(r.initiator?._id ?? r.initiator ?? "") === me;
+          return (
+            <li key={String(r._id)} data-head-approval={String(r._id)} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+              <span>
+                <span className="font-semibold text-gray-900">{r.payload?.name ?? "(unnamed head)"}</span>
+                <span className="ml-2 text-[11px] text-gray-500">added by {r.initiator?.name ?? "someone"}{r.createdAt ? `, ${fmtDT(r.createdAt)}` : ""}</span>
+              </span>
+              {mine ? (
+                <span className="text-[11px] text-gray-500">You added this head - another finance approver must sign it off.</span>
+              ) : (
+                <span className="flex gap-1">
+                  <Btn small onClick={() => decide(r, "Approved")} disabled={busy === String(r._id)}>Approve</Btn>
+                  <Btn small kind="danger" onClick={() => decide(r, "Rejected")} disabled={busy === String(r._id)}>Reject</Btn>
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

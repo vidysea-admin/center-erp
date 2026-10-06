@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, isScoped, locationFilter, readJson } from "@/lib/authz";
-import { requirePerm, requireView, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
+import { requirePerm, requireView, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
@@ -41,14 +41,29 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // `payload` — closure reasons, invoice amounts — so any signed-in user could read what the
   // business was about to do and why. Deciding an approval is already gated; seeing the queue
   // now is too. QA-025 P2: seeing = view level; deciding (POST/decide paths) keeps edit.
-  await requireView(user, "approvals.decide");
+  //
+  // QA-1977 5B (Umesh, 2026-10-06): a new cost head is signed off by ANY holder of the finance approve
+  // right except its raiser, whatever their role. Such a holder may have no queue right at all, so
+  // for them this lists head sign-offs and NOTHING else - no parked cost, no closure, no rule config.
+  // Someone with the queue right sees exactly what they saw before, plus (if location-scoped and a
+  // grant holder) the head sign-offs, which carry no location and so were never in their scope.
+  const queueRight = await hasPermission(user, "approvals.decide");
+  // Asked only where it changes the answer (senior review: two permission lookups per GET otherwise).
+  const headRight = (!queueRight || isScoped(user)) ? await hasFinanceApprove(user) : false;
+  if (!queueRight && !headRight) await requireView(user, "approvals.decide");
+  const HEAD_APPROVALS = { action: "costcategory.create", "payload.kind": "head-approval" };
   const status = req.nextUrl.searchParams.get("status") ?? "Pending";
   // Applying is a recoverable in-flight finance claim, not a completed decision. Keep it in the
   // default approver queue so a process restart cannot turn durable work into an invisible orphan.
   const filter: Record<string, unknown> = status === "all" ? {}
     : status === "Pending" ? { status: { $in: ["Pending", "Applying"] } }
       : { status };
-  if (isScoped(user)) Object.assign(filter, locationFilter(user));
+  // ?kind=head-approval narrows ANY reader to head sign-offs (the /finance panel asks this, so 100 newer
+  // parked costs in a queue reader's list cannot push a head out of it - senior review).
+  const headsOnly = !queueRight || req.nextUrl.searchParams.get("kind") === "head-approval";
+  if (headsOnly) Object.assign(filter, HEAD_APPROVALS);
+  // A reader with no queue right sees head sign-offs only, and those carry no location.
+  if (queueRight && isScoped(user)) Object.assign(filter, headRight ? { $or: [locationFilter(user), HEAD_APPROVALS] } : locationFilter(user));
 
   const queryItems = (queryFilter: Record<string, unknown>, take: number, oldestFirst = false) =>
     ApprovalRequest.find(queryFilter).sort({ createdAt: oldestFirst ? 1 : -1 }).limit(take)
@@ -65,9 +80,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
         return [...applying, ...pending];
       })()
     : queryItems(filter, 100);
-  const [items, rules] = await Promise.all([itemsPromise, ApprovalRule.find({}).lean()]);
-  // Actions with no stored rule are simply off.
-  const config = APPROVAL_ACTIONS.map((action) => {
+  const [items, rules] = await Promise.all([itemsPromise, queueRight ? ApprovalRule.find({}).lean() : Promise.resolve([] as any[])]);
+  // Actions with no stored rule are simply off. A head-only reader (5B) gets no rule config.
+  const config = !queueRight ? [] : APPROVAL_ACTIONS.map((action) => {
     const r = rules.find((x: any) => x.action === action);
     return {
       action, enabled: !!r?.enabled, approver_role: r?.approver_role ?? "Admin",
