@@ -4,11 +4,11 @@ import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInS
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
-import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
+import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, requireHeadApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { coerceExtras } from "@/app/api/master-lists/[list]/route";
 import { Types } from "mongoose";
-import { normalizeCostHeadName, costHeadNameProblem } from "@/lib/validate";
+import { normalizeCostHeadName, costHeadNameProblem, isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -98,38 +98,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Q-1006a (Umesh, 2026-10-06): the typed name BECOMES the head's label everywhere, so it is
   // normalised (one label, not three spellings of it) and must be a label - not "Others" again, not
   // two letters. Same rule and words as the form (lib/validate.ts). Applies to an Admin naming a head
-  // here as much as to anyone; Admin master-list creation does not pass through this route.
+  // here as much as to anyone.
   const proposed = normalizeCostHeadName(body.new_subhead);
   const nameProblem = costHeadNameProblem(proposed);
   if (proposed && nameProblem) throw new HttpError(400, nameProblem);
-  // Umesh, 2026-09-07: *"head jo 2-3 ceo ne bnaaye vo rakhte hai otherwise baaki others se new head
-  // bhi tho create krr skte hai naa, team kr legi"*.
-  //
-  // An Admin ALREADY creates cost heads — Rule 40, `master-lists/[list]/route.ts:64` — and the
-  // three Admins are the very people the CEO named as the evaluators. Sending them round an
-  // approval queue to reach a screen they can open in two clicks would be ceremony, not control:
-  // the request would be theirs, the decision would be theirs, and the only thing added is a step.
-  // So an Admin naming a head here just creates it; everybody else proposes and an Admin decides.
-  // That is the same split the master list already draws, applied at the place the need is felt.
-  if (proposed && user.role === "Admin") {
-    // A staged head is hidden from ordinary Mongoose reads. Inspect the raw row here so an Admin
-    // posting the same name cannot race the approval replay into a duplicate-key 500 or attach a
-    // cost to an unpublished taxonomy row.
-    const escaped = proposed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const existing = await CostCategory.collection.findOne(
-      { name: { $regex: `^${escaped}$`, $options: "i" } },
-      { projection: { _id: 1, active: 1, staged_by_approval: 1 } },
-    );
-    if (existing?.staged_by_approval || existing?.active === false) {
-      throw new HttpError(409, `"${proposed}" is inactive or currently being approved. Wait for that review or choose another active head.`);
-    }
-    if (existing) body.category = String(existing._id);
-    else {
-      const made = await CostCategory.create({ name: proposed, active: true });
-      body.category = String(made._id);
-      await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${proposed}" created inline while posting a cost`, actor: user.id });
-    }
-  } else if (proposed) {
+  // An Admin used to create the head here APPROVED at once (Umesh, 2026-09-07: the Admins were the
+  // evaluators, so a queue was "ceremony"). Umesh reversed that on 2026-10-06 ~22:00 - "Admin heads
+  // also wait": whoever names a head, Admin or not, it is created not approved and a SECOND finance
+  // approve holder signs it off; the creator never can (decideApproval's self-approval rule). So
+  // there is one path for everybody now, the one below.
+  if (proposed) {
     // QA-1977 (Umesh, 2026-10-06): *"admin bnaate wqt bnaa lee, approve baad mai koi aur krengee like
     // new add krr paay but approve nhi  add mens not appproved"*. This branch used to park the WHOLE
     // entry in a costcategory.create request, and when that rule was off it refused with 409 - which
@@ -163,16 +141,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
         if (!existing) throw e;
       }
       if (!existing) {
-        let headRequest: Awaited<ReturnType<typeof requireApproval>> = null;
+        let headRequest: Awaited<ReturnType<typeof requireHeadApproval>> | null = null;
         try {
-          headRequest = await requireApproval("costcategory.create", user, {
-            entity: "CostCategory", entity_id: headId,
-            summary: `New cost head "${proposed}" added by ${user.name} — not approved yet`,
-            payload: { kind: "head-approval", category: String(headId), name: proposed, ...(extras.parent ? { parent: String(extras.parent) } : {}) },
-            fallbackApproverRole: "Admin",
-            // QA-1977 5B: signed off by any finance approve holder except this raiser; alerted to them.
-            decidedByGrant: true,
-          });
+          // QA-1977 5B: signed off by any finance approve holder except this raiser; alerted to them.
+          // Shared with the master-list door so both raise the identical request (lib/approvals.ts).
+          headRequest = await requireHeadApproval(user, { id: headId, name: proposed, parent: extras.parent }, "cost form");
         } catch (e) {
           // No request means nobody would ever be asked about this head, so it must not exist either.
           // requireApproval may have written the request before a later step (bell, mail, audit)
@@ -190,7 +163,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       }
     }
     if (existing) {
-      // Same rule as the Admin path: an inactive or staged head is never silently reused. Any other
+      // An inactive or staged head is never silently reused. Any other
       // match - approved or still waiting - is the head the person meant, and it already has its own
       // request if it needs one.
       if (existing.staged_by_approval || existing.active === false) {
@@ -202,7 +175,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     delete body.new_head_parent;
   }
 
-  await assertActiveCostCategory(body.category);
+  const filedUnder = await assertActiveCostCategory(body.category);
+  // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): the bare Other/Misc head is the door to naming
+  // a head, not a place to file a cost. Same words as the form (lib/validate.ts). A named head can
+  // never match here - costHeadNameProblem above already refuses a new head called "Others".
+  if (isBareOtherHeadName(filedUnder.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
 
   // Allocate the id before any write. Formula submissions persist under this id as hidden Pending
   // rows before the cap decision; fixed/non-approved submissions use it for ambiguity-safe create.

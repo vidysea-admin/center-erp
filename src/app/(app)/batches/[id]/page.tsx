@@ -6120,7 +6120,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
             two buttons today so it has not overflowed YET, which is the reason to fix it in the same
             change rather than wait for the third one to be added. */}
         <div className="flex flex-wrap items-end gap-2 md:col-span-5">
-          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!costHeadReady(form) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={!costHeadReady(form, cats, !!editId) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add Cost"}</Btn>
           {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
         </div>
       </div>

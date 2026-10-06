@@ -7,6 +7,7 @@ import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEn
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
+import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 
 // POST { decision: "Approved" | "Rejected", note? }
 // On approval the parked action is replayed here, so approval and execution stay in one
@@ -144,9 +145,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     if (chosenMap) {
       // Checked here as well as in the replay, because reaching the replay means the decision is
       // already saved. QA-1980: a deactivated head is not a place to file new money either.
-      const target = await CostCategory.findById(chosenMap).select("_id active").lean<any>();
+      const target = await CostCategory.findById(chosenMap).select("_id name active").lean<any>();
       if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
       if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it. Pick an active one, or approve the new head as proposed.");
+      // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): an old parked entry is not filed under the
+      // bare Other/Misc head either - map it to a real head, or approve the named one as proposed.
+      if (isBareOtherHeadName(target.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
     }
   }
 

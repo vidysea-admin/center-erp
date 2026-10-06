@@ -446,3 +446,11 @@ export function costHeadNameProblem(v: unknown): string | null {
   if (name.length > COST_HEAD_NAME_MAX) return `A new head's name can be at most ${COST_HEAD_NAME_MAX} characters.`;
   return null;
 }
+
+// Umesh, 2026-10-06 ~22:00 ("Others needs a name"): a cost cannot be filed under the bare Other/Misc
+// head itself - choosing Others means naming the new head. One sentence, shown by the form under the
+// empty name box and returned by the server (costs POST, and a PATCH that moves a cost onto Others).
+export const OTHER_HEAD_NEEDS_NAME = "Name the new head for this cost - a cost cannot be filed under \"Others\" itself.";
+export function isBareOtherHeadName(v: unknown): boolean {
+  return OTHER_HEAD_RE.test(normalizeCostHeadName(v));
+}

@@ -574,7 +574,7 @@ export async function requireApproval(
     // approve right except its raiser - the grant is the rule, not the role and not a named list.
     // With this set the request snapshots no named approvers, and its bell + mail go to every such
     // holder other than the raiser (whatever their role), so a non-Admin approver actually hears
-    // about it. Only the head-approval call in /api/costs sets it; every other request keeps its
+    // about it. Only requireHeadApproval below sets it (cost form + master list); every other request keeps its
     // configured role/named-list audience exactly. With no holder at all the old role audience is
     // used, so the request is never addressed to nobody.
     decidedByGrant?: boolean;
@@ -745,6 +745,29 @@ export async function requireApproval(
   // purpose; `maskMoneyInAuditRow` decides per reader.
   await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: { summary: ctx.summary, payload: ctx.payload }, actor: user.id });
   return { request };
+}
+
+// QA-1977 owner decision 2026-10-06 ~22:00 (Umesh: "Admin heads also wait"): EVERY new cost head -
+// whoever creates it, from the cost form or the Admin master list - is created not approved and gets
+// one head-approval request, decided by any finance approve holder except its creator (5B). One
+// function so both creation doors raise the identical request: same payload shape (which is what
+// approvals/[id] and decideApproval recognise as "head-approval"), same audience, same summary.
+// The caller has already created the head with approval_status "Pending", links the returned request
+// to it (`approval_request`), and decides what to undo if this throws.
+export async function requireHeadApproval(
+  user: SessionUser,
+  head: { id: Types.ObjectId; name: string; parent?: unknown },
+  origin: "cost form" | "master list",
+) {
+  const outcome = await requireApproval("costcategory.create", user, {
+    entity: "CostCategory", entity_id: head.id,
+    summary: `New cost head "${head.name}" added by ${user.name} — not approved yet`,
+    payload: { kind: "head-approval", category: String(head.id), name: head.name, origin, ...(head.parent ? { parent: String(head.parent) } : {}) },
+    fallbackApproverRole: "Admin",
+    decidedByGrant: true,
+  });
+  if (!outcome) throw new HttpError(500, "The new head's approval request could not be created.");
+  return outcome;
 }
 
 // Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one

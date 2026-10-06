@@ -3,7 +3,8 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { hasPermission, FINANCE_VIEW, maskCostCategoryMoneyList, requireFinance, COST_CATEGORY_MONEY_FIELDS, COST_CATEGORY_PREAPPROVAL_FIELDS } from "@/lib/permissions";
 import type { SessionUser } from "@/auth";
-import { CostCategory, DropReason, FailureReason, JobRole, Scheme, SCHEME } from "@/models";
+import { ApprovalRequest, CostCategory, DropReason, FailureReason, JobRole, Scheme, SCHEME } from "@/models";
+import { requireHeadApproval } from "@/lib/approvals";
 import { Types } from "mongoose";
 
 const LISTS: Record<string, any> = {
@@ -79,9 +80,32 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (dupe) throw new HttpError(409, `"${dupe.name}" already exists in this list — names are unique (case-insensitive).`);
   await assertMayWriteCategoryMoney(user, list, body);
   const extras = await coerceExtras(list, body);
+  if (list === "cost-categories") return createCostHeadAwaitingApproval(user, name, body, extras);
   const item = await Model.create({ name, active: body.active ?? true, ...extras });
   return NextResponse.json({ item }, { status: 201 });
 });
+
+// Umesh, 2026-10-06 ~22:00 ("Admin heads also wait"): a head added on this master list is created
+// NOT approved, exactly like one named on the cost form, and gets the same head-approval request
+// (lib/approvals.ts requireHeadApproval) - decided by any finance approve holder except this Admin.
+// It is usable at once (the same "added now, approved later" shape QA-1977 set for the cost form).
+// Heads that already exist carry no flag and read as approved; nothing is migrated.
+async function createCostHeadAwaitingApproval(user: SessionUser, name: string, body: any, extras: Record<string, unknown>) {
+  const item = await CostCategory.create({ name, active: body.active ?? true, ...extras, approval_status: "Pending" });
+  let outcome: Awaited<ReturnType<typeof requireHeadApproval>>;
+  try {
+    outcome = await requireHeadApproval(user, { id: item._id, name, parent: extras.parent }, "master list");
+  } catch (e) {
+    // No request means nobody is ever asked about this head, so it must not exist either. Nothing
+    // can point at it yet - it was created a moment ago, in this request.
+    await ApprovalRequest.deleteOne({ action: "costcategory.create", entity_id: item._id, status: "Pending" }).catch(() => {});
+    await CostCategory.collection.deleteOne({ _id: item._id, approval_status: "Pending" }).catch(() => {});
+    throw e;
+  }
+  await CostCategory.collection.updateOne({ _id: item._id }, { $set: { approval_request: outcome.request._id } });
+  const linked = await CostCategory.findById(item._id).lean();
+  return NextResponse.json({ item: linked ?? item }, { status: 201 });
+}
 
 // Masking a field on READ while leaving it writable is half a rule, and the worse half: an Admin
 // without the grant could set a budget they are not allowed to see, and never learn what they

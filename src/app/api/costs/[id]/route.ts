@@ -7,6 +7,7 @@ import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
 import { costDeletionAuditIsDurable, costDeletionSnapshot, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, settleFinanceAuditEvents } from "@/lib/approvals";
 import { Types } from "mongoose";
+import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -111,7 +112,15 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const before = doc.toObject();
   assertCostEntryValid({ ...before, ...patch }); // Rule 37 on the merged entry
-  if (patch.category !== undefined) await assertActiveCostCategory(patch.category);
+  if (patch.category !== undefined) {
+    const target = await assertActiveCostCategory(patch.category);
+    // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): no cost may be MOVED onto the bare Other/Misc
+    // head. Only a change counts - the edit form sends the category back unchanged, and an old row
+    // already under Others stays editable (no migration of old rows).
+    if (String(patch.category) !== String(doc.category ?? "") && isBareOtherHeadName(target.name)) {
+      throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
+    }
+  }
   const setPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
   const unsetPatch = Object.fromEntries(Object.entries(patch).filter(([, value]) => value === undefined).map(([field]) => [field, 1]));
   const update = {

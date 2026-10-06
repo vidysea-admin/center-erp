@@ -254,7 +254,7 @@ function CostsInner() {
                   immediately beside the primary Save, while an ordinary frequent action was stranded
                   at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
               <div className="flex flex-wrap items-end gap-2 md:col-span-6">
-                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
+                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form, cats, !!editId) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
                 {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && canApproveCosts && (
                   <span className="flex flex-wrap items-end gap-2 md:ml-auto">

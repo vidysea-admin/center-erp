@@ -6,8 +6,7 @@ import { IconTrendDown, IconTrendUp } from "@/components/icons";
 import { sourceLink } from "@/lib/client";
 import { plain } from "@/lib/user-copy";
 import { BATCH_STATUS_LABEL, SIGNOFF_PENDING_LABEL, batchStatusLabel } from "@/lib/candidate-journey";
-import { OTHER_HEAD_RE, costHeadNameProblem } from "@/lib/validate";
-import { useSession } from "next-auth/react";
+import { OTHER_HEAD_RE, OTHER_HEAD_NEEDS_NAME, costHeadNameProblem } from "@/lib/validate";
 
 // 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
 // every drill-down header carries this. Browser-back when there is history (keeps scroll
@@ -393,9 +392,14 @@ export function showNewHeadBox(cats: any[], id: unknown): boolean {
 
 // Whether a cost form has a head to post: an existing head, or a name to create one from. Choosing
 // "Others (add a new head)" with no name is NOT ready - there is nothing to file the cost under.
-export function costHeadReady(form: { category?: unknown; new_subhead?: unknown }): boolean {
+// Umesh, 2026-10-06 ~22:00 ("Others needs a name"): neither is choosing the existing Other/Misc head
+// with no name - a cost cannot be filed under Others itself (the server refuses it in the same words).
+// `editing`: the edit form shows no name box and the server only refuses a MOVE onto Others, so an
+// old row already under Others stays saveable.
+export function costHeadReady(form: { category?: unknown; new_subhead?: unknown }, cats: any[] = [], editing = false): boolean {
   const name = String(form.new_subhead ?? "").trim();
   if (name) return !costHeadNameProblem(name);
+  if (!editing && isOtherCostHead(cats, form.category)) return false;
   return !!form.category && String(form.category) !== NEW_COST_HEAD;
 }
 
@@ -405,25 +409,23 @@ export function costHeadPayload<T extends Record<string, any>>(form: T): T {
   return String(form.category ?? "") === NEW_COST_HEAD ? { ...form, category: undefined } : form;
 }
 
-// The inline sentence under the naming box. What happens to a typed name depends on WHO types it
-// (an Admin's head is made approved; anybody else's is made at once, marked not approved, and goes to
-// a finance approver), so it says the true thing for the reader, plus any problem with the name.
+// The inline sentence under the naming box. Since Umesh's 2026-10-06 ~22:00 decision ("Admin heads
+// also wait") the same thing happens whoever types the name - the head is made at once, marked not
+// approved, and a DIFFERENT finance approver signs it off - so there is one sentence for everybody,
+// plus any problem with the name, and the "needs a name" refusal while the box is empty.
 export function NewCostHeadHint({ name }: { name?: unknown }) {
-  const { data: session } = useSession();
-  const isAdmin = (session?.user as any)?.role === "Admin";
-  const problem = costHeadNameProblem(name);
+  const problem = String(name ?? "").trim() ? costHeadNameProblem(name) : OTHER_HEAD_NEEDS_NAME;
   return (
     <p className={`mt-1 text-xs ${problem ? "text-red-700" : "text-gray-500"}`} data-new-head-hint>
-      {problem ?? (isAdmin
-        ? "You can create heads, so this one is made straight away under the name you type."
-        : "This head is added now under the name you type, marked not approved; a finance approver will review it. You can use it straight away.")}
+      {problem ?? "This head is added now under the name you type, marked not approved; another finance approver will review it. You can use it straight away."}
     </p>
   );
 }
 
 // QA-1977 (Umesh, 2026-10-06): a head somebody named while entering a cost exists at once but is
 // not approved yet. It stays selectable - people keep using it - and it SAYS so wherever it is
-// offered. An absent flag means approved: every older head and every Admin-made head carries none.
+// offered. An absent flag means approved: every head that existed before this change carries none
+// (since 2026-10-06 ~22:00 every NEW head is created Pending, an Admin's included).
 export function costHeadApprovalNote(c: any): string {
   const st = String(c?.approval_status ?? "");
   if (st === "Pending") return " (not approved)";

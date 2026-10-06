@@ -1630,12 +1630,16 @@ for (const variant of ["ordinary", "mark_paid"]) {
   ok("QA-1828c: an Admin's cost still goes through the cost.post queue like everyone else's",
     inline.status === 201 || inline.status === 202, `got ${inline.status}`);
   const inlineCats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
-  ok("QA-1828c: ...but the HEAD they named exists straight away, with no approval in between",
-    inlineCats.some((c) => c.name === inlineName), `${inlineCats.length} heads`);
+  // DELIBERATE CONTRACT CHANGE (Umesh, 2026-10-06 ~22:00, "Admin heads also wait"): these two pins
+  // used to assert that an Admin's head needed no approval because the Admin "is the evaluator". The
+  // owner reversed that: whoever creates a head, a SECOND finance approver signs it off.
+  ok("QA-1828c: ...the HEAD they named exists straight away (selectable) but marked not approved",
+    inlineCats.some((c) => c.name === inlineName && c.approval_status === "Pending"),
+    JSON.stringify(inlineCats.find((c) => c.name === inlineName) ?? null));
   const reqsAfter = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
     .filter((r) => r.action === "costcategory.create").length;
-  ok("QA-1828c: ...and no new-head request was raised for them - they are the evaluator",
-    reqsAfter === reqsBefore, `${reqsBefore} -> ${reqsAfter}`);
+  ok("QA-1828c: ...and exactly one head-approval request was raised for it - an Admin's head waits too",
+    reqsAfter === reqsBefore + 1, `${reqsBefore} -> ${reqsAfter}`);
 }
 
 
@@ -1679,8 +1683,10 @@ for (const variant of ["ordinary", "mark_paid"]) {
   const c = await req(admin, "POST", "/api/costs", { ...baseEntry({ amount: 213 }), new_subhead: adminName });
   const headC = await rawCategories.findOne({ name: adminName });
   const reqsC = headC ? await rawApprovals.countDocuments({ action: "costcategory.create", entity_id: headC._id }) : -1;
-  ok("QA-1977: a head an Admin creates is approved at once - no flag, no head request",
-    [201, 202].includes(c.status) && !!headC && headC.approval_status === undefined && headC.active === true && reqsC === 0,
+  // DELIBERATE CONTRACT CHANGE (Umesh, 2026-10-06 ~22:00): this pin asserted "an Admin's head is
+  // approved at once". It now asserts the opposite - "Admin heads also wait".
+  ok("QA-1977 (owner 22:00): a head an Admin names on the cost form starts NOT approved - flag Pending, one head request",
+    [201, 202].includes(c.status) && !!headC && headC.approval_status === "Pending" && headC.active === true && reqsC === 1,
     `got ${c.status} head=${!!headC} flag=${headC?.approval_status} headRequests=${reqsC}`);
 
   // REJECT: file one entry under the head first, then reject the head. The entry must survive.
@@ -2426,6 +2432,43 @@ for (const variant of ["ordinary", "mark_paid"]) {
   const h4 = await raiseHead(finB.cookie, `ZZ FiveB Own ${stamp}`);
   if (h4.request) { qa5bUi.ownReqId = String(h4.request._id); qa5bUi.ownName = h4.head.name; }
 
+  // (e) Umesh, 2026-10-06 ~22:00 - "Admin heads also wait": an Admin's new head is not approved until
+  // a SECOND finance.approve holder signs it off, on BOTH creation doors - the cost form and the Admin
+  // master list. The Admin holds finance.approve here, so the refusal must come from the self-approval
+  // rule itself, not from a missing grant.
+  const h5 = await raiseHead(admin, `ZZ FiveB AdminForm ${stamp}`);
+  ok("QA-1977 owner 22:00 (e): an Admin naming a head on the cost form - the head starts Pending with its head-approval request",
+    [201, 202].includes(h5.status) && h5.head?.approval_status === "Pending" && h5.request?.status === "Pending" && h5.request?.payload?.kind === "head-approval",
+    `got ${h5.status} flag=${h5.head?.approval_status} req=${h5.request?.status}/${h5.request?.payload?.kind}`);
+  if (h5.request) {
+    const selfAdm = await req(admin, "POST", `/api/approvals/${h5.request._id}`, { decision: "Approved", note: "my own head" });
+    const h5Mid = await rawCategories.findOne({ _id: h5.head._id });
+    ok("QA-1977 owner 22:00 (e): ...the Admin who created it cannot approve it - 403 by the self-approval rule, still Pending",
+      selfAdm.status === 403 && /cannot approve your own request/i.test(String(selfAdm.data?.error ?? "")) && h5Mid?.approval_status === "Pending",
+      `got ${selfAdm.status} ${JSON.stringify(selfAdm.data?.error ?? "").slice(0, 140)} flag=${h5Mid?.approval_status}`);
+    const byA = await req(finA.cookie, "POST", `/api/approvals/${h5.request._id}`, { decision: "Approved", note: "second person" });
+    const h5After = await rawCategories.findOne({ _id: h5.head._id });
+    ok("QA-1977 owner 22:00 (e): ...while a different finance.approve holder approves it - 200, flag Approved",
+      byA.status === 200 && h5After?.approval_status === "Approved",
+      `got ${byA.status} ${JSON.stringify(byA.data?.error ?? "").slice(0, 140)} flag=${h5After?.approval_status}`);
+  }
+  const mlName = `ZZ FiveB AdminList ${stamp}`;
+  const ml = await req(admin, "POST", "/api/master-lists/cost-categories", { name: mlName });
+  const mlHead = await rawCategories.findOne({ name: mlName });
+  const mlReqs = mlHead ? await rawApprovals.find({ action: "costcategory.create", entity_id: mlHead._id }).toArray() : [];
+  ok("QA-1977 owner 22:00 (f): an Admin adding a head on the master list - created (201) but Pending, linked to exactly one head-approval request",
+    ml.status === 201 && mlHead?.approval_status === "Pending" && mlHead?.active !== false && mlReqs.length === 1
+      && mlReqs[0].status === "Pending" && mlReqs[0].payload?.kind === "head-approval" && String(mlHead?.approval_request ?? "") === String(mlReqs[0]._id),
+    `got ${ml.status} ${JSON.stringify(ml.data?.error ?? "").slice(0, 120)} flag=${mlHead?.approval_status} reqs=${mlReqs.length} linked=${String(mlHead?.approval_request ?? "")}`);
+  if (mlReqs[0]) {
+    const selfMl = await req(admin, "POST", `/api/approvals/${mlReqs[0]._id}`, { decision: "Approved", note: "my own head" });
+    const byB = await req(finB.cookie, "POST", `/api/approvals/${mlReqs[0]._id}`, { decision: "Approved", note: "second person" });
+    const mlAfter = await rawCategories.findOne({ _id: mlHead._id });
+    ok("QA-1977 owner 22:00 (f): ...the Admin creator gets 403 on approve, and another finance holder's approval flips it to Approved",
+      selfMl.status === 403 && /cannot approve your own request/i.test(String(selfMl.data?.error ?? "")) && byB.status === 200 && mlAfter?.approval_status === "Approved",
+      `self=${selfMl.status} other=${byB.status} ${JSON.stringify(byB.data?.error ?? "").slice(0, 120)} flag=${mlAfter?.approval_status}`);
+  }
+
   // (d) NO WIDENING: a non-Admin holder still cannot decide a whole-entry cost.post request - with or
   // without approvals.decide - and the parked cost stays exactly where it was.
   const normal5b = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
@@ -2496,6 +2539,59 @@ for (const variant of ["ordinary", "mark_paid"]) {
   ok("Q-1006a: ...nor one longer than 80 characters - 400 with the reason, no head created",
     tooLong.status === 400 && /at most 80/i.test(String(tooLong.data?.error ?? "")) && longMade === 0,
     `got ${tooLong.status} ${JSON.stringify(tooLong.data?.error ?? "").slice(0, 120)} made=${longMade}`);
+
+  // Umesh, 2026-10-06 ~22:00 - "Others needs a name": a cost cannot be filed under the bare
+  // Other/Misc head itself; choosing Others means naming the new head. Server refuses in the words
+  // the form shows (lib/validate.ts OTHER_HEAD_NEEDS_NAME). Both doors that set a category: POST, and
+  // a PATCH that MOVES a cost onto Others. A PATCH that leaves an old Other row's category alone is
+  // not a new filing and stays allowed (no migration of old rows).
+  const bareOther = await rawCategories.findOne({ name: { $regex: "^(others?|miscellaneous|misc)$", $options: "i" }, active: { $ne: false } });
+  const bareNote = `Q-1006a bare other ${stamp}`;
+  const bare = bareOther ? await req(ops, "POST", "/api/costs", baseEntry({ category: String(bareOther._id), amount: 145, note: bareNote })) : { status: -1, data: {} };
+  const bareAdmin = bareOther ? await req(admin, "POST", "/api/costs", baseEntry({ category: String(bareOther._id), amount: 145, note: `${bareNote} admin` })) : { status: -1, data: {} };
+  const bareParked = await rawApprovals.countDocuments({ "payload.note": { $regex: `^${bareNote}` } });
+  const bareFiled = await rawCosts.countDocuments({ note: { $regex: `^${bareNote}` } });
+  ok("Q-1006a owner 22:00: filing a cost under the bare Others head with no new name is refused - 400 'name the new head', Operations AND Admin, nothing parked or filed",
+    !!bareOther && bare.status === 400 && bareAdmin.status === 400
+      && /name the new head/i.test(String(bare.data?.error ?? "")) && /cannot be filed under/i.test(String(bare.data?.error ?? ""))
+      && bareParked === 0 && bareFiled === 0,
+    `other=${bareOther?.name} ops=${bare.status} admin=${bareAdmin.status} ${JSON.stringify(bare.data?.error ?? "").slice(0, 140)} parked=${bareParked} filed=${bareFiled}`);
+  const moveRow = bareOther ? await rawCosts.findOne({
+    category: { $nin: [bareOther._id, String(bareOther._id)] }, pre_approved_applied: { $ne: true },
+    deletion_state: { $exists: false }, reservation_state: { $ne: "Pending" }, note: { $type: "string" },
+  }) : null;
+  if (moveRow) {
+    const moved = await req(admin, "PATCH", `/api/costs/${moveRow._id}`, { category: String(bareOther._id) });
+    const rowAfter = await rawCosts.findOne({ _id: moveRow._id });
+    ok("Q-1006a owner 22:00: ...and an edit cannot MOVE an existing cost onto the bare Others head - 400 with the same words, category unchanged",
+      moved.status === 400 && /name the new head/i.test(String(moved.data?.error ?? "")) && String(rowAfter?.category) === String(moveRow.category),
+      `got ${moved.status} ${JSON.stringify(moved.data?.error ?? "").slice(0, 140)} cat ${moveRow.category}->${rowAfter?.category}`);
+    // An OLD row already under Others (simulated on the raw row) can still be edited with its
+    // category sent back unchanged - which is exactly what the edit form posts. Restored in finally.
+    try {
+      await rawCosts.updateOne({ _id: moveRow._id }, { $set: { category: bareOther._id } });
+      const keep = await req(admin, "PATCH", `/api/costs/${moveRow._id}`, { category: String(bareOther._id), note: `${moveRow.note} (edited)` });
+      ok("Q-1006a owner 22:00 [control]: ...an old cost already under Others still saves when its category is sent back unchanged",
+        keep.status === 200, `got ${keep.status} ${JSON.stringify(keep.data?.error ?? "").slice(0, 140)}`);
+    } finally {
+      await rawCosts.updateOne({ _id: moveRow._id }, { $set: { category: moveRow.category, note: moveRow.note } });
+    }
+  } else {
+    ok("Q-1006a owner 22:00 [precondition]: a ledger cost exists to try moving onto Others", false, `other=${!!bareOther}`);
+  }
+
+  // The third door that sets a category: an OLD whole-entry head request (still Pending from before
+  // QA-1977) approved WITH a mapping. Mapping it onto the bare Others head is refused the same way
+  // (senior review), before the decision is saved.
+  if (bareOther) {
+    const legacy = await parkLegacyHeadRequest({ ...baseEntry({ amount: 146, note: `Q-1006a legacy map ${stamp}` }), new_subhead: `ZZ Legacy Map ${stamp}` });
+    const mapOther = await req(admin, "POST", `/api/approvals/${legacy.data.item._id}`, { decision: "Approved", note: "file under Others", map_to_category: String(bareOther._id) });
+    const legacyAfter = await rawApprovals.findOne({ _id: new ObjectId(legacy.data.item._id) });
+    ok("Q-1006a owner 22:00: ...and an old parked entry cannot be approved INTO the bare Others head by mapping - 400 with the same words, request still Pending",
+      mapOther.status === 400 && /name the new head/i.test(String(mapOther.data?.error ?? "")) && legacyAfter?.status === "Pending",
+      `got ${mapOther.status} ${JSON.stringify(mapOther.data?.error ?? "").slice(0, 140)} req=${legacyAfter?.status}`);
+    await req(admin, "POST", `/api/approvals/${legacy.data.item._id}`, { decision: "Rejected", note: "pin cleanup" });
+  }
 }
 
 
@@ -2950,6 +3046,16 @@ for (const variant of ["ordinary", "mark_paid"]) {
           }
           return null;
         };
+        // The head row is written BEFORE its request (and before the parked cost), so the browser
+        // arms poll for the request too - reading it the instant the head appears raced (green3).
+        const waitApproval = async (filter) => {
+          for (let i = 0; i < 60; i++) {
+            const r = await rawApprovals.findOne(filter);
+            if (r) return r;
+            await new Promise((res) => setTimeout(res, 500));
+          }
+          return null;
+        };
         const otherValue = (cat) => cat.locator("option").evaluateAll((os) =>
           (os.find((o) => /^(others?|miscellaneous|misc)$/i.test((o.textContent ?? "").trim())) ?? { value: "" }).value);
 
@@ -2965,10 +3071,18 @@ for (const variant of ["ordinary", "mark_paid"]) {
           if (ov) await cat.selectOption(ov);
           const shown = await nameBox.waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
           const hint = shown ? await op.locator("[data-new-head-hint]").innerText() : "";
-          ok("Q-1006a UI (Operations): no head-name box until Others is chosen in the dropdown; choosing it reveals the box and a 'will be reviewed' hint",
-            hiddenAtStart && !!ov && shown && /not approved/i.test(hint) && /finance approver will review/i.test(hint),
-            `hiddenAtStart=${hiddenAtStart} other=${!!ov} shown=${shown} hint=${JSON.stringify(hint)}`);
+          // Owner 22:00 "Others needs a name": with Others chosen and no name typed, the hint says so in
+          // the server's own words and Add stays disabled (a cost cannot be filed under Others itself).
+          if (shown) await fillRest(op, 321, `Q-1006a ops walk ${stamp}`);
+          const disabledNoName = shown ? await addBtn(op).isDisabled() : false;
+          ok("Q-1006a UI (Operations): no head-name box until Others is chosen in the dropdown; choosing it reveals the box, and with no name the hint says 'name the new head' and Add is disabled",
+            hiddenAtStart && !!ov && shown && /name the new head/i.test(hint) && /cannot be filed under/i.test(hint) && disabledNoName,
+            `hiddenAtStart=${hiddenAtStart} other=${!!ov} shown=${shown} disabled=${disabledNoName} hint=${JSON.stringify(hint)}`);
           if (shown) {
+            await nameBox.fill(`ZZ Hint Probe ${stamp}`);
+            const okHint = await op.locator("[data-new-head-hint]").innerText();
+            ok("Q-1006a UI (Operations): ...with a proper name typed, the hint says the head is added not approved and ANOTHER finance approver reviews it",
+              /not approved/i.test(okHint) && /another finance approver will review/i.test(okHint), `hint=${JSON.stringify(okHint)}`);
             await nameBox.fill("Others");
             const refusedHint = await op.locator("[data-new-head-hint]").innerText();
             await fillRest(op, 321, `Q-1006a ops walk ${stamp}`);
@@ -2978,7 +3092,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
             await nameBox.fill(opsName);
             await addBtn(op).click();
             const h = await waitHead(opsName);
-            const hr = h ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: h._id }) : null;
+            const hr = h ? await waitApproval({ action: "costcategory.create", entity_id: h._id }) : null;
             ok("Q-1006a UI (Operations): Add creates the head under exactly the typed label, NOT approved, with its head-approval request",
               h?.approval_status === "Pending" && hr?.payload?.kind === "head-approval" && hr?.payload?.name === opsName,
               `head=${h?.name ?? "none"} flag=${h?.approval_status} req=${hr?.payload?.kind}`);
@@ -3019,7 +3133,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
               sp.on("request", (r) => { if (r.method() === "POST" && /\/api\/costs(\?|$)/.test(r.url())) sentBodies.push(r.postData() ?? ""); });
               await addBtn(sp).click();
               const h = await waitHead(sentName);
-              const parked = h ? await rawApprovals.findOne({ action: "cost.post", "payload.category": { $in: [String(h._id), h._id] } }) : null;
+              const parked = h ? await waitApproval({ action: "cost.post", "payload.category": { $in: [String(h._id), h._id] } }) : null;
               const leaked = sentBodies.filter((b) => b.includes("__new_head__")).length + (sentBodies.length ? 0 : 1);
               ok("Q-1006a UI (no Other head): Add creates the head (not approved) and files the cost under IT - the sentinel never reaches the server",
                 h?.approval_status === "Pending" && !!parked && leaked === 0,
@@ -3042,18 +3156,20 @@ for (const variant of ["ordinary", "mark_paid"]) {
           const ov = await otherValue(cat);
           if (ov) await cat.selectOption(ov);
           const shown = await nameBox.waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+          // DELIBERATE CONTRACT CHANGE (owner 22:00, "Admin heads also wait"): these two pins asserted the
+          // Admin hint said "made straight away" and that Add made the head approved with no request.
+          if (shown) await nameBox.fill(admName);
           const hint = shown ? await ap.locator("[data-new-head-hint]").innerText() : "";
-          ok("Q-1006a UI (Admin): the same Others route, and the hint says an Admin's head is made straight away (not 'will be reviewed')",
-            hiddenAtStart && shown && /made straight away/i.test(hint) && !/not approved/i.test(hint),
+          ok("Q-1006a UI (Admin): the same Others route, and the Admin is told the SAME thing as everyone - added not approved, another finance approver reviews it",
+            hiddenAtStart && shown && /not approved/i.test(hint) && /another finance approver will review/i.test(hint) && !/straight away under/i.test(hint),
             `hiddenAtStart=${hiddenAtStart} shown=${shown} hint=${JSON.stringify(hint)}`);
           if (shown) {
-            await nameBox.fill(admName);
             await fillRest(ap, 323, `Q-1006a admin walk ${stamp}`);
             await addBtn(ap).click();
             const h = await waitHead(admName);
-            const hr = h ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: h._id }) : null;
-            ok("Q-1006a UI (Admin): Add creates the head approved (no flag) and raises no head-approval request",
-              !!h && !h.approval_status && !hr, `head=${h?.name ?? "none"} flag=${h?.approval_status} req=${!!hr}`);
+            const hr = h ? await waitApproval({ action: "costcategory.create", entity_id: h._id }) : null;
+            ok("Q-1006a UI (Admin): Add creates the head NOT approved (Pending) with its head-approval request - an Admin's head waits too",
+              h?.approval_status === "Pending" && hr?.payload?.kind === "head-approval", `head=${h?.name ?? "none"} flag=${h?.approval_status} req=${hr?.payload?.kind}`);
           }
         } finally {
           try { await actx.close(); } catch {}
