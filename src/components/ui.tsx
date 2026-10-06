@@ -380,7 +380,18 @@ export function showNewHeadBox(cats: any[], id: unknown): boolean {
   return !hasOtherCostHead(cats) || isOtherCostHead(cats, id);
 }
 
+// QA-1977 (Umesh, 2026-10-06): a head somebody named while entering a cost exists at once but is
+// not approved yet. It stays selectable - people keep using it - and it SAYS so wherever it is
+// offered. An absent flag means approved: every older head and every Admin-made head carries none.
+export function costHeadApprovalNote(c: any): string {
+  const st = String(c?.approval_status ?? "");
+  if (st === "Pending") return " (not approved)";
+  if (st === "Rejected") return " (rejected)";
+  return "";
+}
+
 export function CostHeadOptions({ cats }: { cats: any[] }) {
+  const label = (c: any) => `${c.name}${costHeadApprovalNote(c)}`;
   const idOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
   const heads = cats.filter((c) => !idOf(c));
   const subsOf = (headId: string) => cats.filter((c) => idOf(c) === String(headId));
@@ -392,19 +403,19 @@ export function CostHeadOptions({ cats }: { cats: any[] }) {
     <>
       {heads.map((h) => {
         const subs = subsOf(String(h._id));
-        if (!subs.length) return <option key={String(h._id)} value={String(h._id)}>{h.name}</option>;
+        if (!subs.length) return <option key={String(h._id)} value={String(h._id)}>{label(h)}</option>;
         return (
-          <optgroup key={String(h._id)} label={h.name}>
+          <optgroup key={String(h._id)} label={label(h)}>
             {/* The head itself stays selectable: a cost can belong to "Travel" without belonging to
                 any of its subheads, and forcing a subhead would push people to pick a wrong one. */}
-            <option value={String(h._id)}>{h.name} — no subhead</option>
-            {subs.map((c) => <option key={String(c._id)} value={String(c._id)}>{c.name}</option>)}
+            <option value={String(h._id)}>{label(h)} — no subhead</option>
+            {subs.map((c) => <option key={String(c._id)} value={String(c._id)}>{label(c)}</option>)}
           </optgroup>
         );
       })}
       {orphans.length > 0 && (
         <optgroup label="Head no longer listed">
-          {orphans.map((c) => <option key={String(c._id)} value={String(c._id)}>{c.name}</option>)}
+          {orphans.map((c) => <option key={String(c._id)} value={String(c._id)}>{label(c)}</option>)}
         </optgroup>
       )}
     </>

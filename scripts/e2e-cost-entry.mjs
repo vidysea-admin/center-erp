@@ -168,11 +168,34 @@ ok("[precondition] cost-entry personas can sign in", !!admin && !!ops && !!spoc 
 
 const stamp = Date.now().toString(36);
 const proposedHeadForMine = `ZZ Proposed ${stamp}`;
+// QA-1977: filled by the API block, read by the browser block - a head left Pending and one with no flag at all.
+const qa1977Ui = { pendingId: "", pendingName: `ZZ Pending Ui ${stamp}`, legacyId: "" };
 const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
 ok("[precondition] a location exists to hang entries on", !!anyLoc, "none");
 
 // Rule 37 needs one of location/batch/trainer; a location is the simplest.
 const baseEntry = (extra = {}) => ({ entry_date: "2026-09-07", location: anyLoc, amount: 500, note: "pin: what this was for", ...extra });
+
+// QA-1977 (Umesh, 2026-10-06): POST /api/costs no longer parks a WHOLE entry behind a new head. It
+// creates the head at once, marked not approved, and the cost goes through cost.post like any other.
+// Requests of the OLD shape (the entire entry parked under action costcategory.create) can still be
+// Pending on production from before that release, so their replay is kept - and these pins keep it
+// honest by parking an old-shape request directly, the way the c13 replay race below already does,
+// rather than through a door that no longer produces one.
+const opsUserRow = await rawUsers.findOne({ email: "ops@vidysea.com" });
+async function parkLegacyHeadRequest(body) {
+  const _id = new ObjectId();
+  const name = String(body.new_subhead ?? "").trim();
+  await rawApprovals.insertOne({
+    _id, action: "costcategory.create", entity: "CostCategory",
+    summary: `New cost head "${name}" for a ₹${body.amount} entry by Operations Lead — ${body.note ?? ""}`,
+    payload: { ...body, new_subhead: name },
+    ...(body.location ? { location: new ObjectId(String(body.location)) } : {}),
+    initiator: opsUserRow?._id, approver_role: "Admin", approver_users: [], status: "Pending",
+    createdAt: new Date(), updatedAt: new Date(),
+  });
+  return { status: 202, data: { queued: true, item: { _id: String(_id) } } };
+}
 
 // -------------------------------- every operational role may submit, but only inside its scope
 {
@@ -1471,17 +1494,40 @@ for (const variant of ["ordinary", "mark_paid"]) {
   const catsBefore = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
   const costsBefore = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
 
-  // The route REFUSES rather than inventing an approver, so the rule for THIS action has to be on.
-  // The pin failed with 409 "there is no approver set up for new cost heads yet" on its first run,
-  // which is the route behaving exactly as designed and the fixture not having read its own design.
-  const catRule = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: true, approver_role: "Admin" });
-  ok("QA-1828c [precondition] an approver is configured for new cost heads", catRule.status === 200, `got ${catRule.status}`);
+  // QA-1977 (Umesh, 2026-10-06): *"admin bnaate wqt bnaa lee, approve baad mai koi aur krengee like
+  // new add krr paay but approve nhi  add mens not appproved"*. This block used to switch the
+  // costcategory.create rule ON first, because without one the route refused with 409 - and that
+  // refusal is exactly what Manish hit. The contract now: the head is created AT ONCE, flagged not
+  // approved; the entry goes through cost.post like any other entry; an approver signs the head off
+  // later. So the rule is switched OFF here ON PURPOSE - the point is that no rule has to exist.
+  const catRuleOff = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
+  const postRuleOn = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+  ok("QA-1977 [precondition]: NO approval rule for new cost heads, cost.post approval ON",
+    catRuleOff.status === 200 && postRuleOn.status === 200, `cat=${catRuleOff.status} post=${postRuleOn.status}`);
 
   const q = await req(ops, "POST", "/api/costs", { ...baseEntry(), new_subhead: proposed });
-  ok("QA-1828c: naming a head that does not exist parks the entry instead of refusing it",
-    q.status === 202, `got ${q.status} ${JSON.stringify(q.data).slice(0, 120)}`);
+  ok("QA-1977: a non-Admin naming a head that does not exist is NOT refused (no 409) - the entry parks on cost.post",
+    q.status === 202, `got ${q.status} ${JSON.stringify(q.data).slice(0, 160)}`);
+  const rawHead = await rawCategories.findOne({ name: proposed });
+  ok("QA-1977: ...the head EXISTS at once - active, selectable, NOT staged, flagged approval_status Pending",
+    !!rawHead && rawHead.active === true && rawHead.approval_status === "Pending" && !rawHead.staged_by_approval,
+    JSON.stringify(rawHead ? { active: rawHead.active, approval_status: rawHead.approval_status, staged: rawHead.staged_by_approval } : null));
+  const parkedId = q.data?.item?._id && ObjectId.isValid(String(q.data.item._id)) ? new ObjectId(String(q.data.item._id)) : null;
+  const costReq = parkedId ? await rawApprovals.findOne({ _id: parkedId }) : null;
+  ok("QA-1977: ...the entry itself is an ordinary Pending cost.post request filed under that head",
+    costReq?.action === "cost.post" && costReq?.status === "Pending" && !!rawHead && String(costReq?.payload?.category) === String(rawHead._id),
+    JSON.stringify(costReq ? { action: costReq.action, status: costReq.status, category: costReq.payload?.category } : null));
+  const costsMid = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
+  ok("QA-1977: ...and no ledger row is written before cost.post is decided",
+    costsMid === costsBefore, `costs ${costsBefore}->${costsMid}`);
+  const headReq = rawHead ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: rawHead._id }) : null;
+  ok("QA-1977: ...a request to approve the HEAD always exists, even with no rule - Admin approves, Operations initiated",
+    headReq?.status === "Pending" && headReq?.approver_role === "Admin" && headReq?.payload?.kind === "head-approval"
+      && String(headReq?.initiator) === String(opsUserRow?._id) && String(rawHead?.approval_request) === String(headReq?._id),
+    JSON.stringify(headReq ? { status: headReq.status, role: headReq.approver_role, kind: headReq.payload?.kind, initiator: String(headReq.initiator), link: String(rawHead?.approval_request) } : null));
+
   const ownUnknownHead = ((await req(ops, "GET", "/api/approvals?mine=1")).data?.items ?? [])
-    .find((r) => String(r._id) === String(q.data?.item?._id));
+    .find((r) => String(r._id) === String(headReq?._id));
   // QA-2488: this required the summary to contain the proposed head name VERBATIM, and that name
   // embeds `Date.now().toString(36)`. Base 36 mixes letters and digits, so some clock values give it
   // a run of 3+ consecutive digits - and -303 deliberately redacts every such run on an approval for
@@ -1497,37 +1543,59 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // every clock value and red if the masker's behaviour ever changes in either direction.
   const stampHasDigitRun = /\d{3,}/.test(proposed);
   const summaryText = String(ownUnknownHead?.summary ?? "");
-  ok("My submissions: an unknown-head proposal is returned beside ordinary cost.post requests",
+  ok("My submissions: the new-head request is returned beside ordinary cost.post requests",
     ownUnknownHead?.action === "costcategory.create" && summaryText.includes("ZZ Proposed"),
     JSON.stringify(ownUnknownHead ? { action: ownUnknownHead.action, summary: ownUnknownHead.summary } : null));
   ok("QA-2488: ...and the masker treats that head name EXACTLY as -303 says - every 3+ digit run taken, nothing else",
     stampHasDigitRun ? !summaryText.includes(proposed) : summaryText.includes(proposed),
     `proposed=${proposed} hasDigitRun=${stampHasDigitRun} summary=${summaryText.slice(0, 130)}`);
 
-  // NOTHING may have been written yet - not the head, not the entry. "The whole entry parks" is
-  // the claim (Umesh, D8), and a queue that half-writes is worse than no queue.
-  const catsMid = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
-  const costsMid = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
-  ok("QA-1828c: ...and NOTHING is written yet - no head, no ledger row",
-    catsMid === catsBefore && costsMid === costsBefore,
-    `cats ${catsBefore}->${catsMid}, costs ${costsBefore}->${costsMid}`);
-
-  const reqId = q.data?.item?._id;
-  if (reqId) {
-    const decided = await req(admin, "POST", `/api/approvals/${reqId}`, { decision: "Approved", note: "pin" });
-    ok("QA-1828c: approving it does BOTH writes in one decision", decided.status === 200, `got ${decided.status}`);
-    const catsAfter = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
+  if (headReq && rawHead && costReq) {
+    const selfDecide = await req(ops, "POST", `/api/approvals/${headReq._id}`, { decision: "Approved", note: "my own head" });
+    ok("QA-1977: Operations, who named the head, cannot approve it (permission gates)", selfDecide.status === 403, `got ${selfDecide.status}`);
+    const otherHead = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+      .find((c) => String(c._id) !== String(rawHead._id) && c.active !== false);
+    const remap = otherHead
+      ? await req(admin, "POST", `/api/approvals/${headReq._id}`, { decision: "Approved", note: "remap", map_to_category: otherHead._id })
+      : { status: -1 };
+    const afterRemap = await rawApprovals.findOne({ _id: headReq._id });
+    ok("QA-1977: a head-approval cannot be remapped (entries already point at the head) - 400, still Pending",
+      remap.status === 400 && afterRemap?.status === "Pending", `got ${remap.status}, request ${afterRemap?.status}`);
+    const approvedHead = await req(admin, "POST", `/api/approvals/${headReq._id}`, { decision: "Approved", note: "pin" });
+    const headAfter = await rawCategories.findOne({ _id: rawHead._id });
+    ok("QA-1977: an Admin approving the head flips it to Approved",
+      approvedHead.status === 200 && headAfter?.approval_status === "Approved",
+      `got ${approvedHead.status} ${JSON.stringify(approvedHead.data ?? {}).slice(0, 160)} flag=${headAfter?.approval_status}`);
+    const costReqAfter = await rawApprovals.findOne({ _id: costReq._id });
+    const costsAfterHead = ((await req(admin, "GET", "/api/costs")).data?.items ?? []).length;
+    ok("QA-1977: ...and does NOT decide the cost entry - that stays with cost.post",
+      costReqAfter?.status === "Pending" && costsAfterHead === costsBefore,
+      `cost request ${costReqAfter?.status}, costs ${costsBefore}->${costsAfterHead}`);
+    const decidedCost = await req(admin, "POST", `/api/approvals/${costReq._id}`, { decision: "Approved", note: "pin" });
     const costsAfter = ((await req(admin, "GET", "/api/costs")).data?.items ?? []);
-    ok("QA-1828c: ...the head now exists", catsAfter.some((c) => c.name === proposed), `${catsAfter.length} heads`);
-    ok("QA-1828c: ...and the cost entry is in the ledger, filed under it",
-      costsAfter.some((c) => c.category?.name === proposed || String(c.category?._id) === String(catsAfter.find((x) => x.name === proposed)?._id)),
-      `${costsAfter.length} entries`);
+    ok("QA-1977: approving the cost files it in the ledger under the new head, like any cost.post",
+      decidedCost.status === 200 && costsAfter.some((c) => String(c.category?._id ?? c.category) === String(rawHead._id)),
+      `got ${decidedCost.status}, ${costsAfter.length} entries`);
   }
+
+  // The old whole-entry shape (one costcategory.create request carrying the full entry) can still be
+  // sitting Pending in production - the rule has been ON there since 2026-09-14. Its replay must keep
+  // working, so the "both writes in one decision" pins move onto a request of that OLD shape.
+  const legacyName = `ZZ Legacy ${stamp}`;
+  const lq = await parkLegacyHeadRequest({ ...baseEntry({ amount: 502 }), new_subhead: legacyName });
+  const ld = await req(admin, "POST", `/api/approvals/${lq.data.item._id}`, { decision: "Approved", note: "pin" });
+  ok("QA-1828c (old request shape): approving it still does BOTH writes in one decision", ld.status === 200, `got ${ld.status} ${JSON.stringify(ld.data ?? {}).slice(0, 160)}`);
+  const legacyCats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
+  const legacyHead = legacyCats.find((x) => x.name === legacyName);
+  ok("QA-1828c (old request shape): ...the head now exists", !!legacyHead, `${legacyCats.length} heads`);
+  ok("QA-1828c (old request shape): ...and the cost entry is in the ledger, filed under it",
+    !!legacyHead && ((await req(admin, "GET", "/api/costs")).data?.items ?? []).some((c) => String(c.category?._id ?? c.category) === String(legacyHead._id)),
+    `head ${legacyHead?._id}`);
 
   // The CEO's OTHER option - *"एप्रोप्रियेट हेड सब हेड में डाल पाएं"*. Approving with a mapping
   // must file the cost under the existing head and create NOTHING.
   const mapTarget = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])[0];
-  const q2 = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 321 }), new_subhead: `ZZ Never ${stamp}` });
+  const q2 = await parkLegacyHeadRequest({ ...baseEntry({ amount: 321 }), new_subhead: `ZZ Never ${stamp}` });
   const catsBeforeMap = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).length;
   if (q2.data?.item?._id && mapTarget) {
     const mapped = await req(admin, "POST", `/api/approvals/${q2.data.item._id}`, { decision: "Approved", note: "file it here", map_to_category: mapTarget._id });
@@ -1566,6 +1634,121 @@ for (const variant of ["ordinary", "mark_paid"]) {
     .filter((r) => r.action === "costcategory.create").length;
   ok("QA-1828c: ...and no new-head request was raised for them - they are the evaluator",
     reqsAfter === reqsBefore, `${reqsBefore} -> ${reqsAfter}`);
+}
+
+
+// ------------------------------------------------ QA-1977: the rest of the contract
+{
+  const n = `ZZ Unapproved ${stamp}`;
+  const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // With the rule ON, the shape is the SAME - not the old whole-entry park.
+  const onCat = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: true, approver_role: "Admin" });
+  const onPost = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+  ok("QA-1977 [precondition]: costcategory.create rule ON, cost.post ON", onCat.status === 200 && onPost.status === 200, `cat=${onCat.status} post=${onPost.status}`);
+  const a = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 211 }), new_subhead: n });
+  const headA = await rawCategories.findOne({ name: n });
+  const reqsA = headA ? await rawApprovals.find({ action: "costcategory.create", entity_id: headA._id }).toArray() : [];
+  ok("QA-1977: with the costcategory.create rule ON the behaviour is the same - head created Pending, one head request, entry on cost.post",
+    a.status === 202 && headA?.approval_status === "Pending" && reqsA.length === 1 && reqsA[0].payload?.kind === "head-approval",
+    `got ${a.status} flag=${headA?.approval_status} headRequests=${reqsA.length} ${JSON.stringify(a.data ?? {}).slice(0, 120)}`);
+
+  const b = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 212 }), new_subhead: n.toUpperCase() });
+  const same = await rawCategories.find({ name: { $regex: `^${reEsc(n)}$`, $options: "i" } }).toArray();
+  const reqsB = headA ? await rawApprovals.countDocuments({ action: "costcategory.create", entity_id: headA._id }) : -1;
+  ok("QA-1977: naming the same unapproved head again (any case) reuses it - still one head, one head request",
+    b.status === 202 && same.length === 1 && reqsB === 1, `got ${b.status} heads=${same.length} headRequests=${reqsB}`);
+
+  const adminList = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+  const opsList = (await req(ops, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+  const inAdmin = adminList.find((c) => String(c._id) === String(headA?._id));
+  const inOps = opsList.find((c) => String(c._id) === String(headA?._id));
+  ok("QA-1977: the cost-head list returns it flagged Pending - to Admin AND to Operations (it stays selectable)",
+    inAdmin?.approval_status === "Pending" && inOps?.approval_status === "Pending",
+    `admin=${inAdmin?.approval_status} ops=${inOps?.approval_status}`);
+
+  const legacyId = new ObjectId();
+  await rawCategories.insertOne({ _id: legacyId, name: `ZZ Old Head ${stamp}`, active: true, createdAt: new Date(), updatedAt: new Date() });
+  qa1977Ui.legacyId = String(legacyId);
+  const legacyListed = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []).find((c) => String(c._id) === String(legacyId));
+  ok("QA-1977: a head written before this change (no flag at all) reads as approved - no flag, no migration",
+    !!legacyListed && legacyListed.approval_status === undefined, JSON.stringify(legacyListed ?? null));
+
+  const adminName = `ZZ AdminMade ${stamp}`;
+  const c = await req(admin, "POST", "/api/costs", { ...baseEntry({ amount: 213 }), new_subhead: adminName });
+  const headC = await rawCategories.findOne({ name: adminName });
+  const reqsC = headC ? await rawApprovals.countDocuments({ action: "costcategory.create", entity_id: headC._id }) : -1;
+  ok("QA-1977: a head an Admin creates is approved at once - no flag, no head request",
+    [201, 202].includes(c.status) && !!headC && headC.approval_status === undefined && headC.active === true && reqsC === 0,
+    `got ${c.status} head=${!!headC} flag=${headC?.approval_status} headRequests=${reqsC}`);
+
+  // REJECT: file one entry under the head first, then reject the head. The entry must survive.
+  if (headA && reqsA[0]) {
+    const catIn = { $in: [String(headA._id), headA._id] };
+    const costReqA = await rawApprovals.findOne({ action: "cost.post", status: "Pending", "payload.category": catIn });
+    const approvedA = costReqA ? await req(admin, "POST", `/api/approvals/${costReqA._id}`, { decision: "Approved", note: "pin" }) : { status: -1 };
+    const filedBefore = await rawCosts.countDocuments({ category: headA._id });
+    ok("QA-1977 [precondition]: one entry is filed under the unapproved head", approvedA.status === 200 && filedBefore >= 1, `got ${approvedA.status} filed=${filedBefore}`);
+    const rejected = await req(admin, "POST", `/api/approvals/${reqsA[0]._id}`, { decision: "Rejected", note: "not a real head" });
+    const headAfter = await rawCategories.findOne({ _id: headA._id });
+    const filedAfter = await rawCosts.countDocuments({ category: headA._id });
+    ok("QA-1977: rejecting a head flags it Rejected and keeps it (active) - it does not delete it",
+      rejected.status === 200 && headAfter?.approval_status === "Rejected" && headAfter?.active === true,
+      `got ${rejected.status} ${JSON.stringify(rejected.data ?? {}).slice(0, 120)} flag=${headAfter?.approval_status} active=${headAfter?.active}`);
+    ok("QA-1977: ...and NO cost entry filed under it is deleted or moved", filedAfter === filedBefore, `filed ${filedBefore}->${filedAfter}`);
+  } else {
+    ok("QA-1977 [precondition]: the reject arms had a Pending head and its request to work on", false, `head=${!!headA} headRequests=${reqsA.length}`);
+  }
+
+  // Senior review: the Operations 403 above is earned by permission gates in FRONT of the
+  // self-approval rule, so it cannot prove that rule. This arm reaches it: a head-only request whose
+  // initiator is the Admin deciding it, left UNLINKED on the head (the shape a post that died before
+  // writing the link leaves behind), so the same arm also proves an unlinked head can still be decided.
+  {
+    const adminRow = await rawUsers.findOne({ email: "admin@vidysea.com" });
+    const selfHeadId = new ObjectId();
+    const selfReqId = new ObjectId();
+    const selfName = `ZZ SelfHead ${stamp}`;
+    await rawCategories.insertOne({ _id: selfHeadId, name: selfName, active: true, approval_status: "Pending", createdAt: new Date(), updatedAt: new Date() });
+    await rawApprovals.insertOne({
+      _id: selfReqId, action: "costcategory.create", entity: "CostCategory", entity_id: selfHeadId,
+      summary: `New cost head "${selfName}" added by Admin — not approved yet`,
+      payload: { kind: "head-approval", category: String(selfHeadId), name: selfName },
+      initiator: adminRow?._id, approver_role: "Admin", approver_users: [], status: "Pending",
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const own = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "my own" });
+    ok("QA-1977: whoever raised a head request cannot approve it - refused by the self-approval rule itself",
+      own.status === 403 && /cannot approve your own request/i.test(String(own.data?.error ?? "")),
+      `got ${own.status} ${JSON.stringify(own.data ?? {}).slice(0, 160)}`);
+    const amt = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "x", approved_amount: 5 });
+    ok("QA-1977: a head-only request carries no amount, so a partial amount is refused (400)", amt.status === 400, `got ${amt.status}`);
+    await rawApprovals.updateOne({ _id: selfReqId }, { $set: { initiator: opsUserRow?._id } });
+    const ok2 = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "pin" });
+    const selfAfter = await rawCategories.findOne({ _id: selfHeadId });
+    ok("QA-1977: a head the request never got linked to can still be approved by it (and is linked on the way)",
+      ok2.status === 200 && selfAfter?.approval_status === "Approved" && String(selfAfter?.approval_request) === String(selfReqId),
+      `got ${ok2.status} flag=${selfAfter?.approval_status} link=${selfAfter?.approval_request}`);
+  }
+
+  // With cost.post approval OFF the entry is written straight to the ledger, exactly as today - and
+  // the head it names is still created flagged and still gets its request.
+  {
+    const offName = `ZZ PostOff ${stamp}`;
+    const offPost = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+    const r = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 215 }), new_subhead: offName });
+    await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    const h = await rawCategories.findOne({ name: offName });
+    const hr = h ? await rawApprovals.countDocuments({ action: "costcategory.create", entity_id: h._id }) : -1;
+    const filed = h ? await rawCosts.countDocuments({ category: h._id }) : -1;
+    ok("QA-1977: with cost.post approval OFF the entry lands in the ledger (201) under the new head, still flagged Pending with its request",
+      offPost.status === 200 && r.status === 201 && h?.approval_status === "Pending" && hr === 1 && filed === 1,
+      `got ${r.status} flag=${h?.approval_status} headRequests=${hr} filed=${filed} ${JSON.stringify(r.data ?? {}).slice(0, 120)}`);
+  }
+
+  // One head left Pending on purpose, for the browser block to look at.
+  const ui = await req(ops, "POST", "/api/costs", { ...baseEntry({ amount: 214 }), new_subhead: qa1977Ui.pendingName });
+  const uiHead = await rawCategories.findOne({ name: qa1977Ui.pendingName });
+  if (ui.status === 202 && uiHead?.approval_status === "Pending") qa1977Ui.pendingId = String(uiHead._id);
 }
 
 // ------------------------------------- the asymmetry this unit was most exposed to
@@ -1698,7 +1881,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     // `_test_fail_after_head` is the real shape: CI-db-gated, it throws AFTER the staged cost head
     // exists and before the ledger row - which is exactly the half-write QA-1975 was filed for
     // (a head invented, no money recorded, and the request left permanently Approved).
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+    const parked = await parkLegacyHeadRequest(baseEntry({
       amount: 777, new_subhead: nm, payment_mode: "Cash", _test_fail_after_head: true,
     }));
     if (parked.data?.item?._id) {
@@ -1725,7 +1908,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const nm = `ZZ Compensate ${stamp}`;
     const before = (await catList()).length;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+    const parked = await parkLegacyHeadRequest(baseEntry({
       amount: 778, new_subhead: nm, payment_mode: "Cash", _test_fail_after_head: true,
     }));
     if (parked.data?.item?._id) {
@@ -1753,7 +1936,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const nm = `ZZ Cost Compensate ${stamp}`;
     const note = `staged cost compensate ${stamp}`;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+    const parked = await parkLegacyHeadRequest(baseEntry({
       amount: 778.5, note, new_subhead: nm, payment_mode: "Cash", _test_fail_after_cost_before_publish: true,
     }));
     if (parked.data?.item?._id) {
@@ -1795,7 +1978,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // it; after replay it is published once with its one deterministic associated cost.
   {
     const nm = `ZZ Staged Race ${stamp}`;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+    const parked = await parkLegacyHeadRequest(baseEntry({
       amount: 779, new_subhead: nm, payment_mode: "Cash", _test_pause_after_head_ms: 450,
     }));
     const requestId = parked.data?.item?._id;
@@ -1836,7 +2019,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const nm = `ZZ Resume Published ${stamp}`;
     const note = `resume-published-${stamp}`;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({
+    const parked = await parkLegacyHeadRequest(baseEntry({
       amount: 780, note, new_subhead: nm, payment_mode: "Cash",
       _test_fail_after_publish_before_cost_apply: true,
     }));
@@ -1989,7 +2172,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // deleted. The claimed request fails closed in Applying for reconciliation.
   {
     const nm = `ZZ Foreign Owner ${stamp}`;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 782, new_subhead: nm, payment_mode: "Cash" }));
+    const parked = await parkLegacyHeadRequest(baseEntry({ amount: 782, new_subhead: nm, payment_mode: "Cash" }));
     const requestId = parked.data?.item?._id;
     if (requestId) {
       const foreign = {
@@ -2014,7 +2197,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const dead = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ Dead ${stamp}`, active: false });
     const deadId = dead.data?.item?._id;
-    const parked = await req(ops, "POST", "/api/costs", baseEntry({ amount: 999, new_subhead: `ZZ NeverMap ${stamp}`, payment_mode: "Cash" }));
+    const parked = await parkLegacyHeadRequest(baseEntry({ amount: 999, new_subhead: `ZZ NeverMap ${stamp}`, payment_mode: "Cash" }));
     if (deadId && parked.data?.item?._id) {
       const d = await req(admin, "POST", `/api/approvals/${parked.data.item._id}`, { decision: "Approved", map_to_category: deadId });
       ok("QA-1980: filing a cost under a DEACTIVATED head is refused", d.status >= 400, `got ${d.status}`);
@@ -2431,6 +2614,64 @@ for (const variant of ["ordinary", "mark_paid"]) {
         } finally {
           try { await uctx.close(); } catch {}
         }
+      }
+
+      // ---- QA-1977: an unapproved head SAYS so wherever it is offered, and an old head does not ----
+      // Driven in a browser because the defect class is rendered: the API can carry the flag while
+      // the picker and the master list silently show the head as if it were approved.
+      if (qa1977Ui.pendingId && qa1977Ui.legacyId) {
+        const login = async (ctx, email, pw) => {
+          const p = await ctx.newPage();
+          await p.goto(BASE, { waitUntil: "networkidle" });
+          const b = p.locator('input[type="email"], input[name="email"]').first();
+          if (await b.count()) {
+            await b.fill(email);
+            await p.locator('input[type="password"]').first().fill(pw);
+            await p.locator('button[type="submit"]').first().click();
+            await p.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+          }
+          return p;
+        };
+        const optionText = (p, id) => p.waitForFunction(
+          (v) => [...document.querySelectorAll("option")].find((o) => o.value === v)?.textContent ?? null,
+          id, { timeout: 45000 },
+        ).then((h) => h.jsonValue()).catch(() => null);
+        const octx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const op = await login(octx, "ops@vidysea.com", PW);
+          await op.goto(`${BASE}/costs`, { waitUntil: "networkidle" });
+          const pendingText = await optionText(op, qa1977Ui.pendingId);
+          const legacyText = await optionText(op, qa1977Ui.legacyId);
+          ok("QA-1977 UI: on the Operations cost form the unapproved head is offered AND marked \"(not approved)\"",
+            typeof pendingText === "string" && pendingText.includes(qa1977Ui.pendingName) && pendingText.includes("(not approved)"),
+            `option text: ${JSON.stringify(pendingText)}`);
+          ok("QA-1977 UI: ...while a head with no flag (written before this change) is offered with no such mark",
+            typeof legacyText === "string" && !/not approved|rejected/i.test(legacyText),
+            `option text: ${JSON.stringify(legacyText)}`);
+        } finally {
+          try { await octx.close(); } catch {}
+        }
+        const mctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
+        try {
+          const mp = await login(mctx, "admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+          await mp.goto(`${BASE}/admin?tab=${encodeURIComponent("Master Lists")}`, { waitUntil: "networkidle" });
+          const rowText = (id) => mp.waitForFunction(
+            (v) => document.querySelector(`[data-cost-head-id="${v}"]`)?.textContent ?? null,
+            id, { timeout: 45000 },
+          ).then((h) => h.jsonValue()).catch(() => null);
+          const pendingRow = await rowText(qa1977Ui.pendingId);
+          const legacyRow = await rowText(qa1977Ui.legacyId);
+          ok("QA-1977 UI: the Admin cost-heads list marks the unapproved head \"Not approved\"",
+            typeof pendingRow === "string" && pendingRow.includes(qa1977Ui.pendingName) && pendingRow.includes("Not approved"),
+            `row: ${JSON.stringify(pendingRow)?.slice(0, 200)}`);
+          ok("QA-1977 UI: ...and does not mark an old head with no flag",
+            typeof legacyRow === "string" && !/Not approved|Rejected/.test(legacyRow),
+            `row: ${JSON.stringify(legacyRow)?.slice(0, 200)}`);
+        } finally {
+          try { await mctx.close(); } catch {}
+        }
+      } else {
+        ok("QA-1977 UI [precondition]: the API block left a Pending head and an unflagged head to look at", false, JSON.stringify(qa1977Ui));
       }
 
       // ---- QA-2518: "No cost head matches" was unreachable in the only case that needs it ----

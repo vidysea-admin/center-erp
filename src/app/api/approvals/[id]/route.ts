@@ -60,6 +60,27 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!pending) throw new HttpError(404, "Approval request not found");
   if (MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
   await flushPendingFinanceAuditEvents().catch(() => {});
+  // QA-1977: a HEAD-ONLY request. The head was created when the cost was entered and is already in
+  // use, flagged not approved; the cost itself went through cost.post separately. Deciding this
+  // request only flips that flag, so remapping (entries already point at the head) and a partial
+  // amount (there is no amount) are refused rather than silently ignored.
+  const headOnly = pending.action === "costcategory.create" && (pending.payload as any)?.kind === "head-approval";
+  // The head this request decides: linked to it, or - if the post that created both died before the
+  // link was written - still Pending with no link at all (senior review). Never a head another
+  // request owns, and never one that is already decided.
+  const ownedHeadFilter = (catId: Types.ObjectId, reqId: unknown) => ({
+    _id: catId,
+    $or: [
+      { approval_request: new Types.ObjectId(String(reqId)) },
+      { approval_request: { $exists: false }, approval_status: "Pending" },
+    ],
+  });
+  if (headOnly && map_to_category) {
+    throw new HttpError(400, "This head already exists and costs are already filed under it, so it cannot be mapped to another head. Approve it, or reject it and move those costs by hand.");
+  }
+  if (headOnly && approved_amount !== undefined && approved_amount !== null && approved_amount !== "") {
+    throw new HttpError(400, "approved_amount is only valid while approving a cost entry.");
+  }
   const resuming = pending.status === "Applying" && decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action);
   const chosenMap = resuming ? String(pending.decision_map_to_category ?? "") : String(map_to_category ?? "");
 
@@ -98,7 +119,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // route has no transaction, and a rollback that itself fails would just move the problem. What it
   // does guarantee is that the payload which reaches the replay can produce an entry, so the second
   // write cannot fail on data the first write already committed to.
-  if (decision === "Approved" && pending.action === "costcategory.create") {
+  if (decision === "Approved" && pending.action === "costcategory.create" && !headOnly) {
     const pp = (pending.payload ?? {}) as any;
     assertCostEntryValid({ ...pp, amount: sanctionedAmount ?? pp.amount, category: pp.category ?? "pending" }); // Rule 37, before anything is written
     if (pp.payment_mode && !COST_PAYMENT_MODE.includes(pp.payment_mode)) {
@@ -115,12 +136,27 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   const request = await decideApproval(id, user, decision, note, {
     approvedAmount: sanctionedAmount,
-    applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action),
+    applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action) && !headOnly,
     ...(map_to_category !== undefined ? { mapToCategory: String(map_to_category ?? "") } : {}),
   });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.
   if (decision !== "Approved") {
+    // QA-1977: rejecting a head FLAGS it; it does not delete it. Costs may already be filed under it
+    // (cost.post decides those on its own), and removing the head would orphan them. It stays active
+    // so those entries still read correctly; an Admin can deactivate it or move its costs by hand.
+    if (headOnly) {
+      const cat = (request.payload as any)?.category;
+      if (cat && Types.ObjectId.isValid(String(cat))) {
+        const flagged = await CostCategory.collection.updateOne(
+          ownedHeadFilter(new Types.ObjectId(String(cat)), request._id),
+          { $set: { approval_status: "Rejected" } },
+        );
+        if (flagged.modifiedCount) {
+          await audit({ entity: "CostCategory", entityId: cat, field: "approval_status", oldValue: "Pending", newValue: "Rejected", actor: user.id });
+        }
+      }
+    }
     await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
     const seeMoney = await hasPermission(user, FINANCE_VIEW);
     return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, seeMoney), applied: false });
@@ -198,6 +234,18 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       break;
     }
     case "costcategory.create": {
+      if (headOnly) {
+        // QA-1977: sign-off of a head that already exists. Only the head THIS request owns is flipped.
+        const cat = p.category && Types.ObjectId.isValid(String(p.category)) ? new Types.ObjectId(String(p.category)) : null;
+        const flipped = cat ? await CostCategory.collection.updateOne(
+          ownedHeadFilter(cat, request._id),
+          { $set: { approval_status: "Approved", approval_request: new Types.ObjectId(String(request._id)) } },
+        ) : { matchedCount: 0 };
+        if (!flipped.matchedCount) throw new HttpError(409, "The cost head this request was about no longer exists, so there is nothing to approve.");
+        await audit({ entity: "CostCategory", entityId: cat, field: "approval_status", oldValue: "Pending", newValue: "Approved", actor: user.id });
+        effectApplied = true;
+        break;
+      }
       // The WHOLE cost entry parked, not just the taxonomy request (Umesh, D8): nothing reaches the
       // ledger until somebody has decided where it belongs. So this replay does both writes, in the
       // order that makes the second possible.

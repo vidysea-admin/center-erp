@@ -1910,6 +1910,17 @@ const CostCategorySchema = new Schema({
   // cost is prepared. Ordinary category reads and writes must not reuse it; only the replay's raw
   // collection operations can publish or compensate this exact staged row.
   staged_by_approval: oid("ApprovalRequest"),
+  // QA-1977 (Umesh, 2026-10-06): *"admin bnaate wqt bnaa lee, approve baad mai koi aur krengee"*.
+  // A head a non-Admin names while entering a cost is created AT ONCE - visible, active, selectable -
+  // and flagged here until an approver signs it off. NOT the same thing as `staged_by_approval`,
+  // which hides a row from every read; this one is meant to be seen and used.
+  //
+  // ABSENT MEANS APPROVED. Every head written before this field existed, every head an Admin creates,
+  // and the TOT fee head upserted by name in rules.ts carry no value, and all of them read as approved.
+  // Nothing rewrites existing rows; there is no migration and none is needed.
+  approval_status: { type: String, enum: ["Pending", "Approved", "Rejected"] },
+  // The costcategory.create request that decides it, so the decision can be traced both ways.
+  approval_request: oid("ApprovalRequest"),
 }, { timestamps: true });
 const NOT_STAGED_COST_CATEGORY = { staged_by_approval: { $exists: false } };
 for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {

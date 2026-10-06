@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch } from "@/models";
+import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
+import { coerceExtras } from "@/app/api/master-lists/[list]/route";
 import { Types } from "mongoose";
 
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -122,20 +123,74 @@ export const POST = apiHandler(async (req: NextRequest) => {
       await audit({ entity: "CostCategory", entityId: made._id, field: "created", newValue: `"${proposed}" created inline while posting a cost`, actor: user.id });
     }
   } else if (proposed) {
-    const queued = await requireApproval("costcategory.create", user, {
-      entity: "CostCategory",
-      summary: `New cost head "${proposed}" for a ₹${body.amount} entry by ${user.name} — ${body.note}`,
-      payload: { ...body, new_subhead: proposed },
-      location: body.location || undefined,
-      batch: body.batch || undefined,
-      ...(isTestDb && Number(body._test_pause_after_approval_request_create_ms) > 0
-        ? { testPauseAfterCreateMs: Number(body._test_pause_after_approval_request_create_ms) }
-        : {}),
-    });
-    // If nobody has enabled the rule there is no approver, and silently writing an unreviewed head
-    // would be the opposite of what was asked. Say so instead of inventing one.
-    if (!queued) throw new HttpError(409, "There is no approver set up for new cost heads yet, so this cannot be reviewed. Pick an existing head for now, or ask an Admin to turn that approval on.");
-    return NextResponse.json({ queued: true, item: queued.request, awaiting: "a new cost head" }, { status: 202 });
+    // QA-1977 (Umesh, 2026-10-06): *"admin bnaate wqt bnaa lee, approve baad mai koi aur krengee like
+    // new add krr paay but approve nhi  add mens not appproved"*. This branch used to park the WHOLE
+    // entry in a costcategory.create request, and when that rule was off it refused with 409 - which
+    // is what Manish hit, because the rule was off. Umesh's decision replaces REQ-427's "the whole
+    // entry parks" for this case: the head is created NOW, flagged not approved, the entry carries on
+    // through cost.post below exactly like any other entry, and an approver signs the head off later
+    // through a request that is ALWAYS created, rule or no rule (Admin by default).
+    //
+    // An old whole-entry request already Pending is still replayed by approvals/[id] as before.
+    const parentRaw = body.new_head_parent ? String(body.new_head_parent) : "";
+    if (parentRaw && !Types.ObjectId.isValid(parentRaw)) throw new HttpError(400, "That head does not exist.");
+    const extras = parentRaw ? await coerceExtras("cost-categories", { parent: parentRaw }) : {};
+    const escaped = proposed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const findByName = () => CostCategory.collection.findOne(
+      { name: { $regex: `^${escaped}$`, $options: "i" } },
+      { projection: { _id: 1, active: 1, staged_by_approval: 1 } },
+    );
+    let existing = await findByName();
+    if (!existing) {
+      const headId = new Types.ObjectId();
+      try {
+        await CostCategory.create({
+          _id: headId, name: proposed, active: true, approval_status: "Pending",
+          ...(extras.parent ? { parent: extras.parent } : {}),
+        });
+      } catch (e: any) {
+        // Two people naming the same new head at once: the unique index lets one in, and the other
+        // reuses that row rather than seeing a 500.
+        if (e?.code !== 11000) throw e;
+        existing = await findByName();
+        if (!existing) throw e;
+      }
+      if (!existing) {
+        let headRequest: Awaited<ReturnType<typeof requireApproval>> = null;
+        try {
+          headRequest = await requireApproval("costcategory.create", user, {
+            entity: "CostCategory", entity_id: headId,
+            summary: `New cost head "${proposed}" added by ${user.name} — not approved yet`,
+            payload: { kind: "head-approval", category: String(headId), name: proposed, ...(extras.parent ? { parent: String(extras.parent) } : {}) },
+            fallbackApproverRole: "Admin",
+          });
+        } catch (e) {
+          // No request means nobody would ever be asked about this head, so it must not exist either.
+          // requireApproval may have written the request before a later step (bell, mail, audit)
+          // threw, so that request goes first. The head goes only if nothing else points at it yet -
+          // a concurrent poster who lost the unique-index race may already be filing a cost under it.
+          await ApprovalRequest.deleteOne({ action: "costcategory.create", entity_id: headId, status: "Pending" }).catch(() => {});
+          const inUse = await CostEntry.collection.countDocuments({ category: headId }, { limit: 1 })
+            + await ApprovalRequest.countDocuments({ "payload.category": { $in: [String(headId), headId] } });
+          if (!inUse) await CostCategory.collection.deleteOne({ _id: headId, approval_status: "Pending", approval_request: { $exists: false } });
+          throw e;
+        }
+        await CostCategory.collection.updateOne({ _id: headId }, { $set: { approval_request: headRequest!.request._id } });
+        await audit({ entity: "CostCategory", entityId: headId, field: "created", newValue: `"${proposed}" created while posting a cost — not approved yet`, actor: user.id });
+        body.category = String(headId);
+      }
+    }
+    if (existing) {
+      // Same rule as the Admin path: an inactive or staged head is never silently reused. Any other
+      // match - approved or still waiting - is the head the person meant, and it already has its own
+      // request if it needs one.
+      if (existing.staged_by_approval || existing.active === false) {
+        throw new HttpError(409, `"${proposed}" is inactive or currently being approved. Wait for that review or choose another active head.`);
+      }
+      body.category = String(existing._id);
+    }
+    delete body.new_subhead;
+    delete body.new_head_parent;
   }
 
   await assertActiveCostCategory(body.category);

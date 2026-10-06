@@ -276,7 +276,7 @@ function CostsInner() {
                 which is worse than not filing it. Naming one parks the whole entry for review. */}
             {showNewHeadBox(cats, form.category) && (<>
             <Field label="Cost head not in the list? Name the one you need">
-              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder={postOnly ? "e.g. Assessor travel — it goes for approval with this entry" : "e.g. Assessor travel — you can create heads, so this one is made straight away"}
+              <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder={postOnly ? "e.g. Assessor travel — added now, marked not approved until an Admin approves it" : "e.g. Assessor travel — you can create heads, so this one is made straight away"}
                 onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
             </Field>
             {/* QA-1979: the replay has always accepted `new_head_parent` - the checker expected dead

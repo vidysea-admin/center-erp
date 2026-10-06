@@ -563,9 +563,17 @@ export async function requireApproval(
   ctx: {
     entity?: string; entity_id?: unknown; summary: string; payload?: unknown; location?: unknown; batch?: unknown;
     testPauseAfterCreateMs?: number;
+    // QA-1977 (Umesh, 2026-10-06): some requests must ALWAYS reach a human, rule or no rule. A new
+    // cost head named by a non-Admin is created at once but flagged not approved, and its sign-off
+    // cannot depend on somebody having remembered to switch a rule on - that dependency is exactly
+    // what produced the 409 Manish hit. With this set and no enabled rule, the request goes to this
+    // role with no named approvers. An enabled rule still wins, so a configured approver list is
+    // honoured. Every other caller leaves it unset and keeps "no rule = nothing changes".
+    fallbackApproverRole?: string;
   },
 ): Promise<ApprovalOutcome> {
-  const rule = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
+  const configured = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
+  const rule = configured ?? (ctx.fallbackApproverRole ? { approver_role: ctx.fallbackApproverRole, approver_users: [] } : null);
   if (!rule) return null;
 
   const batchId = ctx.batch ? new Types.ObjectId(String(ctx.batch)) : undefined;

@@ -1164,7 +1164,13 @@ function Approvals({ error, setError }: any) {
                         "Head → Subhead" of two admin-typed names, so it is the longest option list
                         on this screen. -309 shipped exactly this cap on the finance filters after
                         a 76-character centre name was measured in production. */}
-                    {r.status === "Pending" && r.action === "costcategory.create" && (
+                    {/* QA-1977: a head-only request is about a head that ALREADY exists and is in use; there is nothing to map. */}
+                    {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind === "head-approval" && (
+                      <span className="text-xs text-gray-600">
+                        This head was added while entering a cost and is already in use, marked &quot;Not approved&quot;. Approving marks it approved; rejecting marks it rejected and keeps the costs filed under it.
+                      </span>
+                    )}
+                    {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind !== "head-approval" && (
                       <select className={inputCls + " min-w-0 max-w-[13rem]"}
                         value={mapTo[r._id] ?? ""}
                         onChange={(e) => setMapTo({ ...mapTo, [r._id]: e.target.value })}>
@@ -1177,7 +1183,7 @@ function Approvals({ error, setError }: any) {
                     )}
                     {/* QA-2597: say why the only choice is "create as proposed" rather than letting
                         a failed fetch look like an empty master list. */}
-                    {r.status === "Pending" && r.action === "costcategory.create" && catsFailed && (
+                    {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind !== "head-approval" && catsFailed && (
                       <span className="text-xs text-amber-700">
                         Cost heads could not be loaded, so filing this onto an existing head is unavailable — approving now creates the head as proposed. Reload to try again.
                       </span>
@@ -1364,9 +1370,12 @@ function CostHeadRow({ c, showMoney, canSetPreapproval, onSave, isHead }: { c: a
   });
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 py-1">
+    <div className="flex flex-wrap items-center gap-1.5 py-1" data-cost-head-id={String(c._id)}>
       <span className={`${isHead ? "font-medium" : ""} min-w-[9rem] text-sm`}>{c.name}{c.code ? <span className="ml-1 text-xs text-gray-400">{c.code}</span> : null}</span>
       {!c.active && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500">inactive</span>}
+      {/* QA-1977: a head named while entering a cost is in use before anyone has approved it. No flag = approved. */}
+      {c.approval_status === "Pending" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800" title="Added while entering a cost. Approve or reject it under Approvals.">Not approved</span>}
+      {c.approval_status === "Rejected" && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700" title="Rejected under Approvals. Costs already filed under it are kept.">Rejected</span>}
       <input className={`${cell} min-w-[12rem] flex-1`} placeholder="Description" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
       {isHead && (
         <select className={cell} value={f.head_type} onChange={(e) => setF({ ...f, head_type: e.target.value })}>
