@@ -1618,7 +1618,7 @@ function DefaultsTab({ error, setError }: any) {
               onChange={(e) => setForm({ ...form, digest_only_approval_mails: e.target.checked })} />
             <span>
               <span className="font-medium">Digest only: stop the separate mail for each approval</span>
-              <span className="block text-xs text-gray-500">On: approval-needed and cost-corrected mails are not sent one by one (each is recorded as skipped, with this reason); the approver still sees the bell and the digest. Off (default): every approval sends its own mail.</span>
+              <span className="block text-xs text-gray-500">On: the mails for COST approvals (a cost waiting for approval, a new cost head, a corrected cost) are not sent one by one; each is recorded as skipped, with this reason, and the approver still sees the bell and the cost block of the digest. Other approvals keep their own mail. Needs at least one digest recipient. Off (default): every approval sends its own mail.</span>
             </span>
           </label>
           <MailPanel error={error} setError={setError} />

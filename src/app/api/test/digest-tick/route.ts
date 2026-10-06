@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, readJson, HttpError } from "@/lib/authz";
 import { digestTick } from "@/lib/daily-digest";
 import { istDayOf } from "@/lib/rules";
 
@@ -15,7 +15,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   requireRole(user, "Admin");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req);
   const now = body?.now ? new Date(body.now) : new Date();
   if (Number.isNaN(now.getTime())) throw new HttpError(400, "now must be an ISO instant");
   const r = await digestTick({ now, instance: String(body?.instance || "test-door"), includeText: true });

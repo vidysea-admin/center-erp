@@ -726,7 +726,7 @@ export async function requireApproval(
   // someone to open the bell is an approval that waits.
   (approverUsers.length
     ? mailUsers({
-        perEvent: true,
+        perEvent: action === "cost.post", // mtg-c1: only cost approvals are folded - the digest's pending block is the cost one
         userIds: approverUsers,
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",
@@ -734,7 +734,7 @@ export async function requireApproval(
         link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
       })
     : mailUsersByRole({
-        perEvent: true,
+        perEvent: action === "cost.post",
         roles: [rule.approver_role], location: ctx.location,
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",

@@ -377,13 +377,14 @@ export function parseSheetDate(raw: unknown): Date | null {
 // midnight) encoding — at 1am IST the server's UTC date is still yesterday, the same
 // class as the QA-056 DOB lockout.
 export function istToday(): Date {
-  return dayKey(istDayOf(new Date()));
+  return dayKey(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
 }
 
 // mtg-c1 (R4): the IST calendar day (YYYY-MM-DD) and the IST minute-of-day of ANY instant, not only of
 // "now" - the daily digest's tick is handed its clock as an argument so a test can put it at 20:59 and
-// 21:00 without touching the process clock. `istToday()` above is this, applied to the real clock; the
-// offset lives in this one place.
+// 21:00 without touching the process clock. `istToday()` above is the same shift applied to the real
+// clock; its literal stays inline because check-user-copy.mjs (QA-1123) reads that shift to prove the
+// client's istTodayInput and the server agree.
 export const IST_OFFSET_MIN = 330;
 export function istDayOf(now: Date = new Date()): string {
   return new Date(now.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
@@ -5434,8 +5435,10 @@ export async function recentlyApprovedTargets(
 // against the IST day's two instants, with an explicit +05:30 (the Fargate process zone is UTC).
 //
 // SCOPE (Rule 38) is `locationFilter(viewer)`, applied LAST to every read (L4) and with find(), not an
-// aggregation over the filter (QA-302/347/350/395). The pending and "as of" figures are as of the END of
-// the chosen day. Mobilised and trainer availability are LIVE state (a roster and a batch link have no
+// aggregation over the filter (QA-302/347/350/395). `actual_start` is matched against the IST day's two
+// instants even though a back-dated start is a business date: UTC-midnight of an IST date is 05:30 IST
+// that day, inside the same IST day, so one range covers both encodings (a start stamped with
+// `new Date()` and a typed one). Mobilised and trainer availability are LIVE state (a roster and a batch link have no
 // history here), so they read "now" whichever day is chosen - the screen says so.
 export const STAGE_BUCKETS: Record<string, string> = {
   // The CEO's five buckets, from the stored stage names (R-A). The NSDC round-trip
@@ -5505,7 +5508,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser) {
   const [enrolled, created, started, planRows] = await Promise.all([
     Candidate.countDocuments({ enrolled_at: instants, ...scope }),
     Batch.find({ createdAt: instants, ...scope }).select("code status location").populate("location", "name").sort({ createdAt: 1 }).lean<any[]>(),
-    Batch.find({ actual_start: business, ...scope }).select("code status location").populate("location", "name").sort({ code: 1 }).lean<any[]>(),
+    Batch.find({ actual_start: instants, ...scope }).select("code status location").populate("location", "name").sort({ code: 1 }).lean<any[]>(),
     planTrackerRows(scope),
   ]);
   const listOf = (rows: any[]) => rows.map((b) => ({ batch_id: String(b._id), code: b.code, status: b.status, location: b.location?.name ?? null }));
@@ -5562,7 +5565,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser) {
     day: dayIST,
     generated_at: new Date().toISOString(),
     finance,
-    live_note: "Mobilised and trainer availability are live figures: they show the position now, whichever day is chosen. Pending approvals and payment-pending are as of the end of the chosen day.",
+    live_note: "Mobilised and trainer availability are live figures: they show the position now, whichever day is chosen. Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
     candidates: {
       joined: { total: by_batch.reduce((s, r) => s + r.count, 0), by_batch },
       enrolled: { total: enrolled },

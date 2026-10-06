@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, readJson, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { assertDigestDay, istDayOf } from "@/lib/rules";
 import { publishDigestNow } from "@/lib/daily-digest";
@@ -13,7 +13,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "defaults.manage");
-  const body = await req.json().catch(() => ({}));
+  const body = await readJson(req);
   const day = assertDigestDay(body?.date || istDayOf());
   const r = await publishDigestNow(day, user);
   if (r.status !== 200) throw new HttpError(r.status, r.error);

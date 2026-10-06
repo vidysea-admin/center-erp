@@ -99,7 +99,7 @@ export function digestMailContent(d: DailyDigest) {
           `Payment pending: ${rs(d.costs.payment_pending.amount)} in ${plural(d.costs.payment_pending.count, "entry", "entries")}`,
         ]
       : []),
-    "Mobilised and trainer figures are the position now; pending and payment-pending are as of the end of the day.",
+    "Mobilised and trainer figures are the position now. For an earlier day, pending and payment-pending count what had been raised by then and is still pending now.",
   ];
   return renderMail({
     title: `Daily digest, ${d.day}`,

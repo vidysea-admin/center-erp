@@ -107,7 +107,7 @@ const prog = await mkProg("PG");
 // ---- batches: [tag, centre, status, target, createdAt, actual_start] ---------------------------------
 const BATCHES = [
   ["pa1",    locA, "Planning", 20, istAt(D, 0, 1),   null],            // created D 00:01 IST  -> IN
-  ["pa2",    locA, "Ready",    10, istAt(D, 23, 59), null],            // created D 23:59 IST  -> IN
+  ["pa2",    locA, "Ready",    10, istAt(D, 23, 59), istAt(D, 2, 0)],  // created D 23:59 IST -> IN; started by `new Date()` at 02:00 IST D (an INSTANT, 20:30Z on D-1) -> IN D, not D-1
   ["act",    locA, "Active",   50, istAt(PREV, 23, 59), bizDay(D)],    // created D-1 23:59 -> OUT; started D -> IN
   ["closed", locA, "Closed",   12, istAt(NEXT, 0, 1), bizDay(PREV)],   // created D+1 00:01 -> OUT; started D-1 -> OUT
   ["pb1",    locB, "Planning", 30, istAt(D, 10, 0),  null],            // centre B
@@ -244,8 +244,8 @@ ok("D1: enrolled on the day = 2 (09:00 and 23:59:30 IST; 23:59 the day before an
   dA?.candidates?.enrolled?.total === 2, JSON.stringify(dA?.candidates?.enrolled));
 ok("D1: batches created on the day = 2 (00:01 IST and 23:59 IST; the batch created the previous 23:59 and the next 00:01 are out)",
   eq((dA?.candidates?.batches_created ?? []).map((b) => b.code).sort(), [fx.pa1.code, fx.pa2.code].sort()), JSON.stringify(dA?.candidates?.batches_created));
-ok("D1: batches started on the day = 1 (the Active batch whose actual_start is that day)",
-  eq((dA?.candidates?.batches_started ?? []).map((b) => b.code), [fx.act.code]), JSON.stringify(dA?.candidates?.batches_started));
+ok("D1: batches started on the day = 2 (the Active batch with a typed start date, and the Ready batch stamped at 02:00 IST: an instant whose UTC date is the day before)",
+  eq((dA?.candidates?.batches_started ?? []).map((b) => b.code).sort(), [fx.act.code, fx.pa2.code].sort()), JSON.stringify(dA?.candidates?.batches_started));
 ok("D1: mobilised = 2 planning batches, target 30, mobilised 12 (9 + 3: a member who left is not counted), gap 18; the Active batch is not in it",
   eq(dA?.candidates?.mobilised, { batches: 2, target: 30, mobilised: 12, gap: 18 }), JSON.stringify(dA?.candidates?.mobilised));
 
@@ -430,6 +430,13 @@ ok("G1 [precondition] a cost parked for approval (202) with the toggle OFF", off
 const offRows = offPark.id ? await settledMail(offPark.id) : [];
 ok("G1: toggle OFF keeps the per-approval mail: rows exist and none is held back by the digest-only mode",
   offRows.length > 0 && !offRows.some((m) => /digest-only/i.test(String(m.reason ?? ""))), JSON.stringify({ n: offRows.length, reasons: [...new Set(offRows.map((m) => m.reason))] }));
+// ON is refused while nobody is listed to receive the digest (the approval mails would simply vanish)
+const listBefore = (await req(admin, "GET", "/api/defaults")).data?.item?.digest_recipients;
+await setDefaults({ digest_recipients: "" });
+const onNoList = await setDefaults({ digest_only_approval_mails: true });
+ok("G1: switching 'digest only' ON with no digest recipient is refused (400) and the toggle stays OFF",
+  onNoList.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === false, `${onNoList.status}`);
+await setDefaults({ digest_recipients: listBefore });
 // ON
 const onSet = await setDefaults({ digest_only_approval_mails: true });
 ok("G1 [precondition] the toggle is stored ON", onSet.status === 200 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === true, `${onSet.status}`);
@@ -439,12 +446,17 @@ ok("G1: toggle ON suppresses the per-approval mail: every row is skipped, with t
   onRows.length > 0 && onRows.every((m) => m.status !== "sent" && /digest-only/i.test(String(m.reason ?? ""))), JSON.stringify({ n: onRows.length, reasons: [...new Set(onRows.map((m) => m.reason))] }));
 ok("G1: ...while the approver still gets the bell (the toggle governs mail, not whether they are told)",
   !!onPark.id && (await db.collection("notifications").countDocuments({ entity: "ApprovalRequest", entity_id: oid(onPark.id) })) > 0, "");
+const emptyWhileOn = await setDefaults({ digest_recipients: "" });
+ok("G1: ...and emptying the recipient list while it is ON is refused (400) too", emptyWhileOn.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_recipients === listBefore, `${emptyWhileOn.status}`);
 await setDefaults({ digest_only_approval_mails: false });
 const back = await parkCost(`mc1 toggle back OFF ${s}`);
 const backRows = back.id ? await settledMail(back.id) : [];
 ok("G1: switched back OFF the per-approval mail is kept again", backRows.length > 0 && !backRows.some((m) => /digest-only/i.test(String(m.reason ?? ""))), JSON.stringify([...new Set(backRows.map((m) => m.reason))]));
 // this suite parked three requests on a shared wall: put the shared rule back the way the sibling suites expect it
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+// ...and remove the three parked requests: a request raised now is "still pending" as of any later day, so
+// they would otherwise add 1,920 to the pending figure the Chromium arm below reads
+await db.collection("approvalrequests").deleteMany({ _id: { $in: [offPark.id, onPark.id, back.id].filter(Boolean).map(oid) } });
 
 // =================================================================================================
 // G2 - Publish now
@@ -536,7 +548,7 @@ await arm("S2 digest screen (Location A, no finance)", async () => {
 await arm("S3 digest screen (Admin: Publish now)", async () => {
   await setDefaults({ digest_recipients: recipients.join(", ") });
   await jobLocks.deleteMany({ _id: "daily-digest-manual" });
-  const { ctx, page } = await newPage("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+  const { ctx, page } = await newPage(uAdm.email, PW);   // the fixture Admin: holds no finance.view (the seeded admin may carry the grant)
   await page.goto(`${BASE}/reports/daily?date=${PUBDAY}`, { waitUntil: "domcontentloaded" });
   await page.locator('[data-testid="digest-publish"]').waitFor();
   const before = (await digestRows(PUBDAY, recipients)).length;
@@ -560,5 +572,12 @@ await arm("S4 digest screen (Trainer is kept out)", async () => {
 });
 
 await browser.close();
+// remove the raw rows this suite inserted (marked with this run's stamp): they carry 2031 dates and real
+// centres, and a later suite reading costs or trainers on the shared wall should not meet them
+await db.collection("costentries").deleteMany({ note: `mc1 fixture ${s}` });
+await db.collection("approvalrequests").deleteMany({ summary: new RegExp(`^mc1 pending .* ${s}$`) });
+await db.collection("batchmembers").deleteMany({ batch: { $in: Object.values(fx).map((f) => oid(f.id)) } });
+await db.collection("candidates").deleteMany({ name: new RegExp(`^ZZ MC1 .*${s}$`) });
+await db.collection("trainers").deleteMany({ name: new RegExp(`^ZZ MC1 .*${s}$`) });
 await mc.close();
 finish();

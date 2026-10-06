@@ -42,6 +42,17 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (body.digest_recipients !== undefined && typeof body.digest_recipients !== "string") {
     throw new HttpError(400, "digest_recipients must be text: email addresses separated by commas.");
   }
+  // "Digest only" must never leave an approver with neither the mail nor a digest: refuse ON while no
+  // recipient is listed (and refuse emptying the list while it is ON). Judged on the values the document
+  // will hold after this write.
+  if (body.digest_only_approval_mails !== undefined || body.digest_recipients !== undefined) {
+    const cur = await getDefaults();
+    const willBeOn = (body.digest_only_approval_mails ?? cur.digest_only_approval_mails) === true;
+    const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "").trim();
+    if (willBeOn && !willList) {
+      throw new HttpError(400, "Add at least one digest recipient before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
+    }
+  }
   if (body.fee_required_for_enrollment === true && !FEE_CAPTURE_UI_EXISTS) {
     throw new HttpError(409, "Rule 54 (QA-2793): fee_required_for_enrollment cannot be turned on — there is no fee-capture UI on the candidate screen for an operator to record fee_paid_on against. Build that surface first, or leave this switch off.");
   }
