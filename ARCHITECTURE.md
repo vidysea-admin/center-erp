@@ -282,6 +282,7 @@ invalid recipient) and **always** write a MailLog row. Bounces: SNS → `public/
   the writer now BOTH read `CANDIDATE_IMPORT_FIELDS` (`field-catalog.ts`) — cost of the drift was
   55 live portal IDs landing in `id_reference` (QA-414 S1). `trainers/import` `TEXT_FIELDS` is the
   same disease waiting to repeat (QA-424 residue — still hand-typed).
+- **"which columns the Candidates table shows and the Excel download writes" (QA-2845/2846/2847, 2026-10-06):** `lib/candidate-columns.ts` is the ONE shared column list (key, label, default-visible, optional) read by the Candidates screen (page + column picker + hidden-columns chip) AND by `api/candidates/export`; never hand-type a second list. Aadhaar and APAAR are deliberately absent from it, and the export refuses them by name.
 - **shifted-column signature:** `shiftSignature()` in `lib/govt-attendance.ts` is the ONLY
   definition; readers = the -154 import guard, the portal-id-health screen, the ID-re-match.
 - **CAN normalisation:** `normalizeCan()` is DEFINED in `lib/validate.ts`; `lib/govt-attendance.ts`

@@ -67,9 +67,13 @@ const locA = await mkLoc("A");
 const locB = await mkLoc("B");
 
 // Aadhaar / APAAR values that must NEVER appear in any file. 234123412346 passes the Verhoeff check
-// (e2e-blindspot.mjs uses it); the APAAR is the live example from the feature request.
+// (e2e-blindspot.mjs uses it); Aadhaar has no unique index, so a fixed value is safe.
+// The APAAR MUST be derived from the run stamp: APAAR is unique per candidate (CandidateSchema
+// unique index on apaar_id) and e2e-flows-blindspot.mjs creates 190305516076 earlier in the same
+// wall DB, so a hard-coded copy here made candidate A0 fail with "That apaar id is already in use."
+// and took 8 assertions red (checker B cycle 0, P1). 12 digits, like e2e-flows-blindspot.mjs:1577.
 const AADHAAR = "234123412346";
-const APAAR = "190305516076";
+const APAAR = `19${s.slice(2)}305`;
 const GOV_PROBES = [AADHAAR, APAAR];
 
 // 30 candidates at A (more than one 25-row page of the table), 3 at B, 1 archived at A.
