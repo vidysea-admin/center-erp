@@ -36,10 +36,15 @@ const R2 = await mkRoom("R2"); // a free room to assign later
 const R3 = await mkRoom("R3"); // room with trainer left unassigned
 
 const mk = (extra) => ({ location: loc._id, program: prog._id, planned_start: today(), target_size: 3, ...extra });
-const untilOf = (b) => new Date(b.planned_end).toDateString(); // the same format the server prints (TZ=Asia/Kolkata in the wall)
-const names = (msg, b) => (msg ?? "").includes(b.code);
+// The holder batches below start a few days AFTER the batch being created, so each holder's end date is
+// different from every other batch's: a message that named the wrong batch's end date cannot pass
+// `until()` by luck. Helpers tolerate a missing holder (a failed fixture create) so a mutant that breaks
+// fixture creation turns arms red instead of crashing the suite.
+const dayPlus = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const untilOf = (b) => (b?.planned_end ? new Date(b.planned_end).toDateString() : "<no holder>"); // the same format the server prints (TZ=Asia/Kolkata in the wall)
+const names = (msg, b) => !!b?.code && (msg ?? "").includes(b.code);
 const hint = (msg) => /assign later/i.test(msg ?? "");
-const until = (msg, b) => (msg ?? "").includes(untilOf(b));
+const until = (msg, b) => !!b?.planned_end && (msg ?? "").includes(untilOf(b));
 
 // ------------------------------------------------------------ 1. creatable with "assign later"
 const both = await req(admin, "POST", "/api/batches", mk({}), 201);
@@ -62,7 +67,7 @@ ok("R2-C4: explicit nulls for both (what the form's undefined/empty becomes) cre
   nullBoth.status === 201 && nullBoth.data.item?.trainer == null && nullBoth.data.item?.room == null);
 
 // ------------------------------------------------------------ 2. a clash is still refused, and says so well
-const heldT = (await req(admin, "POST", "/api/batches", mk({ trainer: T1._id }), 201)).data.item;
+const heldT = (await req(admin, "POST", "/api/batches", mk({ trainer: T1._id, planned_start: dayPlus(3) }), 201)).data.item;
 const t2 = await req(admin, "POST", "/api/batches", mk({ trainer: T1._id }), 409);
 ok("R2-T1: an assigned trainer who is already booked is REFUSED at create (409)", t2.status === 409);
 ok("R2-T2: the trainer refusal NAMES the batch that holds the trainer", names(t2.data.error, heldT), `(${JSON.stringify(t2.data.error)})`);
@@ -70,7 +75,7 @@ ok("R2-T3: the trainer refusal says UNTIL WHEN (the holding batch's end date)", 
 ok("R2-T4: the trainer refusal hints Assign later", hint(t2.data.error), `(${JSON.stringify(t2.data.error)})`);
 
 // the time-slot door of the same rule
-const slotHeld = (await req(admin, "POST", "/api/batches", mk({ trainer: TS._id, slot_start: "09:00", slot_end: "13:00" }), 201)).data.item;
+const slotHeld = (await req(admin, "POST", "/api/batches", mk({ trainer: TS._id, slot_start: "09:00", slot_end: "13:00", planned_start: dayPlus(5) }), 201)).data.item;
 const ts2 = await req(admin, "POST", "/api/batches", mk({ trainer: TS._id, slot_start: "10:00", slot_end: "14:00" }), 409);
 ok("R2-T5: a same-time slot clash is refused (409)", ts2.status === 409);
 ok("R2-T6: the slot-clash refusal names the batch, says until when, and hints Assign later",
@@ -79,7 +84,7 @@ ok("R2-T6: the slot-clash refusal names the batch, says until when, and hints As
 // (14:00-18:00), so the time-clash rule passes and the per-day rules are what refuse. Their limits are
 // Admin defaults (2 sessions, 8 hours), so each is tightened for one assertion and put back.
 const TD = await mkTrainer("TD", "66");
-const dayHeld = (await req(admin, "POST", "/api/batches", mk({ trainer: TD._id, slot_start: "09:00", slot_end: "13:00" }), 201)).data.item;
+const dayHeld = (await req(admin, "POST", "/api/batches", mk({ trainer: TD._id, slot_start: "09:00", slot_end: "13:00", planned_start: dayPlus(6) }), 201)).data.item;
 const dBefore = (await req(admin, "GET", "/api/defaults", undefined, 200)).data.item;
 let perDay, perHours;
 try {
@@ -95,7 +100,7 @@ ok("R2-T7: the sessions-a-day refusal names the batch, says until when, and hint
 ok("R2-T8: the daily-hours refusal names the batch, says until when, and hints Assign later",
   perHours?.status === 409 && names(perHours.data.error, dayHeld) && until(perHours.data.error, dayHeld) && hint(perHours.data.error), `(${perHours?.status} ${JSON.stringify(perHours?.data?.error)})`);
 
-const heldR = (await req(admin, "POST", "/api/batches", mk({ room: R1._id }), 201)).data.item;
+const heldR = (await req(admin, "POST", "/api/batches", mk({ room: R1._id, planned_start: dayPlus(4) }), 201)).data.item;
 const r2 = await req(admin, "POST", "/api/batches", mk({ room: R1._id }), 409);
 ok("R2-R1: an assigned room that is already booked is REFUSED at create (409)", r2.status === 409);
 ok("R2-R2: the room refusal NAMES the batch that holds the room", names(r2.data.error, heldR), `(${JSON.stringify(r2.data.error)})`);
