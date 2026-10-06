@@ -65,6 +65,10 @@ const SUITES = [
   // allow-list and on a screen — a grep for the NAME finds it everywhere and still finds nothing
   // wrong. Only driving the create door shows that the value goes in and does not come out.
   "e2e-govt-batch-id.mjs",
+  // mtg-a2 (meeting 2026-10-06, R2): a batch is creatable with the trainer and/or room on "assign
+  // later"; a clash is still refused (no override) at create AND at a later assignment, and the
+  // refusal names the batch, says until when, and hints "Assign later". Own fixture, stamp-derived.
+  "e2e-batch-assign-later.mjs",
   // RPL compliance (2026-08-26): the batch document checklist — six new batch-level document
   // types, attendance_sheet on DailyLog (Daily Execution door), the batches.daily_log permission
   // gate and batch scope, and that the trainer-documentation pull-through writes nothing into

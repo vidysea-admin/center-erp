@@ -1324,7 +1324,7 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
             not quietly sidestep what the create drawer enforces. */}
         <Field label="Trainer">
           <select className={inputCls} value={form.trainer} onChange={(e) => setForm({ ...form, trainer: e.target.value })}>
-            <option value="">—</option>
+            <option value="">— assign later —</option>
             {certified.length > 0 && (
               <optgroup label="Certified — has a TR ID and is cleared for this centre">
                 {certified.map((t: any) => <option key={t._id} value={t._id}>{t.name} · TR {t.tr_id}</option>)}
@@ -1339,7 +1339,7 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
         </Field>
         <Field label="Room">
           <select className={inputCls} value={form.room} onChange={(e) => setForm({ ...form, room: e.target.value })}>
-            <option value="">—</option>
+            <option value="">— assign later —</option>
             {rooms.map((r) => <option key={r._id} value={r._id}>{r.name} ({r.type})</option>)}
           </select>
         </Field>

@@ -516,6 +516,18 @@ function batchRange(b: { planned_start: Date; planned_end?: Date | null; actual_
   return [new Date(start), new Date(end)];
 }
 
+// Meeting 2026-10-06 (R2): when a booking clashes, the person must be told WHICH batch holds the
+// trainer or the room, UNTIL WHEN, and what to do instead. There is no override (Umesh refused
+// double booking); the way out is to leave the resource on "Assign later" and book a free one after.
+// ONE wording, used by every refusal below and therefore by both doors that assign a trainer or a
+// room (POST /api/batches and PATCH /api/batches/[id]), so the two cannot drift apart.
+function bookedUntil(b: { planned_start: Date; planned_end?: Date | null; actual_start?: Date | null; status: string }): string {
+  return batchRange(b)[1].toDateString();
+}
+function assignLaterHint(what: "trainer" | "room"): string {
+  return ` Choose "Assign later" for the ${what} to go ahead without one, then assign a free ${what} once there is one.`;
+}
+
 // 2026-08-11: "HH:mm" time-slot pair on a batch. Two slots clash when both are fully
 // defined and the times overlap. Batches without slots do NOT clash by time (backward
 // compatible — the concurrency cap alone governs them, as before).
@@ -565,7 +577,7 @@ export async function assertTrainerAvailableForBatch(
   const clash = overlapping.find((b) => slotsClash(slot?.slot_start, slot?.slot_end, b.slot_start, b.slot_end));
   if (clash) {
     throw new HttpError(409,
-      `Time slot clash: Trainer ${trainerName} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}.`);
+      `Time slot clash: Trainer ${trainerName} already teaches batch ${clash.code} at ${clash.location?.name ?? "?"} during ${clash.slot_start}–${clash.slot_end}, booked until ${bookedUntil(clash)}.${assignLaterHint("trainer")}`);
   }
   // Two 4-hour batches a day is the sanctioned pattern (Manish, 2026-08-12). Only slotted
   // batches are counted — an unslotted batch is "whole day" and is already governed by the
@@ -576,7 +588,7 @@ export async function assertTrainerAvailableForBatch(
     const sameDaySlotted = overlapping.filter((b) => b.slot_start && b.slot_end);
     if (sameDaySlotted.length + 1 > maxPerDay) {
       throw new HttpError(409,
-        `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainerName} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")}).`);
+        `Scheme guideline: at most ${maxPerDay} sessions a day. Trainer ${trainerName} already runs ${sameDaySlotted.length} slotted batch(es) over these dates (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}, until ${bookedUntil(b)}`).join("; ")}).${assignLaterHint("trainer")}`);
     }
     // QA-144: the CEO's 8-hour rule. The session cap above bounds HOW MANY sessions; this
     // bounds their TOTAL hours, because two 4-hour sessions pass the count while 4+8 must
@@ -586,7 +598,7 @@ export async function assertTrainerAvailableForBatch(
     const hours = [slot, ...sameDaySlotted].reduce((sum, b) => sum + (slotHoursPerDay(b) ?? 0), 0);
     if (hours > maxDailyHours) {
       throw new HttpError(409,
-        `Trainer ${trainerName} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}`).join(", ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.`);
+        `Trainer ${trainerName} would teach ${hours}h on overlapping days (${sameDaySlotted.map((b) => `${b.code} ${b.slot_start}–${b.slot_end}, until ${bookedUntil(b)}`).join("; ")} + this batch ${slot.slot_start}–${slot.slot_end}); max daily hours = ${maxDailyHours}.${assignLaterHint("trainer")}`);
     }
   }
   // 2026-08-12 audit F-001: Admin → Defaults shows a "Max concurrent batches" field, but Rule 10
@@ -596,9 +608,11 @@ export async function assertTrainerAvailableForBatch(
   // trainers genuinely carry more or fewer); the Default is the policy behind everyone else.
   const cap = trainer.max_concurrent_batches ?? (await getDefaults()).max_concurrent_batches ?? 1;
   if (overlapping.length + 1 > cap) {
-    const c = overlapping[0];
+    // Every batch that holds the trainer in these dates, each with its own end date: with a cap above
+    // one, naming only the first would leave the person guessing which of them to wait for.
+    const holders = overlapping.map((c) => `${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${bookedUntil(c)})`).join("; ");
     throw new HttpError(409,
-      `Trainer ${trainerName} already assigned to batch ${c.code} at ${c.location?.name ?? "?"} (${new Date(batchRange(c)[0]).toDateString()} – ${new Date(batchRange(c)[1]).toDateString()}); max concurrent = ${cap}.`);
+      `Trainer ${trainerName} already assigned to batch ${holders}; max concurrent = ${cap}.${assignLaterHint("trainer")}`);
   }
 }
 
@@ -658,7 +672,7 @@ export async function assertRoomFreeForBatch(roomId: string, batchId: string | n
   for (const b of others) {
     const [s, e] = batchRange(b);
     if (rangesOverlap(new Date(planned_start), new Date(planned_end), s, e) && sessionsConflict(session, b.session)) {
-      throw new HttpError(409, `Rule 13: Room already hosts batch ${b.code} (${b.session}) from ${s.toDateString()} to ${e.toDateString()}.`);
+      throw new HttpError(409, `Room already hosts batch ${b.code} (${b.session}) from ${s.toDateString()} until ${bookedUntil(b)}.${assignLaterHint("room")}`);
     }
   }
 }
