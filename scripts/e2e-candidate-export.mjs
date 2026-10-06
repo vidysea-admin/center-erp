@@ -20,10 +20,30 @@
 //   C6  Locations: "Approval (centre)" is visible by default
 import { chromium } from "playwright";
 import * as XLSX from "xlsx";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { ok, req, login, adminLogin, finish, stamp, phone, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
+import { ok as okLib, req, login, adminLogin, finish as finishLib, stamp, phone, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
+
+// Every result is also kept here so a real-browser SMOKE can leave a report.json when
+// CX_BROWSER_REPORT=<dir> is set (the maker's pre-push smoke; it is not validation).
+const results = [];
+const ok = (n, c, x = "") => { results.push({ name: n, pass: !!c, detail: String(x ?? "").replace(/\s+/g, " ").slice(0, 300) }); okLib(n, c, x); };
+const pageErrors = [];
+const finish = () => {
+  const dir = process.env.CX_BROWSER_REPORT;
+  if (dir) {
+    try {
+      mkdirSync(dir, { recursive: true });
+      const failed = results.filter((r) => !r.pass).length;
+      writeFileSync(path.join(dir, "report.json"), JSON.stringify({
+        unit: "mtg-a1-candidate-export-and-hidden-cols", date: new Date().toISOString(), base: BASE, kind: "maker smoke, not validation",
+        total: results.length, passed: results.length - failed, failed, uncaughtPageErrors: pageErrors.length, pageErrors: pageErrors.slice(0, 10), results,
+      }, null, 2));
+    } catch { /* the report is a convenience; the run's own exit code still decides */ }
+  }
+  finishLib();
+};
 
 let crashGuardBrowser = null;
 const onFatal = async (e) => {
@@ -217,7 +237,7 @@ const newPage = async (email, password) => {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
   const page = await ctx.newPage();
   const errors = [];
-  page.on("pageerror", (e) => errors.push(String(e.message).slice(0, 160)));
+  page.on("pageerror", (e) => { errors.push(String(e.message).slice(0, 160)); pageErrors.push(String(e.message).slice(0, 160)); });
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(800);
   const emailBox = page.locator('input[type="email"], input[name="email"], input[id="email"]').first();
