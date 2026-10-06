@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, locationFilter, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { enrichCandidateRows } from "@/lib/rules";
 import { resolveExportCols } from "@/lib/candidate-columns";
@@ -98,8 +98,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  let body: any;
-  try { body = await req.json(); } catch { throw new HttpError(400, "Send the columns as JSON."); }
-  if (!body || typeof body !== "object") throw new HttpError(400, "Send the columns as JSON.");
+  const body = await readJson(req);
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new HttpError(400, "Send the columns as JSON.");
   return buildExport(user, { cols: body.cols, ids: body.ids, location: body.location });
 });
