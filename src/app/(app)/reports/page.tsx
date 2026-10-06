@@ -62,7 +62,7 @@ function ReportsInner() {
   const [recentErr, setRecentErr] = useState("");
   useEffect(() => {
     let live = true;
-    setRecentErr("");
+    setRecentErr(""); setRecent(null);
     api(`/api/reports/recently-approved?days=${recentDays}`)
       .then((d) => { if (live) setRecent(d); })
       .catch((e) => { if (live) setRecentErr(String(e?.message ?? e)); });

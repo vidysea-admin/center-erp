@@ -533,18 +533,23 @@ LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
 // the (trimmed, lower-cased) text really changes, because a sync that rewrites "Approved" with
 // "Approved" must not make a months-old approval look fresh. Read-then-write, not atomic: two writers
 // racing on one row can at worst both stamp, which only moves the date by seconds. updateMany and
-// replaceOne are not hooked - nothing in src/ writes a LocationTarget that way.
+// replaceOne are not hooked, and the admin AVPL rebase (api/admin/avpl-rebase) writes tc_status through
+// the native driver, which no Mongoose middleware sees: a row it flips stays undated (counted as
+// `undated_approved`, never shown as recent). Nothing else in src/ writes a LocationTarget that way.
 const tcNorm = (v: unknown) => String(v ?? "").trim().toLowerCase();
 (LocationTargetSchema as any).pre(["findOneAndUpdate", "updateOne"], async function (this: any) {
   const raw = this.getUpdate() ?? {};
   if (Array.isArray(raw)) return;
-  const flat: Record<string, unknown> = { ...(raw.$set ?? {}), ...(raw.$setOnInsert ?? {}) };
+  const flat: Record<string, unknown> = { ...(raw.$set ?? {}) };
   for (const [k, v] of Object.entries(raw)) if (!k.startsWith("$")) flat[k] = v;
   const unsetting = "tc_status" in (raw.$unset ?? {});
-  if (!("tc_status" in flat) && !unsetting) return;
+  const onInsert = raw.$setOnInsert ?? {};
+  if (!("tc_status" in flat) && !unsetting && !("tc_status" in onInsert)) return;
   if ("tc_status_changed_at" in flat) return;                 // an explicit write wins (restore, test fixture)
   const before = await this.model.findOne(this.getFilter()).select("tc_status").lean();
-  if (tcNorm(before?.tc_status) === tcNorm(unsetting ? "" : flat.tc_status)) return;
+  // $setOnInsert only takes effect when the row does not exist yet, so it is read only then.
+  const next = unsetting ? "" : "tc_status" in flat ? flat.tc_status : !before ? onInsert.tc_status : undefined;
+  if (next === undefined || tcNorm(before?.tc_status) === tcNorm(next)) return;
   this.setUpdate({ ...raw, $set: { ...(raw.$set ?? {}), tc_status_changed_at: new Date() } });
 });
 

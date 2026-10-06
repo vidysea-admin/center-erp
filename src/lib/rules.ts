@@ -5281,8 +5281,8 @@ export const planGap = (target: number, mobilised: number): number =>
   Math.max(0, (Number(target) || 0) - (Number(mobilised) || 0));
 
 // The statuses the Planning tab lists: a batch that has started has moved to the Batches tab
-// (-196). Declared once so the summary and the screen cannot count different batches; the API echoes
-// it back and the page reads it from there rather than keeping its own copy.
+// (-196). The API echoes it in `summary.statuses`; the screen keeps its own two-word literal (pinned by
+// check-user-copy.mjs) and the suite pins that the two agree.
 export const PLANNING_TAB_STATUSES = ["Planning", "Ready"];
 
 // "This week" is the IST calendar week, Monday 00:00 inclusive to the next Monday 00:00 exclusive.
@@ -5380,6 +5380,7 @@ export async function recentlyApprovedTargets(
     const at = new Date(t.tc_status_changed_at);
     if (at.getTime() < since.getTime()) continue;
     const loc = t.location;
+    if (!loc) continue;                                  // an orphan row (its centre was deleted) belongs to nobody's scope
     const role = t.program?.name ?? "(job role not set)";
     const k = `${String(loc?._id)}|${role}`;
     const e = by.get(k) ?? { location: { _id: String(loc?._id), name: loc?.name ?? "" }, job_role: role, count: 0, seats: 0, last_approved_at: at.toISOString() };

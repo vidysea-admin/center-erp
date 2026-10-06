@@ -1401,9 +1401,10 @@ function PlanningTable({ rows, summary, onSaved, onError }: { rows: any[] | null
   // jayega". A batch that has started is no longer being planned, so it leaves this table — the row
   // moves by itself, because its status is what moved. The Batches tab stays the full register of
   // every batch at every status, so nothing disappears from the system, only from this view.
-  // mtg-b1: the list comes from the API summary (PLANNING_TAB_STATUSES in rules.ts) so the tiles above
-  // and this table can never count different batches; the literal is only the first-paint fallback.
-  const NOT_STARTED: string[] = summary?.statuses ?? ["Planning", "Ready"];
+  // mtg-b1: this list and PLANNING_TAB_STATUSES in rules.ts (which the summary tiles count over) are the
+  // same two words. check-user-copy pins THIS literal, e2e-planning-and-approved pins the API's, so the
+  // tiles and the table cannot drift apart without a red pin.
+  const NOT_STARTED = ["Planning", "Ready"];
   const shown = (rows ?? []).filter((r: any) => NOT_STARTED.includes(r.batch?.status));
   const started = (rows ?? []).length - shown.length;
 

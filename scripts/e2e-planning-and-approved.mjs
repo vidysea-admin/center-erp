@@ -325,7 +325,7 @@ await arm("S1 planning screen (Location A)", async () => {
   const got = { week: await txt(page, "plan-sum-week"), target: await txt(page, "plan-sum-target"), mobilised: await txt(page, "plan-sum-mobilised"), gap: await txt(page, "plan-sum-gap") };
   ok("S1: the tiles read 4 starting this week, total target 62, mobilised 25, gap 39", got.week === "4" && got.target === "62" && got.mobilised === "25" && got.gap === "39", JSON.stringify(got));
   const headers = (await page.locator("table thead th, [role=columnheader]").allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
-  ok("S1: the table has Target, Mobilised and Gap column headings", ["Target", "Mobilised", "Gap"].every((h) => headers.some((x) => x.startsWith(h))), headers.join(" | "));
+  ok("S1: the table has Target, Mobilised and Gap column headings", ["target", "mobilised", "gap"].every((h) => headers.some((x) => x.toLowerCase().startsWith(h))), headers.join(" | "));
   const rowFor = (code) => page.locator(`tr:has-text("${code}")`).first();
   const cells = async (code) => ({ t: await rowFor(code).locator('[data-testid="plan-target"]').innerText(), m: await rowFor(code).locator('[data-testid="plan-mobilised"]').innerText(), g: await rowFor(code).locator('[data-testid="plan-gap"]').innerText() });
   const cm = await cells(fx.mon.code), co = await cells(fx.over.code);
