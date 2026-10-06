@@ -2,7 +2,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { Batch, Location, Trainer } from "@/models";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { hasPermission } from "@/lib/permissions";
-import { ACTIVE_BATCH_STATUSES, assertLocationOperational } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, assertLocationOperational, trainerLocationFilter } from "@/lib/rules";
 import { HttpError, isScoped } from "@/lib/authz";
 import { emailError, canonicalEmail, canonicalPhone, phoneError } from "@/lib/validate";
 
@@ -34,16 +34,7 @@ export const { GET, POST } = collectionRoutes({
   // 2026-08-13 (Umesh, testing the view-only principal): masking pay was not enough — a
   // scoped user saw the ENTIRE trainer directory. A trainer belongs to a centre through
   // nomination, capability or home; scoped users see only trainers tied to their centres.
-  scopeFilter: (user) => {
-    const ids = (user.location_scope ?? []).map(String);
-    return {
-      $or: [
-        { nominated_for_location: { $in: ids } },
-        { capable_locations: { $in: ids } },
-        { home_location: { $in: ids } },
-      ],
-    };
-  },
+  scopeFilter: (user) => trainerLocationFilter(user.location_scope ?? []), // mtg-c1: shared with the daily digest
   async mapItems(items, user) {
     // QA-031/045 (checker): "Assigned 6" was derived from pipeline_status Certified while
     // assigned_batches sat empty on all 71 — two different facts presented as one. The

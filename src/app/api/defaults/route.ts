@@ -34,6 +34,14 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (body.fee_required_for_enrollment !== undefined && typeof body.fee_required_for_enrollment !== "boolean") {
     throw new HttpError(400, "fee_required_for_enrollment must be a boolean.");
   }
+  // mtg-c1 (R4): the digest toggle is a real boolean or nothing, and the recipient list a real string -
+  // Mongoose would otherwise coerce "false" to a boolean and an object to a string.
+  if (body.digest_only_approval_mails !== undefined && typeof body.digest_only_approval_mails !== "boolean") {
+    throw new HttpError(400, "digest_only_approval_mails must be a boolean.");
+  }
+  if (body.digest_recipients !== undefined && typeof body.digest_recipients !== "string") {
+    throw new HttpError(400, "digest_recipients must be text: email addresses separated by commas.");
+  }
   if (body.fee_required_for_enrollment === true && !FEE_CAPTURE_UI_EXISTS) {
     throw new HttpError(409, "Rule 54 (QA-2793): fee_required_for_enrollment cannot be turned on — there is no fee-capture UI on the candidate screen for an operator to record fee_paid_on against. Build that surface first, or leave this switch off.");
   }
@@ -59,6 +67,8 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     "fee_required_for_enrollment",
     // QA-115 (15/08): admin kill-switch for outbound email
     "email_enabled",
+    // mtg-c1 (R4): the daily digest - who gets it, and whether per-approval mails fold into it
+    "digest_recipients", "digest_only_approval_mails",
   ]) {
     if (body[f] !== undefined) set[f] = body[f];
   }

@@ -90,3 +90,20 @@ export function trainerLabel(t?: {
     phone: t?.phone,
   });
 }
+
+// mtg-c1 (R4): a trainer's availability TAG - one function, read by the Trainers screen (its tabs and its
+// chips) and by the daily digest. It lived inside trainers/page.tsx as `availabilityTag`; the digest
+// needs the same answer on the server, and a second copy of "who is free" is exactly the disagreement
+// QA-031 recorded (a stored-status tab said "Assigned 11" while no batch pointed at those trainers).
+// Assignment is read from the LIVE BATCH LINKS (`live_batches`, attached by the API / the digest) and
+// never from the stored `status`. The TAGS and their order are the screen's (TAG_ORDER there); the
+// tab's LABEL for "Certified" is "Free to assign" - the value stays the one that rides in ?tag=.
+export type TrainerAvailabilityTag = "Certified" | "Under preparation" | "Assigned" | "Unavailable" | "Rejected/Dropped";
+export function trainerAvailabilityTag(t: { pipeline_status?: string | null; status?: string | null; live_batches?: unknown[] | null }): TrainerAvailabilityTag {
+  const p = t.pipeline_status ?? "Fresh Lead";
+  if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
+  if (p !== "Certified") return "Under preparation";
+  if ((t.live_batches?.length ?? 0) > 0) return "Assigned";
+  if (t.status === "Unavailable") return "Unavailable";
+  return "Certified";
+}

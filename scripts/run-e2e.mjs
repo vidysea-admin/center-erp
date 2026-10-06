@@ -129,6 +129,10 @@ const SUITES = [
   // columns and this-week summary (IST week), and the /reports "Recently approved" strip (N-day window,
   // approved only, centre-scoped, stamped through the real write door). Its own file and browser.
   "e2e-planning-and-approved.mjs",
+  // mtg-c1 (R4, QA-2871/2872/2873, meeting 2026-10-06): the daily digest - dailyDigest(day, viewer) read by the
+  // /reports/daily screen, Publish now and the 21:00 IST mail; once per IST day under a lock and a durable day
+  // key; finance only for finance.view; and the "digest only" toggle on the per-approval mails. Its own file and browser.
+  "e2e-daily-digest.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

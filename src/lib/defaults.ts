@@ -64,6 +64,13 @@ export type AppDefaults = {
   // redeploy. Credentials themselves NEVER live here — defaults are readable by every
   // authenticated user.
   email_enabled: boolean;
+  // mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"). Who gets the 21:00 IST daily digest: ERP-user emails,
+  // comma / semicolon / newline separated. A STRING on purpose - getDefaults() only merges number, string
+  // and boolean fields. Empty (the default) means the digest is not mailed to anyone.
+  digest_recipients: string;
+  // When ON, the per-approval mails ("approval needed", "cost corrected") are folded into the digest: each
+  // is skipped and RECORDED as skipped, with the reason. The bell notification is untouched. Default OFF.
+  digest_only_approval_mails: boolean;
 };
 
 // Fallbacks for every tunable. A Defaults document written before a field existed simply
@@ -113,6 +120,8 @@ export const DEFAULT_VALUES: AppDefaults = {
   min_attendance_pct: 50,
   fee_required_for_enrollment: false,
   email_enabled: true,
+  digest_recipients: "",
+  digest_only_approval_mails: false,
 };
 
 export async function getDefaults(): Promise<AppDefaults> {

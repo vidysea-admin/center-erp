@@ -15,10 +15,10 @@ import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts'
 export { isCertificateSettled, SETTLED_CERTIFICATE_STATUSES } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
-import { HttpError, isScoped } from "@/lib/authz";
+import { HttpError, isScoped, locationFilter } from "@/lib/authz";
 // QA-1575: trainerDocsAccess() needs the permission level, not just the role. permissions.ts
 // imports authz.ts and models only, so this direction adds no cycle.
-import { hasEditLevel, requirePerm, INVOICE_MONEY_FIELDS } from "@/lib/permissions";
+import { hasEditLevel, hasPermission, requirePerm, INVOICE_MONEY_FIELDS } from "@/lib/permissions";
 // QA-1074: which pending sheet changes can actually move the report's figures. IMPORTED, never
 // re-listed — this is the predicate the apply door and the Sync Inbox screen already share
 // (-242 / QA-946), and a third copy of "what is a target-row field" is exactly the ARCHITECTURE
@@ -28,7 +28,7 @@ import { targetRowField } from "@/lib/sync";
 import type { SessionUser } from "@/auth";
 // QA-491 (REQ-389a, Umesh: "har jagah, bina exception"): the same person-naming rule the client
 // tooltips already use, so a REFUSAL and the tooltip that preceded it never disagree.
-import { personLabel, personList, trainerLabel } from "@/lib/person";
+import { personLabel, personList, trainerLabel, trainerAvailabilityTag } from "@/lib/person";
 
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
@@ -377,7 +377,20 @@ export function parseSheetDate(raw: unknown): Date | null {
 // midnight) encoding — at 1am IST the server's UTC date is still yesterday, the same
 // class as the QA-056 DOB lockout.
 export function istToday(): Date {
-  return dayKey(new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10));
+  return dayKey(istDayOf(new Date()));
+}
+
+// mtg-c1 (R4): the IST calendar day (YYYY-MM-DD) and the IST minute-of-day of ANY instant, not only of
+// "now" - the daily digest's tick is handed its clock as an argument so a test can put it at 20:59 and
+// 21:00 without touching the process clock. `istToday()` above is this, applied to the real clock; the
+// offset lives in this one place.
+export const IST_OFFSET_MIN = 330;
+export function istDayOf(now: Date = new Date()): string {
+  return new Date(now.getTime() + IST_OFFSET_MIN * 60_000).toISOString().slice(0, 10);
+}
+export function istMinuteOfDay(now: Date = new Date()): number {
+  const t = new Date(now.getTime() + IST_OFFSET_MIN * 60_000);
+  return t.getUTCHours() * 60 + t.getUTCMinutes();
 }
 
 export function dayKey(d: Date | string): Date {
@@ -5397,6 +5410,174 @@ export async function recentlyApprovedTargets(
     undated_approved: undated,
   };
 }
+
+// ---------- The daily digest (mtg-c1, R4) ----------
+// Karunn sir, 2026-10-06: "all reporting from the system, no Excel" - and Umesh's decision on the
+// notification noise: "Screen + 1 mail". ONE function builds the digest; the screen /reports/daily, the
+// "Publish now" button and the 21:00 IST mail (lib/daily-digest.ts) all read it, so the three can never
+// disagree about a number and none of them re-derives a count.
+//
+// Three sections, and each is built from what the product already defines rather than a second reading:
+//   candidates  today's joins into batches (BatchMember.joined_on), enrolments (Candidate.enrolled_at),
+//               batches created (Batch.createdAt) and started (Batch.actual_start), and the mobilised
+//               figure - which IS planTrackerRows/planTrackerSummary's, not a recount.
+//   trainers    assigned / free / unavailable / pipeline, from `trainerAvailabilityTag` (the Trainers
+//               screen's own rule) over the LIVE BATCH LINKS, never the stored `status` (QA-031), and
+//               bucketed with STAGE_BUCKETS (Open Positions' own map).
+//   costs       today and month to date from `costRollup`, pending approvals, payment-pending. This
+//               section exists ONLY for a viewer holding finance.view (an Admin does not get it for free:
+//               it is outside the Admin bypass). It is not hidden by the screen - it is not built.
+//
+// THE DAY. `day` is an IST calendar date string. Fields are stored in TWO encodings and the digest has
+// to respect each: a BUSINESS date (`joined_on`, `actual_start`, `entry_date`) is UTC-midnight of the IST
+// date, so it is matched with `dayRange` / `dayKey`; an INSTANT (`enrolled_at`, `createdAt`) is matched
+// against the IST day's two instants, with an explicit +05:30 (the Fargate process zone is UTC).
+//
+// SCOPE (Rule 38) is `locationFilter(viewer)`, applied LAST to every read (L4) and with find(), not an
+// aggregation over the filter (QA-302/347/350/395). The pending and "as of" figures are as of the END of
+// the chosen day. Mobilised and trainer availability are LIVE state (a roster and a batch link have no
+// history here), so they read "now" whichever day is chosen - the screen says so.
+export const STAGE_BUCKETS: Record<string, string> = {
+  // The CEO's five buckets, from the stored stage names (R-A). The NSDC round-trip
+  // (Rejected) sits with "Sent to NSDC" - it is still at the government's door - and the
+  // post-approval prep states (payment/TOT) sit with "NSDC Approved".
+  "Fresh Lead": "fresh",
+  "Shortlisted": "shortlisted",
+  "Documents Completed": "docs",
+  "Sent to NSDC": "sent",
+  "NSDC Rejected": "sent",
+  "NSDC Approved": "approved",
+  "TOT Payment Done": "approved",
+  "TOT Scheduled": "approved",
+  "TOT In Progress": "approved",
+  "Certified": "certified",
+};
+export const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certified"] as const;
+const BUCKET_LABEL: Record<(typeof BUCKET_KEYS)[number], string> = {
+  fresh: "Fresh lead", shortlisted: "Shortlisted", docs: "Documents completed", sent: "Sent to NSDC", approved: "NSDC approved", certified: "Certified",
+};
+
+// Who a centre-scoped login may see on the Trainers screen: tied to the centre by nomination, by
+// capability or by home. It was an inline closure in api/trainers/route.ts; the digest needs the same
+// answer, and a second copy of "which trainers belong to my centre" is the drift ARCHITECTURE section 3
+// exists to prevent. (The Open Positions / Locations "ties" are a different, deliberately narrower
+// question - trainerTiesFor above - and are not this.)
+export function trainerLocationFilter(ids: unknown[]) {
+  const scope = (ids ?? []).map(String);
+  return {
+    $or: [
+      { nominated_for_location: { $in: scope } },
+      { capable_locations: { $in: scope } },
+      { home_location: { $in: scope } },
+    ],
+  };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+// A chosen digest day must be a real calendar date; the screen, Publish now and the digest itself share this.
+export function assertDigestDay(dayIST: unknown): string {
+  const s = String(dayIST ?? "");
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T00:00:00Z`) : null;
+  if (!parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== s) {
+    throw new HttpError(400, "The date must be a real calendar day, written YYYY-MM-DD.");
+  }
+  return s;
+}
+
+export async function dailyDigest(dayIST: string, viewer: SessionUser) {
+  assertDigestDay(dayIST);
+  const scope = locationFilter(viewer);
+  const trainerScope = isScoped(viewer) ? trainerLocationFilter(viewer.location_scope ?? []) : {};
+  const instants = { $gte: istStart(dayIST), $lte: istEnd(dayIST) };   // for fields stored as instants
+  const business = dayRange(dayIST);                                   // for fields stored as business dates
+
+  // ---- candidates ----------------------------------------------------------------------------------
+  const joins = await BatchMember.find({ joined_on: business }).select("batch").lean<any[]>();
+  const joinedBy = new Map<string, number>();
+  for (const j of joins) joinedBy.set(String(j.batch), (joinedBy.get(String(j.batch)) ?? 0) + 1);
+  const joinBatches = joinedBy.size
+    ? await Batch.find({ _id: { $in: [...joinedBy.keys()] }, ...scope }).select("code location").populate("location", "name").lean<any[]>()
+    : [];
+  const by_batch = joinBatches
+    .map((b) => ({ batch_id: String(b._id), code: b.code, location: b.location?.name ?? null, count: joinedBy.get(String(b._id)) ?? 0 }))
+    .sort((a, b) => b.count - a.count || String(a.code).localeCompare(String(b.code)));
+  const [enrolled, created, started, planRows] = await Promise.all([
+    Candidate.countDocuments({ enrolled_at: instants, ...scope }),
+    Batch.find({ createdAt: instants, ...scope }).select("code status location").populate("location", "name").sort({ createdAt: 1 }).lean<any[]>(),
+    Batch.find({ actual_start: business, ...scope }).select("code status location").populate("location", "name").sort({ code: 1 }).lean<any[]>(),
+    planTrackerRows(scope),
+  ]);
+  const listOf = (rows: any[]) => rows.map((b) => ({ batch_id: String(b._id), code: b.code, status: b.status, location: b.location?.name ?? null }));
+
+  // ---- trainers ------------------------------------------------------------------------------------
+  const trainers = await Trainer.find(trainerScope).select("pipeline_status status createdAt").lean<any[]>();
+  const liveLinks = trainers.length
+    ? await Batch.find({ trainer: { $in: trainers.map((t) => t._id) }, status: { $in: ACTIVE_BATCH_STATUSES } }).select("trainer").lean<any[]>()
+    : [];
+  const hasLive = new Set(liveLinks.map((b) => String(b.trainer)));
+  const buckets = new Map<string, number>(BUCKET_KEYS.map((k) => [k, 0]));
+  let assigned = 0, idle = 0, unavailable = 0, rejected_dropped = 0, pipelineTotal = 0, added = 0;
+  for (const t of trainers) {
+    const tag = trainerAvailabilityTag({ pipeline_status: t.pipeline_status, status: t.status, live_batches: hasLive.has(String(t._id)) ? [t._id] : [] });
+    if (tag === "Assigned") assigned++;
+    else if (tag === "Certified") idle++;
+    else if (tag === "Unavailable") unavailable++;
+    else if (tag === "Rejected/Dropped") rejected_dropped++;
+    else {
+      pipelineTotal++;
+      const key = STAGE_BUCKETS[t.pipeline_status || "Fresh Lead"] ?? "fresh";
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+    const made = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
+    if (made >= instants.$gte.getTime() && made <= instants.$lte.getTime()) added++;
+  }
+
+  // ---- costs: built only for a viewer who may see money ----------------------------------------------
+  const finance = await hasPermission(viewer, "finance.view");
+  let costs: null | {
+    today: { amount: number; entries: number }; month: { amount: number; entries: number; from: string; to: string };
+    pending: { count: number; amount: number; raised_today: { count: number; amount: number } };
+    payment_pending: { count: number; amount: number };
+  } = null;
+  if (finance) {
+    const monthFrom = `${dayIST.slice(0, 8)}01`;
+    const [todayRoll, monthRoll, pendingRows, payRows] = await Promise.all([
+      costRollup(scope, { from: dayIST, to: dayIST }),
+      costRollup(scope, { from: monthFrom, to: dayIST }),
+      ApprovalRequest.find({ action: "cost.post", status: "Pending", createdAt: { $lte: instants.$lte }, ...scope }).select("payload createdAt").lean<any[]>(),
+      CostEntry.find({ payment_status: "Payment Pending", entry_date: { $lte: dayKey(dayIST) }, ...scope }).select("amount").lean<any[]>(),
+    ]);
+    const sum = (rows: any[], pick: (r: any) => number) => ({ count: rows.length, amount: round2(rows.reduce((s, r) => s + (pick(r) || 0), 0)) });
+    const raised = pendingRows.filter((r) => new Date(r.createdAt).getTime() >= instants.$gte.getTime());
+    costs = {
+      today: { amount: round2(todayRoll.totals.actual), entries: todayRoll.totals.entries },
+      month: { amount: round2(monthRoll.totals.actual), entries: monthRoll.totals.entries, from: monthFrom, to: dayIST },
+      pending: { ...sum(pendingRows, (r) => Number(r.payload?.amount)), raised_today: sum(raised, (r) => Number(r.payload?.amount)) },
+      payment_pending: sum(payRows, (r) => Number(r.amount)),
+    };
+  }
+
+  return {
+    day: dayIST,
+    generated_at: new Date().toISOString(),
+    finance,
+    live_note: "Mobilised and trainer availability are live figures: they show the position now, whichever day is chosen. Pending approvals and payment-pending are as of the end of the chosen day.",
+    candidates: {
+      joined: { total: by_batch.reduce((s, r) => s + r.count, 0), by_batch },
+      enrolled: { total: enrolled },
+      batches_created: listOf(created),
+      batches_started: listOf(started),
+      mobilised: planTrackerSummary(planRows).total,
+    },
+    trainers: {
+      assigned, idle, unavailable, rejected_dropped, added,
+      pipeline: { total: pipelineTotal, buckets: BUCKET_KEYS.map((k) => ({ key: k, label: BUCKET_LABEL[k], count: buckets.get(k) ?? 0 })) },
+    },
+    costs,
+  };
+}
+export type DailyDigest = Awaited<ReturnType<typeof dailyDigest>>;
 
 // ---------- The high-level report (QA-398) ----------
 // Karunn sir, 18:51: "aapki ek ye HIGH LEVEL aur doosra batch planning - bas in do mein saara kaam

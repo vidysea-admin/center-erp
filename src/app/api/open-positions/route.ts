@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { LocationTarget } from "@/models";
-import { trainerTiesFor } from "@/lib/rules"; // QA-1262b: one predicate for "who is tied to this centre x job role"
+import { trainerTiesFor, STAGE_BUCKETS, BUCKET_KEYS } from "@/lib/rules"; // QA-1262b: one predicate for "who is tied to this centre x job role"
 
 // Open Positions (CEO, 13/08 walkthrough): "ek tab — kahan-kahan trainer hire karne hain.
 // Location se sort karun toh kaun se program, kitne chahiye, kitne balance; job role select
@@ -18,22 +18,8 @@ import { trainerTiesFor } from "@/lib/rules"; // QA-1262b: one predicate for "wh
 // count is clickable, plus ?approved=all to "show not approved also" (default stays
 // approved-only, exactly as he asked).
 
-// The CEO's five buckets, from the stored stage names (R-A). The NSDC round-trip
-// (Rejected) sits with "Sent to NSDC" — it is still at the government's door — and the
-// post-approval prep states (payment/TOT) sit with "NSDC Approved".
-const STAGE_BUCKETS: Record<string, string> = {
-  "Fresh Lead": "fresh",
-  "Shortlisted": "shortlisted",
-  "Documents Completed": "docs",
-  "Sent to NSDC": "sent",
-  "NSDC Rejected": "sent",
-  "NSDC Approved": "approved",
-  "TOT Payment Done": "approved",
-  "TOT Scheduled": "approved",
-  "TOT In Progress": "approved",
-  "Certified": "certified",
-};
-const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certified"] as const;
+// mtg-c1 (R4): STAGE_BUCKETS / BUCKET_KEYS (the CEO's pipeline buckets, R-A) moved to lib/rules.ts so
+// the daily digest buckets trainers by the SAME map; a route file cannot export a non-handler const.
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();

@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate, offerable } from "@/lib/client";
 import { usePerms } from "@/components/shell";
-import { personLabel } from "@/lib/person";
+import { personLabel, trainerAvailabilityTag } from "@/lib/person";
 import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
@@ -35,14 +35,9 @@ const TAG_LABEL: Record<string, string> = {
   "Unavailable": "Unavailable",
   "Rejected/Dropped": "Rejected/Dropped",
 };
-function availabilityTag(t: any): (typeof TAG_ORDER)[number] {
-  const p = t.pipeline_status ?? "Fresh Lead";
-  if (p === "NSDC Rejected" || p === "Dropped") return "Rejected/Dropped";
-  if (p !== "Certified") return "Under preparation";
-  if ((t.live_batches?.length ?? 0) > 0) return "Assigned";
-  if (t.status === "Unavailable") return "Unavailable";
-  return "Certified";
-}
+// mtg-c1 (R4): the rule itself moved to lib/person.ts (import-free, so this client screen and the daily
+// digest on the server read the SAME function). It is imported under its old local name.
+const availabilityTag = trainerAvailabilityTag;
 
 export default function TrainersPage() {
   return <Suspense><TrainersInner /></Suspense>;

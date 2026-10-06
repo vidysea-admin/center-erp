@@ -68,6 +68,9 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   { prefix: "/locations", roles: ["Admin", "Operations", "Location", "Enrollment"] },
   { prefix: "/trainers", roles: ["Admin", "Operations", "Location"] },
   { prefix: "/candidates", roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  // mtg-c1 (R4): the daily digest. Same ceiling as the API door (/api/reports/daily): not for Trainers.
+  // No `perm`: the centre scope and the finance gate are applied to the DATA, not to the door.
+  { prefix: "/reports/daily", roles: ["Admin", "Operations", "Location", "Enrollment"] },
   // -107 (Umesh 17/08: "trainer dashboard mai ek aur remaining hai — upload government sheet of
   // attendance"): Trainer joins the CEILING here, and the permission still decides. It is OFF for
   // the Trainer role by default, so the three live trainers who only mark daily attendance see
@@ -140,6 +143,8 @@ const NAV = [
   // decides who sees which rows, so a centre login opening this sees its own centre and nothing
   // else. Everyone gets the entry; the report itself is what is scoped.
   { href: "/reports", label: "Reports", Icon: IconCap },
+  // mtg-c1 (R4): the daily digest screen; the 21:00 IST mail is the same data.
+  { href: "/reports/daily", label: "Daily digest", Icon: IconCap, roles: ["Admin", "Operations", "Location", "Enrollment"] },
 ] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 
 // ---- Location context (header switcher; pages read via this hook) ----

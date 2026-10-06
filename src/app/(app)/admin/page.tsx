@@ -1604,6 +1604,23 @@ function DefaultsTab({ error, setError }: any) {
               <span className="block text-xs text-gray-500">Off: every send is skipped and recorded as skipped. Sending also stays off until the mail credentials are configured on the server.</span>
             </span>
           </label>
+          {/* mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"): the 21:00 IST daily digest. Recipients are ERP
+              accounts; the finance section goes only to those who hold finance.view. */}
+          <label className="block text-sm">
+            <span className="font-medium">Daily digest recipients</span>
+            <textarea data-testid="digest-recipients" className={inputCls + " mt-1 min-h-[64px]"} value={form.digest_recipients ?? ""}
+              onChange={(e) => setForm({ ...form, digest_recipients: e.target.value })}
+              placeholder="name@vidysea.com, other@vidysea.com" />
+            <span className="block text-xs text-gray-500">One mail a day at 21:00 IST to each ERP account listed (separate with commas). Empty: no digest mail is sent. The cost section is included only for people who hold the finance right.</span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input data-testid="digest-only-toggle" type="checkbox" className="mt-0.5" checked={form.digest_only_approval_mails === true}
+              onChange={(e) => setForm({ ...form, digest_only_approval_mails: e.target.checked })} />
+            <span>
+              <span className="font-medium">Digest only: stop the separate mail for each approval</span>
+              <span className="block text-xs text-gray-500">On: approval-needed and cost-corrected mails are not sent one by one (each is recorded as skipped, with this reason); the approver still sees the bell and the digest. Off (default): every approval sends its own mail.</span>
+            </span>
+          </label>
           <MailPanel error={error} setError={setError} />
         </div>
       </Section>

@@ -12,8 +12,8 @@ export async function register() {
     console.log("[scheduler] disabled by SCHEDULER_DISABLED=1");
     return;
   }
-  const { dbConnect } = await import("@/lib/db");
-  const { SyncSource, mongoose } = await import("@/models");
+  const { dbConnect, takeJobLock } = await import("@/lib/db");
+  const { SyncSource } = await import("@/models");
   const { runSync } = await import("@/lib/sync");
   const { runWatch, sourceAllowed } = await import("@/lib/workbook");
   const { evaluateAlerts } = await import("@/lib/alerts");
@@ -22,14 +22,9 @@ export async function register() {
   const INSTANCE = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
   // Returns true only for the instance that wins the lock for this window.
+  // mtg-c1: the implementation moved to lib/db.ts (takeJobLock) so the daily digest shares it.
   async function takeLock(job: string, ttlMs: number): Promise<boolean> {
-    const now = new Date();
-    const res = await mongoose.connection.db!.collection("job_locks").findOneAndUpdate(
-      { _id: job as any, $or: [{ expires_at: { $lt: now } }, { expires_at: { $exists: false } }] },
-      { $set: { holder: INSTANCE, expires_at: new Date(now.getTime() + ttlMs) } },
-      { upsert: true, returnDocument: "after" },
-    ).catch(() => null); // upsert races throw a duplicate key — that instance simply lost
-    return !!res && (res as any).holder === INSTANCE;
+    return takeJobLock(job, ttlMs, INSTANCE);
   }
 
   const syncTick = async () => {
@@ -113,10 +108,24 @@ export async function register() {
     }
   };
 
+  // mtg-c1 (R4): the daily digest. Every minute is enough: digestTick returns at once before 21:00 IST,
+  // and after it takes the lock and claims the IST day durably, so it fires once per day however many
+  // containers run and however many times one restarts.
+  const digestJob = async () => {
+    try {
+      const { digestTick } = await import("@/lib/daily-digest");
+      const r = await digestTick({ instance: INSTANCE });
+      if (r.fired) console.log(`[daily-digest] ${r.day}: ${r.results.length} recipient(s) processed`);
+    } catch (e) {
+      console.error("[daily-digest] tick failed:", e);
+    }
+  };
+
   setInterval(syncTick, 60_000);
+  setInterval(digestJob, 60_000);
   setInterval(alertTick, 10 * 60_000);
   setInterval(stagedSweep, 30 * 60_000);
   setTimeout(alertTick, 15_000); // one pass shortly after boot
   setTimeout(stagedSweep, 45_000);
-  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes, staged-certificate sweep every 30");
+  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes, staged-certificate sweep every 30, daily digest at 21:00 IST");
 }

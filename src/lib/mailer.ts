@@ -151,12 +151,25 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
 // QA-2461: ONE place decides what a silenced recipient means, so the two mail doors below
 // cannot drift apart. They are the only two exits mail has; a per-call-site check would have
 // meant the next feature that mails somebody quietly ignores the switch.
-const suppressFor = (u: { mail_enabled?: unknown }) =>
+export const suppressFor = (u: { mail_enabled?: unknown }) =>
   (u?.mail_enabled === false ? "mail off for this account (admin toggle)" : undefined);
 
-export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown }) {
+// mtg-c1 (R4c, Umesh 2026-10-06: "Screen + 1 mail"). When the Defaults switch "digest only" is ON, the
+// PER-EVENT approval mails (a call site marks itself `perEvent: true`) are folded into the 21:00 daily
+// digest instead of going out one by one. Like the per-account switch above this is honoured at the mail
+// door and leaves a MailLog row - a skipped row naming the reason - rather than dropping the recipient
+// upstream, so "did the approval mail go?" stays answerable. The bell notification is a separate write at
+// each call site and is untouched. The per-account switch wins when both apply (it is the more specific).
+export const DIGEST_ONLY_REASON = "digest-only mode: per-approval mails are folded into the 21:00 daily digest";
+async function perEventSuppress(perEvent: boolean | undefined): Promise<string | undefined> {
+  if (!perEvent) return undefined;
+  return (await getDefaults()).digest_only_approval_mails === true ? DIGEST_ONLY_REASON : undefined;
+}
+
+export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean }) {
   const ids = (opts.userIds ?? []).filter(Boolean);
   if (!ids.length) return 0;
+  const foldedIntoDigest = await perEventSuppress(opts.perEvent);
   const users = await User.find({
     _id: { $in: ids }, active: true, dropped: { $ne: true }, approval_status: { $ne: "Pending" },
   }).select("email mail_enabled").lean<any[]>();
@@ -169,12 +182,13 @@ export async function mailUsers(opts: { userIds: unknown[]; subject: string; tit
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) });
+    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }
 
-export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown }) {
+export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean }) {
+  const foldedIntoDigest = await perEventSuppress(opts.perEvent);
   const users = await User.find({
     role: { $in: opts.roles }, active: true, dropped: { $ne: true },
     approval_status: { $ne: "Pending" },
@@ -193,7 +207,7 @@ export async function mailUsersByRole(opts: { roles: string[]; location?: unknow
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) });
+    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }

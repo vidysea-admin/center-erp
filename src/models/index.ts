@@ -1869,6 +1869,10 @@ const DefaultsSchema = new Schema({
   // QA-115 (2026-08-15): admin kill-switch for outbound email — the real gate is the SES
   // env creds. Same strict-schema warning as above: omit here = writes silently dropped.
   email_enabled: { type: Boolean, default: true },
+  // mtg-c1 (R4): the daily digest's recipient list and the "digest only" switch. Same strict-schema
+  // warning as above: omit here = the PUT's $set is silently dropped.
+  digest_recipients: { type: String, default: "" },
+  digest_only_approval_mails: { type: Boolean, default: false },
   // Client-contract counting rules, confirmed by Manish 2026-08-12.
   // "Appeared" is NOT reduced by absentees — the client counts everyone who reached assessment
   // stage. Kept as a toggle because it is a contract term, not a scheme rule, and the next

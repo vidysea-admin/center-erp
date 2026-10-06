@@ -77,6 +77,22 @@ export function assertSafeConnectionTarget(url: string, dbName: string) {
   }
 }
 
+// mtg-c1 (R4): the scheduler's job lock, moved here from the closure in instrumentation.ts so the daily
+// digest's tick and the three older ticks share ONE implementation (and a test can reach it through the
+// tick, which is where the digest takes it). Returns true only for the instance that wins the lock for
+// this window. The lock is a document in `job_locks` keyed by the job name: an upsert whose filter
+// excludes an unexpired lock, so a second container's upsert collides on _id (duplicate key) and loses.
+// A duplicate-key error is the normal losing outcome and is swallowed into `false`.
+export async function takeJobLock(job: string, ttlMs: number, instance: string): Promise<boolean> {
+  const now = new Date();
+  const res = await mongoose.connection.db!.collection("job_locks").findOneAndUpdate(
+    { _id: job as any, $or: [{ expires_at: { $lt: now } }, { expires_at: { $exists: false } }] },
+    { $set: { holder: instance, expires_at: new Date(now.getTime() + ttlMs) } },
+    { upsert: true, returnDocument: "after" },
+  ).catch(() => null); // upsert races throw a duplicate key - that instance simply lost
+  return !!res && (res as any).holder === instance;
+}
+
 export async function dbConnect() {
   assertSafeConnectionTarget(MONGODB_URL, MONGODB_DB);
   if (cached.conn) return cached.conn;

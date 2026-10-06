@@ -539,6 +539,7 @@ export async function notifyCostCorrection(input: {
   // the bell and no mail.
   (named.length
     ? mailUsers({
+        perEvent: true, // mtg-c1 (R4): folded into the digest when "digest only" is ON
         userIds: named,
         subject: summary,
         title: "A recorded cost was corrected",
@@ -546,6 +547,7 @@ export async function notifyCostCorrection(input: {
         link: "/costs", entity: "CostEntry", entity_id: input.costId,
       })
     : mailUsersByRole({
+        perEvent: true,
         roles: [rule.approver_role], location: input.location,
         subject: summary,
         title: "A recorded cost was corrected",
@@ -697,6 +699,7 @@ export async function requireApproval(
       location: ctx.location,
     });
     mailUsers({
+      perEvent: true, // mtg-c1 (R4): folded into the digest when "digest only" is ON
       userIds: grantHolders.map((h) => h.id),
       subject: `Approval needed: ${safeSummary}`,
       title: "A new cost head is waiting for your approval",
@@ -723,6 +726,7 @@ export async function requireApproval(
   // someone to open the bell is an approval that waits.
   (approverUsers.length
     ? mailUsers({
+        perEvent: true,
         userIds: approverUsers,
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",
@@ -730,6 +734,7 @@ export async function requireApproval(
         link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
       })
     : mailUsersByRole({
+        perEvent: true,
         roles: [rule.approver_role], location: ctx.location,
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",
