@@ -145,7 +145,7 @@ ok("R2-P7: clearing both back to assign later works", c1.data.item?.trainer == n
   `(trainer ${JSON.stringify(c1.data.item?.trainer)}, room ${JSON.stringify(c1.data.item?.room)})`);
 
 // a clash disappears when the holder is cancelled: the rule is about LIVE bookings
-await req(admin, "POST", `/api/batches/${heldR._id}/transition`, { target: "Cancelled", reason: "assign-later test" }, 200);
+await req(admin, "POST", `/api/batches/${heldR?._id}/transition`, { target: "Cancelled", reason: "assign-later test" }, 200);
 const free = await req(admin, "POST", "/api/batches", mk({ room: R1._id }), 201);
 ok("R2-P8: once the holding batch is cancelled the same room is bookable again", free.status === 201);
 
