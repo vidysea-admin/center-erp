@@ -57,7 +57,8 @@ function DailyDigestInner() {
     setPublished("");
     setError("");
     try {
-      const r = await api("/api/reports/daily/publish", { method: "POST", json: { date: data?.day } });
+      // The day published is the day on the screen: the chosen date, or (no date chosen) the day the loaded digest names.
+      const r = await api("/api/reports/daily/publish", { method: "POST", json: { date: wanted || data?.day } });
       const parts = [`${r.attempted} recipient${r.attempted === 1 ? "" : "s"} attempted for ${r.day}`, `${r.mailed} handed to the mail service`];
       if (r.ineligible) parts.push(`${r.ineligible} not mailed (not an active ERP account)`);
       setPublished(parts.join(", ") + ".");
@@ -71,6 +72,8 @@ function DailyDigestInner() {
   const costs = data?.costs;
   const meta = data?.meta;
   const mayPublish = can("defaults.manage", "edit");
+  // Never publish while the figures on screen are for a different day than the chosen one (a load in flight)
+  const settled = !!data && !loading && (!wanted || data.day === wanted);
 
   return (
     <div className="space-y-5">
@@ -87,11 +90,11 @@ function DailyDigestInner() {
             <span className="block text-xs text-gray-500">Day (IST)</span>
             <input
               data-testid="digest-date" type="date" className="rounded border border-gray-300 px-2 py-1"
-              value={data?.day ?? wanted}
+              value={wanted || data?.day || ""}
               onChange={(e) => { if (e.target.value) router.replace(`/reports/daily?date=${e.target.value}`); }}
             />
           </label>
-          {mayPublish && <span data-testid="digest-publish"><Btn kind="ghost" onClick={publish}>Publish now</Btn></span>}
+          {mayPublish && <span data-testid="digest-publish"><Btn kind="ghost" onClick={publish} disabled={!settled}>Publish now</Btn></span>}
         </div>
       </div>
 
