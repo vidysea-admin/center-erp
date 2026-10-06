@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, HttpError, readJson } from "@/lib/authz";
 import { fetchWorkbook } from "@/lib/workbook";
-import { Location } from "@/models";
+import { Location, upsertLocationTargetNative } from "@/models";
 import { audit } from "@/lib/audit";
 import { slotGenerationBumps } from "@/lib/rules";
 
@@ -212,9 +212,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const location = locIds.get(t.institution), program = progIds.get(t.key);
     if (!location || !program) continue;
     const clean = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
-    await db.collection("locationtargets").updateOne(
+    // QA-2866: a native-driver write, so no LocationTarget middleware sees it. It goes through the ONE
+    // helper that applies the stamp rule (models/index.ts), so tc_status_changed_at moves here too, and
+    // only when tc_status really changes.
+    await upsertLocationTargetNative(
       { location, program },
-      { $set: clean({
+      clean({
         location, program,
         approved_target: t.approved_target, trainers_required: t.trainers_required,
         enrolled_reported: t.enrolled_reported, pending_reported: t.pending_reported,
@@ -223,8 +226,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
         nominated_nsdc_reported: t.nominated_nsdc_reported,
         trainers_certified_reported: t.trainers_certified_reported,
         reported_at: new Date(), updatedAt: new Date(),
-      }), $setOnInsert: { createdAt: new Date() } },
-      { upsert: true },
+      }),
+      { createdAt: new Date() },
     );
     written++;
   }

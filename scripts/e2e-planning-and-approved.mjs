@@ -17,6 +17,8 @@
 //   A3  the status filter: Pending and Rejected rows decided yesterday are NOT counted
 //   A4  centre scope on the strip
 //   A5  the stamp: a real write through the door stamps, an unchanged re-write does not refresh it
+//   A6  the native-driver door (api/admin/avpl-rebase -> upsertLocationTargetNative) moves the stamp by the SAME rule (QA-2866)
+//   P3b the exact week boundaries: a batch starting exactly Monday 00:00 IST is IN, exactly next Monday 00:00 IST is OUT (QA-2867)
 //   S   the real screens, in Chromium
 //
 // Every identity is derived from the run stamp. The shared wall DB holds other suites' batches, so the
@@ -24,7 +26,9 @@
 // scope contains only this run's centres; Admin and Operations get invariant checks only.
 import { chromium } from "playwright";
 import * as XLSX from "xlsx";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ok as okLib, req, login, adminLogin, finish as finishLib, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
@@ -85,6 +89,8 @@ const mkLoc = async (tag) => (await req(admin, "POST", "/api/locations", { code:
 const locA = await mkLoc("A");
 const locB = await mkLoc("B");
 const locH = await mkLoc("H");
+const locE = await mkLoc("E");   // P3b: the exact week-boundary batches live alone at this centre, so no other arm's number moves
+const locR = await mkLoc("R");   // A6: the native-driver rows
 const mkProg = async (tag, name) => (await req(admin, "POST", "/api/programs", { code: `${tag}${s}`, name: name ?? `MB1 ${tag} ${s}`, trainer_skill: "MB1Skill" + s }, 201)).data.item;
 const prog = await mkProg("PL");
 
@@ -155,6 +161,7 @@ const mkUser = async (role, scope, tag) => {
 const uA = await mkUser("Location", [locA._id], "a");
 const uB = await mkUser("Location", [locB._id], "b");
 const uAB = await mkUser("Enrollment", [locA._id, locB._id], "ab");
+const uE = await mkUser("Location", [locE._id], "e");
 const uOps = await mkUser("Operations", [], "ops");
 ok("[precondition] personas (Location A, Location B, Enrollment A+B, Operations) can log in", !!(uA.cookie && uB.cookie && uAB.cookie && uOps.cookie),
   JSON.stringify({ a: uA.status, b: uB.status, ab: uAB.status, ops: uOps.status }));
@@ -193,6 +200,26 @@ ok("P3: week.start is Monday 00:00 IST of the current week", sA?.week?.start ===
 ok("P3: week.end is the next Monday 00:00 IST", sA?.week?.end === WEEK_END.toISOString(), `${sA?.week?.end} vs ${WEEK_END.toISOString()}`);
 ok("P3: starting this week = 4 batches (Mon 00:30 IST, Sun 23:30 IST, Thursday over-filled, Ready) - not last Sunday 23:30 IST, not next Monday 00:30 IST",
   sA?.this_week?.batches === 4 && sA.this_week.target === 42 && sA.this_week.mobilised === 19 && sA.this_week.gap === 25, JSON.stringify(sA?.this_week));
+
+// =================================================================================================
+// P3b - the EXACT week boundaries (QA-2867). Monday 00:30 and Sunday 23:30 never touch the edge itself, so
+// a `ps <= end` mutant survived every arm above. Two batches at a centre of their own, planned_start set in
+// Mongo to the exact instants: this Monday 00:00 IST (inclusive, IN) and next Monday 00:00 IST (exclusive, OUT).
+// =================================================================================================
+const edgeBatch = async (tag, startMs, target) => {
+  const r = await req(admin, "POST", "/api/batches", { location: locE._id, program: prog._id, planned_start: today(), target_size: target });
+  if (r.status !== 201) { ok(`[precondition] boundary batch ${tag} created`, false, JSON.stringify(r.data).slice(0, 160)); return null; }
+  await db.collection("batches").updateOne({ _id: oid(r.data.item._id) }, { $set: { planned_start: at(startMs), status: "Planning", target_size: target } });
+  return r.data.item;
+};
+const eStart = await edgeBatch("edge-start", WEEK_START.getTime(), 7);
+const eEnd = await edgeBatch("edge-end", WEEK_END.getTime(), 9);
+const tE = await track(uE.cookie);
+ok("P3b: a batch starting EXACTLY at this Monday 00:00 IST is in this week (inclusive start): this_week = 1 batch, target 7",
+  tE.summary?.this_week?.batches === 1 && tE.summary.this_week.target === 7, JSON.stringify(tE.summary?.this_week));
+ok("P3b: a batch starting EXACTLY at next Monday 00:00 IST is NOT this week (exclusive end): it is in total (2 batches, target 16) but not in this_week",
+  tE.summary?.total?.batches === 2 && tE.summary.total.target === 16 && tE.summary.this_week?.batches === 1 && tE.summary.this_week.target !== 16,
+  JSON.stringify({ total: tE.summary?.total, wk: tE.summary?.this_week, ids: [eStart?._id, eEnd?._id] }));
 
 // =================================================================================================
 // P4 - scope on the Planning tab
@@ -293,6 +320,61 @@ await putT(locH, PH, { tc_status: "Approved" });
 ok("A5: Pending -> Approved is a new approval: stamped now, appears (count 1, seats 55)", (await h()).length === 1 && (await h())[0].seats === 55, JSON.stringify(await h()));
 const doc = await db.collection("locationtargets").findOne({ location: oid(locH._id), program: oid(PH._id) });
 ok("A5: tc_status_changed_at is a Date within the last minute", doc?.tc_status_changed_at instanceof Date && Date.now() - doc.tc_status_changed_at.getTime() < 60_000, String(doc?.tc_status_changed_at));
+
+// =================================================================================================
+// A6 - the native-driver door (QA-2866). api/admin/avpl-rebase cannot be driven offline (it fetches a
+// hardcoded OneDrive workbook, and the outbound-fetch guard refuses loopback), so the REAL function it calls
+// for every target, upsertLocationTargetNative in src/models/index.ts, is loaded with jiti against this same
+// CI database, and a source pin below proves the route still goes through it and has no write of its own.
+// Each effect is read back through the strip's own API, and the stored stamp.
+// =================================================================================================
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const jm = createRequire(import.meta.url)(path.join(root, "node_modules/jiti"));
+const M = (jm.createJiti ?? jm)(path.join(here, "e2e-planning-and-approved.mjs"), { interopDefault: true })(path.join(root, "src/models/index.ts"));
+const mg = createRequire(import.meta.url)(path.join(root, "node_modules/mongoose"));
+await mg.connect(MURL, { dbName: process.env.MONGODB_DB });
+const nativeWrite = (loc, p, fields) => M.upsertLocationTargetNative(
+  { location: new mg.Types.ObjectId(String(loc._id)), program: new mg.Types.ObjectId(String(p._id)) },
+  { location: new mg.Types.ObjectId(String(loc._id)), program: new mg.Types.ObjectId(String(p._id)), reported_at: new Date(), updatedAt: new Date(), ...fields },
+  { createdAt: new Date() });
+const rDoc = (p) => db.collection("locationtargets").findOne({ location: oid(locR._id), program: oid(p._id) });
+const rStrip = async () => ((await recent(admin, "?days=7")).rows ?? []).filter((r) => r.location._id === locR._id);
+const fresh = (d) => d?.tc_status_changed_at instanceof Date && Date.now() - d.tc_status_changed_at.getTime() < 60_000;
+
+const R1 = await mkProg("N1", `MB1 N1 ${s}`), R2 = await mkProg("N2", `MB1 N2 ${s}`), R3 = await mkProg("N3", `MB1 N3 ${s}`), R4 = await mkProg("N4", `MB1 N4 ${s}`);
+ok("A6: (setup) the centre has nothing in the strip before the native writes", (await rStrip()).length === 0, "");
+// R1: a row that ALREADY carries a stamp (Pending, 30 days old), flipped to Approved by the native door
+await putT(locR, R1, { approved_target: 20, tc_status: "Pending" });
+await db.collection("locationtargets").updateOne({ location: oid(locR._id), program: oid(R1._id) }, { $set: { tc_status_changed_at: at(nowMs - 30 * DAY) } });
+const r1Before = (await rDoc(R1))?.tc_status_changed_at?.getTime();
+await nativeWrite(locR, R1, { approved_target: 20, tc_status: "Approved" });
+const r1Doc = await rDoc(R1);
+ok("A6: a previously STAMPED row (Pending, 30 days old) flipped to Approved by the native door has its stamp MOVED to now (QA-2866)",
+  fresh(r1Doc) && r1Doc.tc_status_changed_at.getTime() > r1Before && r1Doc.tc_status === "Approved", JSON.stringify({ before: r1Before, after: r1Doc?.tc_status_changed_at, st: r1Doc?.tc_status }));
+ok("A6: ...and that row now lists as recently approved (a stale stamp would have dated it 30 days ago)", (await rStrip()).some((r) => r.job_role === `MB1 N1 ${s}` && r.count === 1 && r.seats === 20), JSON.stringify(await rStrip()));
+// R2: already Approved and stamped 30 days ago, the native door re-writes the SAME status (other spelling, other field)
+await putT(locR, R2, { approved_target: 30, tc_status: "Approved" });
+await db.collection("locationtargets").updateOne({ location: oid(locR._id), program: oid(R2._id) }, { $set: { tc_status_changed_at: at(nowMs - 30 * DAY) } });
+await nativeWrite(locR, R2, { approved_target: 35, tc_status: " approved " });
+const r2Doc = await rDoc(R2);
+ok("A6: an UNCHANGED status re-written by the native door (other spelling, other field changed) does NOT refresh the stamp - an old approval does not look new",
+  r2Doc?.approved_target === 35 && Math.abs(r2Doc.tc_status_changed_at.getTime() - (nowMs - 30 * DAY)) < 1000 && !(await rStrip()).some((r) => r.job_role === `MB1 N2 ${s}`), JSON.stringify({ at: r2Doc?.tc_status_changed_at, t: r2Doc?.approved_target }));
+// R3: a NEW row inserted by the native door as Approved is stamped (it is a change from blank)
+await nativeWrite(locR, R3, { approved_target: 40, tc_status: "Approved" });
+ok("A6: a NEW row the native door inserts as Approved is stamped now and appears (count 1, seats 40)",
+  fresh(await rDoc(R3)) && (await rStrip()).some((r) => r.job_role === `MB1 N3 ${s}` && r.count === 1 && r.seats === 40), JSON.stringify(await rDoc(R3)));
+// R4: a native write that does not carry tc_status leaves the stamp alone
+await putT(locR, R4, { approved_target: 10, tc_status: "Approved" });
+await db.collection("locationtargets").updateOne({ location: oid(locR._id), program: oid(R4._id) }, { $set: { tc_status_changed_at: at(nowMs - 30 * DAY) } });
+await nativeWrite(locR, R4, { approved_target: 12 });
+const r4Doc = await rDoc(R4);
+ok("A6: a native write with no tc_status in it leaves the stamp alone", r4Doc?.approved_target === 12 && r4Doc.tc_status === "Approved" && Math.abs(r4Doc.tc_status_changed_at.getTime() - (nowMs - 30 * DAY)) < 1000, JSON.stringify({ at: r4Doc?.tc_status_changed_at }));
+await mg.disconnect();
+// the route must still go through that function and carry no write of its own
+const routeSrc = readFileSync(path.join(root, "src/app/api/admin/avpl-rebase/route.ts"), "utf8");
+ok("A6: api/admin/avpl-rebase writes LocationTargets only through upsertLocationTargetNative (no raw locationtargets collection call left in the route)",
+  /upsertLocationTargetNative\(/.test(routeSrc) && !/collection\(\s*["']locationtargets["']\s*\)/.test(routeSrc), "");
 
 // =================================================================================================
 // S - the real screens

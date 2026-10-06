@@ -533,10 +533,16 @@ LocationTargetSchema.index({ location: 1, program: 1 }, { unique: true });
 // the (trimmed, lower-cased) text really changes, because a sync that rewrites "Approved" with
 // "Approved" must not make a months-old approval look fresh. Read-then-write, not atomic: two writers
 // racing on one row can at worst both stamp, which only moves the date by seconds. updateMany and
-// replaceOne are not hooked, and the admin AVPL rebase (api/admin/avpl-rebase) writes tc_status through
-// the native driver, which no Mongoose middleware sees: a row it flips stays undated (counted as
-// `undated_approved`, never shown as recent). Nothing else in src/ writes a LocationTarget that way.
+// replaceOne are not hooked. The admin AVPL rebase (api/admin/avpl-rebase) writes tc_status through the
+// native driver, which no Mongoose middleware sees, so it goes through upsertLocationTargetNative below
+// instead: the SAME rule (tcStatusChanged), applied by hand, in this file. A stamp already on a row is
+// therefore moved by that door too when the status really changes. Nothing else in src/ writes a
+// LocationTarget through the native driver.
 const tcNorm = (v: unknown) => String(v ?? "").trim().toLowerCase();
+// THE rule for "tc_status really changed", shared by the middleware below and the native-driver door.
+// `next === undefined` means the write does not touch tc_status at all, so it is never a change.
+export const tcStatusChanged = (before: unknown, next: unknown): boolean =>
+  next !== undefined && tcNorm(before) !== tcNorm(next);
 (LocationTargetSchema as any).pre(["findOneAndUpdate", "updateOne"], async function (this: any) {
   const raw = this.getUpdate() ?? {};
   if (Array.isArray(raw)) return;
@@ -549,9 +555,26 @@ const tcNorm = (v: unknown) => String(v ?? "").trim().toLowerCase();
   const before = await this.model.findOne(this.getFilter()).select("tc_status").lean();
   // $setOnInsert only takes effect when the row does not exist yet, so it is read only then.
   const next = unsetting ? "" : "tc_status" in flat ? flat.tc_status : !before ? onInsert.tc_status : undefined;
-  if (next === undefined || tcNorm(before?.tc_status) === tcNorm(next)) return;
+  if (!tcStatusChanged(before?.tc_status, next)) return;
   this.setUpdate({ ...raw, $set: { ...(raw.$set ?? {}), tc_status_changed_at: new Date() } });
 });
+
+// mtg-b1 cycle 1 (QA-2866): the ONE native-driver write of a LocationTarget (api/admin/avpl-rebase), which
+// no Mongoose middleware can see. It applies the middleware's rule (tcStatusChanged) by hand: the stored
+// row's tc_status is read first and tc_status_changed_at is $set only when it really changes, so a row
+// that already carried a stamp has it moved and one that did not is dated from now on. Upsert semantics
+// are the rebase's own: `fields` go in $set, `onInsert` in $setOnInsert.
+export async function upsertLocationTargetNative(
+  filter: { location: unknown; program: unknown },
+  fields: Record<string, unknown>,
+  onInsert: Record<string, unknown>,
+) {
+  const coll = (LocationTarget as any).collection;
+  const before = await coll.findOne(filter, { projection: { tc_status: 1 } });
+  const $set: Record<string, unknown> = { ...fields };
+  if (!("tc_status_changed_at" in $set) && tcStatusChanged(before?.tc_status, $set.tc_status)) $set.tc_status_changed_at = new Date();
+  return coll.updateOne(filter, { $set, $setOnInsert: onInsert }, { upsert: true });
+}
 
 // ---------- Room ----------
 const RoomSchema = new Schema({
