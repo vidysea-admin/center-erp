@@ -120,27 +120,27 @@ ok("R2-N3: the refused attempts wrote no batch (trainer T1 holds exactly one, ro
 
 // ------------------------------------------------------------ 4. the EDIT door runs the SAME rule
 const later = (await req(admin, "POST", "/api/batches", mk({}), 201)).data.item;
-const p1 = await req(admin, "PATCH", `/api/batches/${later._id}`, { trainer: T1._id }, 409);
+const p1 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { trainer: T1._id }, 409);
 ok("R2-P1: assigning a booked trainer LATER is refused (409)", p1.status === 409);
 ok("R2-P2: ...and names the holding batch, says until when, hints Assign later",
   names(p1.data.error, heldT) && until(p1.data.error, heldT) && hint(p1.data.error), `(${JSON.stringify(p1.data.error)})`);
-const p2 = await req(admin, "PATCH", `/api/batches/${later._id}`, { room: R1._id }, 409);
+const p2 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { room: R1._id }, 409);
 ok("R2-P3: assigning a booked room LATER is refused (409), naming the batch + until + Assign later",
   p2.status === 409 && names(p2.data.error, heldR) && until(p2.data.error, heldR) && hint(p2.data.error), `(${p2.status} ${JSON.stringify(p2.data.error)})`);
-const p3 = await req(admin, "PATCH", `/api/batches/${later._id}`, { trainer: T1._id, override: true, force: true }, 409);
+const p3 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { trainer: T1._id, override: true, force: true }, 409);
 ok("R2-P4: no override key on the edit door either", p3.status === 409);
-const still = (await req(admin, "GET", `/api/batches/${later._id}`, undefined, 200)).data.item;
+const still = (await req(admin, "GET", `/api/batches/${later?._id}`, undefined, 200)).data.item;
 ok("R2-P5: the refused assignments wrote nothing (trainer and room still unassigned)",
   still?.trainer == null && still?.room == null, `(trainer ${JSON.stringify(still?.trainer)}, room ${JSON.stringify(still?.room)})`);
 
 // a non-clashing later assignment works
-const a1 = await req(admin, "PATCH", `/api/batches/${later._id}`, { trainer: T2._id }, 200);
-const a2 = await req(admin, "PATCH", `/api/batches/${later._id}`, { room: R2._id }, 200);
+const a1 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { trainer: T2._id }, 200);
+const a2 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { room: R2._id }, 200);
 ok("R2-P6: a NON-clashing trainer and room assigned later are accepted and stored",
   String(a1.data.item?.trainer) === String(T2._id) && String(a2.data.item?.room) === String(R2._id),
   `(trainer ${JSON.stringify(a1.data.item?.trainer)}, room ${JSON.stringify(a2.data.item?.room)})`);
 // and back to assign later
-const c1 = await req(admin, "PATCH", `/api/batches/${later._id}`, { trainer: null, room: null }, 200);
+const c1 = await req(admin, "PATCH", `/api/batches/${later?._id}`, { trainer: null, room: null }, 200);
 ok("R2-P7: clearing both back to assign later works", c1.data.item?.trainer == null && c1.data.item?.room == null,
   `(trainer ${JSON.stringify(c1.data.item?.trainer)}, room ${JSON.stringify(c1.data.item?.room)})`);
 
@@ -177,7 +177,7 @@ ok("R2-L0: the scoped Location user can sign in", !!lu);
 if (lu) {
   const l1 = await req(lu, "POST", "/api/batches", mk({}), 403);
   ok("R2-L1: a Location user still cannot create a batch, with or without a trainer (assign later is not a way in)", l1.status === 403);
-  const l2 = await req(lu, "PATCH", `/api/batches/${later._id}`, { trainer: T2._id }, 403);
+  const l2 = await req(lu, "PATCH", `/api/batches/${later?._id}`, { trainer: T2._id }, 403);
   ok("R2-L2: ...nor assign a trainer to an existing batch", l2.status === 403);
 }
 
