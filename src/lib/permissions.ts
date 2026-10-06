@@ -233,14 +233,16 @@ export function parseLevel(entry: string): { key: string; level: PermLevel } {
 // above view. Admin: always edit on everything (bypass, as today).
 export async function getEffectiveLevels(user: SessionUser): Promise<Map<string, PermLevel>> {
   const doc = await User.findById(user.id).select("extra_permissions revoked_permissions can_edit").lean<any>();
-  return levelsFromDoc(user.role, doc, await getRolePermissions(user.role));
+  return levelsFromDoc(user, doc, await getRolePermissions(user.role));
 }
 
 // QA-1977 5B: the body of getEffectiveLevels, split out so a caller that must ask the question of
 // MANY users (financeApprovers, below) applies the identical rule to each without a lookup per
 // user. There is still exactly one statement of how role + grants + revokes + Rule 39 + the Admin
 // bypass combine; getEffectiveLevels is now a one-user wrapper around it.
-function levelsFromDoc(role: string, doc: any, rolePerms: Iterable<string>): Map<string, PermLevel> {
+// It takes `user` (not a bare role) so the Admin bypass below keeps the exact `user.role === "Admin"`
+// shape that check-user-copy's QA-1825 pin counts and requires to consult NO_ADMIN_BYPASS.
+function levelsFromDoc(user: { role: string }, doc: any, rolePerms: Iterable<string>): Map<string, PermLevel> {
   const levels = new Map<string, PermLevel>();
   // QA-1825: an Admin used to return here with every key at edit and never read their own User
   // row. Now the ordinary path runs for them too, and the bypass is applied at the BOTTOM of this
@@ -263,7 +265,7 @@ function levelsFromDoc(role: string, doc: any, rolePerms: Iterable<string>): Map
   if (doc && doc.can_edit === false) {
     for (const [k, l] of levels) if (l === "edit") levels.set(k, "view");
   }
-  if (role === "Admin") {
+  if (user.role === "Admin") {
     for (const p of PERMISSIONS) if (!NO_ADMIN_BYPASS.has(p.key)) levels.set(p.key, "edit");
   }
   return levels;
@@ -347,7 +349,7 @@ export async function financeApprovers(): Promise<{ id: string; role: string }[]
   for (const d of docs) {
     const role = String(d.role ?? "");
     if (!byRole.has(role)) byRole.set(role, await getRolePermissions(role));
-    const levels = levelsFromDoc(role, d, byRole.get(role)!);
+    const levels = levelsFromDoc({ role }, d, byRole.get(role)!);
     if (levels.has(FINANCE_VIEW) && levels.get(FINANCE_APPROVE) === "edit") out.push({ id: String(d._id), role });
   }
   return out;
