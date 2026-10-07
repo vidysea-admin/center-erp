@@ -189,13 +189,22 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
     if (!recipients.length) return { fired: false, day, reason: "no recipients configured", results: [] };
     const results: DigestResult[] = [];
     for (const r of recipients) {
+      if (istDayOf(clock()) !== day) break;   // a long tick that crosses midnight must not send yesterday's digest
       const attempt = await takeClaim(day, r.to, instance, clock());
       if (!attempt) continue;
-      const res = await sendOne(day, r, opts.includeText === true);
-      const sim = opts.simulate?.[attempt - 1];
-      if (sim && res.outcome === "mailed") res.status = sim;
-      res.attempt = attempt;
-      await settleClaim(day, r.to, attempt, res, clock());
+      let res: DigestResult;
+      try {
+        res = await sendOne(day, r, opts.includeText === true);
+        const sim = opts.simulate?.[attempt - 1];
+        if (sim && res.outcome === "mailed") res.status = sim;
+        res.attempt = attempt;
+        await settleClaim(day, r.to, attempt, res, clock());
+      } catch (e) {
+        // Neither step is expected to throw (sendMail catches everything). If one does, do not leave the claim
+        // "sending" for the rest of the day: record a failed attempt so the retry rules apply.
+        res = { to: r.to, outcome: "failed", status: "failed", reason: e instanceof Error ? e.message : String(e), attempt };
+        await settleClaim(day, r.to, attempt, res, clock()).catch(() => {});
+      }
       results.push(res);
     }
     if (!results.length) return { fired: false, day, reason: `already handled for ${day}: sent, closed, exhausted, or waiting out the ${DIGEST_RETRY_GAP_MS / 60_000}-minute gap before a retry`, results };

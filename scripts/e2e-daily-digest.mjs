@@ -656,7 +656,7 @@ await arm("S3 digest screen (Admin: Publish now)", async () => {
   await page.locator('[data-testid="digest-publish-result"]').waitFor();
   const res = await txt(page, "digest-publish-result");
   ok("S3: pressing Publish now shows the outcome in words (5 recipients attempted)", /5/.test(res) && /recipient/i.test(res), res);
-  ok("S3: ...and says truthfully that nothing was sent (test env suppresses mail): '0 sent', '5 skipped', the reason, and never 'handed to the mail service'", /0 sent/.test(res) && /5 skipped/.test(res) && /Reason/.test(res) && !/handed to the mail service/i.test(res), res);
+  ok("S3: ...and says truthfully that nothing was sent (test env suppresses mail): '0 sent', '5 skipped', the reason, and never 'handed to the mail service'", /(^|[^0-9])0 sent/.test(res) && /5 skipped/.test(res) && /Reason/.test(res) && !/handed to the mail service/i.test(res), res);
   ok("S3: ...and it really mailed through the one door: 5 new rows for that day", (await digestRows(PUBDAY, recipients)).length === before + 5, String((await digestRows(PUBDAY, recipients)).length - before));
   ok("S3: the Admin's screen has no costs section (no finance.view)", (await page.locator('[data-testid="digest-costs"]').count()) === 0, "");
   await shot(page, "S3-digest-admin-publish.png");

@@ -52,8 +52,12 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (body.digest_only_approval_mails !== undefined || body.digest_recipients !== undefined) {
     const cur = await getDefaults();
     const willBeOn = (body.digest_only_approval_mails ?? cur.digest_only_approval_mails) === true;
-    if (willBeOn) {
-      const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "");
+    const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "");
+    // An unrelated Defaults save (the Admin screen sends the whole form) must not be refused because a listed
+    // account was deactivated since: judge only a write that changes the toggle or the list.
+    const changes = (body.digest_only_approval_mails !== undefined && body.digest_only_approval_mails !== (cur.digest_only_approval_mails === true))
+      || (body.digest_recipients !== undefined && body.digest_recipients !== String(cur.digest_recipients ?? ""));
+    if (willBeOn && changes) {
       if (!parseRecipients(willList).length) {
         throw new HttpError(400, "Add at least one digest recipient (an email address) before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
       }
