@@ -381,9 +381,11 @@ const rows5 = {};
   ok("R5 export: 'Approved on' is the IST day (decided 20:00 UTC on the 8th reads 2026-09-09)", xir?.["Approved on"] === "2026-09-09", String(xir?.["Approved on"]));
 
   // GET /api/costs?location= intersects the caller's scope
-  const foreignQ = await req(spoc, "GET", `/api/costs?location=${foreignLoc._id}`);
-  ok("scope: a scoped user naming a FOREIGN centre on the ledger is refused (403), not handed that centre's rows", foreignQ.status === 403, `got ${foreignQ.status} items=${foreignQ.data?.items?.length}`);
-  const ownQ = await req(spoc, "GET", `/api/costs?location=${ownLoc._id}`);
+  const scopedV = await mkUser(`Scoped viewer2 ${stamp}`, `zz.a3.scoped2.${stamp}@vidysea-test.local`, "Location", ["finance.view"], [ownLoc._id]);
+  ok("[precondition] a location-scoped finance viewer can sign in", !!scopedV.cookie, JSON.stringify(scopedV.made.data).slice(0, 160));
+  const foreignQ = await req(scopedV.cookie, "GET", `/api/costs?location=${foreignLoc._id}`);
+  ok("scope: a scoped user naming a FOREIGN centre on the ledger is refused (403), not handed that centre's rows (and by the SCOPE rule, not some other 403)", foreignQ.status === 403 && /scope/i.test(JSON.stringify(foreignQ.data)), `got ${foreignQ.status} items=${foreignQ.data?.items?.length}`);
+  const ownQ = await req(scopedV.cookie, "GET", `/api/costs?location=${ownLoc._id}`);
   ok("scope: naming their OWN centre still works (200)", ownQ.status === 200, `got ${ownQ.status}`);
 
   // approved_from / approved_to must be real days
