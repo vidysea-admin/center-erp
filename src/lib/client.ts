@@ -16,7 +16,8 @@ export async function api<T = any>(path: string, opts: RequestInit & { json?: un
 }
 
 // mtg-a3 R7 (Umesh, 2026-10-06 meeting): a cost POST carries a client-generated idempotency key, so
-// a double click, a retry after a dropped response or a second tab cannot post the same cost twice
+// a double click or a retry after a dropped response (in the same tab - sessionStorage is per tab, so
+// a second tab holds its own key) cannot post the same cost twice
 // (Manish's existing duplicates came from exactly that). The key lives in sessionStorage for as long
 // as THIS payload is unsent or unconfirmed: the same payload retried reuses it, an EDITED payload
 // gets a fresh one (a different cost must never be answered with an earlier cost's result), and a

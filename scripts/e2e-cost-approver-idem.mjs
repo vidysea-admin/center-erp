@@ -291,7 +291,7 @@ const rows5 = {};
   const xl = XLSX.read((await reqBuffer(admin, "/api/reports/costs/export")).data, { type: "buffer" });
   const xrows = XLSX.utils.sheet_to_json(xl.Sheets["cost entry register"]);
   const xl_ = (n) => xrows.find((r) => r.Description === n);
-  const ymd = (d) => (d ? new Date(d).toISOString().slice(0, 10) : "—");
+  const ymd = (d) => (d ? new Date(new Date(d).getTime() + 330 * 60_000).toISOString().slice(0, 10) : "—"); // IST day, like the export
   const same = [rows5.approver.note, rows5.pre.note, `${TAG}-direct-admin`, `${TAG}-direct-ops`].every((n) => {
     const l = L(n), g = G(n), x = xl_(n);
     return !!l && !!g && !!x && l.approved_by === g.approved_by && g.approved_by === x["Approved by"]
@@ -370,6 +370,50 @@ const rows5 = {};
   const xpRows = XLSX.utils.sheet_to_json(xp.Sheets["cost entry register"]);
   ok("R9 filter: the Excel export honours payment_status", xpRows.length === gPaid.register.length && xpRows.every((r) => r["Payment status"] === "Paid"), `x=${xpRows.length} g=${gPaid.register.length}`);
   ok("R9 filter: variance/budget go to '—' under a payment filter, as for every other narrowing filter", gPaid.totals.budget_comparable === false);
+}
+
+// ======================================================= review fixes (senior-software-engineer, mtg-a3)
+{
+  // IST day in the export: 2026-09-08T20:00Z is 01:30 on the 9th in India; a UTC slice would say the 8th.
+  await rawApprovals.updateOne({ _id: new ObjectId(parkedA.requestId) }, { $set: { decided_at: new Date("2026-09-08T20:00:00Z") } });
+  const xi = XLSX.read((await reqBuffer(admin, "/api/reports/costs/export")).data, { type: "buffer" });
+  const xir = XLSX.utils.sheet_to_json(xi.Sheets["cost entry register"]).find((r) => r.Description === `${TAG}-park`);
+  ok("R5 export: 'Approved on' is the IST day (decided 20:00 UTC on the 8th reads 2026-09-09)", xir?.["Approved on"] === "2026-09-09", String(xir?.["Approved on"]));
+
+  // GET /api/costs?location= intersects the caller's scope
+  const foreignQ = await req(spoc, "GET", `/api/costs?location=${foreignLoc._id}`);
+  ok("scope: a scoped user naming a FOREIGN centre on the ledger is refused (403), not handed that centre's rows", foreignQ.status === 403, `got ${foreignQ.status} items=${foreignQ.data?.items?.length}`);
+  const ownQ = await req(spoc, "GET", `/api/costs?location=${ownLoc._id}`);
+  ok("scope: naming their OWN centre still works (200)", ownQ.status === 200, `got ${ownQ.status}`);
+
+  // approved_from / approved_to must be real days
+  const badDay = await req(admin, "GET", "/api/costs?approved_from=2026-02-31");
+  const goodDay = await req(admin, "GET", "/api/costs?approved_from=2026-02-28");
+  ok("R5 filter: a date that is not a real day (2026-02-31) is a 400, a real one is a 200", badDay.status === 400 && goodDay.status === 200, `${badDay.status}/${goodDay.status}`);
+
+  // an orphaned (expired) Formula reservation must not park the key behind a 409 for ever
+  const adminId = String(adminRow._id);
+  const reserve = (suffix, expiresAt) => rawCosts.insertOne({
+    entry_date: "2026-09-07", location: new ObjectId(String(ownLoc._id)), category: new ObjectId(String(formulaId)), amount: 77,
+    note: `${TAG}-resv-${suffix}`, entered_by: adminRow._id, reservation_state: "Pending", reservation_kind: "Formula",
+    reservation_expires_at: expiresAt, idempotency_key: `${adminId}:k-resv-${suffix}-${stamp}`, createdAt: new Date(), updatedAt: new Date(),
+  });
+  await rule(false);
+  await reserve("dead", new Date(Date.now() - 60_000));
+  const deadKey = `k-resv-dead-${stamp}`;
+  const t0 = Date.now();
+  const afterDead = await req(admin, "POST", "/api/costs", entry("after-dead"), { "Idempotency-Key": deadKey });
+  const deadRow = await rawCosts.findOne({ note: `${TAG}-resv-dead` });
+  ok("R7 reservation: an EXPIRED Pending reservation holding the key is cancelled and the POST goes through (201, no 10 s wait)",
+    afterDead.status === 201 && Date.now() - t0 < 8000 && deadRow?.reservation_state === "Cancelled" && !deadRow?.idempotency_key,
+    `status=${afterDead.status} ms=${Date.now() - t0} state=${deadRow?.reservation_state} key=${deadRow?.idempotency_key}`);
+  await reserve("live", new Date(Date.now() + 120_000));
+  const liveKey = `k-resv-live-${stamp}`;
+  const afterLive = await req(admin, "POST", "/api/costs", entry("after-live"), { "Idempotency-Key": liveKey });
+  const afterLiveRows = await rawCosts.countDocuments({ note: `${TAG}-after-live` });
+  ok("R7 reservation: a LIVE Pending reservation holding the key is in flight - the repeat is refused (409) and creates nothing",
+    afterLive.status === 409 && afterLiveRows === 0, `status=${afterLive.status} rows=${afterLiveRows}`);
+  await rawCosts.updateOne({ note: `${TAG}-resv-live` }, { $set: { reservation_state: "Cancelled" }, $unset: { idempotency_key: "", reservation_expires_at: "" } });
 }
 
 await rule(false);

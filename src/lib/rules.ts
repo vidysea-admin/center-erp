@@ -3036,8 +3036,25 @@ export async function findPriorCostPost(scopedKey: string): Promise<PriorCostPos
   if (entry) return { status: 201, item: entry };
   const request = await ApprovalRequest.findOne({ idempotency_key: scopedKey }).lean<any>();
   if (request) return { status: 202, item: request };
-  const reserved = await CostEntry.collection.findOne({ idempotency_key: scopedKey }, { projection: { _id: 1 } });
-  return reserved ? { status: "in-flight" } : null;
+  // A hidden Formula reservation is "in flight" only while it is live: Pending AND not past its
+  // expiry. A Pending row whose expiry has passed is an orphan (its poster died), so it must not
+  // park a retry behind a 409 for ever - cancel it (compare-and-set, freeing the key) and say "no
+  // prior result". A soft-deleted row is not a result either.
+  const reserved: any = await CostEntry.collection.findOne(
+    { idempotency_key: scopedKey, deletion_state: { $exists: false } },
+    { projection: { _id: 1, reservation_state: 1, reservation_expires_at: 1 } },
+  );
+  if (!reserved) return null;
+  const now = new Date();
+  if (reserved.reservation_state === "Pending") {
+    if (reserved.reservation_expires_at && new Date(reserved.reservation_expires_at) > now) return { status: "in-flight" };
+    await CostEntry.collection.updateOne(
+      { _id: reserved._id, reservation_state: "Pending", reservation_expires_at: { $lte: now } },
+      { $set: { reservation_state: "Cancelled", reservation_cancel_reason: "expired", updatedAt: now }, $unset: { reservation_expires_at: "", idempotency_key: "" } },
+    );
+    return null;
+  }
+  return null;
 }
 
 // A concurrent duplicate lost the unique-index race: wait (bounded) for the winner to finish and
@@ -6687,7 +6704,11 @@ export function parseCostFilters(sp: URLSearchParams, keys: readonly (keyof Cost
     throw new HttpError(400, "Choose an approver from the list.");
   }
   for (const k of ["approved_from", "approved_to"] as const) {
-    if (filters[k] && !/^\d{4}-\d{2}-\d{2}$/.test(String(filters[k]))) throw new HttpError(400, "Dates must look like 2026-10-31.");
+    const day = filters[k];
+    // A real calendar day: 2026-02-31 matches the shape but is not a date (it would roll to March).
+    if (day && (!/^\d{4}-\d{2}-\d{2}$/.test(String(day)) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day)) {
+      throw new HttpError(400, "Dates must look like 2026-10-31.");
+    }
   }
   return filters;
 }

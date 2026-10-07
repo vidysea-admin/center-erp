@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
-import { COST_FILTER_KEYS, COST_LABELS, costRollup, parseCostFilters, type CostFilters } from "@/lib/rules";
+import { COST_FILTER_KEYS, COST_LABELS, costRollup, istDayOf, parseCostFilters, type CostFilters } from "@/lib/rules";
 
 // QA-1830 — the finance dashboard as an .xlsx, carrying THE SAME NUMBERS as the screen because it
 // calls the same `costRollup`. An export that recomputes is an export that eventually disagrees,
@@ -91,7 +91,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
       "Pre-approved": r.pre_approved ?? "—",
       // mtg-a3 R5: the same two columns as the screen, from the same costRollup stamp.
       "Approved by": r.approved_by ?? "—",
-      "Approved on": r.approved_on ? new Date(r.approved_on).toISOString().slice(0, 10) : "—",
+      "Approved on": r.approved_on ? istDayOf(new Date(r.approved_on)) : "—",
     })),
   ), "cost entry register");
 

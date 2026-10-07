@@ -30,7 +30,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   for (const k of ["location", "batch", "trainer", "category"]) {
     const v = sp.get(k);
-    if (v) filter[k] = v;
+    if (!v) continue;
+    // mtg-a3 review: `location` is the key the scope filter also uses, so a plain assignment let a
+    // scoped user name a foreign centre and replace their own scope. Intersect it, as costRollup does.
+    if (k === "location") assertLocationInScope(user, v);
+    filter[k] = v;
   }
   // mtg-a3 R9 / R5: Payment Pending / Paid, and who approved it - read by the SAME parser the
   // register uses, and the approval columns are stamped by the SAME function (stampCostApprovals).

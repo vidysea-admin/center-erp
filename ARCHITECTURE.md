@@ -414,6 +414,13 @@ that loses the index race (E11000) waits for the winner (`awaitPriorCostPost`). 
 written. Client side the key lives in `postCost` / `costIdempotencyKey` (`lib/client.ts`); the Costs page and the
 batch Costs tab both post through it. Suite: `scripts/e2e-cost-approver-idem.mjs`.
 
+**Known limits (by design, stated so nobody over-claims them).** (1) A repeat with the SAME key but a DIFFERENT
+payload returns the FIRST result; it does not error - the client mints a fresh key whenever the payload is edited,
+so this only arises from a hand-built request. (2) A replayed 202 returns `pre_approval: null` and does not
+re-notify the approver. (3) The key lives in `sessionStorage`, which is per tab: two tabs hold two keys and the
+protection is for a double click or a retry in the same tab, not for two tabs. (4) Rows posted BEFORE this unit
+carry no key, so existing duplicates are not collapsed (Manish's cleanup is a separate, human-gated job).
+
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.
