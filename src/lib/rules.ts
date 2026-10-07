@@ -5579,7 +5579,12 @@ export function assertDigestDay(dayIST: unknown): string {
   return s;
 }
 
-export async function dailyDigest(dayIST: string, viewer: SessionUser) {
+// `opts.fullView` (mtg-c1 cycle 2, Umesh 2026-10-07: a typed, non-ERP digest address "receives the full report
+// incl. money"): builds the Costs block without asking the viewer's finance right, because such an address has
+// no account to ask. It is passed ONLY by lib/daily-digest.ts, for a typed address that matches no ERP account.
+// Every other caller (the screen, the API, Publish now, an ERP recipient's mail) leaves it off, so finance.view
+// (no Admin bypass) and the centre scope stay exactly as they were.
+export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { fullView?: boolean } = {}) {
   assertDigestDay(dayIST);
   const scope = locationFilter(viewer);
   const trainerScope = isScoped(viewer) ? trainerLocationFilter(viewer.location_scope ?? []) : {};
@@ -5628,7 +5633,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser) {
   }
 
   // ---- costs: built only for a viewer who may see money ----------------------------------------------
-  const finance = await hasPermission(viewer, "finance.view");
+  const finance = opts.fullView === true || (await hasPermission(viewer, "finance.view"));
   let costs: null | {
     today: { amount: number; entries: number }; month: { amount: number; entries: number; from: string; to: string };
     pending: { count: number; amount: number; raised_today: { count: number; amount: number } };
