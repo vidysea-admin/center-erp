@@ -85,7 +85,6 @@ export function parseEntries(raw: unknown): RecipientEntry[] {
   return out;
 }
 export const entryToken = (e: RecipientEntry) => (e.kind === "user" ? `u:${e.id}` : e.email);
-export function parseRecipients(raw: unknown): string[] { return parseEntries(raw).map(entryToken); }
 
 // STRICT check of a list being WRITTEN (the Defaults route). A blank string is a valid "clear the list". Anything
 // else must hold at least one entry, every entry must be a tag or a syntactically valid address, no duplicates,

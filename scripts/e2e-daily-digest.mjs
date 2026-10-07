@@ -228,7 +228,7 @@ const uAdm = await mkUser("Admin", [], "adm");
 const uTr = await mkUser("Trainer", [locA._id], "tr");
 const uOff = await mkUser("Operations", [], "off");        // an active ERP account whose OWN mail switch is off (QA-2461)
 await db.collection("users").updateOne({ _id: oid(uOff.id) }, { $set: { mail_enabled: false } });
-const uAdv = await mkUser("Operations", [], "adv", { can_edit: false, extra_permissions: ["defaults.manage"] }); // holds defaults.manage but may only VIEW (can_edit false): must not edit the list (Admin is exempt from requireEdit, QA-617, so the persona is a non-Admin grantee)
+const uAdv = await mkUser("Location", [locA._id], "adv", { can_edit: false, extra_permissions: ["defaults.manage"] }); // holds defaults.manage but may only VIEW (can_edit false): must not edit the list (requireEdit exempts Admin AND Operations, so only a Location-type grantee can be refused by it)
 const uD = await mkUser("Operations", [], "d");                           // an eligible recipient that the arms deactivate and reactivate
 const uDead = await mkUser("Operations", [], "dead");                     // a deactivated account (cannot receive; cannot log in)
 await db.collection("users").updateOne({ _id: oid(uDead.id) }, { $set: { active: false } });
