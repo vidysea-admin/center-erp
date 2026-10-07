@@ -18,6 +18,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const body = await readJson(req);
   const now = body?.now ? new Date(body.now) : new Date();
   if (Number.isNaN(now.getTime())) throw new HttpError(400, "now must be an ISO instant");
-  const r = await digestTick({ now, instance: String(body?.instance || "test-door"), includeText: true });
+  // `skip_lock`: race ticks WITHOUT the efficiency lock, so the per-recipient claims alone must give exactly-once.
+  // `simulate`: the outcome of attempt 1, 2, 3 ("sent" | "failed" | "skipped"), because every test env suppresses
+  // mail and a genuine sent/failed cannot happen there. Both exist only behind the two gates above.
+  const simulate = Array.isArray(body?.simulate) ? body.simulate.map(String) as Array<"sent" | "failed" | "skipped"> : undefined;
+  if (simulate?.some((x: string) => !["sent", "failed", "skipped"].includes(x))) throw new HttpError(400, "simulate must be a list of sent | failed | skipped");
+  const r = await digestTick({ now, instance: String(body?.instance || "test-door"), includeText: true, skipLock: body?.skip_lock === true, simulate });
   return NextResponse.json({ ...r, today_ist: istDayOf(now) });
 });

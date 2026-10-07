@@ -386,10 +386,13 @@ copies: `trainerAvailabilityTag` (now in `lib/person.ts`, was inline in `trainer
 `trainerLocationFilter` (was inline in `api/trainers`), `costRollup` and `planTrackerRows`. The Costs section
 is built only for a viewer holding `finance.view` (no Admin bypass), so a mail rendered for a recipient
 without it contains no cost word or figure. Once per IST day: `takeJobLock("daily-digest")` (the one lock
-implementation, now `takeJobLock` in `lib/db.ts`, which the three older ticks also call) plus a durable
-per-recipient claim, an insert into `job_locks` with `_id` `digest-sent:<day>:<email>`. Recipients are the
+implementation, now `takeJobLock` in `lib/db.ts`, which the three older ticks also call; it is an efficiency
+guard only) plus a durable per-recipient claim, a `job_locks` document with `_id` `digest-sent:<day>:<email>`
+that CARRIES the exactly-once and records the outcome: `sent` is final, a failed or skipped send is `retry`
+(re-taken atomically, at least 10 minutes after the last attempt, up to 3 attempts, same IST day only), then
+`exhausted`; an ineligible or silenced recipient is `closed`. Recipients are the
 Defaults string `digest_recipients` (ERP accounts only; Trainers and unknown addresses are recorded as
-skipped, not mailed). `digest_only_approval_mails` (default OFF) makes the five approval-mail call sites in
+skipped, not mailed). `digest_only_approval_mails` (default OFF; refused ON unless the list holds an active, non-Trainer, mail-enabled ERP account) makes the five approval-mail call sites in
 `lib/approvals.ts` (tagged `perEvent: true`) skip and record a skipped row; the bell is untouched. The mail
 goes out through `sendMail`, so `email_enabled` still decides whether anything leaves the building. Suite:
 `scripts/e2e-daily-digest.mjs` (clock driven through the test-only `POST /api/test/digest-tick`).

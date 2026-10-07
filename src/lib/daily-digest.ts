@@ -11,16 +11,24 @@ import type { SessionUser } from "@/auth";
 // file only decides recipients, wording and timing, so the screen, the Publish-now button and this mail
 // can never disagree.
 //
-// ONE MAIL PER DAY, however many containers and however many restarts. Two independent guards:
-//   1. `takeJobLock("daily-digest")` - the same lock the other three scheduler ticks use, so two
-//      containers ticking at 21:00 do not both start sending;
-//   2. a DURABLE per-recipient day claim, an insert into `job_locks` with _id `digest-sent:<day>:<email>`.
-//      The unique _id makes the claim atomic; a duplicate-key error means "already sent". It outlives the
-//      lock's TTL and a restart, which is what stops a container that boots at 21:30 on a day already
-//      sent from sending again. The claim is made BEFORE the send, so a crash mid-send errs on the side
-//      of one mail missed, never two sent; a failed send is recorded (MailLog) and is not retried by the
-//      tick - "Publish now" on the screen is the manual recovery.
+// ONE MAIL PER DAY PER RECIPIENT THAT GOT IT, however many containers and however many restarts, and a
+// failed or skipped send does NOT use the day up (cycle 1, QA-2884).
+//   * THE PER-RECIPIENT CLAIM CARRIES EXACTLY-ONCE. It is a document in `job_locks` with _id
+//     `digest-sent:<day>:<email>`; the unique _id makes the first claim atomic and a retry is re-taken with
+//     one atomic findOneAndUpdate on {status: "retry", attempts < 3, next_at <= now}, so two processes
+//     racing for the same claim, first or retry, cannot both win it.
+//   * `takeJobLock("daily-digest")` (the same lock the other ticks use) is only an EFFICIENCY guard: it
+//     stops two containers each walking the whole recipient list at 21:00. Nothing relies on it for
+//     correctness (the suite races ticks with the lock switched off and still gets one mail).
+//   * The claim records the outcome. status: "sending" (taken, mail in flight; a crash here leaves it
+//     "sending" for good: one mail possibly missed, never two sent) -> "sent" (final, never retried) |
+//     "retry" (the send failed or was skipped; a later tick on the SAME IST day retries it, at least 10
+//     minutes after the last attempt, up to 3 attempts in all) | "exhausted" (3 attempts used, stop) |
+//     "closed" (not a send problem: the address is not an eligible ERP account, or the account's own mail
+//     switch is off; recorded once, never retried). The day key means a retry can never run after 23:59 IST.
 export const DIGEST_HOUR_IST = 21;
+export const DIGEST_MAX_ATTEMPTS = 3;
+export const DIGEST_RETRY_GAP_MS = 10 * 60_000;
 
 export type DigestResult = {
   to: string;
@@ -30,6 +38,7 @@ export type DigestResult = {
   status?: "sent" | "failed" | "skipped";
   reason?: string;
   text?: string;
+  attempt?: number;   // 1 for the first send of the day, 2 and 3 for retries (the tick only)
 };
 export type DigestTickResult = { fired: boolean; day: string; reason?: string; results: DigestResult[] };
 
@@ -48,8 +57,9 @@ type Resolved = { to: string; viewer: SessionUser | null; problem?: string; sile
 // permission, so an address that is not an account has no permission to read and gets nothing. Each
 // problem is returned (and written to the MailLog by the caller) rather than dropped, so "why did X not
 // get it?" is answerable from the record.
-export async function resolveRecipients(): Promise<Resolved[]> {
-  const addrs = parseRecipients((await getDefaults()).digest_recipients);
+// `raw` lets a caller judge a list that is not stored yet (the Defaults route, before it writes it).
+export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
+  const addrs = parseRecipients(raw ?? (await getDefaults()).digest_recipients);
   if (!addrs.length) return [];
   const users = await User.find({ email: { $in: addrs } }).select("name email role location_scope can_edit active dropped approval_status mail_enabled").lean<any[]>();
   const byEmail = new Map(users.map((u) => [String(u.email).toLowerCase(), u]));
@@ -125,26 +135,53 @@ async function sendOne(day: string, r: Resolved, includeText: boolean): Promise<
   return { to: r.to, outcome: r.silenced ? "silenced" : "mailed", status: o.status, reason: o.reason, ...(includeText ? { text: content.text } : {}) };
 }
 
-// The durable "this recipient has had this IST day's digest" claim. true = the caller won it and must send.
-async function claimDay(day: string, to: string, instance: string): Promise<boolean> {
+// The durable per-recipient day claim. Returns the attempt number the caller has WON (1 = first send of
+// the day, 2..3 = a retry), or 0 when somebody else holds it or it is not due. Both paths are atomic:
+// the first is an insert on a unique _id, a retry is one findOneAndUpdate whose filter is the whole
+// eligibility test, so of N racers exactly one gets the document back.
+async function takeClaim(day: string, to: string, instance: string, now: Date): Promise<number> {
+  const col = mongoose.connection.db!.collection("job_locks");
+  const _id = `digest-sent:${day}:${to}` as any;
   try {
-    await mongoose.connection.db!.collection("job_locks").insertOne({ _id: `digest-sent:${day}:${to}` as any, day, to, instance, at: new Date() });
-    return true;
+    await col.insertOne({ _id, day, to, instance, at: now, status: "sending", attempts: 1 });
+    return 1;
   } catch (e: any) {
-    if (e?.code === 11000) return false;   // somebody (this container earlier, or another) already claimed it
-    throw e;
+    if (e?.code !== 11000) throw e;
   }
+  const won = await col.findOneAndUpdate(
+    { _id, status: "retry", attempts: { $lt: DIGEST_MAX_ATTEMPTS }, next_at: { $lte: now } },
+    { $set: { status: "sending", instance, at: now }, $inc: { attempts: 1 } },
+    { returnDocument: "after" },
+  );
+  return Number((won as any)?.attempts ?? 0);
+}
+
+// Record how the attempt ended. "sent" is final; a failed or skipped send is retryable until the cap.
+async function settleClaim(day: string, to: string, attempt: number, res: DigestResult, at: Date): Promise<void> {
+  let set: Record<string, unknown>;
+  if (res.outcome === "ineligible" || res.outcome === "silenced") set = { status: "closed" };
+  else if (res.status === "sent") set = { status: "sent", sent_at: at };
+  else if (attempt >= DIGEST_MAX_ATTEMPTS) set = { status: "exhausted" };
+  else set = { status: "retry", next_at: new Date(at.getTime() + DIGEST_RETRY_GAP_MS) };
+  await mongoose.connection.db!.collection("job_locks").updateOne(
+    { _id: `digest-sent:${day}:${to}` as any },
+    { $set: { ...set, last_status: res.status ?? res.outcome, last_reason: res.reason ?? null, last_at: at } },
+  );
 }
 
 // One scheduler tick. `now` and `instance` are arguments so a test drives the clock without touching the
 // process clock; instrumentation passes neither `now` nor a fake instance.
-export async function digestTick(opts: { now?: Date; instance?: string; includeText?: boolean } = {}): Promise<DigestTickResult> {
-  const now = opts.now ?? new Date();
+// `skipLock` and `simulate` are for the TEST-ONLY clock door (it 404s outside center_erp_ci* databases):
+// `skipLock` proves the claims alone carry exactly-once; `simulate[attempt-1]` replaces the outcome of a
+// real send, because every test env suppresses mail so a genuine "sent" or "failed" cannot occur there.
+export async function digestTick(opts: { now?: Date; instance?: string; includeText?: boolean; skipLock?: boolean; simulate?: Array<"sent" | "failed" | "skipped"> } = {}): Promise<DigestTickResult> {
+  const clock = () => opts.now ?? new Date();
+  const now = clock();
   const instance = opts.instance ?? "digest-" + process.pid;
   const day = istDayOf(now);
   if (istMinuteOfDay(now) < DIGEST_HOUR_IST * 60) return { fired: false, day, reason: `before ${DIGEST_HOUR_IST}:00 IST`, results: [] };
   await dbConnect();
-  if (!(await takeJobLock("daily-digest", 10 * 60_000, instance))) {
+  if (!opts.skipLock && !(await takeJobLock("daily-digest", 10 * 60_000, instance))) {
     return { fired: false, day, reason: "another container holds the daily-digest lock", results: [] };
   }
   try {
@@ -152,14 +189,20 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
     if (!recipients.length) return { fired: false, day, reason: "no recipients configured", results: [] };
     const results: DigestResult[] = [];
     for (const r of recipients) {
-      if (!(await claimDay(day, r.to, instance))) continue;
-      results.push(await sendOne(day, r, opts.includeText === true));
+      const attempt = await takeClaim(day, r.to, instance, clock());
+      if (!attempt) continue;
+      const res = await sendOne(day, r, opts.includeText === true);
+      const sim = opts.simulate?.[attempt - 1];
+      if (sim && res.outcome === "mailed") res.status = sim;
+      res.attempt = attempt;
+      await settleClaim(day, r.to, attempt, res, clock());
+      results.push(res);
     }
-    if (!results.length) return { fired: false, day, reason: `already sent for ${day}`, results };
+    if (!results.length) return { fired: false, day, reason: `already handled for ${day}: sent, closed, exhausted, or waiting out the ${DIGEST_RETRY_GAP_MS / 60_000}-minute gap before a retry`, results };
     return { fired: true, day, results };
   } finally {
     // Released as soon as the work is done: the durable claims above, not this lock's TTL, are what stop a second send.
-    await mongoose.connection.db!.collection("job_locks").deleteOne({ _id: "daily-digest" as any, holder: instance }).catch(() => {});
+    if (!opts.skipLock) await mongoose.connection.db!.collection("job_locks").deleteOne({ _id: "daily-digest" as any, holder: instance }).catch(() => {});
   }
 }
 
@@ -175,12 +218,19 @@ export async function publishDigestNow(day: string, user: SessionUser) {
   }
   const results: DigestResult[] = [];
   for (const r of recipients) results.push(await sendOne(day, r, false));
+  // Counts come from each send's own outcome (the MailLog status), never from "was handed to the door":
+  // a skipped mail (email off, no SES credentials, an ineligible address) must not read as delivered.
+  const count = (st: "sent" | "skipped" | "failed") => results.filter((r) => (r.status ?? "failed") === st).length;
+  const why = [...new Set(results.filter((r) => r.status !== "sent" && r.reason).map((r) => String(r.reason)))].slice(0, 3);
   return {
     status: 200 as const,
     day,
     attempted: results.length,
-    mailed: results.filter((r) => r.outcome === "mailed").length,
+    sent: count("sent"),
+    skipped: count("skipped"),
+    failed: count("failed"),
     ineligible: results.filter((r) => r.outcome === "ineligible").length,
+    not_sent_reasons: why,
     results,
   };
 }

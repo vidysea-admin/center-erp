@@ -38,6 +38,7 @@ function DailyDigestInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [published, setPublished] = useState("");
+  const [publishedAllSent, setPublishedAllSent] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -59,9 +60,15 @@ function DailyDigestInner() {
     try {
       // The day published is the day on the screen: the chosen date, or (no date chosen) the day the loaded digest names.
       const r = await api("/api/reports/daily/publish", { method: "POST", json: { date: wanted || data?.day } });
-      const parts = [`${r.attempted} recipient${r.attempted === 1 ? "" : "s"} attempted for ${r.day}`, `${r.mailed} handed to the mail service`];
-      if (r.ineligible) parts.push(`${r.ineligible} not mailed (not an active ERP account)`);
-      setPublished(parts.join(", ") + ".");
+      // Reported from each send's own outcome. "Sent" means the mail service accepted it; skipped and failed are
+      // said as such, with the reason, so a day where email is off never reads as delivered.
+      const parts = [`${r.attempted} recipient${r.attempted === 1 ? "" : "s"} attempted for ${r.day}`, `${r.sent} sent`];
+      if (r.skipped) parts.push(`${r.skipped} skipped (not sent)`);
+      if (r.failed) parts.push(`${r.failed} failed`);
+      if (r.ineligible) parts.push(`${r.ineligible} of the skipped ${r.ineligible === 1 ? "is" : "are"} not an active ERP account`);
+      const why = Array.isArray(r.not_sent_reasons) && r.not_sent_reasons.length ? ` Reason${r.not_sent_reasons.length === 1 ? "" : "s"}: ${r.not_sent_reasons.join("; ")}.` : "";
+      setPublishedAllSent(r.sent === r.attempted);
+      setPublished(parts.join(", ") + "." + why);
     } catch (e: any) {
       setError(e?.message ?? "The digest could not be published.");
     }
@@ -99,7 +106,7 @@ function DailyDigestInner() {
       </div>
 
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
-      {published && <div data-testid="digest-publish-result" className="rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{published}</div>}
+      {published && <div data-testid="digest-publish-result" className={`rounded border px-3 py-2 text-sm ${publishedAllSent ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>{published}</div>}
       {mayPublish && meta && (!meta.email_enabled || meta.recipients === 0) && (
         <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="digest-mail-warning">
           {meta.recipients === 0 ? "No digest recipients are set (Admin, Defaults), so no digest mail goes out. " : ""}

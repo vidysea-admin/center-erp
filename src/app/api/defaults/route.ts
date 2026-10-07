@@ -6,6 +6,7 @@ import { Defaults } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { FEE_CAPTURE_UI_EXISTS } from "@/lib/fee-capture";
+import { parseRecipients, resolveRecipients } from "@/lib/daily-digest";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
@@ -42,15 +43,23 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (body.digest_recipients !== undefined && typeof body.digest_recipients !== "string") {
     throw new HttpError(400, "digest_recipients must be text: email addresses separated by commas.");
   }
-  // "Digest only" must never leave an approver with neither the mail nor a digest: refuse ON while no
-  // recipient is listed (and refuse emptying the list while it is ON). Judged on the values the document
-  // will hold after this write.
+  // "Digest only" must never leave an approver with neither the mail nor a digest: refuse ON unless the list
+  // will hold at least one ELIGIBLE recipient (an active, non-Trainer ERP account whose own mail switch is on,
+  // the same test the 21:00 tick applies), and refuse emptying the list of such people while it is ON.
+  // A separator-only list ("," ";" " , ; ") parses to zero addresses and an address that is not an ERP
+  // account is skipped by the tick, so a non-blank string is NOT enough (QA-2883). Judged on the values the
+  // document will hold after this write.
   if (body.digest_only_approval_mails !== undefined || body.digest_recipients !== undefined) {
     const cur = await getDefaults();
     const willBeOn = (body.digest_only_approval_mails ?? cur.digest_only_approval_mails) === true;
-    const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "").trim();
-    if (willBeOn && !willList) {
-      throw new HttpError(400, "Add at least one digest recipient before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
+    if (willBeOn) {
+      const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "");
+      if (!parseRecipients(willList).length) {
+        throw new HttpError(400, "Add at least one digest recipient (an email address) before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
+      }
+      if (!(await resolveRecipients(willList)).some((r) => r.viewer && !r.silenced)) {
+        throw new HttpError(400, "None of the digest recipients is an active ERP user account that can receive the digest (Trainer accounts, addresses without an ERP account and accounts with their mail switched off are not sent it). Add at least one such person before switching on 'digest only', so the approval mails are not simply lost.");
+      }
     }
   }
   if (body.fee_required_for_enrollment === true && !FEE_CAPTURE_UI_EXISTS) {
