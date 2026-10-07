@@ -173,6 +173,34 @@ const qa1977Ui = { pendingId: "", pendingName: `ZZ Pending Ui ${stamp}`, legacyI
 // QA-1977 5B: a head request raised by Operations and left Pending, for the /finance browser arm.
 const qa5bUi = { finEmail: "", headId: "", headName: "", reqId: "", ownReqId: "", ownName: "" };
 const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? [])[0]?._id;
+// Umesh, 2026-10-07 ("Pending head pe auto-approve band"): a pre-approved cap works only on a head
+// that has been signed off (Approved, or no flag at all). Since 22:00 every new head starts Pending,
+// so a fixture that tests the CAP - not head sign-off - creates its head and then has a second
+// finance.approve holder sign it off through the real approvals door, exactly as production would.
+// The Pending/Rejected arms that pin the rule itself are in the "owner 2026-10-07" block below.
+let capSigner = null;
+async function signOffHead(headId) {
+  if (!capSigner) {
+    const email = `zz.capsigner.${stamp}@vidysea-test.local`;
+    const made = await req(admin, "POST", "/api/users", { name: `Cap signer ${stamp}`, email, password: PW, role: "Operations", can_edit: true, location_scope: [] });
+    const id = made.data?.item?._id;
+    if (id) await req(admin, "PATCH", `/api/users/${id}`, { extra_permissions: ["finance.view", "finance.approve"] });
+    capSigner = await login(email, PW);
+  }
+  const hr = await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(headId)), status: "Pending" });
+  if (!hr) return 0;
+  return (await req(capSigner, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off a capped head" })).status;
+}
+async function mkSignedHead(body) {
+  const r = await req(admin, "POST", "/api/master-lists/cost-categories", body);
+  const id = r.data?.item?._id;
+  if (id) r.signedOff = await signOffHead(id);
+  // Without this a failed sign-off would leave the head Pending, and every pin below that expects a
+  // PARK (threshold, basis-only) would pass for the wrong reason (senior review, 2026-10-07).
+  ok(`[precondition] capped fixture head "${body.name}" was created and signed off by a second finance holder`,
+    (r.status === 201 || r.status === 200) && r.signedOff === 200, `create=${r.status} signoff=${r.signedOff}`);
+  return r;
+}
 ok("[precondition] a location exists to hang entries on", !!anyLoc, "none");
 
 // Rule 37 needs one of location/batch/trainer; a location is the simplest.
@@ -696,7 +724,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const doomedId = doomed.data?.item?._id;
     const ordinaryId = ordinary.data?.item?._id;
     if (doomedId && ordinaryId) {
-      const formulaHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
+      const formulaHead = await mkSignedHead({
         name: `ZZ Cascade Formula ${stamp}`, pre_approved: true,
         pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
         pre_approved_min_billable: 0, pre_approved_basis: "cycle 10 cascade race",
@@ -958,7 +986,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
 // ------------------------------------------------- item 6: pre-approved is a CONDITION
 {
   const capName = `ZZ Capped ${stamp}`;
-  const cap = await req(admin, "POST", "/api/master-lists/cost-categories", {
+  const cap = await mkSignedHead({
     name: capName, pre_approved: true, pre_approved_amount: 1000, pre_approved_basis: "Rs 50 per child, up to 1000",
   });
   ok("QA-1828b [precondition] a head with a machine-checkable pre-approved AMOUNT exists",
@@ -1015,7 +1043,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // A head marked pre-approved with only a free-text basis cannot be checked by a machine at all.
   // It must park WITH the basis quoted, so the approver ticks rather than rediscovers.
   const textName = `ZZ Basis ${stamp}`;
-  const textCat = await req(admin, "POST", "/api/master-lists/cost-categories", {
+  const textCat = await mkSignedHead({
     name: textName, pre_approved: true, pre_approved_basis: "per batch at 30+ pass-outs",
   });
   const textId = textCat.data?.item?._id;
@@ -1044,7 +1072,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     JSON.stringify({ batch: closedBatch?.code, billable }));
 
   if (closedBatch && billable > 0) {
-    const formula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const formula = await mkSignedHead({
       name: `ZZ PerPass ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
       pre_approved_min_billable: billable, pre_approved_basis: "Rs 50 per billable passed at the recorded threshold",
@@ -1092,7 +1120,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         exhausted.status === 202, `got ${exhausted.status}`);
     }
 
-    const raceFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const raceFormula = await mkSignedHead({
       name: `ZZ PerPass Race ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
       pre_approved_min_billable: billable, pre_approved_basis: "atomic cumulative cap pin",
@@ -1117,7 +1145,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         JSON.stringify(raceRows.map((c) => c.amount)));
     }
 
-    const recoveryFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const recoveryFormula = await mkSignedHead({
       name: `ZZ PerPass Recovery ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
       pre_approved_min_billable: billable, pre_approved_basis: "crash and ambiguous-write recovery pin",
@@ -1178,7 +1206,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         JSON.stringify({ report: report.status, export: exported.status, ledgerLeak: JSON.stringify(recoveryRows).includes(zombieNote), reportLeak: reportText.includes(zombieNote), exportLeak: exportText.includes(zombieNote) }));
     }
 
-    const rollbackFormula = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const rollbackFormula = await mkSignedHead({
       name: `ZZ PerPass Rollback ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
       pre_approved_min_billable: billable, pre_approved_basis: "reservation rollback pin",
@@ -1199,7 +1227,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         `invalid=${invalid.status} retry=${retry.status}`);
     } else ok("formula rollback [precondition]: a per-pass commitment exists", false, `got ${rollbackFormula.status}`);
 
-    const threshold = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const threshold = await mkSignedHead({
       name: `ZZ Threshold ${stamp}`, pre_approved: true,
       pre_approved_unit: "Per billable passed", pre_approved_amount: 50,
       pre_approved_min_billable: billable + 1, pre_approved_basis: "minimum pass-outs pin",
@@ -2221,7 +2249,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // ---- QA-1976: pre-approval does NOT inherit. A subhead nobody marked could ride its parent's
   // cap and post 90,000 unapproved. Q4b/Q4c are here so the fix cannot be "disable the feature".
   {
-    const h = await req(admin, "POST", "/api/master-lists/cost-categories", {
+    const h = await mkSignedHead({
       name: `ZZ BigHead ${stamp}`, pre_approved: true, pre_approved_amount: 100000, pre_approved_basis: "big commitment",
     });
     const hId = h.data?.item?._id;
@@ -2467,6 +2495,60 @@ for (const variant of ["ordinary", "mark_paid"]) {
     ok("QA-1977 owner 22:00 (f): ...the Admin creator gets 403 on approve, and another finance holder's approval flips it to Approved",
       selfMl.status === 403 && /cannot approve your own request/i.test(String(selfMl.data?.error ?? "")) && byB.status === 200 && mlAfter?.approval_status === "Approved",
       `self=${selfMl.status} other=${byB.status} ${JSON.stringify(byB.data?.error ?? "").slice(0, 120)} flag=${mlAfter?.approval_status}`);
+  }
+
+  // owner 2026-10-07 (Umesh, qa/feedback-inbox.md: "Pending head pe auto-approve band"): while a head
+  // is Pending or Rejected its pre_approved_* cap does NOT auto-post - every cost under it goes to the
+  // normal cost.post queue. Once the head is Approved, or carries no flag (a legacy head, which reads
+  // as approved), the cap works exactly as before. Four capped heads, identical cap, identical entry:
+  // only the head's sign-off state differs, so the status code is the rule and nothing else.
+  {
+    const capBody = (tag) => ({ name: `ZZ CapState ${tag} ${stamp}`, pre_approved: true, pre_approved_amount: 1000, pre_approved_basis: "owner 2026-10-07 cap pin" });
+    const mkCap = async (tag) => {
+      const r = await req(admin, "POST", "/api/master-lists/cost-categories", capBody(tag));
+      const head = await rawCategories.findOne({ name: capBody(tag).name });
+      const hr = head ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: head._id, status: "Pending" }) : null;
+      return { status: r.status, head, hr };
+    };
+    const cP = await mkCap("Pending");
+    const cR = await mkCap("Rejected");
+    const cA = await mkCap("Approved");
+    const cL = await mkCap("Legacy");
+    const rej = cR.hr ? await req(finB.cookie, "POST", `/api/approvals/${cR.hr._id}`, { decision: "Rejected", note: "owner 2026-10-07 pin" }) : { status: -1 };
+    const appr = cA.hr ? await req(finA.cookie, "POST", `/api/approvals/${cA.hr._id}`, { decision: "Approved", note: "owner 2026-10-07 pin" }) : { status: -1 };
+    // A head written before 2026-10-06 has no flag and no head request at all - make one look exactly like that.
+    if (cL.head) {
+      await rawCategories.updateOne({ _id: cL.head._id }, { $unset: { approval_status: "", approval_request: "" } });
+      await rawApprovals.deleteMany({ action: "costcategory.create", entity_id: cL.head._id });
+    }
+    const flags = {};
+    for (const [k, c] of Object.entries({ P: cP, R: cR, A: cA, L: cL })) flags[k] = c.head ? (await rawCategories.findOne({ _id: c.head._id }))?.approval_status ?? null : "missing";
+    const postOnAgain = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+    ok("owner 2026-10-07 [precondition]: four capped heads (cap 1000) in the four sign-off states - Pending, Rejected, Approved, no flag - and cost.post approval ON",
+      [cP, cR, cA, cL].every((c) => c.status === 201 && !!c.head) && rej.status === 200 && appr.status === 200 && postOnAgain.status === 200
+        && flags.P === "Pending" && flags.R === "Rejected" && flags.A === "Approved" && flags.L === null,
+      JSON.stringify({ made: [cP, cR, cA, cL].map((c) => c.status), rej: rej.status, appr: appr.status, flags }));
+    const postUnder = async (c, tag) => {
+      const note = `owner 2026-10-07 cap ${tag} ${stamp}`;
+      const r = await req(ops, "POST", "/api/costs", baseEntry({ category: String(c.head?._id ?? ""), amount: 300, note }));
+      const ledger = await rawCosts.countDocuments({ note, deletion_state: { $exists: false }, reservation_state: { $ne: "Pending" } });
+      const parked = await rawApprovals.countDocuments({ action: "cost.post", "payload.note": note, status: "Pending" });
+      return { status: r.status, ledger, parked, reason: String(r.data?.pre_approval ?? ""), applied: r.data?.item?.pre_approved_applied, summary: String(r.data?.item?.summary ?? "") };
+    };
+    const pP = await postUnder(cP, "P");
+    const pR = await postUnder(cR, "R");
+    const pA = await postUnder(cA, "A");
+    const pL = await postUnder(cL, "L");
+    ok("owner 2026-10-07: a cost WITHIN the cap of a PENDING head does not auto-post - 202, one Pending cost.post request, no ledger row, and the reason names the head as not approved",
+      pP.status === 202 && pP.parked === 1 && pP.ledger === 0 && /not approved/i.test(pP.reason), JSON.stringify(pP));
+    ok("owner 2026-10-07: ...and the parked request does not advertise a 'pre-approved basis' for the cap it ignored",
+      pP.status === 202 && !/pre-approved basis/i.test(pP.summary), pP.summary.slice(0, 160));
+    ok("owner 2026-10-07: a cost WITHIN the cap of a REJECTED head does not auto-post either - 202, one Pending cost.post request, no ledger row",
+      pR.status === 202 && pR.parked === 1 && pR.ledger === 0 && /rejected/i.test(pR.reason), JSON.stringify(pR));
+    ok("owner 2026-10-07 [regression guard]: the same cost under the same cap on an APPROVED head still auto-posts - 201, pre_approved_applied, nothing parked",
+      pA.status === 201 && pA.applied === true && pA.ledger === 1 && pA.parked === 0, JSON.stringify(pA));
+    ok("owner 2026-10-07 [regression guard]: ...and on a legacy head with NO flag (reads as approved) it auto-posts exactly as before - 201, pre_approved_applied, nothing parked",
+      pL.status === 201 && pL.applied === true && pL.ledger === 1 && pL.parked === 0, JSON.stringify(pL));
   }
 
   // (d) NO WIDENING: a non-Admin holder still cannot decide a whole-entry cost.post request - with or

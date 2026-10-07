@@ -3162,7 +3162,7 @@ export async function evaluatePreApproval(
   } = {},
 ): Promise<PreApproval> {
   const cat = categoryId
-    ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis pre_approved_unit pre_approved_min_billable").lean<any>()
+    ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis pre_approved_unit pre_approved_min_billable approval_status").lean<any>()
     : null;
   if (!cat) return { applied: false, basis: null, reason: "no cost head on the entry" };
 
@@ -3189,6 +3189,25 @@ export async function evaluatePreApproval(
       reason: cat.parent
         ? `"${cat.name}" is not marked pre-approved (a marker on its parent head does NOT carry down)`
         : `"${cat.name}" is not marked pre-approved`,
+    };
+  }
+
+  // Umesh, 2026-10-07 (qa/feedback-inbox.md, "Pending head pe auto-approve band"): a cap is a
+  // commitment somebody agreed to, and a head nobody has signed off yet carries no agreement. Since
+  // the 2026-10-06 ~22:00 decision every new head - an Admin's included - starts Pending, and the
+  // master list lets its creator set pre_approved_* in the same request, so without this the creator
+  // alone could open a no-queue money door before the second finance person ever looked. While the
+  // head is Pending or Rejected nothing auto-posts and no Formula reservation is taken: the entry goes
+  // to the normal cost.post queue like any head without a cap. Approved, or no flag at all (a head
+  // written before 2026-10-06, which reads as approved), behaves exactly as before.
+  if (src.approval_status === "Pending" || src.approval_status === "Rejected") {
+    return {
+      // basis null: the parked request's summary must not say "pre-approved basis" for a cap that was
+      // deliberately ignored (senior review, 2026-10-07).
+      applied: false, basis: null,
+      reason: src.approval_status === "Pending"
+        ? `"${src.name}" is a new head that is not approved yet, so its pre-approved cap does not apply until a second finance approver signs it off`
+        : `"${src.name}" was rejected as a head, so its pre-approved cap does not apply`,
     };
   }
 
