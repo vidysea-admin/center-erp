@@ -99,6 +99,16 @@ const formula = await req(admin, "POST", "/api/master-lists/cost-categories", {
 const formulaId = formula.data?.item?._id;
 ok("[precondition] a plain head, a capped head and a formula head exist", !!plain && !!capId && !!formulaId,
   JSON.stringify({ plain: plain?.name, cap: cap.status, formula: formula.status }));
+// Umesh, 2026-10-07 (43f31fa, "Pending head pe auto-approve band"): every new head starts Pending and
+// evaluatePreApproval auto-posts nothing under a Pending head. So the two fixture heads are signed off
+// through the real approvals door by the SECOND approver (finance.approve, not the head's creator),
+// exactly as production would - otherwise every pre-approved arm below parks (202) for the wrong reason.
+const signOff = async (headId) => {
+  const hr = await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(headId)), status: "Pending" });
+  return hr ? (await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off" })).status : 0;
+};
+const [capSign, formulaSign] = [await signOff(capId), await signOff(formulaId)];
+ok("[precondition] the capped and the formula head were signed off by the second approver (not the creator)", capSign === 200 && formulaSign === 200, `cap=${capSign} formula=${formulaSign}`);
 
 const rule = (enabled) => req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled, approver_role: "Admin" });
 const entry = (note, extra = {}) => ({ entry_date: "2026-09-07", location: ownLoc._id, category: plain._id, amount: 321, note: `${TAG}-${note}`, ...extra });
@@ -225,6 +235,8 @@ if (formulaId) {
   const first = await req(admin, "POST", "/api/costs", entry("formula", { category: formulaId, amount: 100 }), { "Idempotency-Key": key });
   ok("R7 formula: a Formula head whose reservation is cancelled still posts under the key (201)", first.status === 201, `got ${first.status} ${JSON.stringify(first.data).slice(0, 160)}`);
   const rows = await rawCosts.find({ note: `${TAG}-formula` }).toArray();
+  ok("R7 formula [reaches the reservation]: a Formula fencing row WAS written and then Cancelled (so the arm is not vacuous on a head that never reserves)",
+    rows.some((r) => r.reservation_state === "Cancelled"), JSON.stringify(rows.map((r) => ({ s: r.reservation_state, kind: r.reservation_kind }))));
   const keyed = rows.filter((r) => r.idempotency_key);
   ok("R7 formula: the cancelled fencing row no longer holds the key; exactly one row does",
     keyed.length === 1 && keyed[0].reservation_state !== "Cancelled", JSON.stringify(rows.map((r) => ({ s: r.reservation_state, k: !!r.idempotency_key }))));
