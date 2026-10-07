@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, readJson, HttpError } from "@/lib/authz";
-import { requirePerm } from "@/lib/permissions";
+import { hasPermission, requirePerm } from "@/lib/permissions";
 import { Defaults } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { FEE_CAPTURE_UI_EXISTS } from "@/lib/fee-capture";
-import { parseRecipients, resolveRecipients } from "@/lib/daily-digest";
+import { parseEntries, resolveRecipients, isDeliverable, validateRecipientList, PROBLEM_USER_GONE } from "@/lib/daily-digest";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
-  await requireUser();
-  return NextResponse.json({ item: await getDefaults() });
+  const user = await requireUser();
+  const item = await getDefaults();
+  // Defaults are readable by every signed-in user (the batch and candidate screens read tunables from here), but
+  // the digest list holds typed outside addresses that receive the full cost report, so it is shown only to a
+  // holder of defaults.manage (cycle 2, Umesh 2026-10-07: wanted).
+  if (!(await hasPermission(user, "defaults.manage"))) return NextResponse.json({ item: { ...item, digest_recipients: "" } });
+  return NextResponse.json({ item });
 });
 
 export const PUT = apiHandler(async (req: NextRequest) => {
@@ -43,26 +48,41 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   if (body.digest_recipients !== undefined && typeof body.digest_recipients !== "string") {
     throw new HttpError(400, "digest_recipients must be text: email addresses separated by commas.");
   }
-  // "Digest only" must never leave an approver with neither the mail nor a digest: refuse ON unless the list
-  // will hold at least one ELIGIBLE recipient (an active, non-Trainer ERP account whose own mail switch is on,
-  // the same test the 21:00 tick applies), and refuse emptying the list of such people while it is ON.
-  // A separator-only list ("," ";" " , ; ") parses to zero addresses and an address that is not an ERP
-  // account is skipped by the tick, so a non-blank string is NOT enough (QA-2883). Judged on the values the
-  // document will hold after this write.
-  if (body.digest_only_approval_mails !== undefined || body.digest_recipients !== undefined) {
+  // The recipient list (cycle 2) is a tagged string: `u:<ERP user id>` entries and typed email addresses. A write that
+  // CHANGES the list must be well formed (separator-only, a bad or duplicate address, more than 50 entries, CR/LF or
+  // other control characters are all 400) and is stored in its canonical form. A whole-form save that carries the list
+  // UNCHANGED is not judged: an old value must not block an unrelated Defaults save.
+  // "Digest only" must never leave an approver with neither the mail nor a digest: ON (or a list change while ON)
+  // needs at least one DELIVERABLE recipient: an eligible ERP account (active, non-Trainer, mail switch on) or a
+  // syntactically valid typed address that is no account (QA-2883, rewritten for the custom list). Judged on the
+  // values the document will hold after this write, and the write below is CONDITIONAL on those same stored values
+  // (checker A1: two concurrent requests, one switching ON and one emptying the list, each passed alone).
+  const touchesDigest = body.digest_only_approval_mails !== undefined || body.digest_recipients !== undefined;
+  let digestSeen: { on: boolean; list: string } | null = null;
+  if (touchesDigest) {
     const cur = await getDefaults();
-    const willBeOn = (body.digest_only_approval_mails ?? cur.digest_only_approval_mails) === true;
-    const willList = String(body.digest_recipients ?? cur.digest_recipients ?? "");
-    // An unrelated Defaults save (the Admin screen sends the whole form) must not be refused because a listed
-    // account was deactivated since: judge only a write that changes the toggle or the list.
-    const changes = (body.digest_only_approval_mails !== undefined && body.digest_only_approval_mails !== (cur.digest_only_approval_mails === true))
-      || (body.digest_recipients !== undefined && body.digest_recipients !== String(cur.digest_recipients ?? ""));
-    if (willBeOn && changes) {
-      if (!parseRecipients(willList).length) {
-        throw new HttpError(400, "Add at least one digest recipient (an email address) before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
+    const curOn = cur.digest_only_approval_mails === true;
+    const curList = String(cur.digest_recipients ?? "");
+    digestSeen = { on: curOn, list: curList };
+    const willOn = (body.digest_only_approval_mails ?? curOn) === true;
+    const listChanges = body.digest_recipients !== undefined && body.digest_recipients !== curList;
+    const toggleChanges = body.digest_only_approval_mails !== undefined && body.digest_only_approval_mails !== curOn;
+    let willList = curList;
+    if (listChanges) {
+      const v = validateRecipientList(String(body.digest_recipients));
+      if (!v.ok) throw new HttpError(400, v.error);
+      willList = v.canonical;
+      body.digest_recipients = v.canonical;
+      if ((await resolveRecipients(willList)).some((r) => r.problem === PROBLEM_USER_GONE)) {
+        throw new HttpError(400, "One of the picked digest recipients is not an ERP user (the account was removed). Pick the list again.");
       }
-      if (!(await resolveRecipients(willList)).some((r) => r.viewer && !r.silenced)) {
-        throw new HttpError(400, "None of the digest recipients is an active ERP user account that can receive the digest (Trainer accounts, addresses without an ERP account and accounts with their mail switched off are not sent it). Add at least one such person before switching on 'digest only', so the approval mails are not simply lost.");
+    }
+    if (willOn && (listChanges || toggleChanges)) {
+      if (!parseEntries(willList).length) {
+        throw new HttpError(400, "Add at least one digest recipient (an ERP user or an email address) before switching on 'digest only', so the approval mails are replaced by the daily digest and not simply lost.");
+      }
+      if (!(await resolveRecipients(willList)).some(isDeliverable)) {
+        throw new HttpError(400, "None of the digest recipients can receive the digest (Trainer accounts, deactivated accounts and accounts with their mail switched off are not sent it). Add at least one recipient who can, an ERP user or an email address, before switching on 'digest only', so the approval mails are not simply lost.");
       }
     }
   }
@@ -96,7 +116,20 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   ]) {
     if (body[f] !== undefined) set[f] = body[f];
   }
-  const doc = await Defaults.findOneAndUpdate({ _singleton: "defaults" }, { $set: set }, { upsert: true, new: true });
+  let doc;
+  if (digestSeen) {
+    // Compare-and-set: the write lands only if the two digest fields still hold what the checks above judged. A
+    // missing field counts as its default (the document may predate the field).
+    // (getDefaults() above has already created the singleton, so there is no upsert here.)
+    const holds = (f: string, v: unknown, dflt: unknown) => (v === dflt ? { $or: [{ [f]: v }, { [f]: { $exists: false } }] } : { [f]: v });
+    doc = await Defaults.findOneAndUpdate(
+      { _singleton: "defaults", $and: [holds("digest_only_approval_mails", digestSeen.on, false), holds("digest_recipients", digestSeen.list, "")] },
+      { $set: set }, { new: true },
+    );
+    if (!doc) throw new HttpError(409, "The digest settings were changed by someone else while you were saving. Reload the page and save again.");
+  } else {
+    doc = await Defaults.findOneAndUpdate({ _singleton: "defaults" }, { $set: set }, { upsert: true, new: true });
+  }
   await audit({ entity: "Defaults", entityId: doc._id, field: "defaults", newValue: set, actor: user.id });
   return NextResponse.json({ item: doc });
 });

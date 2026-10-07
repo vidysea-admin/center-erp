@@ -377,7 +377,7 @@ later" are the create drawer (`batches/page.tsx`) and the detail edit form (`bat
 
 ### 3.0e The daily digest — one function, three readers (mtg-c1, meeting 2026-10-06, "Screen + 1 mail")
 
-`dailyDigest(dayIST, viewer)` in `lib/rules.ts` is the only code that computes the day's numbers. Three
+`dailyDigest(dayIST, viewer, opts?)` in `lib/rules.ts` is the only code that computes the day's numbers. Three
 things read it and none re-derives a count: the screen `/reports/daily` (`GET /api/reports/daily`), the
 "Publish now" button (`POST /api/reports/daily/publish`, gated by `defaults.manage`) and the 21:00 IST mail
 (`digestTick` in `lib/daily-digest.ts`, the 4th interval in `instrumentation.ts`). It reuses, rather than
@@ -390,9 +390,41 @@ implementation, now `takeJobLock` in `lib/db.ts`, which the three older ticks al
 guard only) plus a durable per-recipient claim, a `job_locks` document with `_id` `digest-sent:<day>:<email>`
 that CARRIES the exactly-once and records the outcome: `sent` is final, a failed or skipped send is `retry`
 (re-taken atomically, at least 10 minutes after the last attempt, up to 3 attempts, same IST day only), then
-`exhausted`; an ineligible or silenced recipient is `closed`. Recipients are the
-Defaults string `digest_recipients` (ERP accounts only; Trainers and unknown addresses are recorded as
-skipped, not mailed). `digest_only_approval_mails` (default OFF; refused ON unless the list holds an active, non-Trainer, mail-enabled ERP account) makes the five approval-mail call sites in
+`exhausted`; an ineligible or silenced recipient is `closed`. A claim left `sending` by a crashed process is
+re-taken by that same atomic step after `DIGEST_SENDING_STALE_MS` (15 minutes) and counts as an attempt inside
+the cap (trade-off, stated: a send that was only slow, not dead, and finishes after 15 minutes can mail twice;
+the alternative is a crash losing the whole day). The claim key is the NORMALISED LOWERCASE EMAIL, so a person
+listed as an ERP user and as a typed address with the same email is one claim and one mail.
+
+**Recipients are a custom list (cycle 2, Umesh 2026-10-07: "select it or add custom mail").** They are still
+the one Defaults string `digest_recipients`, but each entry is tagged: `u:<24-hex ERP user id>` is a picked
+account (so a renamed or re-emailed user keeps receiving it) and anything else is a typed address; a legacy
+plain-email string reads as typed entries, nothing migrated. It is written canonically (lowercase, `, `
+separated) by `validateRecipientList` in `lib/daily-digest.ts` and judged by `resolveRecipients` there;
+`parseEntries` is the lenient reader, `validateRecipientList` the strict writer (invalid or duplicate entry, a
+separator-only list, more than 50 entries, any control character such as CR/LF/NUL/tab, or a `u:` id that does
+not exist is a 400). Only a holder of `defaults.manage` with `can_edit` writes it (Admin by default; the right is grantable, Rule 40, so a grantee could add a typed address that receives the cost report: stated, and put to Umesh), and `GET /api/defaults` returns it
+as "" to everyone without `defaults.manage`. Format is judged only when the list CHANGES, so an old value
+re-sent by a whole-form save is not refused. The Defaults write is a compare-and-set on the two digest fields
+(`findOneAndUpdate` filtered on the values that were validated), so two concurrent saves cannot leave
+digest-only ON with an empty list (409). The picker is `GET /api/reports/daily/recipients` (`defaults.manage`
+only): active, non-Trainer ERP users by name and email, plus `health`.
+
+**Who sees what (3.0e typed-address rendering).** An ERP account always gets ITS OWN view: its centre scope, and
+money only with `finance.view`. A typed address that equals an ERP account's email is that account (ACCOUNT
+WINS): a Trainer, deactivated, dropped or pending account is refused (recorded `closed`), never "upgraded" by
+typing its email. A typed address that matches NO account is given the FULL report, money included (Umesh's
+choice, 2026-10-07; the Defaults screen warns "This address will receive cost figures"): `dailyDigest(day,
+viewer, { fullView: true })`, an Admin-shaped unscoped viewer. `fullView` exists in `lib/rules.ts` and is passed
+from exactly one line of `lib/daily-digest.ts` (pinned by e2e arm U12); `finance.view` itself is still outside
+the Admin bypass. A deliverable recipient is an eligible ERP user (active, non-Trainer, mail switch on) or a
+valid typed address; `digest_only_approval_mails` is refused ON, or saved while ON, with none. If it is ON and
+the last deliverable recipient later goes, `digestHealth()` says so (`meta.digest_only_nobody`, a red warning on
+Defaults and on `/reports/daily`) and the 21:00 tick writes one `DailyDigestWarning` MailLog row per day (a
+`digest-warn:<day>` claim). "Publish now" returns up to three reasons per category (`not_sent_reasons`) and
+`typed_addresses`.
+
+`digest_only_approval_mails` (default OFF) makes the five approval-mail call sites in
 `lib/approvals.ts` (tagged `perEvent: true`) skip and record a skipped row; the bell is untouched. The mail
 goes out through `sendMail`, so `email_enabled` still decides whether anything leaves the building. Suite:
 `scripts/e2e-daily-digest.mjs` (clock driven through the test-only `POST /api/test/digest-tick`).

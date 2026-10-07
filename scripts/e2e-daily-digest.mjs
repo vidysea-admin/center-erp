@@ -26,8 +26,14 @@
 //   T3  a lock held by another instance means nothing is sent and the day is not consumed
 //   T4  a restart after a send does not send again; the next IST day does send
 //   T5  the finance section is rendered per recipient
-//   T6  recipients: ineligible addresses are recorded, not mailed
+//   T6  recipients: ineligible accounts are recorded, not mailed; a typed address that is no account is mailed
 //   R1-R5 a failed/skipped send does not consume the day: retry (atomic, capped at 3, 10 minutes apart, same IST day)
+//   U   the CUSTOM recipient list (cycle 2, Umesh 2026-10-07): picked ERP users (`u:<id>`) and/or typed addresses
+//       U1 the picker endpoint . U2 tagged entries, a re-emailed user, the typed address's full report with money
+//       U3 the same person twice = one mail . U4 the account wins over a typed address . U5 write validation
+//       U6 the deliverable guard . U7 only Admin edits, and GET redacts the list . U8 concurrent PUTs (A1)
+//       U9 "digest-only ON, nobody can receive it" is said out loud (A2) . U10 a crashed claim is re-taken (A3)
+//       U11 Publish now names a reason per category (A5) . U12 fullView is reachable from one place only
 //   G1  the "digest only" toggle: ON suppresses (on the record), OFF keeps the per-approval mail
 //   G2  Publish now: refused without defaults.manage, allowed with it, cooldown, empty list
 //   W   the scheduler wiring
@@ -36,7 +42,7 @@
 // Every identity is derived from the run stamp. The shared wall DB holds other suites' data, so the EXACT
 // numbers are asserted through scoped personas on a day (2031-03-14) no other suite writes to.
 import { chromium } from "playwright";
-import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { ok as okLib, req, login, adminLogin, finish as finishLib, stamp, today, BASE } from "./e2e-lib.mjs";
@@ -222,9 +228,19 @@ const uAdm = await mkUser("Admin", [], "adm");
 const uTr = await mkUser("Trainer", [locA._id], "tr");
 const uOff = await mkUser("Operations", [], "off");        // an active ERP account whose OWN mail switch is off (QA-2461)
 await db.collection("users").updateOne({ _id: oid(uOff.id) }, { $set: { mail_enabled: false } });
+const uAdv = await mkUser("Admin", [], "adv", { can_edit: false });      // an Admin who may only VIEW: must not edit the recipient list
+const uD = await mkUser("Operations", [], "d");                           // an eligible recipient that the arms deactivate and reactivate
+const uDead = await mkUser("Operations", [], "dead");                     // a deactivated account (cannot receive; cannot log in)
+await db.collection("users").updateOne({ _id: oid(uDead.id) }, { $set: { active: false } });
+const uGone = await mkUser("Operations", [], "gone");                     // picked, then REMOVED (U4)
+const uRej = await mkUser("Operations", [], "rej");                       // an account whose approval was REJECTED: it cannot sign in, so it cannot receive the digest
+await db.collection("users").updateOne({ _id: oid(uRej.id) }, { $set: { approval_status: "Rejected" } });
+const uDrop = await mkUser("Operations", [], "drop");                     // a DROPPED account: the product renames its login email and keeps the original in dropped_email
+await db.collection("users").updateOne({ _id: oid(uDrop.id) }, { $set: { dropped: true, dropped_email: uDrop.email.toLowerCase(), email: `dropped.1700000000.${uDrop.email.toLowerCase()}` } });
 ok("[precondition] personas (Location A, Location A + finance.view, Location B, Location B + finance.view, Operations, Admin, Trainer) can log in",
   !!(uA.cookie && uAF.cookie && uB.cookie && uBF.cookie && uOps.cookie && uAdm.cookie && uTr.cookie),
   JSON.stringify({ a: uA.status, af: uAF.status, b: uB.status, bf: uBF.status, ops: uOps.status, adm: uAdm.status, tr: uTr.status }));
+ok("[precondition] the cycle-2 personas exist (view-only Admin can log in; deactivated, removable and re-emailable accounts have ids)", !!(uAdv.cookie && uAdv.id && uD.id && uDead.id && uGone.id), JSON.stringify({ adv: uAdv.status, d: uD.status, dead: uDead.status, gone: uGone.status }));
 
 const digest = (cookie, day) => req(cookie, "GET", `/api/reports/daily${day ? `?date=${day}` : ""}`);
 // By default a tick's first attempt is simulated as "sent" (every test env suppresses mail, so a real send is always
@@ -339,6 +355,8 @@ const recipients = [uAF.email, uA.email, uAdm.email, uTr.email, unknownEmail];
 const emptyPub = await req(admin, "POST", "/api/reports/daily/publish", { date: PUBDAY });
 ok("G2: Publish now with no recipients configured is a 409 that says so", emptyPub.status === 409 && /recipient/i.test(JSON.stringify(emptyPub.data)), `${emptyPub.status} ${JSON.stringify(emptyPub.data).slice(0, 120)}`);
 const setDefaults = (body) => req(admin, "PUT", "/api/defaults", body);
+// A list the route would refuse (a removed user, a legacy value) is written straight to the document, the way an old row sits there.
+const setListDirect = (list) => db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: list } });
 const putR = await setDefaults({ digest_recipients: recipients.join(", ") });
 const readBack = (await req(admin, "GET", "/api/defaults")).data?.item;
 ok("[precondition] the recipient list is stored and read back, and the toggle defaults to OFF", putR.status === 200 && readBack?.digest_recipients === recipients.join(", ") && readBack?.digest_only_approval_mails === false,
@@ -360,11 +378,11 @@ ok("T1: exactly one mail row per recipient was written (5 recipients, 5 rows), e
 // T6 / T5 - recipients and the per-recipient finance section
 // =================================================================================================
 const mailed = (e) => resByTo[e.toLowerCase()];
-ok("T6: the three eligible ERP accounts were mailed (outcome mailed) and the Trainer account and the unknown address were not",
+ok("T6: the three eligible ERP accounts and the typed address (no ERP account: it gets the full report, cycle 2) were mailed; the Trainer account was not",
   mailed(uAF.email)?.outcome === "mailed" && mailed(uA.email)?.outcome === "mailed" && mailed(uAdm.email)?.outcome === "mailed"
-  && mailed(uTr.email)?.outcome === "ineligible" && mailed(unknownEmail)?.outcome === "ineligible", JSON.stringify(Object.values(resByTo).map((r) => [r.to, r.outcome])));
-ok("T6: the ineligible ones are ON THE RECORD with a reason, not silent", rowsD.filter((r) => r.to === unknownEmail.toLowerCase() || r.to === uTr.email.toLowerCase()).every((r) => r.status === "skipped" && /not an active|trainer/i.test(String(r.reason ?? ""))),
-  JSON.stringify(rowsD.filter((r) => /nobody|tr\./.test(r.to)).map((r) => [r.to, r.status, r.reason])));
+  && mailed(unknownEmail)?.outcome === "mailed" && mailed(unknownEmail)?.kind === "address" && mailed(uTr.email)?.outcome === "ineligible", JSON.stringify(Object.values(resByTo).map((r) => [r.to, r.outcome, r.kind])));
+ok("T6: the ineligible one is ON THE RECORD with a reason, not silent", rowsD.filter((r) => r.to === uTr.email.toLowerCase()).length === 1 && rowsD.filter((r) => r.to === uTr.email.toLowerCase()).every((r) => r.status === "skipped" && /trainer/i.test(String(r.reason ?? ""))),
+  JSON.stringify(rowsD.filter((r) => /tr\./.test(r.to)).map((r) => [r.to, r.status, r.reason])));
 const txtF = String(mailed(uAF.email)?.text ?? ""), txtN = String(mailed(uA.email)?.text ?? ""), txtAdm = String(mailed(uAdm.email)?.text ?? "");
 ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, month Rs 5,750, pending Rs 1,100, payment pending Rs 14,249)",
   /Costs/.test(txtF) && txtF.includes("Rs 1,250") && txtF.includes("Rs 5,750") && txtF.includes("Rs 1,100") && txtF.includes("Rs 14,249"), txtF.replace(/\s+/g, " ").slice(0, 400));
@@ -373,6 +391,9 @@ ok("T5: ...and its other sections carry the same exact numbers as the screen (Jo
 ok("T5: the SAME digest for a recipient WITHOUT finance.view has no Costs section and no cost figure at all",
   txtN.length > 0 && !/Costs|Rs \d|spend|Payment pending/i.test(txtN) && txtN.includes("Joined into batches: 4"), txtN.replace(/\s+/g, " ").slice(0, 300));
 ok("T5: an Admin recipient gets no Costs section either (no finance.view)", txtAdm.length > 0 && !/Costs|Rs \d/i.test(txtAdm), txtAdm.replace(/\s+/g, " ").slice(0, 200));
+const txtTyped = String(mailed(unknownEmail)?.text ?? "");
+ok("T5: the typed address (no ERP account) gets the FULL report: both centres' batches and the cost section with both centres' money (today Rs 1,550 = 1,250 + 300, month Rs 6,050)",
+  /Costs/.test(txtTyped) && txtTyped.includes("Rs 1,550") && txtTyped.includes("Rs 6,050") && txtTyped.includes(fx.pa1.code) && txtTyped.includes(fx.pb1.code), txtTyped.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: a scoped recipient's mail names only its own centre's batches", !txtN.includes(fx.pb1.code) && txtN.includes(fx.pa1.code), "");
 
 // =================================================================================================
@@ -476,13 +497,227 @@ await tick(istAt(RD4, 21, 0, 0), "r4a-" + s, admin, { simulate: ["sent"] });
 const r4 = [];
 for (const [hh, mm] of [[21, 10], [21, 25], [23, 59]]) r4.push(await tick(istAt(RD4, hh, mm, 0), `r4-${hh}${mm}-` + s, admin, { simulate: ["failed", "failed", "failed"], skip_lock: true }));
 ok("R4: a claim that was SENT is never re-sent: later ticks (lock off, outcomes forced to failed) fire nothing and the day keeps its 1 row", r4.every((x) => x.data?.fired === false) && (await rowsOf(RD4)) === 1 && (await claimOf(RD4))?.status === "sent" && (await claimOf(RD4))?.attempts === 1, JSON.stringify({ rows: await rowsOf(RD4), cl: (await claimOf(RD4))?.status }));
-// R5 - an ineligible address is recorded once and closed, not retried
-await setDefaults({ digest_recipients: unknownEmail });
+// R5 - an ineligible recipient (a Trainer account's email) is recorded once and closed, not retried
+await setDefaults({ digest_recipients: uTr.email });
 const r5a = await tick(istAt("2031-04-05", 21, 0, 0), "r5a-" + s, admin, { simulate: [] });
 const r5b = await tick(istAt("2031-04-05", 21, 15, 0), "r5b-" + s, admin, { simulate: [] });
-const clU = await jobLocks.findOne({ _id: `digest-sent:2031-04-05:${unknownEmail.toLowerCase()}` });
-ok("R5: an address that is not an ERP account is recorded once and CLOSED (not retried: a retry cannot make it an account)", r5a.data?.fired === true && r5b.data?.fired === false && clU?.status === "closed" && (await digestRows("2031-04-05", [unknownEmail.toLowerCase()])).length === 1, JSON.stringify({ cl: clU?.status, rows: (await digestRows("2031-04-05", [unknownEmail.toLowerCase()])).length }));
+const clU = await jobLocks.findOne({ _id: `digest-sent:2031-04-05:${uTr.email.toLowerCase()}` });
+ok("R5: a recipient who may never receive it (a Trainer account) is recorded once and CLOSED (not retried: a retry cannot make a Trainer eligible)", r5a.data?.fired === true && r5b.data?.fired === false && clU?.status === "closed" && (await digestRows("2031-04-05", [uTr.email.toLowerCase()])).length === 1, JSON.stringify({ cl: clU?.status, rows: (await digestRows("2031-04-05", [uTr.email.toLowerCase()])).length }));
 await setDefaults({ digest_recipients: listAll });
+
+// =================================================================================================
+// U - the custom recipient list (cycle 2, Umesh 2026-10-07: "select it or add custom mail"). Entries are `u:<ERP user id>`
+//     (a picked account) or a typed address. An ERP account always keeps ITS OWN view; a typed address that is no
+//     account gets the FULL report incl. money; only Admin (defaults.manage) edits the list.
+// =================================================================================================
+const getDef = async (cookie = admin) => (await req(cookie, "GET", "/api/defaults")).data?.item;
+const dbDef = () => db.collection("defaults").findOne({ _singleton: "defaults" });
+const rowFor = (arr, to) => (arr ?? []).find((r) => r.to === to);
+
+// ---- U1 the picker endpoint
+const pk = await req(admin, "GET", "/api/reports/daily/recipients");
+const pkUsers = pk.data?.users ?? [];
+const pkEmails = new Set(pkUsers.map((u) => u.email));
+ok("U1: the picker lists ERP accounts by name and email: active non-Trainer fixtures are in it (Location A, Location A + finance, Operations, Admin)",
+  pk.status === 200 && [uA, uAF, uOps, uAdm].every((u) => pkEmails.has(u.email.toLowerCase())), `${pk.status} ${pkUsers.length} users`);
+ok("U1: ...and a Trainer, a deactivated, a rejected and a dropped account are not in it", ![uTr, uDead, uRej, uDrop].some((u) => pkEmails.has(u.email.toLowerCase())), "");
+ok("U1: ...each entry carries only id, name, email, role and the mail switch (no password hash or other account data)",
+  pkUsers.length > 0 && pkUsers.every((u) => eq(Object.keys(u).sort(), ["email", "id", "mail_enabled", "name", "role"])), JSON.stringify(Object.keys(pkUsers[0] ?? {})));
+const pkLoc = await req(uA.cookie, "GET", "/api/reports/daily/recipients");
+const pkOps = await req(uOps.cookie, "GET", "/api/reports/daily/recipients");
+ok("U1: a Location user and an Operations user are refused the picker (403): it needs defaults.manage", pkLoc.status === 403 && pkOps.status === 403, `${pkLoc.status} ${pkOps.status}`);
+
+// ---- U2 tagged entries + the money split between an ERP account and a typed address
+const UD2 = "2031-03-14";                      // the day with the exact fixtures, so the figures are known
+const typedFull = `zz.typed.${s.toLowerCase()}@vidysea-test.local`;
+const newEmail = `zzcheck.mc1afnew.${s.toLowerCase()}@vidysea-test.local`;
+const putTag = await setDefaults({ digest_recipients: `u:${uAF.id}, ${typedFull.toUpperCase()}` });
+const rb2 = await getDef();
+ok("U2: a list of a picked user and a typed address is stored in canonical form (lowercase, tagged, comma separated)", putTag.status === 200 && rb2?.digest_recipients === `u:${uAF.id}, ${typedFull}`, `${putTag.status} ${rb2?.digest_recipients}`);
+await db.collection("users").updateOne({ _id: oid(uAF.id) }, { $set: { email: newEmail } });          // the account is RE-EMAILED after it was picked
+const t2 = await tick(istAt(UD2, 22, 0, 0), "u2-" + s, admin, { simulate: ["sent"] });
+const r2m = Object.fromEntries((t2.data?.results ?? []).map((r) => [r.to, r]));
+ok("U2: a picked user whose email changed after it was picked STILL gets the digest, at the NEW address (the entry is the account, not the text)",
+  r2m[newEmail]?.outcome === "mailed" && !r2m[uAF.email.toLowerCase()] && String(r2m[newEmail]?.text ?? "").includes("Rs 1,250"), JSON.stringify(Object.keys(r2m)));
+const tx2 = String(r2m[newEmail]?.text ?? "");
+ok("U2: ...and that ERP user's mail keeps ITS OWN view: centre A's money only (Rs 1,250 today, Rs 5,750 month, Rs 1,100 pending), not centre B's (no Rs 1,550) and no centre-B batch",
+  tx2.includes("Rs 1,250") && tx2.includes("Rs 5,750") && tx2.includes("Rs 1,100") && !tx2.includes("Rs 1,550") && !tx2.includes(fx.pb1.code) && tx2.includes(fx.pa1.code), tx2.replace(/\s+/g, " ").slice(0, 300));
+await db.collection("users").updateOne({ _id: oid(uAF.id) }, { $set: { email: uAF.email.toLowerCase() } });
+const typedTxt = String(r2m[typedFull]?.text ?? "");
+ok("U2: a typed address that is no ERP account is mailed (outcome mailed, kind address, full view)", r2m[typedFull]?.outcome === "mailed" && r2m[typedFull]?.kind === "address" && r2m[typedFull]?.full === true, JSON.stringify(r2m[typedFull] && { o: r2m[typedFull].outcome, k: r2m[typedFull].kind, f: r2m[typedFull].full }));
+ok("U2: ...and its report is the FULL one: both centres' batches and the cost section with both centres' money (today Rs 1,550, month Rs 6,050)",
+  /Costs/.test(typedTxt) && typedTxt.includes("Rs 1,550") && typedTxt.includes("Rs 6,050") && typedTxt.includes(fx.pa1.code) && typedTxt.includes(fx.pb1.code), typedTxt.replace(/\s+/g, " ").slice(0, 300));
+ok("U2: ...the typed address's claim key is its normalised lowercase email", !!(await jobLocks.findOne({ _id: `digest-sent:${UD2}:${typedFull}` })), "");
+
+// ---- U3 the same person listed twice (ERP user + typed address with the same email): ONE mail, in the account's own view
+const UD3 = "2031-05-03", UD4 = "2031-05-04";
+await setDefaults({ digest_recipients: `u:${uA.id}, ${uA.email.toUpperCase()}` });
+const t3 = await tick(istAt(UD3, 21, 0, 0), "u3-" + s, admin, { simulate: ["sent"] });
+const tx3 = String(t3.data?.results?.[0]?.text ?? "");
+ok("U3: an ERP user AND a typed address with the same email: exactly one mail row, one claim, one result", (await digestRows(UD3, [uA.email.toLowerCase()])).length === 1 && t3.data?.results?.length === 1 && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${UD3}:` } })) === 1,
+  JSON.stringify({ rows: (await digestRows(UD3, [uA.email.toLowerCase()])).length, results: t3.data?.results?.length }));
+ok("U3: ...and it is the ACCOUNT's view (Location A, no finance): no Costs section, no centre-B batch (typing the address did not upgrade it to the full report)", tx3.length > 0 && !/Costs|Rs \d/i.test(tx3) && !tx3.includes(fx.pb1.code) && tx3.includes(fx.pa1.code), tx3.replace(/\s+/g, " ").slice(0, 200));
+const raceSame = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(UD4, 21, 0, 5), `u3r-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
+ok("U3: 4 processes racing that same list with the lock OFF: still exactly one mail row for the person", (await digestRows(UD4, [uA.email.toLowerCase()])).length === 1 && raceSame.filter((x) => (x.data?.results ?? []).length > 0).length === 1,
+  JSON.stringify({ rows: (await digestRows(UD4, [uA.email.toLowerCase()])).length, winners: raceSame.filter((x) => (x.data?.results ?? []).length > 0).length }));
+
+// ---- U4 the account wins over a typed address (no upgrade, no revival)
+const UD5 = "2031-05-05";
+await setDefaults({ digest_recipients: `${uTr.email}, ${uDead.email}, u:${uGone.id}, ${uA.email}, ${uRej.email}, ${uDrop.email}` });   // picked while the user still existed...
+await db.collection("users").deleteOne({ _id: oid(uGone.id) });                                          // ...then removed
+const t5 = await tick(istAt(UD5, 21, 0, 0), "u4-" + s, admin, { simulate: ["sent"] });
+const r5m = Object.fromEntries((t5.data?.results ?? []).map((r) => [r.to, r]));
+ok("U4: a typed address that is a TRAINER account's email is refused (ineligible, nothing rendered): typing it does not give a Trainer the money report", r5m[uTr.email.toLowerCase()]?.outcome === "ineligible" && !r5m[uTr.email.toLowerCase()]?.text && /trainer/i.test(String(r5m[uTr.email.toLowerCase()]?.reason ?? "")), JSON.stringify(r5m[uTr.email.toLowerCase()]));
+ok("U4: ...so is a typed address that is a DEACTIVATED account's email (reason names it), and a picked user that was removed (reason names it)",
+  r5m[uDead.email.toLowerCase()]?.outcome === "ineligible" && /deactivated/i.test(String(r5m[uDead.email.toLowerCase()]?.reason ?? "")) && Object.values(r5m).some((r) => r.outcome === "ineligible" && /no longer exists/i.test(String(r.reason ?? ""))), JSON.stringify(Object.values(r5m).map((r) => [r.to, r.outcome, r.reason])));
+ok("U4: ...so is a typed address of a REJECTED account (it cannot sign in) and one of a DROPPED account (whose login email was renamed: typing the original must not read as 'no account' and earn the full report with money)",
+  [uRej, uDrop].every((u) => r5m[u.email.toLowerCase()]?.outcome === "ineligible" && !r5m[u.email.toLowerCase()]?.text), JSON.stringify([uRej, uDrop].map((u) => r5m[u.email.toLowerCase()] && [r5m[u.email.toLowerCase()].outcome, r5m[u.email.toLowerCase()].full])));
+ok("U4: ...and a typed address that IS a Location A account gets that account's view (no Costs)", r5m[uA.email.toLowerCase()]?.outcome === "mailed" && !/Costs|Rs \d/i.test(String(r5m[uA.email.toLowerCase()]?.text ?? "")), "");
+ok("U4: each refusal is on the record (a skipped MailLog row with the reason), not silent", (await digestRows(UD5, [uTr.email.toLowerCase(), uDead.email.toLowerCase()])).every((r) => r.status === "skipped" && r.reason), "");
+// a legacy, malformed token in the stored string is refused, never mailed as a "full view"
+await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "not-an-email" } });
+const t5b = await tick(istAt("2031-05-06", 21, 0, 0), "u4b-" + s, admin, { simulate: ["sent"] });
+ok("U4: a malformed token already in the stored string is refused (ineligible), not treated as a typed address with the full view", t5b.data?.results?.[0]?.outcome === "ineligible" && !t5b.data?.results?.[0]?.text, JSON.stringify(t5b.data?.results?.[0]));
+await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "" } });
+
+// ---- U5 write validation: every one is a 400 and leaves the stored list as it was
+await setDefaults({ digest_recipients: uA.email });
+const base5 = (await getDef())?.digest_recipients;
+const badLists = [
+  ["an entry that is not an address", "nope"], ["an address with no dot in the domain", "a@b"], ["a list with a space inside an address", "a b@c.com"],
+  ["a duplicate (same address, different case)", `${uA.email}, ${uA.email.toUpperCase()}`], ["a duplicate user tag", `u:${uA.id}, u:${uA.id}`],
+  ["51 recipients", Array.from({ length: 51 }, (_, i) => `zzmany${i}.${s.toLowerCase()}@vidysea-test.local`).join(", ")],
+  ["a CRLF header-injection attempt (Bcc line)", `${uA.email}\r\nBcc: attacker@evil.test`], ["an LF between two valid addresses", `${uA.email}\n${uB.email}`], ["a bare CR", `${uA.email}\r${uB.email}`],
+  ["a NUL byte", `${uA.email}\u0000`], ["a tab", `${uA.email}\t${uB.email}`], ["angle brackets and a display name", `"Boss" <${uB.email}>`],
+  ["a second address smuggled after a semicolon-colon", `${uA.email};bcc:x@y.com`], ["a malformed user tag", "u:123"], ["a well-formed tag for a user that does not exist", `u:${"0".repeat(23)}1`],
+  ["a comma only", ","], ["a semicolon only", ";"], ["separators and spaces only", " , ; "], ["a percent-encoded CRLF in the local part", "a%0d%0a@c.com"],
+];
+const badOut = [];
+for (const [label, list] of badLists) {
+  const r = await setDefaults({ digest_recipients: list });
+  const after = (await getDef())?.digest_recipients;
+  if (!(r.status === 400 && after === base5)) badOut.push(`${label}: ${r.status} ${JSON.stringify(r.data).slice(0, 80)} stored=${after}`);
+}
+ok(`U5: ${badLists.length} malformed lists are each refused with a 400 and leave the stored list untouched`, badOut.length === 0, badOut.join(" | "));
+const nonStr = await req(admin, "PUT", "/api/defaults", { digest_recipients: ["a@b.com"] });
+ok("U5: a non-string list is a 400 too", nonStr.status === 400 && (await getDef())?.digest_recipients === base5, `${nonStr.status}`);
+const fifty = Array.from({ length: 50 }, (_, i) => `zzfifty${i}.${s.toLowerCase()}@vidysea-test.local`).join(", ");
+const ok50 = await setDefaults({ digest_recipients: fifty });
+ok("U5: exactly 50 recipients is accepted (the limit is 50, not 49)", ok50.status === 200 && (await getDef())?.digest_recipients === fifty, `${ok50.status}`);
+const canon = await setDefaults({ digest_recipients: `${uA.email.toUpperCase()};   ${typedFull}` });
+ok("U5: a list written with semicolons, extra spaces and capitals is stored canonical", canon.status === 200 && (await getDef())?.digest_recipients === `${uA.email.toLowerCase()}, ${typedFull}`, `${canon.status} ${(await getDef())?.digest_recipients}`);
+const unchanged = await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "legacy.one@vidysea-test.local;\nlegacy.two@vidysea-test.local" } });
+const curDef = await getDef();
+const legacySave = await req(admin, "PUT", "/api/defaults", { batch_size: curDef.batch_size, duration_days: curDef.duration_days, digest_recipients: "legacy.one@vidysea-test.local;\nlegacy.two@vidysea-test.local" });
+ok("U5: a whole-form save that sends a LEGACY list back UNCHANGED (newline separated) is not refused: an old value must not block an unrelated save", legacySave.status === 200 && unchanged.matchedCount === 1, `${legacySave.status} ${JSON.stringify(legacySave.data).slice(0, 100)}`);
+const legacyParsed = await tick(istAt("2031-05-07", 21, 0, 0), "u5l-" + s, admin, { simulate: ["sent"] });
+ok("U5: ...and that legacy plain-email string still reads: both addresses are recipients (typed entries, nothing dropped)", (legacyParsed.data?.results ?? []).map((r) => r.to).sort().join() === "legacy.one@vidysea-test.local,legacy.two@vidysea-test.local", JSON.stringify((legacyParsed.data?.results ?? []).map((r) => r.to)));
+await setDefaults({ digest_recipients: "" });
+const blankOk = await setDefaults({ digest_recipients: "   " });
+ok("U5: a blank list clears it (200)", blankOk.status === 200 && ((await getDef())?.digest_recipients ?? "") === "", `${blankOk.status}`);
+
+// ---- U6 the deliverable guard (QA-2883, rewritten): ON needs at least one DELIVERABLE recipient
+const offAgain = () => setDefaults({ digest_only_approval_mails: false });
+await offAgain();
+const typedOnly = await setDefaults({ digest_recipients: typedFull, digest_only_approval_mails: true });
+ok("U6: a list of ONLY a typed address is now valid: digest-only ON is accepted (the cycle-1 'non-ERP-only refused' rule is superseded)", typedOnly.status === 200 && (await getDef())?.digest_only_approval_mails === true, `${typedOnly.status} ${JSON.stringify(typedOnly.data).slice(0, 100)}`);
+const swapTyped = await setDefaults({ digest_recipients: `other.${typedFull}` });
+ok("U6: ...and while ON the list may be swapped for another typed address", swapTyped.status === 200, `${swapTyped.status}`);
+const toNobody = await setDefaults({ digest_recipients: uTr.email });
+ok("U6: ...but not for a list nobody on can receive (a typed address that is a Trainer's email): 400, list unchanged", toNobody.status === 400 && (await getDef())?.digest_recipients === `other.${typedFull}`, `${toNobody.status}`);
+await offAgain();
+for (const [label, list] of [["a typed address that is a Trainer account's email", uTr.email], ["a picked ERP user whose own mail switch is off", `u:${uOff.id}`], ["a picked ERP user that is deactivated", `u:${uDead.id}`], ["a typed address that is a deactivated account's email", uDead.email]]) {
+  await setDefaults({ digest_recipients: list });
+  const r = await setDefaults({ digest_only_approval_mails: true });
+  const one = await setDefaults({ digest_recipients: list, digest_only_approval_mails: true });
+  ok(`U6: digest-only ON with ${label} is refused (400), also in one request, and the toggle stays OFF`, r.status === 400 && one.status === 400 && (await getDef())?.digest_only_approval_mails === false, `${r.status} ${one.status}`);
+}
+await setDefaults({ digest_recipients: "" });
+
+// ---- U7 only Admin (defaults.manage, can_edit) changes the list; the list is not served to everyone
+await setDefaults({ digest_recipients: typedFull });
+const attempt = { digest_recipients: `x.${typedFull}`, digest_only_approval_mails: false };
+const deniedLoc = await req(uA.cookie, "PUT", "/api/defaults", attempt);
+const deniedOps = await req(uOps.cookie, "PUT", "/api/defaults", attempt);
+const deniedViewOnly = await req(uAdv.cookie, "PUT", "/api/defaults", attempt);
+ok("U7: Location, Operations and a view-only Admin are all refused (403) when they try to change the recipient list, and the list is unchanged",
+  deniedLoc.status === 403 && deniedOps.status === 403 && deniedViewOnly.status === 403 && (await getDef())?.digest_recipients === typedFull, `${deniedLoc.status} ${deniedOps.status} ${deniedViewOnly.status}`);
+const toggleDenied = await req(uA.cookie, "PUT", "/api/defaults", { digest_only_approval_mails: true });
+ok("U7: ...and they cannot switch digest-only on either", toggleDenied.status === 403 && (await getDef())?.digest_only_approval_mails === false, `${toggleDenied.status}`);
+const seenLoc = await getDef(uA.cookie), seenOps = await getDef(uOps.cookie), seenAdm = await getDef(admin);
+ok("U7: GET /api/defaults does not serve the list to a caller without defaults.manage (Location, Operations: empty) while the Admin sees it", seenLoc?.digest_recipients === "" && seenOps?.digest_recipients === "" && seenAdm?.digest_recipients === typedFull, JSON.stringify([seenLoc?.digest_recipients, seenOps?.digest_recipients, seenAdm?.digest_recipients]));
+ok("U7: ...and every OTHER default is still there for them (batch_size, duration_days, email_enabled: nothing a screen reads is gone)", [seenLoc, seenOps].every((d) => typeof d?.batch_size === "number" && typeof d?.duration_days === "number" && typeof d?.email_enabled === "boolean"), JSON.stringify([typeof seenLoc?.batch_size, typeof seenOps?.duration_days]));
+
+// ---- U8 (A1) two concurrent writes, one switching ON and one emptying the list, never leave ON with nobody
+const racedBad = [];
+for (let i = 0; i < 12; i++) {
+  await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: uA.email.toLowerCase(), digest_only_approval_mails: false } });
+  const [p1, p2] = await Promise.all([req(admin, "PUT", "/api/defaults", { digest_only_approval_mails: true }), req(admin, "PUT", "/api/defaults", { digest_recipients: "" })]);
+  const d = await dbDef();
+  if (d.digest_only_approval_mails === true && !String(d.digest_recipients ?? "").trim()) racedBad.push(`round ${i}: ON + empty list (${p1.status}/${p2.status})`);
+  if (![200, 400, 409].includes(p1.status) || ![200, 400, 409].includes(p2.status)) racedBad.push(`round ${i}: ${p1.status}/${p2.status}`);
+}
+ok("U8: 12 rounds of two concurrent PUTs (digest-only ON vs emptying the list): the document is never left ON with an empty list (the write is conditional on what was judged)", racedBad.length === 0, racedBad.join(" | "));
+await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "", digest_only_approval_mails: false } });
+
+// ---- U9 (A2) digest-only stays ON after the last deliverable recipient goes: say so, on the screens and on the record
+await setDefaults({ digest_recipients: `u:${uD.id}`, digest_only_approval_mails: true });
+const UD9 = "2031-05-09";
+const healthy = (await digest(admin, D)).data?.meta;
+ok("U9: with a deliverable recipient and digest-only ON there is no 'nobody' warning (meta.digest_only_nobody false, deliverable 1)", healthy?.digest_only === true && healthy?.deliverable === 1 && healthy?.digest_only_nobody === false, JSON.stringify(healthy));
+await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: false } });
+const nobody = (await digest(admin, D)).data?.meta;
+const pkHealth = (await req(admin, "GET", "/api/reports/daily/recipients")).data?.health;
+ok("U9: once the last recipient is deactivated the screen data says digest-only is ON and nobody can receive it (daily meta and the Defaults picker both)", nobody?.digest_only_nobody === true && nobody?.deliverable === 0 && pkHealth?.digest_only_nobody === true, JSON.stringify({ nobody, pkHealth }));
+const w1 = await tick(istAt(UD9, 21, 0, 0), "u9a-" + s, admin, { simulate: ["sent"] });
+const w2 = await tick(istAt(UD9, 21, 30, 0), "u9b-" + s, admin, { simulate: ["sent"] });
+const warnRows = await mailLogs.find({ entity: "DailyDigestWarning", subject: { $regex: `Daily digest ${UD9}` } }).toArray();
+ok("U9: the 21:00 tick says so on the record: a result warning and exactly ONE system MailLog row for the day (a second tick the same evening adds none)",
+  /Digest-only is ON/.test(String(w1.data?.warning ?? "")) && /Digest-only is ON/.test(String(w2.data?.warning ?? "")) && warnRows.length === 1 && warnRows[0].status === "skipped" && /going nowhere/.test(String(warnRows[0].reason ?? "")), JSON.stringify({ w1: w1.data?.warning, rows: warnRows.length }));
+await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: true } });
+const recovered = (await digest(admin, D)).data?.meta;
+ok("U9: reactivating the recipient clears the warning", recovered?.digest_only_nobody === false && recovered?.deliverable === 1, JSON.stringify(recovered));
+await setDefaults({ digest_only_approval_mails: false });
+await setDefaults({ digest_recipients: "" });
+
+// ---- U10 (A3) a claim left "sending" by a crash is re-taken after 15 minutes, inside the 3-attempt cap
+await setDefaults({ digest_recipients: uA.email });
+const stale = async (day, attempts, at) => { await jobLocks.deleteMany({ _id: { $regex: `^digest-sent:${day}:` } }); await jobLocks.insertOne({ _id: `digest-sent:${day}:${toA}`, day, to: toA, instance: "crashed-" + s, at, status: "sending", attempts }); };
+const SD1 = "2031-05-10", SD2 = "2031-05-11", SD3 = "2031-05-12";
+await stale(SD1, 1, istAt(SD1, 21, 0, 0));
+const sBefore = await tick(istAt(SD1, 21, 14, 59), "u10a-" + s, admin, { simulate: ["failed", "sent"] });
+ok("U10: a claim stuck in 'sending' is NOT re-taken at 14:59 (the first process may just be slow)", sBefore.data?.fired === false && (await rowsOf(SD1)) === 0 && (await claimOf(SD1))?.attempts === 1, JSON.stringify({ f: sBefore.data?.fired, rows: await rowsOf(SD1) }));
+const sAt = await tick(istAt(SD1, 21, 15, 0), "u10b-" + s, admin, { simulate: ["failed", "sent"] });
+cl = await claimOf(SD1);
+ok("U10: ...at 15:00 it IS re-taken: attempt 2 (the crashed one counted), the mail goes, the claim is final", sAt.data?.fired === true && sAt.data?.results?.[0]?.attempt === 2 && cl?.status === "sent" && cl?.attempts === 2 && (await rowsOf(SD1)) === 1, JSON.stringify({ att: sAt.data?.results?.[0]?.attempt, cl: cl && { s: cl.status, a: cl.attempts } }));
+await stale(SD2, 3, istAt(SD2, 21, 0, 0));
+const capped = await tick(istAt(SD2, 22, 30, 0), "u10c-" + s, admin, { simulate: ["sent"] });
+ok("U10: a stale claim that already used all 3 attempts is never re-taken (the cap holds)", capped.data?.fired === false && (await rowsOf(SD2)) === 0, JSON.stringify(capped.data).slice(0, 120));
+await stale(SD3, 1, istAt(SD3, 21, 0, 0));
+const staleRace = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(SD3, 21, 16, 0), `u10r-${i}-` + s, admin, { simulate: ["failed", "sent"], skip_lock: true })));
+ok("U10: 4 processes racing the stale re-take with the lock off: exactly one wins and one mail row is written", staleRace.filter((x) => (x.data?.results ?? []).length > 0).length === 1 && (await rowsOf(SD3)) === 1 && (await claimOf(SD3))?.attempts === 2, JSON.stringify({ w: staleRace.filter((x) => (x.data?.results ?? []).length > 0).length, rows: await rowsOf(SD3) }));
+
+// ---- U11 (A5) Publish now names a reason per category
+await setListDirect(`${uTr.email}, u:${uGone.id}, ${uOff.email}, ${typedFull}, ${uA.email}`);   // the removed user cannot be written through the route (it refuses it), so a stale list is written directly
+await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+const pubR = await req(admin, "POST", "/api/reports/daily/publish", { date: "2031-03-21" });
+const why = (pubR.data?.not_sent_reasons ?? []).join(" | ");
+ok("U11: Publish now names a reason for EACH category that was not sent: a Trainer, a removed user, an account with its mail switch off, and the mail door's own skip (test environment)",
+  pubR.status === 200 && /Trainer accounts are not sent/.test(why) && /no longer exists/.test(why) && /mail off for this account/.test(why) && /test environment/.test(why), `${pubR.status} ${why}`);
+ok("U11: ...it counts the typed address as a typed address, and its counts add up (5 attempted, 0 sent, 5 skipped, 2 not allowed to receive it)", pubR.data?.typed_addresses === 1 && pubR.data?.attempted === 5 && pubR.data?.sent === 0 && pubR.data?.skipped === 5 && pubR.data?.ineligible === 2, JSON.stringify({ t: pubR.data?.typed_addresses, a: pubR.data?.attempted, s: pubR.data?.skipped, i: pubR.data?.ineligible }));
+await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+await setDefaults({ digest_recipients: listAll });
+
+// ---- U12 fullView is reachable ONLY from lib/daily-digest.ts, and only for a typed address that matches no account
+const srcRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
+const walkSrc = (dir) => readdirSync(dir).flatMap((n) => { const f = path.join(dir, n); return statSync(f).isDirectory() ? walkSrc(f) : /\.(ts|tsx)$/.test(n) ? [f] : []; });
+const fullViewUsers = walkSrc(srcRoot).filter((f) => /fullView/.test(readFileSync(f, "utf8"))).map((f) => path.relative(srcRoot, f).split(path.sep).join("/")).sort();
+ok("U12: `fullView` appears only in lib/rules.ts (the option) and lib/daily-digest.ts (its one caller)", eq(fullViewUsers, ["lib/daily-digest.ts", "lib/rules.ts"]), fullViewUsers.join(","));
+const ddCode = readFileSync(path.join(srcRoot, "lib", "daily-digest.ts"), "utf8").split("\n").filter((l) => /fullView/.test(l) && !/^\s*\/\//.test(l));
+const ddSrc = readFileSync(path.join(srcRoot, "lib", "daily-digest.ts"), "utf8");
+ok("U10b: a claim is settled only by its CURRENT holder: the settle write is conditional on {instance, attempt, status sending}, so a slow first sender whose claim was re-taken cannot overwrite the re-taker (source shape; the race itself is not drivable through the door)",
+  /async function settleClaim\([^)]*instance: string/.test(ddSrc) && /\{ _id: `digest-sent:\$\{day\}:\$\{to\}` as any, instance, attempts: attempt, status: "sending" \}/.test(ddSrc), "");
+ok("U12: ...and daily-digest.ts passes it on exactly one code line, only when the recipient is a typed address with no account (r.full)", ddCode.length === 1 && /r\.full \? \{ fullView: true \} : undefined/.test(ddCode[0]), JSON.stringify(ddCode));
 
 // =================================================================================================
 // G1 - the "digest only" toggle on the per-approval mails
@@ -517,10 +752,12 @@ await setDefaults({ digest_recipients: "" });
 const onNoList = await setDefaults({ digest_only_approval_mails: true });
 ok("G1: switching 'digest only' ON with no digest recipient is refused (400) and the toggle stays OFF",
   onNoList.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === false, `${onNoList.status}`);
-// QA-2883: a non-blank string is not a recipient. Separator-only lists parse to zero addresses; an address with no
-// ERP account, a Trainer account and an active account whose own mail switch is off are all skipped by the tick.
-for (const [label, list] of [["a comma only", ","], ["a semicolon only", ";"], ["separators and spaces", " , ; "], ["an address with no ERP account", unknownEmail], ["a Trainer account only", uTr.email], ["an account with its own mail switch off", uOff.email]]) {
-  await setDefaults({ digest_recipients: list });
+// QA-2883 (rewritten in cycle 2): a non-blank string is not a recipient. Separator-only lists parse to zero entries (the route now
+// refuses to STORE one, so they are written straight to the document, the way an old row sits there); a Trainer account's email
+// and an active account whose own mail switch is off are listed but can never receive it. A typed address with NO account is
+// deliverable now (it gets the full report), so it is no longer in this loop: U6 pins that it is accepted.
+for (const [label, list, direct] of [["a comma only", ",", true], ["a semicolon only", ";", true], ["separators and spaces", " , ; ", true], ["a Trainer account's email", uTr.email, false], ["an account with its own mail switch off", uOff.email, false]]) {
+  if (direct) await setListDirect(list); else await setDefaults({ digest_recipients: list });
   const r = await setDefaults({ digest_only_approval_mails: true });
   const rb = (await req(admin, "GET", "/api/defaults")).data?.item;
   ok(`G1/P1: 'digest only' ON with ${label} is refused (400, with a message) and the toggle stays OFF`, r.status === 400 && /recipient/i.test(JSON.stringify(r.data)) && rb?.digest_only_approval_mails === false, `${r.status} ${JSON.stringify(r.data).slice(0, 140)}`);
@@ -528,9 +765,9 @@ for (const [label, list] of [["a comma only", ","], ["a semicolon only", ";"], [
   ok(`G1/P1: ...also when list and toggle arrive in ONE request (${label})`, both.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === false, `${both.status}`);
 }
 const okOne = await setDefaults({ digest_recipients: `${unknownEmail}, ${uA.email}`, digest_only_approval_mails: true });
-ok("G1/P1: ...but ON IS accepted when at least one listed address is an eligible ERP account (a mix with an unknown one)", okOne.status === 200 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === true, `${okOne.status}`);
+ok("G1/P1: ...and ON IS accepted when at least one listed recipient can receive it (a mix of a typed address and an ERP account)", okOne.status === 200 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_only_approval_mails === true, `${okOne.status}`);
 const emptyToSep = await setDefaults({ digest_recipients: " , ; " });
-ok("G1/P1: ...and while ON, replacing the list with separators only is refused too, the list unchanged", emptyToSep.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_recipients === `${unknownEmail}, ${uA.email}`, `${emptyToSep.status}`);
+ok("G1/P1: ...and while ON, replacing the list with separators only is refused too (at the list itself), the list unchanged", emptyToSep.status === 400 && (await req(admin, "GET", "/api/defaults")).data?.item?.digest_recipients === `${unknownEmail}, ${uA.email}`, `${emptyToSep.status}`);
 await setDefaults({ digest_only_approval_mails: false });
 await setDefaults({ digest_recipients: listBefore });
 // ON
@@ -670,6 +907,65 @@ await arm("S4 digest screen (Trainer is kept out)", async () => {
   await page.waitForTimeout(2500);
   ok("S4: a Trainer login does not get the digest tiles", (await page.locator('[data-testid="digest-joined"]').count()) === 0, "");
   await ctx.close();
+});
+
+await arm("S5 Defaults: the recipient picker (Admin)", async () => {
+  await setDefaults({ digest_only_approval_mails: false });
+  await setListDirect("");
+  const typedUi = `zz.ui.${s.toLowerCase()}@vidysea-test.local`;
+  const { ctx, page } = await newPage(uAdm.email, PW);
+  await page.goto(`${BASE}/admin?tab=Defaults`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-testid="digest-recipients"]').waitFor();
+  ok("S5: an empty list says so (no chip) and offers the picker and the typed box", (await page.locator('[data-testid="digest-chip"]').count()) === 0 && (await page.locator('[data-testid="digest-picker-search"]').count()) === 1 && (await page.locator('[data-testid="digest-typed-input"]').count()) === 1, "");
+  await page.locator('[data-testid="digest-picker-search"]').fill(uA.email);
+  await page.locator(`[data-testid="digest-picker-option"][data-email="${uA.email.toLowerCase()}"]`).waitFor();
+  ok("S5: searching an email narrows the picker to that one ERP user (and a Trainer is not offered)", (await page.locator('[data-testid="digest-picker-option"]').count()) === 1, String(await page.locator('[data-testid="digest-picker-option"]').count()));
+  await page.locator(`[data-testid="digest-picker-option"][data-email="${uA.email.toLowerCase()}"] [data-testid="digest-picker-add"]`).click();
+  ok("S5: Add puts the user on the list as a user chip (no cost warning: an ERP user keeps their own view)", (await page.locator('[data-testid="digest-chip"][data-kind="user"]').count()) === 1 && (await page.locator('[data-testid="digest-typed-warning"]').count()) === 0, "");
+  await page.locator('[data-testid="digest-typed-input"]').fill("not-an-email");
+  await page.locator('[data-testid="digest-typed-add"]').click();
+  ok("S5: a typed address that is not an address is refused on the spot, with a message, and no chip is added", (await page.locator('[data-testid="digest-typed-error"]').count()) === 1 && (await page.locator('[data-testid="digest-chip"]').count()) === 1, "");
+  await page.locator('[data-testid="digest-typed-input"]').fill(typedUi.toUpperCase());
+  await page.locator('[data-testid="digest-typed-add"]').click();
+  const typedChip = page.locator(`[data-testid="digest-chip"][data-kind="address"][data-token="${typedUi}"]`);
+  await typedChip.waitFor();
+  ok("S5: a valid typed address becomes a chip (lowercased) that carries the warning 'This address will receive cost figures'", /This address will receive cost figures/.test(await typedChip.innerText()), (await typedChip.innerText()).replace(/\s+/g, " "));
+  await page.locator('[data-testid="digest-typed-input"]').fill(typedUi);
+  await page.locator('[data-testid="digest-typed-add"]').click();
+  ok("S5: the same address again is refused (no duplicate chip)", (await page.locator('[data-testid="digest-chip"]').count()) === 2 && (await page.locator('[data-testid="digest-typed-error"]').count()) === 1, "");
+  await shot(page, "S5-defaults-recipient-picker.png");
+  await page.locator('button:has-text("Save")').first().click();
+  let stored = "";
+  for (let i = 0; i < 40; i++) { stored = String((await dbDef())?.digest_recipients ?? ""); if (stored) break; await sleep(250); }
+  ok("S5: Save stores the list in canonical form: the picked user's tag and the typed address, comma separated", stored === `u:${uA.id}, ${typedUi}`, stored);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator('[data-testid="digest-chip"]').first().waitFor();
+  ok("S5: after a reload both chips are there again (the user chip reads the person's name and email, not a bare id)", (await page.locator('[data-testid="digest-chip"]').count()) === 2 && /ZZ MC1 a/.test(await page.locator('[data-testid="digest-chip"][data-kind="user"]').innerText()) && (await page.locator('[data-testid="digest-chip"][data-kind="user"]').innerText()).includes(uA.email.toLowerCase()), (await page.locator('[data-testid="digest-chips"]').innerText()).replace(/\s+/g, " "));
+  await page.locator(`[data-testid="digest-chip"][data-token="${typedUi}"] [data-testid="digest-chip-remove"]`).click();
+  ok("S5: Remove takes the typed address off the list", (await page.locator('[data-testid="digest-chip"]').count()) === 1 && (await page.locator('[data-testid="digest-typed-warning"]').count()) === 0, "");
+  await ctx.close();
+  await setListDirect("");
+});
+await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the digest screen)", async () => {
+  await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: false } });
+  await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: `u:${uD.id}`, digest_only_approval_mails: true } });
+  const { ctx, page } = await newPage(uAdm.email, PW);
+  await page.goto(`${BASE}/admin?tab=Defaults`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-testid="digest-only-nobody-warning"]').waitFor();
+  ok("S6: Defaults shows the red warning while digest-only is ON and the only recipient is deactivated", /going nowhere/.test(await txt(page, "digest-only-nobody-warning")), await txt(page, "digest-only-nobody-warning"));
+  await page.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-testid="digest-only-nobody-warning"]').waitFor();
+  ok("S6: the digest screen shows the same warning to the Admin who can fix it", /going nowhere/.test(await txt(page, "digest-only-nobody-warning")), "");
+  await shot(page, "S6-digest-only-nobody-warning.png");
+  await ctx.close();
+  const { ctx: ctx2, page: page2 } = await newPage(uOps.email, PW);
+  await page2.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
+  await page2.locator('[data-testid="digest-joined"]').waitFor();
+  ok("S6: a viewer who cannot publish or edit the list does not get the warning", (await page2.locator('[data-testid="digest-only-nobody-warning"]').count()) === 0, "");
+  await ctx2.close();
+  await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: true } });
+  await setDefaults({ digest_only_approval_mails: false });
+  await setListDirect("");
 });
 
 await browser.close();

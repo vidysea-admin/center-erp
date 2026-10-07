@@ -65,7 +65,7 @@ function DailyDigestInner() {
       const parts = [`${r.attempted} recipient${r.attempted === 1 ? "" : "s"} attempted for ${r.day}`, `${r.sent} sent`];
       if (r.skipped) parts.push(`${r.skipped} skipped (not sent)`);
       if (r.failed) parts.push(`${r.failed} failed`);
-      if (r.ineligible) parts.push(`${r.ineligible} of the skipped ${r.ineligible === 1 ? "is" : "are"} not an active ERP account`);
+      if (r.ineligible) parts.push(`${r.ineligible} of the skipped ${r.ineligible === 1 ? "is" : "are"} not allowed to receive it (a Trainer, a deactivated or removed ERP account)`);
       const why = Array.isArray(r.not_sent_reasons) && r.not_sent_reasons.length ? ` Reason${r.not_sent_reasons.length === 1 ? "" : "s"}: ${r.not_sent_reasons.join("; ")}.` : "";
       setPublishedAllSent(r.sent === r.attempted);
       setPublished(parts.join(", ") + "." + why);
@@ -107,6 +107,11 @@ function DailyDigestInner() {
 
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
       {published && <div data-testid="digest-publish-result" className={`rounded border px-3 py-2 text-sm ${publishedAllSent ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}>{published}</div>}
+      {mayPublish && meta?.digest_only_nobody && (
+        <div className="rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="digest-only-nobody-warning">
+          Digest-only is ON but no one can receive the digest, so the approval mails are currently going nowhere. Add an active recipient under Admin, Defaults, or switch digest-only off.
+        </div>
+      )}
       {mayPublish && meta && (!meta.email_enabled || meta.recipients === 0) && (
         <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="digest-mail-warning">
           {meta.recipients === 0 ? "No digest recipients are set (Admin, Defaults), so no digest mail goes out. " : ""}

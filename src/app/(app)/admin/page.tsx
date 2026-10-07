@@ -1421,6 +1421,7 @@ function SchemeRow({ s, onSave }: { s: any; onSave: (id: string, patch: any) => 
 
 function DefaultsTab({ error, setError }: any) {
   const [form, setForm] = useState<any>(null);
+  const [savedKey, setSavedKey] = useState("0");   // bumped after a save so the digest control re-reads who can receive it
   useEffect(() => { api("/api/defaults").then((d) => setForm(d.item)).catch((e: any) => setError(e.message)); }, []);
   // QA-2761 / QA-2763 (5): Umesh's exact complaint. Six Save buttons, and this handler gave no busy
   // state, no reload and no message - a Save that worked and a Save that did nothing looked the same.
@@ -1434,6 +1435,7 @@ function DefaultsTab({ error, setError }: any) {
       await api("/api/defaults", { method: "PUT", json: form });
       const d = await api("/api/defaults");
       if (d?.item) setForm(d.item);
+      setSavedKey(String(Date.now()));
     } catch (e: any) { setError(e.message); throw e; }
   }
   if (!form) return null;
@@ -1606,13 +1608,7 @@ function DefaultsTab({ error, setError }: any) {
           </label>
           {/* mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"): the 21:00 IST daily digest. Recipients are ERP
               accounts; the finance section goes only to those who hold finance.view. */}
-          <label className="block text-sm">
-            <span className="font-medium">Daily digest recipients</span>
-            <textarea data-testid="digest-recipients" className={inputCls + " mt-1 min-h-[64px]"} value={form.digest_recipients ?? ""}
-              onChange={(e) => setForm({ ...form, digest_recipients: e.target.value })}
-              placeholder="name@vidysea.com, other@vidysea.com" />
-            <span className="block text-xs text-gray-500">One mail a day at 21:00 IST to each ERP account listed (separate with commas). Empty: no digest mail is sent. The cost section is included only for people who hold the finance right.</span>
-          </label>
+          <DigestRecipients value={form.digest_recipients ?? ""} onChange={(v) => setForm({ ...form, digest_recipients: v })} toggleOn={form.digest_only_approval_mails === true} reloadKey={savedKey} />
           <label className="flex items-start gap-2 text-sm">
             <input data-testid="digest-only-toggle" type="checkbox" className="mt-0.5" checked={form.digest_only_approval_mails === true}
               onChange={(e) => setForm({ ...form, digest_only_approval_mails: e.target.checked })} />
@@ -1823,6 +1819,96 @@ function MailPanel({ error, setError }: any) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// mtg-c1 cycle 2 (Umesh 2026-10-07: "a custom list of users to select ... we can select it or add custom mail, it will
+// send to all of them"). The list is one string in Defaults: `u:<ERP user id>` for a picked account (so a renamed or
+// re-emailed user keeps receiving it) and a plain address for a typed one. This control edits that string; the server
+// (PUT /api/defaults) is what judges it. A typed address that matches no ERP account is sent the FULL report, money
+// included, so each one carries the warning.
+function DigestRecipients({ value, onChange, toggleOn, reloadKey }: { value: string; onChange: (v: string) => void; toggleOn: boolean; reloadKey: string }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [health, setHealth] = useState<any>(null);
+  const [q, setQ] = useState("");
+  const [typed, setTyped] = useState("");
+  const [typedErr, setTypedErr] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    api("/api/reports/daily/recipients").then((d) => { setUsers(d.users ?? []); setHealth(d.health ?? null); }).catch(() => {}).finally(() => setLoaded(true));
+  }, [reloadKey]);
+  const tokens = String(value ?? "").split(/[,;\s]+/).map((t) => t.trim().toLowerCase()).filter(Boolean);
+  const byId = new Map(users.map((u) => [u.id, u]));
+  const write = (next: string[]) => onChange(next.join(", "));
+  const picked = new Set(tokens);
+  const matches = users
+    .filter((u) => !picked.has(`u:${u.id}`) && (!q.trim() || `${u.name} ${u.email}`.toLowerCase().includes(q.trim().toLowerCase())))
+    .slice(0, 8);
+  const addTyped = () => {
+    const e = typed.trim().toLowerCase();
+    const bad = emailError(e);
+    if (bad) { setTypedErr(bad); return; }
+    if (picked.has(e)) { setTypedErr("That address is already on the list."); return; }
+    setTypedErr(""); setTyped(""); write([...tokens, e]);
+  };
+  return (
+    <div className="block text-sm" data-testid="digest-recipients">
+      <span className="font-medium">Daily digest recipients</span>
+      <span className="block text-xs text-gray-500">
+        One mail a day at 21:00 IST to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
+        and/or type any email address (a typed address gets the full report, cost section included). Empty: no digest mail is sent.
+      </span>
+      {toggleOn && health?.digest_only_nobody && (
+        <div className="mt-1 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="digest-only-nobody-warning">
+          Digest-only is ON but no one can receive the digest, so the approval mails are currently going nowhere. Add an active recipient below, or switch digest-only off.
+        </div>
+      )}
+      <ul className="mt-2 flex flex-col gap-1" data-testid="digest-chips">
+        {tokens.length === 0 && <li className="text-xs text-gray-400">No recipients yet.</li>}
+        {tokens.map((t) => {
+          const m = /^u:([0-9a-f]{24})$/.exec(t);
+          const u = m ? byId.get(m[1]) : null;
+          return (
+            <li key={t} data-testid="digest-chip" data-kind={m ? "user" : "address"} data-token={t} className="flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1">
+              {m ? (
+                <span>{u ? <><b>{u.name}</b> <span className="text-gray-500">{u.email}</span>{u.mail_enabled === false && <span className="ml-1 text-amber-700">(mail switched off for this account)</span>}</> : !loaded ? <span className="text-gray-400">Loading.</span> : <span className="text-amber-700">An ERP user who can no longer receive it (removed, deactivated or a Trainer)</span>}</span>
+              ) : (
+                <>
+                  <span><b>{t}</b> <span className="text-gray-500">(typed address)</span></span>
+                  {users.some((x) => x.email === t)
+                    ? <span data-testid="digest-typed-account" className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-700">This is an ERP account: it gets that account's own view</span>
+                    : <span data-testid="digest-typed-warning" className="rounded bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-900">This address will receive cost figures</span>}
+                </>
+              )}
+              <button type="button" data-testid="digest-chip-remove" className="ml-auto text-xs text-red-700 underline" onClick={() => write(tokens.filter((x) => x !== t))}>Remove</button>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-2 grid gap-3 md:grid-cols-2">
+        <div>
+          <input data-testid="digest-picker-search" className={inputCls} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search ERP users by name or email" />
+          <ul className="mt-1 max-h-48 overflow-auto rounded border border-gray-200 bg-white" data-testid="digest-picker-list">
+            {matches.length === 0 && <li className="px-2 py-1 text-xs text-gray-400">{users.length ? "No matching ERP user." : "Loading the ERP users."}</li>}
+            {matches.map((u) => (
+              <li key={u.id} data-testid="digest-picker-option" data-email={u.email} className="flex items-center justify-between gap-2 border-b border-gray-100 px-2 py-1 last:border-0">
+                <span><b>{u.name}</b> <span className="text-gray-500">{u.email} ({u.role})</span></span>
+                <button type="button" className="text-xs text-blue-700 underline" data-testid="digest-picker-add" onClick={() => write([...tokens, `u:${u.id}`])}>Add</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <div className="flex gap-2">
+            <input data-testid="digest-typed-input" className={inputCls} value={typed} onChange={(e) => { setTyped(e.target.value); setTypedErr(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTyped(); } }} placeholder="Or type any email address" />
+            <button type="button" data-testid="digest-typed-add" className="rounded border border-gray-300 px-3 py-1 text-sm" onClick={addTyped}>Add</button>
+          </div>
+          {typedErr && <div className="mt-1 text-xs text-red-700" data-testid="digest-typed-error">{typedErr}</div>}
+          <div className="mt-1 text-xs text-amber-800">A typed address is not an ERP account, so it gets the full report with the cost figures.</div>
+        </div>
+      </div>
     </div>
   );
 }
