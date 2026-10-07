@@ -5,7 +5,7 @@ import { requirePerm, requireView, hasPermission, hasFinanceApprove, maskApprova
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
-import { flushPendingFinanceAuditEvents } from "@/lib/approvals";
+import { attachCostHeads, flushPendingFinanceAuditEvents } from "@/lib/approvals";
 
 // GET — pending/decided requests plus the current rule configuration.
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -20,7 +20,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
       .sort({ createdAt: -1 }).limit(100)
       .populate("decided_by", "name").populate("location", "name code").lean();
     const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
-    const items = mineItems.map((raw: any) => {
+    const maskedMine = mineItems.map((raw: any) => {
       if (canSeeMoney) return raw;
       // The raiser is entitled to the amount they themselves submitted, but not to a later
       // sanctioned amount or to money repeated in summaries / decision prose. Reuse the one
@@ -35,7 +35,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
       }
       return masked;
     });
-    return NextResponse.json({ items });
+    // QA-2852: the raiser's own parked costs say when their head is not approved (read from the raw row).
+    return NextResponse.json({ items: await attachCostHeads(maskedMine, mineItems) });
   }
   // 2026-08-12 audit (auth S3-5): requireUser() alone. Each request carries the replay
   // `payload` — closure reasons, invoice amounts — so any signed-in user could read what the
@@ -95,7 +96,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // above preserves only the requester's own payload.amount; sanction figures and their prose
   // echoes are finance facts and stay masked.
   const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
-  return NextResponse.json({ items: items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), config });
+  // QA-2852: a parked cost names its head and the head's current approval state (display only).
+  return NextResponse.json({ items: await attachCostHeads(items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), items as any[]), config });
 });
 
 // PUT — Admin toggles which actions require approval (RPL M24, configurable by design).

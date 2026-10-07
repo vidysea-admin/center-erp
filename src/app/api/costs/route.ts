@@ -42,7 +42,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   if (extra.payment_status) filter.payment_status = extra.payment_status;
   const found = await CostEntry.find(filter)
     .sort({ entry_date: -1 })
-    .populate("location", "name code").populate("batch", "code").populate("trainer", "name").populate("category", "name").populate("entered_by", "name")
+    .populate("location", "name code").populate("batch", "code").populate("trainer", "name").populate("category", "name approval_status").populate("entered_by", "name")
     .lean<any[]>();
   await stampCostApprovals(found);
   const approver_options = costApproverOptions(found);

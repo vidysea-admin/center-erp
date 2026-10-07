@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, postCost, toInputDate, offerable } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
 
@@ -331,11 +331,11 @@ function CostsInner() {
 
             <Section title="My submissions">
               <DataTable rows={mine} loading={loading}
-                cardTitle={(r: any) => r.summary}
+                cardTitle={(r: any) => `${r.summary}${parkedCostHeadNote(r)}`}
                 defaultSort={{ key: "createdAt", dir: "desc" }}
                 columns={[
                   { key: "createdAt", label: "Submitted", sortable: true, sortValue: (r: any) => new Date(r.createdAt).getTime(), render: (r: any) => fmtDate(r.createdAt) },
-                  { key: "summary", label: "Entry" },
+                  { key: "summary", label: "Entry", render: (r: any) => `${r.summary}${parkedCostHeadNote(r)}` },
                   { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
                   { key: "decision_note", label: "Admin's note", render: (r: any) => r.decision_note ?? "—" },
                   { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.decided_by?.name ?? "—" },
@@ -398,12 +398,13 @@ function CostsInner() {
               {ledgerQs && <Btn kind="ghost" onClick={() => router.push(`/costs${sp.get("tab") ? `?tab=${sp.get("tab")}` : ""}`, { scroll: false })}>Clear</Btn>}
             </div>
             <DataTable rows={costs} loading={loading}
-              cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+              cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}${costHeadApprovalNote(r.category)}`}
               onRowClick={canApproveCosts ? openEdit : undefined}
               defaultSort={{ key: "entry_date", dir: "desc" }}
               columns={[
                 { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => r.entry_date ? new Date(r.entry_date).getTime() : null, render: (r: any) => fmtDate(r.entry_date) },
-                { key: "category", label: "Category", sortable: true, sortValue: (r: any) => r.category?.name, render: (r: any) => r.category?.name },
+                // QA-2852: an unapproved head is marked in the register as in the picker (GET /api/costs sends its status).
+                { key: "category", label: "Category", sortable: true, sortValue: (r: any) => r.category?.name, render: (r: any) => `${r.category?.name ?? ""}${costHeadApprovalNote(r.category)}` },
                 { key: "amount", label: "Amount", sortable: true, render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
                 { key: "requested_amount", label: "Requested", sortable: true, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? `₹${Number(r.requested_amount).toLocaleString("en-IN")}` : "—" },
                 { key: "payment_status", label: "Payment", sortable: true, filterable: true, render: (r: any) => r.payment_status ?? "Not recorded" },

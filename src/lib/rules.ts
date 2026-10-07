@@ -6821,7 +6821,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
 
   // The master first — it decides the columns (note #1) and it is how a head is resolved from a
   // subhead, by id (note #2).
-  const cats = await CostCategory.find({}).select("name code parent head_type budget active").lean<any[]>();
+  const cats = await CostCategory.find({}).select("name code parent head_type budget active approval_status").lean<any[]>();
   const catById = new Map(cats.map((c) => [String(c._id), c]));
   const heads = cats.filter((c) => !c.parent);
   const subheadsOf = (headId: string) => cats.filter((c) => String(c.parent ?? "") === headId);
@@ -6988,6 +6988,10 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       approved_on: e.approved_on ?? null,
       approved_basis: e.approved_basis,
       head: headLabel, subhead: subLabel,
+      // QA-2852: the heads' approval state, for the register's "(not approved)" mark. Display only; a head
+      // with no flag is null and reads as approved. A subhead's own state rides on `subhead_approval_status`.
+      head_approval_status: head?.approval_status ?? null,
+      subhead_approval_status: cat && cat.parent ? cat.approval_status ?? null : null,
       head_type: head?.head_type ?? null,
       amount: amt,
       location: e.location?.name ?? COST_UNASSIGNED,

@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { api, fmtAuditValue, fmtDT, fmtDate, offerable } from "@/lib/client";
 import { emailError } from "@/lib/validate";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
@@ -1126,7 +1126,7 @@ function Approvals({ error, setError }: any) {
               <li key={r._id} id={`approval-request-${r._id}`} data-approval-request-id={r._id} className="rounded-lg border px-4 py-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <div className="text-sm font-medium">{r.summary}</div>
+                    <div className="text-sm font-medium">{r.summary}{parkedCostHeadNote(r)}</div>
                     <div className="text-xs text-gray-500">
                       {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
                       {/* QA-2296: this said "decided by X" beside the REQUEST's timestamp. The

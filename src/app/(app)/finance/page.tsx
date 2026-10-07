@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
-import { Btn, DataTable, ErrorBanner } from "@/components/ui";
+import { Btn, costHeadApprovalNote, DataTable, ErrorBanner } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { useSession } from "next-auth/react";
 
@@ -123,7 +123,9 @@ function FinanceInner() {
   //    live. With nowhere to put them those options would vanish in silence, which is QA-426's
   //    shape: a value is offered or refused out loud, never dropped quietly.
   const catParent = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
-  const catLabel = (c: any) => `${c?.name}${c?.active === false ? " (inactive)" : ""}`;
+  // QA-2852 (Umesh, 2026-10-07): an unapproved head (Pending / Rejected) is marked here as it is in the cost
+  // form's picker - the one helper, costHeadApprovalNote. A head with no flag reads as approved.
+  const catLabel = (c: any) => `${c?.name}${costHeadApprovalNote(c)}${c?.active === false ? " (inactive)" : ""}`;
   const offeredCats: any[] = offerable(lists.categories, f.category);
   const costHeads = offeredCats.filter((c: any) => !catParent(c));
   const subsOfHead = (id: string) => offeredCats.filter((c: any) => catParent(c) === String(id));
@@ -507,11 +509,13 @@ function FinanceInner() {
 
       <Section title="Cost entry register" hint="Every entry the filters above select — the list every total on this page is summed from.">
         <DataTable storageKey="finance-register" rows={data?.register ?? []} loading={loading} searchable pageSize={50}
-          defaultSort={{ key: "entry_date", dir: "desc" }} cardTitle={(r: any) => `${r.head} — ₹${Number(r.amount).toLocaleString("en-IN")}`}
+          defaultSort={{ key: "entry_date", dir: "desc" }} cardTitle={(r: any) => `${r.head}${costHeadApprovalNote({ approval_status: r.head_approval_status })} — ₹${Number(r.amount).toLocaleString("en-IN")}`}
           columns={[
             { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => String(r.entry_date ?? ""), render: (r: any) => (r.entry_date ? String(r.entry_date).slice(0, 10) : <span className="text-gray-300">—</span>) },
-            { key: "head", label: "Cost head", sortable: true, filterable: true, minWidth: 180, render: (r: any) => r.head },
-            { key: "subhead", label: "Subhead", sortable: true, filterable: true, render: (r: any) => r.subhead },
+            // QA-2852: the register says when a head / subhead is not approved. The status comes from the same
+            // rollup pass as the name; filterable still matches on the bare name.
+            { key: "head", label: "Cost head", sortable: true, filterable: true, minWidth: 180, render: (r: any) => `${r.head}${costHeadApprovalNote({ approval_status: r.head_approval_status })}` },
+            { key: "subhead", label: "Subhead", sortable: true, filterable: true, render: (r: any) => `${r.subhead}${costHeadApprovalNote({ approval_status: r.subhead_approval_status })}` },
             { key: "amount", label: "Amount", sortable: true, sortValue: (r: any) => r.amount, render: (r: any) => rupee(r.amount), total: sumCol((r) => r.amount) },
             { key: "location", label: "Centre", sortable: true, filterable: true, render: (r: any) => r.location },
             { key: "batch", label: "Batch", sortable: true, filterable: true, render: (r: any) => r.batch },

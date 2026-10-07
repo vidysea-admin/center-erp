@@ -1,7 +1,7 @@
 // Approval matrix (RPL M24). Ships as an engine with every action switched OFF: with no
 // enabled rule, `requireApproval` returns null and the caller proceeds exactly as before —
 // zero behaviour change until an Admin turns an action on.
-import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostEntry, Notification } from "@/models";
+import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostCategory, CostEntry, Notification } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit, changedFields } from "@/lib/audit";
@@ -783,6 +783,29 @@ export async function requireHeadApproval(
 // Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
 // changes the row and receives a request to replay. Reading Pending and then saving a document is
 // not a claim — two readers can both do that — so do not replace the findOneAndUpdate with save().
+// QA-2852 (Umesh, 2026-10-07): a cost parked under a head that is not approved says so on the approvals
+// screens. The head's state is read NOW, here, not stored in the request: `summary` is written at park
+// time and a mark written there would outlive the head's approval. `masked` is what the caller is about
+// to return (money already masked) and `raw` the same rows before masking, in the same order - the head
+// id is read from the raw payload, because a raiser without finance.view gets that payload masked.
+// Adds `cost_head: { name, approval_status }` to a cost.post row whose head resolves; nothing else changes.
+// A head with no approval_status gets `null`, which the screens read as approved (legacy heads).
+export async function attachCostHeads<T extends Record<string, any>>(masked: T[], raw: any[]): Promise<T[]> {
+  const ids = [...new Set(raw
+    .filter((r) => r?.action === "cost.post")
+    .map((r) => String(r?.payload?.category ?? ""))
+    .filter((id) => Types.ObjectId.isValid(id)))];
+  if (ids.length === 0) return masked;
+  const cats = await CostCategory.collection
+    .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } }, { projection: { name: 1, approval_status: 1 } })
+    .toArray();
+  const byId = new Map(cats.map((c: any) => [String(c._id), c]));
+  return masked.map((m, i) => {
+    const c: any = raw[i]?.action === "cost.post" ? byId.get(String(raw[i]?.payload?.category ?? "")) : null;
+    return c ? { ...m, cost_head: { name: c.name, approval_status: c.approval_status ?? null } } : m;
+  });
+}
+
 export async function decideApproval(
   requestId: string,
   user: SessionUser,

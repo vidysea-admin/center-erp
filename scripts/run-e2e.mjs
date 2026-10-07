@@ -136,6 +136,10 @@ const SUITES = [
   // mtg-a3 (R5/R7/R9, QA-2880/2881/2882, meeting 2026-10-06): "Approved by / on" on the register, ledger and export;
   // cost-POST idempotency key (direct + parked, race, per-user); payment-status filter. Its own file.
   "e2e-cost-approver-idem.mjs",
+  // QA-2852 (Umesh, 2026-10-07): an unapproved cost head (Pending / Rejected) is marked "(not approved)" /
+  // "(rejected)" in the Finance cost-head filter, the Finance register and Costs ledger rows, and the approvals
+  // summary of a parked cost (Admin queue and My submissions); a head with no flag reads as approved. Its own file.
+  "e2e-cost-head-not-approved-mark.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

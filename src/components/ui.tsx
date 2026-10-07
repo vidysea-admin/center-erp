@@ -433,6 +433,18 @@ export function costHeadApprovalNote(c: any): string {
   return "";
 }
 
+// QA-2852 (Umesh, 2026-10-07, "ye bhi krna hi hai"): the same mark, on the three places the picker's
+// note did not reach. Finance filter / register / Costs ledger call costHeadApprovalNote(head) above;
+// the approvals summary of a cost parked under such a head calls this, which only COMPOSES it. The
+// server hands a parked request `cost_head` ({ name, approval_status }), read from the head's state
+// NOW - the summary text is stored at park time and is never rewritten, so a mark stored there would
+// outlive the approval. Nothing to say for an approved or flag-less head, so it returns "".
+export function parkedCostHeadNote(r: any): string {
+  const h = r?.cost_head;
+  const note = costHeadApprovalNote(h);
+  return note ? ` · head ${h?.name ?? ""}${note}` : "";
+}
+
 export function CostHeadOptions({ cats }: { cats: any[] }) {
   const label = (c: any) => `${c.name}${costHeadApprovalNote(c)}`;
   const idOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
