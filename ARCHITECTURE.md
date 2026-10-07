@@ -397,6 +397,23 @@ skipped, not mailed). `digest_only_approval_mails` (default OFF; refused ON unle
 goes out through `sendMail`, so `email_enabled` still decides whether anything leaves the building. Suite:
 `scripts/e2e-daily-digest.mjs` (clock driven through the test-only `POST /api/test/digest-tick`).
 
+### 3.0f "Who approved this cost, and did the same POST land twice?" — one function each (mtg-a3, meeting 2026-10-06, R5/R7/R9)
+
+**Approved by / Approved on** is `stampCostApprovals(entries)` in `lib/rules.ts` and nothing else. The Finance
+register (`costRollup`), the Costs ledger (`GET /api/costs`) and the Excel export (which reads `costRollup`) all
+carry the stamp it writes (`approved_by`, `approved_by_id`, `approved_by_kind`, `approved_on`, `approved_basis`):
+the entry's `approval_request` -> that request's `decided_by` / `decided_at`; else `pre_approved_applied` ->
+"Pre-approved" (dated by the entry's `createdAt`); else "Direct (<poster's role>)" with no date. The filters
+(`approved_by`, `approved_from`, `approved_to`, `payment_status`) are read by `parseCostFilters` and applied by
+`costRollup` / `filterCostsByApproval`; do not re-read them per route. **Idempotency**: a cost POST's
+`Idempotency-Key` header is scoped to the caller (`scopedIdempotencyKey` -> `"<user id>:<key>"`) and stored on the
+`CostEntry` it creates (direct, pre-approved, finished-batch recording) or on the `ApprovalRequest` it parks, each
+under a unique sparse index; a repeat returns the first result (`findPriorCostPost`), and a concurrent duplicate
+that loses the index race (E11000) waits for the winner (`awaitPriorCostPost`). A cancelled Formula reservation
+`$unset`s the key (`cancelFormulaReservation` and the expiry sweep) or the entry that follows could never be
+written. Client side the key lives in `postCost` / `costIdempotencyKey` (`lib/client.ts`); the Costs page and the
+batch Costs tab both post through it. Suite: `scripts/e2e-cost-approver-idem.mjs`.
+
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.

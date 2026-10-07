@@ -2924,7 +2924,7 @@ const COST_ENTRY_IMMUTABLE_FIELDS = [
   "requested_amount", "approval_request", "payment_status", "note", "vendor_payee",
   "voucher_no", "payment_mode", "pre_approved_applied", "pre_approved_basis",
   "pre_approved_unit", "reservation_state", "reservation_expires_at", "reservation_kind",
-  "_audit_events", "entered_by",
+  "_audit_events", "entered_by", "idempotency_key",
 ] as const;
 
 function stableCostValue(value: unknown): string {
@@ -3000,6 +3000,59 @@ export async function createBatchScopedCostEntryIdempotently(
   return created;
 }
 
+// ---------------------------------------------------------------------------------------------
+// mtg-a3 R7 (Umesh, 2026-10-06 meeting): a cost POST carries a client-generated idempotency key, so
+// a double click, a retry after a dropped response, or two tabs cannot post the same cost twice.
+// Manish's existing duplicates came exactly from this. The key is stored as "<user id>:<key>" - the
+// scope is part of the stored value, so one user's key can never match another user's POST - on the
+// created CostEntry (direct / pre-approved / finished-batch recording) or, when the POST parks, on
+// the ApprovalRequest. Both carry a unique sparse index, so the race is decided by the database,
+// not by a read-then-write.
+export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_.:-]{8,100}$/;
+
+export function scopedIdempotencyKey(userId: unknown, raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const key = String(raw).trim();
+  if (!IDEMPOTENCY_KEY_PATTERN.test(key)) {
+    throw new HttpError(400, "That request key is not valid. Reload the page and try again.");
+  }
+  return `${String(userId)}:${key}`;
+}
+
+export function isIdempotencyKeyCollision(error: any): boolean {
+  if (error?.code !== 11000) return false;
+  const pattern = error?.keyPattern ?? error?.writeErrors?.[0]?.err?.keyPattern ?? {};
+  return "idempotency_key" in pattern || /idempotency_key/.test(String(error?.message ?? ""));
+}
+
+export type SettledCostPost = { status: 201; item: any } | { status: 202; item: any };
+export type PriorCostPost = SettledCostPost | { status: "in-flight" } | null;
+
+// The FIRST result for a key, if there is one. `in-flight` means a hidden Formula reservation still
+// holds the key: the first POST has not finished deciding yet.
+export async function findPriorCostPost(scopedKey: string): Promise<PriorCostPost> {
+  // Schema middleware hides reservation rows from this find, so a hit is a real ledger row.
+  const entry = await CostEntry.findOne({ idempotency_key: scopedKey });
+  if (entry) return { status: 201, item: entry };
+  const request = await ApprovalRequest.findOne({ idempotency_key: scopedKey }).lean<any>();
+  if (request) return { status: 202, item: request };
+  const reserved = await CostEntry.collection.findOne({ idempotency_key: scopedKey }, { projection: { _id: 1 } });
+  return reserved ? { status: "in-flight" } : null;
+}
+
+// A concurrent duplicate lost the unique-index race: wait (bounded) for the winner to finish and
+// return ITS result. Never create anything here.
+export async function awaitPriorCostPost(scopedKey: string, waitMs = 10_000): Promise<SettledCostPost> {
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const prior = await findPriorCostPost(scopedKey);
+    if (prior && prior.status !== "in-flight") return prior;
+    if (Date.now() >= until) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new HttpError(409, "Your first attempt at this entry is still being processed. Wait a few seconds and check the register before submitting it again.");
+}
+
 export async function assertActiveCostCategory(categoryId: unknown) {
   if (!categoryId) throw new HttpError(400, "A cost head is required.");
   // Raw read is intentional: a staged head is hidden by schema middleware, but the write guard
@@ -3060,7 +3113,9 @@ async function cancelFormulaReservation(reservation: PreApprovalReservation, rea
     { _id: reservation.cost_entry_id, reservation_state: "Pending" },
     {
       $set: { reservation_state: "Cancelled", reservation_cancel_reason: reason, updatedAt: new Date() },
-      $unset: { reservation_expires_at: "" },
+      // mtg-a3 R7: a cancelled fencing row is not a result, so it must free the POST's key - the
+      // entry that follows (an approval request, or a direct row under a fresh id) carries it.
+      $unset: { reservation_expires_at: "", idempotency_key: "" },
     },
   );
   if (cancelled.modifiedCount === 1) {
@@ -3208,7 +3263,7 @@ export async function evaluatePreApproval(
       },
       {
         $set: { reservation_state: "Cancelled", reservation_cancel_reason: "expired", updatedAt: now },
-        $unset: { reservation_expires_at: "" },
+        $unset: { reservation_expires_at: "", idempotency_key: "" }, // mtg-a3 R7: free the key
       },
     );
 
@@ -6595,7 +6650,114 @@ export const COST_LABELS = {
 export type CostFilters = {
   from?: string; to?: string;
   location?: string; batch?: string; trainer?: string; program?: string; category?: string;
+  // mtg-a3 R9: Payment Pending / Paid. R5: who approved it (a user id, "pre-approved" or "direct")
+  // and the window the approval falls in. Approver filters are applied after the join below.
+  payment_status?: string; approved_by?: string; approved_from?: string; approved_to?: string;
 };
+
+// mtg-a3 R5 (Umesh, 2026-10-06 meeting): "Approved by" and "Approved on" on the Finance register, the
+// Costs ledger and the Excel export - ONE function, so the three can never disagree. Derived from
+// stored data only, and each answer says which field it came from:
+//   - the entry has `approval_request`  -> that ApprovalRequest's `decided_by` / `decided_at`;
+//   - else `pre_approved_applied`        -> "Pre-approved" (the head's rule decided, at post time:
+//                                            the date is the entry's `createdAt`);
+//   - else                               -> "Direct (<role of entered_by>)": nobody approved it
+//                                            (an Admin posting, or no approval rule on at the time);
+//                                            there is no approval date.
+export type CostApprovalKind = "approver" | "pre-approved" | "direct";
+export const COST_PAYMENT_FILTERS = ["Payment Pending", "Paid"] as const;
+export const COST_FILTER_KEYS = [
+  "from", "to", "location", "batch", "trainer", "program", "category",
+  "payment_status", "approved_by", "approved_from", "approved_to",
+] as const satisfies readonly (keyof CostFilters)[];
+
+// One reader for the finance filter keys, shared by the register, its export and the ledger so a key
+// added here reaches all three. Bad values are refused (400) rather than silently ignored: a typo in
+// `payment_status` that returned everything would look like a filtered report and be a wrong one.
+export function parseCostFilters(sp: URLSearchParams, keys: readonly (keyof CostFilters)[]): CostFilters {
+  const filters: CostFilters = {};
+  for (const k of keys) {
+    const v = sp.get(k);
+    if (v) filters[k] = v;
+  }
+  if (filters.payment_status && !(COST_PAYMENT_FILTERS as readonly string[]).includes(filters.payment_status)) {
+    throw new HttpError(400, "Payment status must be Payment Pending or Paid.");
+  }
+  if (filters.approved_by && !["pre-approved", "direct"].includes(filters.approved_by) && !Types.ObjectId.isValid(filters.approved_by)) {
+    throw new HttpError(400, "Choose an approver from the list.");
+  }
+  for (const k of ["approved_from", "approved_to"] as const) {
+    if (filters[k] && !/^\d{4}-\d{2}-\d{2}$/.test(String(filters[k]))) throw new HttpError(400, "Dates must look like 2026-10-31.");
+  }
+  return filters;
+}
+
+export async function stampCostApprovals(entries: any[]): Promise<void> {
+  const idOf = (v: any) => (v && typeof v === "object" && "_id" in v ? String(v._id) : v ? String(v) : "");
+  const requestIds = [...new Set(entries.map((e) => idOf(e.approval_request)).filter(Boolean))];
+  const requests = requestIds.length
+    ? await ApprovalRequest.find({ _id: { $in: requestIds } }).select("decided_by decided_at").populate("decided_by", "name").lean<any[]>()
+    : [];
+  const requestById = new Map(requests.map((r) => [String(r._id), r]));
+  const directIds = [...new Set(entries.filter((e) => !e.approval_request && !e.pre_approved_applied).map((e) => idOf(e.entered_by)).filter(Boolean))];
+  const posters = directIds.length ? await User.find({ _id: { $in: directIds } }).select("role").lean<any[]>() : [];
+  const roleOf = new Map(posters.map((u) => [String(u._id), String(u.role ?? "")]));
+  for (const e of entries) {
+    if (e.approval_request) {
+      const r = requestById.get(idOf(e.approval_request));
+      e.approved_by_kind = "approver" as CostApprovalKind;
+      e.approved_by = r?.decided_by?.name ?? null;
+      e.approved_by_id = r?.decided_by ? idOf(r.decided_by) : null;
+      e.approved_on = r?.decided_at ?? null;
+      e.approved_basis = "approval_request.decided_by";
+    } else if (e.pre_approved_applied) {
+      e.approved_by_kind = "pre-approved" as CostApprovalKind;
+      e.approved_by = "Pre-approved";
+      e.approved_by_id = null;
+      e.approved_on = e.createdAt ?? null;
+      e.approved_basis = "pre_approved_applied";
+    } else {
+      const role = roleOf.get(idOf(e.entered_by));
+      e.approved_by_kind = "direct" as CostApprovalKind;
+      e.approved_by = role ? `Direct (${role})` : "Direct";
+      e.approved_by_id = null;
+      e.approved_on = null;
+      e.approved_basis = "no approval_request, not pre_approved_applied";
+    }
+  }
+}
+
+// Applied after stampCostApprovals. `approved_by` is a user id, "pre-approved" or "direct".
+export function filterCostsByApproval<T extends Record<string, any>>(entries: T[], f: Pick<CostFilters, "approved_by" | "approved_from" | "approved_to">): T[] {
+  let out = entries;
+  if (f.approved_by) {
+    out = out.filter((e) => f.approved_by === "pre-approved" || f.approved_by === "direct"
+      ? e.approved_by_kind === f.approved_by
+      : e.approved_by_kind === "approver" && e.approved_by_id === String(f.approved_by));
+  }
+  if (f.approved_from) {
+    const from = istStart(f.approved_from).getTime();
+    out = out.filter((e) => e.approved_on && new Date(e.approved_on).getTime() >= from);
+  }
+  if (f.approved_to) {
+    const to = istEnd(f.approved_to).getTime();
+    out = out.filter((e) => e.approved_on && new Date(e.approved_on).getTime() <= to);
+  }
+  return out;
+}
+
+// The distinct approvers present in `entries`, for the filter's drop-down.
+export function costApproverOptions(entries: any[]): { value: string; label: string }[] {
+  const seen = new Map<string, string>();
+  for (const e of entries) {
+    if (e.approved_by_kind === "approver" && e.approved_by_id) seen.set(e.approved_by_id, e.approved_by ?? "Unknown");
+  }
+  return [
+    ...[...seen].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label)),
+    { value: "pre-approved", label: "Pre-approved" },
+    { value: "direct", label: "Direct (no approval)" },
+  ];
+}
 
 const COST_UNASSIGNED = "Unassigned";
 
@@ -6638,6 +6800,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   }
   if (filters.trainer) q.trainer = filters.trainer;
   if (filters.batch) q.batch = filters.batch;
+  if (filters.payment_status) q.payment_status = filters.payment_status; // mtg-a3 R9
   // A cost entry carries no job role. A job role IS a programme here (`ProgramSchema.scheme`'s own
   // comment: "a programme in this business is a JOB ROLE run under a SCHEME"), and it reaches a cost
   // only through the batch — so the filter resolves to batch ids first, inside the same scope.
@@ -6658,7 +6821,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   // `.map(String)`, mongoose casts strings inside find() but NOT inside a pipeline, and four live
   // defects came from exactly that (QA-302, QA-347, QA-350, QA-395). The pipelines below only ever
   // receive ObjectIds taken off documents loaded here.
-  const entries = await CostEntry.find(q)
+  let entries = await CostEntry.find(q)
     .populate("location", "name code")
     .populate({ path: "batch", select: "code program location", populate: { path: "program", select: "name code scheme" } })
     .populate("trainer", "name")
@@ -6666,6 +6829,12 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     .populate("entered_by", "name")
     .sort({ entry_date: -1 })
     .lean<any[]>();
+  // mtg-a3 R5: stamp "approved by / on" on every row, offer the approvers that exist in THIS scope
+  // (before the approver filter narrows them to one), then narrow. Every total below is computed
+  // from the narrowed set, so a filtered register and its KPIs cannot disagree.
+  await stampCostApprovals(entries);
+  const approverOptions = costApproverOptions(entries);
+  entries = filterCostsByApproval(entries, filters);
 
   const entryIds = entries.map((e) => e._id);
   const batchIds = [...new Map(entries.filter((e) => e.batch?._id).map((e) => [String(e.batch._id), e.batch._id])).values()];
@@ -6769,6 +6938,10 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       payment_ref: e.payment_ref ?? null,
       requested_amount: e.requested_amount ?? null,
       pre_approved: e.pre_approved_applied ? (e.pre_approved_basis || "yes") : null,
+      approved_by: e.approved_by ?? null,
+      approved_by_kind: e.approved_by_kind,
+      approved_on: e.approved_on ?? null,
+      approved_basis: e.approved_basis,
       head: headLabel, subhead: subLabel,
       head_type: head?.head_type ?? null,
       amount: amt,
@@ -6791,7 +6964,8 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   // failure this whole report is built to avoid, so those two columns go to `null` ("—") and say
   // why. Filtering by cost HEAD is the exception and stays comparable: the head's own budget and the
   // head's own spend are both complete.
-  const narrows = !!(filters.from || filters.to || filters.location || filters.batch || filters.trainer || filters.program);
+  const narrows = !!(filters.from || filters.to || filters.location || filters.batch || filters.trainer || filters.program
+    || filters.payment_status || filters.approved_by || filters.approved_from || filters.approved_to);
   const budgetNote = narrows
     ? "Budgets are set per cost head for the whole project, not per centre or per period. While a filter is applied, variance and % used would compare part of the spend against all of the budget, so they are not shown."
     : null;
@@ -6889,6 +7063,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     },
     unit_economics: batchRows,
     register,
+    approver_options: approverOptions,
   };
 }
 

@@ -3,7 +3,7 @@ import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, istTodayInput, toInputDate } from "@/lib/client";
+import { api, fmtDate, istTodayInput, postCost, toInputDate } from "@/lib/client";
 import { personLabel, personList, personPhone } from "@/lib/person";
 // -212 (QA-728): the shared portal-CAN helpers, from the PURE module. They used to live only in
 // lib/govt-attendance, which imports the mongoose models, so this screen could not reach them and
@@ -5977,13 +5977,11 @@ function CostsTab({ batchId, batch, error, setError }: any) {
     const cat = cats.find((c: any) => c.name?.toLowerCase() === "trainer fee");
     if (!cat) { setError('Cost category "Trainer Fee" not found — add it in Admin → Master Lists.'); return false; }
     try {
-      await api("/api/costs", {
-        method: "POST",
-        json: {
-          entry_date: toInputDate(new Date()), batch: batchId, location: batch.location?._id ?? batch.location,
-          trainer: suggest.trainer, category: cat._id, amount: suggest.amount,
-          note: `Auto-suggested: ${suggest.basis} (${suggest.name})`,
-        },
+      // mtg-a3 R7: posted with an idempotency key - a double click on "Add as cost entry" adds ONE row.
+      await postCost(`batch-costs-suggest:${batchId}`, {
+        entry_date: toInputDate(new Date()), batch: batchId, location: batch.location?._id ?? batch.location,
+        trainer: suggest.trainer, category: cat._id, amount: suggest.amount,
+        note: `Auto-suggested: ${suggest.basis} (${suggest.name})`,
       });
       setSuggest(null); load();
     } catch (e: any) { setError(e.message); throw e; }
@@ -6022,7 +6020,8 @@ function CostsTab({ batchId, batch, error, setError }: any) {
         setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); load();
         return;
       }
-      await api("/api/costs", { method: "POST", json: { ...costHeadPayload(form), batch: batchId, location: batch.location?._id ?? batch.location } });
+      // mtg-a3 R7: a double click or a retry after a dropped response posts this entry ONCE.
+      await postCost(`batch-costs:${batchId}`, { ...costHeadPayload(form), batch: batchId, location: batch.location?._id ?? batch.location });
       setForm({ entry_date: toInputDate(new Date()) }); load();
     } catch (e: any) { setError(e.message); throw e; }
   }

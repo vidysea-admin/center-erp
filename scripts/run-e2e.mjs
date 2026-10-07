@@ -133,6 +133,9 @@ const SUITES = [
   // /reports/daily screen, Publish now and the 21:00 IST mail; once per IST day under a lock and a durable day
   // key; finance only for finance.view; and the "digest only" toggle on the per-approval mails. Its own file and browser.
   "e2e-daily-digest.mjs",
+  // mtg-a3 (R5/R7/R9, QA-2880/2881/2882, meeting 2026-10-06): "Approved by / on" on the register, ledger and export;
+  // cost-POST idempotency key (direct + parked, race, per-user); payment-status filter. Its own file.
+  "e2e-cost-approver-idem.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

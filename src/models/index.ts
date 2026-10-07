@@ -1302,7 +1302,16 @@ const CostEntrySchema = new Schema({
   deletion_state: { type: String, enum: ["Pending"], default: undefined, select: false },
   deletion_audit_event_id: { type: String, default: undefined, select: false },
   entered_by: oid("User", true),
+  // mtg-a3 R7 (Umesh, 2026-10-06 meeting): the client-generated key of the POST that created this
+  // row, stored as "<user id>:<key>" so one user's key can never match another user's POST. It is
+  // what makes a repeated or concurrent POST return the FIRST result instead of a second ledger
+  // row. select:false - it is plumbing, never shown on a screen or an export.
+  idempotency_key: { type: String, select: false },
 }, { timestamps: true });
+// mtg-a3 R7: the unique sparse index is the race arbiter - two same-millisecond POSTs with one key
+// cannot both insert; the loser gets E11000 and replays the winner. Sparse keeps every row that has
+// no key (all history, all approval replays) out of the index.
+CostEntrySchema.index({ idempotency_key: 1 }, { unique: true, sparse: true });
 // Defense in depth for the approval CAS: even if a future route regresses the claim, one approval
 // request can create at most one ledger row. Sparse preserves direct/pre-approved costs, which have
 // no approval_request at all.
@@ -1521,9 +1530,13 @@ const ApprovalRequestSchema = new Schema({
   // The Applying claim owns these replay choices. A retry must resume the same decision rather than
   // accepting new money/taxonomy input after part of the original effect may already be durable.
   decision_map_to_category: oid("CostCategory"),
+  // mtg-a3 R7: the key of the cost POST that PARKED into this request ("<user id>:<key>"); see
+  // CostEntry.idempotency_key. A repeat of that POST returns this request, not a second one.
+  idempotency_key: { type: String, select: false },
   _audit_events: { type: [Schema.Types.Mixed], default: undefined, select: false },
   _audit_delivered_event_ids: { type: [String], default: undefined, select: false },
 }, { timestamps: true });
+ApprovalRequestSchema.index({ idempotency_key: 1 }, { unique: true, sparse: true });
 ApprovalRequestSchema.index({ status: 1, approver_role: 1, createdAt: -1 });
 ApprovalRequestSchema.index({ batch: 1, status: 1 });
 

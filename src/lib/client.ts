@@ -15,6 +15,42 @@ export async function api<T = any>(path: string, opts: RequestInit & { json?: un
   return data as T;
 }
 
+// mtg-a3 R7 (Umesh, 2026-10-06 meeting): a cost POST carries a client-generated idempotency key, so
+// a double click, a retry after a dropped response or a second tab cannot post the same cost twice
+// (Manish's existing duplicates came from exactly that). The key lives in sessionStorage for as long
+// as THIS payload is unsent or unconfirmed: the same payload retried reuses it, an EDITED payload
+// gets a fresh one (a different cost must never be answered with an earlier cost's result), and a
+// success clears it. The server stores it per user and returns the first result for a repeat.
+const COST_IDEM_PREFIX = "erp-cost-idem:";
+function newIdemKey(): string {
+  const c: any = typeof crypto !== "undefined" ? crypto : null;
+  return c?.randomUUID ? c.randomUUID() : `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+}
+export function costIdempotencyKey(scope: string, payload: unknown): string {
+  const slot = COST_IDEM_PREFIX + scope;
+  const fp = JSON.stringify(payload ?? null);
+  try {
+    const raw = sessionStorage.getItem(slot);
+    if (raw) {
+      const saved = JSON.parse(raw) as { fp?: string; key?: string };
+      if (saved.key && saved.fp === fp) return saved.key;
+    }
+  } catch { /* storage blocked or unreadable: fall through to a fresh key */ }
+  const key = newIdemKey();
+  try { sessionStorage.setItem(slot, JSON.stringify({ fp, key })); } catch { /* private mode: the key still protects this one call */ }
+  return key;
+}
+export function clearCostIdempotencyKey(scope: string): void {
+  try { sessionStorage.removeItem(COST_IDEM_PREFIX + scope); } catch { /* nothing to clear */ }
+}
+// The one way a screen posts a cost: scope names the form ("costs-page", "batch-costs:<id>").
+export async function postCost<T = any>(scope: string, json: Record<string, unknown>): Promise<T> {
+  const key = costIdempotencyKey(scope, json);
+  const res = await api<T>("/api/costs", { method: "POST", json, headers: { "Idempotency-Key": key } });
+  clearCostIdempotencyKey(scope); // success (created or queued) - the next entry is a new one
+  return res;
+}
+
 // Business dates are stored at UTC midnight — pinning the zone keeps the calendar date
 // stable for a viewer west of UTC instead of showing yesterday.
 export function fmtDate(d?: string | Date | null): string {

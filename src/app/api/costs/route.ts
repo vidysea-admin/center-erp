@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
-import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, createBatchScopedCostEntryIdempotently, evaluatePreApproval } from "@/lib/rules";
+import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, requireHeadApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { coerceExtras } from "@/app/api/master-lists/[list]/route";
@@ -32,11 +32,18 @@ export const GET = apiHandler(async (req: NextRequest) => {
     const v = sp.get(k);
     if (v) filter[k] = v;
   }
-  const items = await CostEntry.find(filter)
+  // mtg-a3 R9 / R5: Payment Pending / Paid, and who approved it - read by the SAME parser the
+  // register uses, and the approval columns are stamped by the SAME function (stampCostApprovals).
+  const extra = parseCostFilters(sp, ["payment_status", "approved_by", "approved_from", "approved_to"]);
+  if (extra.payment_status) filter.payment_status = extra.payment_status;
+  const found = await CostEntry.find(filter)
     .sort({ entry_date: -1 })
     .populate("location", "name code").populate("batch", "code").populate("trainer", "name").populate("category", "name").populate("entered_by", "name")
-    .lean();
-  return NextResponse.json({ items });
+    .lean<any[]>();
+  await stampCostApprovals(found);
+  const approver_options = costApproverOptions(found);
+  const items = filterCostsByApproval(found, extra);
+  return NextResponse.json({ items, approver_options });
 });
 
 export const POST = apiHandler(async (req: NextRequest) => {
@@ -46,6 +53,37 @@ export const POST = apiHandler(async (req: NextRequest) => {
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   await flushPendingFinanceAuditEvents().catch(() => {});
   const body = await readJson(req);
+  // mtg-a3 R7: the key travels in the `Idempotency-Key` header (or, equivalently, `idempotency_key`
+  // in the body) and is taken OUT of the body at once - it is plumbing, so it must never reach the
+  // approval payload, the replay or an audit row. Scoped to the caller here, so every later lookup
+  // and index entry is per user.
+  const idemKey = scopedIdempotencyKey(user.id, req.headers.get("idempotency-key") ?? body.idempotency_key);
+  delete body.idempotency_key;
+  if (!idemKey) return postCostEntry(user, body, null);
+  await Promise.all([CostEntry.init(), ApprovalRequest.init()]); // the unique indexes must exist before the race is decided by them
+  // A repeat of a POST that already finished returns that first result, same status, creates nothing.
+  const first = await findPriorCostPost(idemKey);
+  if (first) return replayCostPost(first.status === "in-flight" ? await awaitPriorCostPost(idemKey) : first);
+  try {
+    return await postCostEntry(user, body, idemKey);
+  } catch (error) {
+    // Same key, same instant: the unique index let one POST in. This one replays that winner.
+    if (isIdempotencyKeyCollision(error)) return replayCostPost(await awaitPriorCostPost(idemKey));
+    throw error;
+  }
+});
+
+function replayCostPost(prior: SettledCostPost) {
+  const headers = { "Idempotent-Replay": "true" };
+  if (prior.status === 202) {
+    // pre_approval (the sentence explaining why it parked) is not stored on the request and is not
+    // reconstructed here: the request, its summary and its status are the first result.
+    return NextResponse.json({ queued: true, item: prior.item, pre_approval: null }, { status: 202, headers });
+  }
+  return NextResponse.json({ item: prior.item }, { status: 201, headers });
+}
+
+async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body: Record<string, any>, idemKey: string | null) {
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   assertCostEntryValid(body); // Rule 37
   // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
@@ -202,6 +240,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     payment_mode: body.payment_mode || undefined,
     _audit_events: [createdEvent(costEntryId)],
     entered_by: new Types.ObjectId(String(user.id)),
+    ...(idemKey ? { idempotency_key: idemKey } : {}),
   };
   const auditFailure = isTestDb && body._test_fail_audit_before_insert === true
     ? "before" as const
@@ -263,11 +302,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
     payload: { ...body, _pre_approved_basis: pre.basis },
     location: body.location || undefined,
     batch: body.batch || undefined,
+    ...(idemKey ? { idempotencyKey: idemKey } : {}),
     ...(isTestDb && Number(body._test_pause_after_approval_request_create_ms) > 0
       ? { testPauseAfterCreateMs: Number(body._test_pause_after_approval_request_create_ms) }
       : {}),
   });
-  if (parked) return NextResponse.json({ queued: true, item: parked.request, pre_approval: pre.reason }, { status: 202 });
+  if (parked) {
+    const { idempotency_key: _key, ...item } = typeof parked.request?.toObject === "function" ? parked.request.toObject() : parked.request;
+    return NextResponse.json({ queued: true, item, pre_approval: pre.reason }, { status: 202 });
+  }
   if (pre.applied && pre.reservation?.state === "Applied") {
     const applied = await CostEntry.findById(pre.reservation.cost_entry_id);
     if (!applied) throw new HttpError(500, "The pre-approved reservation was applied but its ledger row could not be confirmed.");
@@ -309,4 +352,4 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const confirmed = await CostEntry.findById(doc._id);
   if (!confirmed) throw new HttpError(500, "The cost was written but could not be read back.");
   return NextResponse.json({ item: confirmed }, { status: 201 });
-});
+}

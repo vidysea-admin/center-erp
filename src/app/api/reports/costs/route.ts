@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
-import { costRollup, type CostFilters } from "@/lib/rules";
+import { COST_FILTER_KEYS, costRollup, parseCostFilters, type CostFilters } from "@/lib/rules";
 
 // QA-1830 — Manish sir's finance dashboard, server-side. A thin door on purpose: every figure and
 // every rule about how it is summed lives in `costRollup` (lib/rules.ts), so this screen and its
@@ -23,11 +23,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // never in the UI (note #7). It travels back in the payload so the screen and the export can both
   // state what was counted.
   const p = req.nextUrl.searchParams;
-  const filters: CostFilters = {};
-  for (const k of ["from", "to", "location", "batch", "trainer", "program", "category"] as const) {
-    const v = p.get(k);
-    if (v) filters[k] = v;
-  }
+  const filters: CostFilters = parseCostFilters(p, COST_FILTER_KEYS);
   // `locationFilter` answers WHOSE; `requireFinance` answered WHETHER. Both are needed: a scoped
   // finance user is a real thing, and a named `?location=` inside `costRollup` intersects this
   // clause rather than overwriting it (QA-1898 — the same defect, one release ago, on the KPI door).

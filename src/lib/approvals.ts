@@ -580,6 +580,10 @@ export async function requireApproval(
     // configured role/named-list audience exactly. With no holder at all the old role audience is
     // used, so the request is never addressed to nobody.
     decidedByGrant?: boolean;
+    // mtg-a3 R7: the scoped ("<user id>:<key>") idempotency key of the cost POST that parks here.
+    // Stored on the request under a unique sparse index, so a duplicate POST can never open a
+    // second request - the loser gets E11000 from the create below, before any bell or mail.
+    idempotencyKey?: string;
   },
 ): Promise<ApprovalOutcome> {
   const configured = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
@@ -626,6 +630,7 @@ export async function requireApproval(
     initiator: user.id,
     approver_role: rule.approver_role,
     approver_users: approverUsers,
+    ...(ctx.idempotencyKey ? { idempotency_key: ctx.idempotencyKey } : {}),
   });
 
   // Test-only ordered race: the request is durable, but its post-create cleanup fence has not

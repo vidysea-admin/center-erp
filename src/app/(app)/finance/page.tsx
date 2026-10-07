@@ -18,8 +18,17 @@ export default function FinancePage() {
   return <Suspense><FinanceInner /></Suspense>;
 }
 
-type Filters = { from: string; to: string; location: string; program: string; category: string; batch: string };
-const EMPTY: Filters = { from: "", to: "", location: "", program: "", category: "", batch: "" };
+// mtg-a3 R9 / R5: payment_status (Payment Pending / Paid), approved_by (a user id, "pre-approved" or
+// "direct") and the approved on window travel in the URL like every other filter, and are applied by
+// costRollup on the server - the figures, the register and the Excel download all see them.
+type Filters = {
+  from: string; to: string; location: string; program: string; category: string; batch: string;
+  payment_status: string; approved_by: string; approved_from: string; approved_to: string;
+};
+const EMPTY: Filters = {
+  from: "", to: "", location: "", program: "", category: "", batch: "",
+  payment_status: "", approved_by: "", approved_from: "", approved_to: "",
+};
 
 function FinanceInner() {
   const sp = useSearchParams();
@@ -230,6 +239,29 @@ function FinanceInner() {
             <option value="">All centres</option>
             {lists.locations.map((l: any) => <option key={l._id} value={l._id}>{l.name}</option>)}
           </select>
+        </label>
+        <label className="text-xs text-gray-500">Payment status
+          <select value={f.payment_status} onChange={(e) => set("payment_status", e.target.value)} aria-label="Payment status filter"
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            <option value="">Any</option>
+            <option value="Payment Pending">Payment Pending</option>
+            <option value="Paid">Paid</option>
+          </select>
+        </label>
+        <label className="text-xs text-gray-500">Approved by
+          <select value={f.approved_by} onChange={(e) => set("approved_by", e.target.value)} aria-label="Approved by filter"
+            className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+            <option value="">Anyone</option>
+            {(data?.approver_options ?? []).map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="text-xs text-gray-500">Approved from
+          <input type="date" value={f.approved_from} onChange={(e) => set("approved_from", e.target.value)} aria-label="Approved from"
+            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
+        </label>
+        <label className="text-xs text-gray-500">Approved to
+          <input type="date" value={f.approved_to} onChange={(e) => set("approved_to", e.target.value)} aria-label="Approved to"
+            className="mt-1 block rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
         </label>
         <label className="text-xs text-gray-500">Job role
           <select value={f.program} onChange={(e) => set("program", e.target.value)}
@@ -494,6 +526,10 @@ function FinanceInner() {
             { key: "payment_ref", label: "Payment ref", sortable: true, filterable: true, render: (r: any) => r.payment_ref || <span className="text-gray-300">—</span> },
             { key: "requested_amount", label: "Requested", sortable: true, sortValue: (r: any) => r.requested_amount ?? r.amount, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? rupee(r.requested_amount) : <span className="text-gray-300">—</span> },
             { key: "pre_approved", label: "Pre-approved", minWidth: 160, render: (r: any) => r.pre_approved || <span className="text-gray-300">—</span> },
+            // mtg-a3 R5: from the approval request's decided_by / decided_at (or "Pre-approved" /
+            // "Direct (<role>)" when nobody was asked) - the same stamp the ledger and the Excel carry.
+            { key: "approved_by", label: "Approved by", sortable: true, filterable: true, sortValue: (r: any) => r.approved_by ?? "", render: (r: any) => r.approved_by || <span className="text-gray-300">—</span> },
+            { key: "approved_on", label: "Approved on", sortable: true, sortValue: (r: any) => String(r.approved_on ?? ""), render: (r: any) => (r.approved_on ? fmtDT(r.approved_on) : <span className="text-gray-300">—</span>) },
             { key: "entered_by", label: "Entered by", sortable: true, filterable: true, render: (r: any) => r.entered_by },
             // QA-2483: omitted entirely rather than rendered blank for a finance.view-only reader,
             // so an 18-column table does not grow a nineteenth empty one for most of its audience.

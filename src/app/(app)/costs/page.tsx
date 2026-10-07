@@ -1,7 +1,7 @@
 "use client";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDate, toInputDate, offerable } from "@/lib/client";
+import { api, fmtDate, postCost, toInputDate, offerable } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
@@ -20,10 +20,17 @@ function CostsInner() {
   // what it was filtered by is a link to a different number.
   const fLoc = sp.get("location") ?? "";
   const fBatch = sp.get("batch") ?? "";
+  // mtg-a3 R9 / R5: Payment Pending / Paid, and who approved it and when. Server-side, like the two
+  // above - /api/costs applies them with the same parser and the same stamp the Finance register uses.
+  const fPay = sp.get("payment_status") ?? "";
+  const fApprover = sp.get("approved_by") ?? "";
+  const fAppFrom = sp.get("approved_from") ?? "";
+  const fAppTo = sp.get("approved_to") ?? "";
   const ledgerQs = new URLSearchParams(
-    Object.entries({ location: fLoc, batch: fBatch }).filter(([, v]) => v) as [string, string][],
+    Object.entries({ location: fLoc, batch: fBatch, payment_status: fPay, approved_by: fApprover, approved_from: fAppFrom, approved_to: fAppTo })
+      .filter(([, v]) => v) as [string, string][],
   ).toString();
-  const setFilter = (k: "location" | "batch", v: string) => {
+  const setFilter = (k: "location" | "batch" | "payment_status" | "approved_by" | "approved_from" | "approved_to", v: string) => {
     const next = new URLSearchParams(ledgerQs);
     if (v) next.set(k, v); else next.delete(k);
     const tabQ = sp.get("tab") ? `tab=${sp.get("tab")}&` : "";
@@ -44,6 +51,7 @@ function CostsInner() {
   const canApproveCosts = permsLoaded && can("finance.approve", "edit");
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
+  const [approverOptions, setApproverOptions] = useState<{ value: string; label: string }[]>([]);
   const [mine, setMine] = useState<any[]>([]);
   const [invoices, setInvoices] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
@@ -68,7 +76,7 @@ function CostsInner() {
     api("/api/approvals?mine=1").then((d) => setMine((d.items ?? []).filter((i: any) => ["cost.post", "costcategory.create"].includes(i.action)))),
     asPostOnly
       ? Promise.resolve()
-      : api(`/api/costs${ledgerQs ? `?${ledgerQs}` : ""}`).then((d) => setCosts(d.items)),
+      : api(`/api/costs${ledgerQs ? `?${ledgerQs}` : ""}`).then((d) => { setCosts(d.items); setApproverOptions(d.approver_options ?? []); }),
     asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     role === "Trainer" ? Promise.resolve() : api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
@@ -99,7 +107,9 @@ function CostsInner() {
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
         await api(`/api/costs/${editId}`, { method: "PATCH", json });
       } else {
-        const res = await api("/api/costs", { method: "POST", json: { ...costHeadPayload(form), location: form.location || undefined, trainer: form.trainer || undefined } });
+        // mtg-a3 R7: sent with an idempotency key (kept in sessionStorage until this entry succeeds),
+        // so a double click or a retry after a dropped response cannot post it twice.
+        const res = await postCost("costs-page", { ...costHeadPayload(form), location: form.location || undefined, trainer: form.trainer || undefined });
         if (res.queued) setNotice("Sent to the Admin for approval — it will leave My submissions once decided.");
       }
       setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); load(postOnly);
@@ -362,6 +372,29 @@ function CostsInner() {
                     .map((b: any) => <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>)}
                 </select>
               </label>
+              <label className="text-xs text-gray-500">Payment status
+                <select value={fPay} onChange={(e) => setFilter("payment_status", e.target.value)} aria-label="Payment status filter"
+                  className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  <option value="">Any</option>
+                  <option value="Payment Pending">Payment Pending</option>
+                  <option value="Paid">Paid</option>
+                </select>
+              </label>
+              <label className="text-xs text-gray-500">Approved by
+                <select value={fApprover} onChange={(e) => setFilter("approved_by", e.target.value)} aria-label="Approved by filter"
+                  className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm">
+                  <option value="">Anyone</option>
+                  {approverOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-gray-500">Approved from
+                <input type="date" value={fAppFrom} onChange={(e) => setFilter("approved_from", e.target.value)} aria-label="Approved from"
+                  className="mt-1 block w-full min-w-0 max-w-[10rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
+              </label>
+              <label className="text-xs text-gray-500">Approved to
+                <input type="date" value={fAppTo} onChange={(e) => setFilter("approved_to", e.target.value)} aria-label="Approved to"
+                  className="mt-1 block w-full min-w-0 max-w-[10rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
+              </label>
               {ledgerQs && <Btn kind="ghost" onClick={() => router.push(`/costs${sp.get("tab") ? `?tab=${sp.get("tab")}` : ""}`, { scroll: false })}>Clear</Btn>}
             </div>
             <DataTable rows={costs} loading={loading}
@@ -375,6 +408,9 @@ function CostsInner() {
                 { key: "requested_amount", label: "Requested", sortable: true, render: (r: any) => r.requested_amount && Number(r.requested_amount) !== Number(r.amount) ? `₹${Number(r.requested_amount).toLocaleString("en-IN")}` : "—" },
                 { key: "payment_status", label: "Payment", sortable: true, filterable: true, render: (r: any) => r.payment_status ?? "Not recorded" },
                 { key: "payment_ref", label: "Payment ref", mobile: false, render: (r: any) => r.payment_ref ?? "—" },
+                // mtg-a3 R5: from the same stamp as the Finance register and the Excel export.
+                { key: "approved_by", label: "Approved by", sortable: true, filterable: true, sortValue: (r: any) => r.approved_by ?? "", render: (r: any) => r.approved_by ?? "—" },
+                { key: "approved_on", label: "Approved on", sortable: true, mobile: false, sortValue: (r: any) => r.approved_on ? new Date(r.approved_on).getTime() : null, render: (r: any) => r.approved_on ? fmtDate(r.approved_on) : "—" },
                 { key: "location", label: "Location", sortable: true, sortValue: (r: any) => r.location?.name, render: (r: any) => r.location?.name ?? "—" },
                 { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code ?? "—" },
                 { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name, render: (r: any) => r.trainer?.name ?? "—" },

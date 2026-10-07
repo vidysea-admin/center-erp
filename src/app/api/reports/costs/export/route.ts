@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requireFinance } from "@/lib/permissions";
-import { COST_LABELS, costRollup, type CostFilters } from "@/lib/rules";
+import { COST_FILTER_KEYS, COST_LABELS, costRollup, parseCostFilters, type CostFilters } from "@/lib/rules";
 
 // QA-1830 — the finance dashboard as an .xlsx, carrying THE SAME NUMBERS as the screen because it
 // calls the same `costRollup`. An export that recomputes is an export that eventually disagrees,
@@ -19,11 +19,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   await requireFinance(user, "view");
 
   const p = req.nextUrl.searchParams;
-  const filters: CostFilters = {};
-  for (const k of ["from", "to", "location", "batch", "trainer", "program", "category"] as const) {
-    const v = p.get(k);
-    if (v) filters[k] = v;
-  }
+  const filters: CostFilters = parseCostFilters(p, COST_FILTER_KEYS);
   const data = await costRollup(locationFilter(user), filters);
   const L = COST_LABELS;
   const money = (n: number | null) => (n === null ? "—" : n);
@@ -93,6 +89,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
       "Payment reference": r.payment_ref ?? "—",
       "Requested amount": r.requested_amount ?? r.amount,
       "Pre-approved": r.pre_approved ?? "—",
+      // mtg-a3 R5: the same two columns as the screen, from the same costRollup stamp.
+      "Approved by": r.approved_by ?? "—",
+      "Approved on": r.approved_on ? new Date(r.approved_on).toISOString().slice(0, 10) : "—",
     })),
   ), "cost entry register");
 
