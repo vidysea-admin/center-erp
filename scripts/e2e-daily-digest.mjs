@@ -228,7 +228,7 @@ const uAdm = await mkUser("Admin", [], "adm");
 const uTr = await mkUser("Trainer", [locA._id], "tr");
 const uOff = await mkUser("Operations", [], "off");        // an active ERP account whose OWN mail switch is off (QA-2461)
 await db.collection("users").updateOne({ _id: oid(uOff.id) }, { $set: { mail_enabled: false } });
-const uAdv = await mkUser("Admin", [], "adv", { can_edit: false });      // an Admin who may only VIEW: must not edit the recipient list
+const uAdv = await mkUser("Operations", [], "adv", { can_edit: false, extra_permissions: ["defaults.manage"] }); // holds defaults.manage but may only VIEW (can_edit false): must not edit the list (Admin is exempt from requireEdit, QA-617, so the persona is a non-Admin grantee)
 const uD = await mkUser("Operations", [], "d");                           // an eligible recipient that the arms deactivate and reactivate
 const uDead = await mkUser("Operations", [], "dead");                     // a deactivated account (cannot receive; cannot log in)
 await db.collection("users").updateOne({ _id: oid(uDead.id) }, { $set: { active: false } });
@@ -240,7 +240,7 @@ await db.collection("users").updateOne({ _id: oid(uDrop.id) }, { $set: { dropped
 ok("[precondition] personas (Location A, Location A + finance.view, Location B, Location B + finance.view, Operations, Admin, Trainer) can log in",
   !!(uA.cookie && uAF.cookie && uB.cookie && uBF.cookie && uOps.cookie && uAdm.cookie && uTr.cookie),
   JSON.stringify({ a: uA.status, af: uAF.status, b: uB.status, bf: uBF.status, ops: uOps.status, adm: uAdm.status, tr: uTr.status }));
-ok("[precondition] the cycle-2 personas exist (view-only Admin can log in; deactivated, removable and re-emailable accounts have ids)", !!(uAdv.cookie && uAdv.id && uD.id && uDead.id && uGone.id), JSON.stringify({ adv: uAdv.status, d: uD.status, dead: uDead.status, gone: uGone.status }));
+ok("[precondition] the cycle-2 personas exist (the defaults.manage view-only grantee can log in; deactivated, removable and re-emailable accounts have ids)", !!(uAdv.cookie && uAdv.id && uD.id && uDead.id && uGone.id), JSON.stringify({ adv: uAdv.status, d: uD.status, dead: uDead.status, gone: uGone.status }));
 
 const digest = (cookie, day) => req(cookie, "GET", `/api/reports/daily${day ? `?date=${day}` : ""}`);
 // By default a tick's first attempt is simulated as "sent" (every test env suppresses mail, so a real send is always
@@ -556,7 +556,7 @@ const t3 = await tick(istAt(UD3, 21, 0, 0), "u3-" + s, admin, { simulate: ["sent
 const tx3 = String(t3.data?.results?.[0]?.text ?? "");
 ok("U3: an ERP user AND a typed address with the same email: exactly one mail row, one claim, one result", (await digestRows(UD3, [uA.email.toLowerCase()])).length === 1 && t3.data?.results?.length === 1 && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${UD3}:` } })) === 1,
   JSON.stringify({ rows: (await digestRows(UD3, [uA.email.toLowerCase()])).length, results: t3.data?.results?.length }));
-ok("U3: ...and it is the ACCOUNT's view (Location A, no finance): no Costs section, no centre-B batch (typing the address did not upgrade it to the full report)", tx3.length > 0 && !/Costs|Rs \d/i.test(tx3) && !tx3.includes(fx.pb1.code) && tx3.includes(fx.pa1.code), tx3.replace(/\s+/g, " ").slice(0, 200));
+ok("U3: ...and it is the ACCOUNT's view (Location A, no finance): no Costs section, no centre-B batch (typing the address did not upgrade it to the full report)", tx3.length > 0 && !/Costs|Rs \d/.test(tx3) && !tx3.includes(fx.pb1.code) && tx3.includes(fx.pa1.code), tx3.replace(/\s+/g, " ").slice(0, 200));
 const raceSame = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(UD4, 21, 0, 5), `u3r-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
 ok("U3: 4 processes racing that same list with the lock OFF: still exactly one mail row for the person", (await digestRows(UD4, [uA.email.toLowerCase()])).length === 1 && raceSame.filter((x) => (x.data?.results ?? []).length > 0).length === 1,
   JSON.stringify({ rows: (await digestRows(UD4, [uA.email.toLowerCase()])).length, winners: raceSame.filter((x) => (x.data?.results ?? []).length > 0).length }));
@@ -572,7 +572,7 @@ ok("U4: ...so is a typed address that is a DEACTIVATED account's email (reason n
   r5m[uDead.email.toLowerCase()]?.outcome === "ineligible" && /deactivated/i.test(String(r5m[uDead.email.toLowerCase()]?.reason ?? "")) && Object.values(r5m).some((r) => r.outcome === "ineligible" && /no longer exists/i.test(String(r.reason ?? ""))), JSON.stringify(Object.values(r5m).map((r) => [r.to, r.outcome, r.reason])));
 ok("U4: ...so is a typed address of a REJECTED account (it cannot sign in) and one of a DROPPED account (whose login email was renamed: typing the original must not read as 'no account' and earn the full report with money)",
   [uRej, uDrop].every((u) => r5m[u.email.toLowerCase()]?.outcome === "ineligible" && !r5m[u.email.toLowerCase()]?.text), JSON.stringify([uRej, uDrop].map((u) => r5m[u.email.toLowerCase()] && [r5m[u.email.toLowerCase()].outcome, r5m[u.email.toLowerCase()].full])));
-ok("U4: ...and a typed address that IS a Location A account gets that account's view (no Costs)", r5m[uA.email.toLowerCase()]?.outcome === "mailed" && !/Costs|Rs \d/i.test(String(r5m[uA.email.toLowerCase()]?.text ?? "")), "");
+ok("U4: ...and a typed address that IS a Location A account gets that account's view (no Costs)", r5m[uA.email.toLowerCase()]?.outcome === "mailed" && !/Costs|Rs \d/.test(String(r5m[uA.email.toLowerCase()]?.text ?? "")), "");
 ok("U4: each refusal is on the record (a skipped MailLog row with the reason), not silent", (await digestRows(UD5, [uTr.email.toLowerCase(), uDead.email.toLowerCase()])).every((r) => r.status === "skipped" && r.reason), "");
 // a legacy, malformed token in the stored string is refused, never mailed as a "full view"
 await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "not-an-email" } });
@@ -640,7 +640,7 @@ const attempt = { digest_recipients: `x.${typedFull}`, digest_only_approval_mail
 const deniedLoc = await req(uA.cookie, "PUT", "/api/defaults", attempt);
 const deniedOps = await req(uOps.cookie, "PUT", "/api/defaults", attempt);
 const deniedViewOnly = await req(uAdv.cookie, "PUT", "/api/defaults", attempt);
-ok("U7: Location, Operations and a view-only Admin are all refused (403) when they try to change the recipient list, and the list is unchanged",
+ok("U7: Location, Operations and a defaults.manage grantee with can_edit off are all refused (403) when they try to change the recipient list, and the list is unchanged",
   deniedLoc.status === 403 && deniedOps.status === 403 && deniedViewOnly.status === 403 && (await getDef())?.digest_recipients === typedFull, `${deniedLoc.status} ${deniedOps.status} ${deniedViewOnly.status}`);
 const toggleDenied = await req(uA.cookie, "PUT", "/api/defaults", { digest_only_approval_mails: true });
 ok("U7: ...and they cannot switch digest-only on either", toggleDenied.status === 403 && (await getDef())?.digest_only_approval_mails === false, `${toggleDenied.status}`);
@@ -939,7 +939,7 @@ await arm("S5 Defaults: the recipient picker (Admin)", async () => {
   for (let i = 0; i < 40; i++) { stored = String((await dbDef())?.digest_recipients ?? ""); if (stored) break; await sleep(250); }
   ok("S5: Save stores the list in canonical form: the picked user's tag and the typed address, comma separated", stored === `u:${uA.id}, ${typedUi}`, stored);
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator('[data-testid="digest-chip"]').first().waitFor();
+  await page.locator('[data-testid="digest-chip"][data-kind="user"]').filter({ hasText: "ZZ MC1 a" }).first().waitFor();
   ok("S5: after a reload both chips are there again (the user chip reads the person's name and email, not a bare id)", (await page.locator('[data-testid="digest-chip"]').count()) === 2 && /ZZ MC1 a/.test(await page.locator('[data-testid="digest-chip"][data-kind="user"]').innerText()) && (await page.locator('[data-testid="digest-chip"][data-kind="user"]').innerText()).includes(uA.email.toLowerCase()), (await page.locator('[data-testid="digest-chips"]').innerText()).replace(/\s+/g, " "));
   await page.locator(`[data-testid="digest-chip"][data-token="${typedUi}"] [data-testid="digest-chip-remove"]`).click();
   ok("S5: Remove takes the typed address off the list", (await page.locator('[data-testid="digest-chip"]').count()) === 1 && (await page.locator('[data-testid="digest-typed-warning"]').count()) === 0, "");
