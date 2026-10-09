@@ -998,6 +998,11 @@ export async function applyApprovedCostEdit(request: any, approvedAmount: number
   const raw: any = await CostEntry.collection.findOne({ _id: costId });
   if (!raw || raw.deletion_state) throw new HttpError(409, "The cost this edit was for no longer exists. Reject this request.");
   if (String(raw.approval_request ?? "") === String(request._id)) return costId; // already applied (a resumed claim)
+  for (const field of ["note", "vendor_payee", "voucher_no", "payment_mode"]) {
+    if (p[field] !== undefined && typeof p[field] !== "string") {
+      throw new HttpError(400, `The proposed ${field.replaceAll("_", " ")} must be text. Reject this request and ask for the edit again.`);
+    }
+  }
   if (String(raw.cost_edit_request ?? "") !== String(request._id)) {
     throw new HttpError(409, "This request no longer owns the cost change. Reject it and ask for the edit again.");
   }

@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-323";
+export const RELEASE = "2026.08.14-324";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -286,6 +286,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "No other screen, figure or permission changes in this release.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-324 repairs candidate links to their assigned batches and completes the cost-entry and daily-report workflows. " +
+  "Pending or rejected cost heads cannot authorize new ledger commitments, even with the ordinary cost approval rule off. " +
+  "Increasing or changing an approved pre-approval cap waits for another finance approver while the existing cap remains effective. " +
+  "Finance and Costs show head approval markers, approver details and payment filters; costs can be filtered by head and subhead. " +
+  "A creator can change or remove their own unpaid entry, with confirmation for approved entries and renewed approval for material changes. " +
+  "Removed creator entries can be restored; paid entries remain locked. Repeated submissions use the original recorded result. " +
+  "The daily report includes daily enrolments and actual training starts, plus current enrolled and ongoing learner totals with their measurement time. " +
+  "An Admin can select ERP recipients or add external addresses. Manual publication and the 9 PM India-time schedule are separate sends, " +
+  "with recipient permissions and recorded sent, skipped or failed outcomes.";
+
+// Preserve the previous public note as literal history.
+const RELEASE_NOTE_ARCHIVE_323 =
   "-323 changes the Candidates, Locations, Batches and Reports screens, and changes how a new "  +
   "cost head is approved. "  +
   "On the Candidates screen, a Download Excel button saves the candidates that match the current "  +
@@ -2046,6 +2058,7 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_323 + " " +
   // -323: ARCHIVE_322 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_322 + " " +
   // -322: ARCHIVE_321 wired in here in the SAME bump that declared it, same discipline.

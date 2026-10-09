@@ -121,12 +121,14 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   const before = doc.toObject();
   assertCostEntryValid({ ...before, ...patch }); // Rule 37 on the merged entry
-  if (patch.category !== undefined) {
-    const target = await assertActiveCostCategory(patch.category);
+  const materialCorrection = COST_MATERIAL_FIELDS.some((field) => field in patch
+    && costCanon(field, patch[field]) !== costCanon(field, before[field]));
+  if (patch.category !== undefined || materialCorrection) {
+    const target = await assertActiveCostCategory(patch.category ?? doc.category, { requireApproved: materialCorrection });
     // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): no cost may be MOVED onto the bare Other/Misc
     // head. Only a change counts - the edit form sends the category back unchanged, and an old row
     // already under Others stays editable (no migration of old rows).
-    if (String(patch.category) !== String(doc.category ?? "") && isBareOtherHeadName(target.name)) {
+    if (patch.category !== undefined && String(patch.category) !== String(doc.category ?? "") && isBareOtherHeadName(target.name)) {
       throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
     }
   }
@@ -308,6 +310,12 @@ const costCanon = (f: string, v: unknown): string => {
 async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   const { doc, internal, stamp } = await loadOwnCost(user, id);
   const body = await readJson(req);
+  // Native writes must keep the schema's text contract before any queue/receipt effects.
+  for (const field of ["note", "vendor_payee", "voucher_no", "payment_mode"]) {
+    if (body[field] !== undefined && typeof body[field] !== "string") {
+      throw new HttpError(400, `The ${field.replaceAll("_", " ")} must be text.`);
+    }
+  }
   if (body.mark_paid === true) {
     throw new HttpError(403, "Recording a payment is for finance. You can change or delete your own entry until it is paid.");
   }
@@ -454,7 +462,17 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
                 ...winner.cost_edit_proposal.context, requestId: new Types.ObjectId(String(winner.cost_edit_request)),
               });
             } catch (error: any) {
-              if (error?.code !== 11000) throw error;
+              if (error?.code !== 11000) {
+                const destination = winner.cost_edit_proposal.context.batch;
+                if (destination) {
+                  const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)), deletion_state: { $exists: false } });
+                  if (!live && !(await ApprovalRequest.exists({ _id: winner.cost_edit_request }))) {
+                    await CostEntry.collection.updateOne({ _id: doc._id, cost_edit_request: winner.cost_edit_request,
+                      "cost_edit_proposal.mutation_key": mutationKey }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+                  }
+                }
+                throw error;
+              }
               const existing = await ApprovalRequest.findById(winner.cost_edit_request);
               if (!existing) throw error;
               parked = { request: existing };
@@ -469,7 +487,17 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
         parked = await requireApproval("cost.post", user,
           recovering ? { ...internal.cost_edit_proposal.context, requestId } : context);
       } catch (error: any) {
-        if (error?.code !== 11000) throw error;
+        if (error?.code !== 11000) {
+          const destination = recovering ? internal.cost_edit_proposal.context.batch : context.batch;
+          if (destination) {
+            const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)), deletion_state: { $exists: false } });
+            if (!live && !(await ApprovalRequest.exists({ _id: requestId }))) {
+              await CostEntry.collection.updateOne({ _id: doc._id, cost_edit_request: requestId,
+                "cost_edit_proposal.mutation_key": mutationKey }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+            }
+          }
+          throw error;
+        }
         const existing = await ApprovalRequest.findById(requestId);
         if (!existing) throw error;
         parked = { request: existing };

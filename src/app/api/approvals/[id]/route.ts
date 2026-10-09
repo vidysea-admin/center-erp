@@ -169,12 +169,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     if (chosenMap) {
       // Checked here as well as in the replay, because reaching the replay means the decision is
       // already saved. QA-1980: a deactivated head is not a place to file new money either.
-      const target = await CostCategory.findById(chosenMap).select("_id name active").lean<any>();
-      if (!target) throw new HttpError(400, "That cost head no longer exists — pick another, or approve the new one as proposed.");
-      if (target.active === false) throw new HttpError(400, "That cost head has been deactivated, so new costs should not be filed under it. Pick an active one, or approve the new head as proposed.");
+      const target = await assertActiveCostCategory(chosenMap, { requireApproved: true });
       // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): an old parked entry is not filed under the
       // bare Other/Misc head either - map it to a real head, or approve the named one as proposed.
       if (isBareOtherHeadName(target.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
+    } else if (pp.new_head_parent) {
+      const parent = await assertActiveCostCategory(pp.new_head_parent, { requireApproved: true });
+      if (parent.parent) throw new HttpError(400, "A subhead must belong directly to a head.");
     }
   }
 
@@ -315,12 +316,16 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       // order that makes the second possible.
       let categoryId = chosenMap;
       if (categoryId) {
-        await assertActiveCostCategory(categoryId);
+        await assertActiveCostCategory(categoryId, { requireApproved: true });
       } else {
         const name = String(p.new_subhead ?? "").trim();
         if (!name) throw new HttpError(400, "This request names no new head, and no existing head was chosen to file it under.");
         const requestId = new Types.ObjectId(String(request._id));
         const parent = p.new_head_parent ? new Types.ObjectId(String(p.new_head_parent)) : undefined;
+        if (parent) {
+          const approvedParent = await assertActiveCostCategory(parent, { requireApproved: true });
+          if (approvedParent.parent) throw new HttpError(400, "A subhead must belong directly to a head.");
+        }
         const expectedHead = {
           _id: requestId, name, active: false,
           staged_by_approval: requestId,
@@ -358,6 +363,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           categoryId = String(requestId);
           stagedCategory = { id: requestId, name, costId: requestId, published: ownsPublished };
         } else if (existing.active !== false && !existing.staged_by_approval) {
+          await assertActiveCostCategory(existing._id, { requireApproved: true });
           categoryId = String(existing._id);
         } else {
           throw new HttpError(409, `"${name}" is inactive or currently staged by another approval. This request remains claimed for reconciliation.`);

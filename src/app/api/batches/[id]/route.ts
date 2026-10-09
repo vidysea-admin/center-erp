@@ -68,6 +68,16 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   // recovery once this door runs, so the audit row is the only place those dates survive.
   const batch = await Batch.findById(id).select("code status location program planned_start planned_end +deletion_state +deletion_actor +deletion_reason +deletion_recorded_work +deletion_requires_finance +deletion_audit_event_id").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
+  // A destination can still be empty while an outside cost owns its claim-before-queue.
+  const externalEditRequests = await ApprovalRequest.collection.find({ batch: batch._id, "payload.kind": "cost-edit" },
+    { projection: { _id: 1 } }).toArray();
+  if (await CostEntry.collection.findOne({ batch: { $ne: batch._id }, deletion_state: { $exists: false },
+    cost_edit_request: { $type: "objectId" }, $or: [
+      { cost_edit_request: { $in: externalEditRequests.map((request) => request._id) } },
+      { "cost_edit_proposal.context.batch": String(batch._id) },
+    ] })) {
+    throw new HttpError(409, "A cost from another batch has a change waiting for this batch. Resolve that change before deleting the batch.");
+  }
 
   // QA-2634/QA-2631: `approvals` counted alongside every other carried-work total so the
   // force-delete cascade's `ApprovalRequest.deleteMany` below (unconditional, same as it always
@@ -136,6 +146,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     // A process may die after this commit and before or during the cascade; a later authorized
     // retry resumes THESE facts rather than creating a second deletion/audit story.
     let deletion = batch;
+    let deletionClaimedHere = false;
     if (batch.deletion_state !== "Deleting") {
       if (!suppliedReason) throw new HttpError(400, "Say why this batch is being force-deleted with recorded work still on it — it is recorded against every row this removes.");
       const auditEventId = createHash("sha256").update(`batch-force-delete-v1:${batch._id}`).digest("hex").slice(0, 24);
@@ -155,6 +166,7 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
           throw new HttpError(409, "This batch changed while force-delete was being prepared. Refresh before trying again.");
         }
       } else {
+        deletionClaimedHere = true;
         deletion = await Batch.collection.findOne({ _id: batch._id });
       }
     }
@@ -168,6 +180,23 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
     const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
     if (isTestDb && req.nextUrl.searchParams.get("_test_crash_after_deletion_claim") === "1") {
       throw new Error("test-only crash after durable batch deletion claim");
+    }
+    const finalEditRequests = await ApprovalRequest.collection.find({ batch: batch._id, "payload.kind": "cost-edit" },
+      { projection: { _id: 1 } }).toArray();
+    if (await CostEntry.collection.findOne({ batch: { $ne: batch._id }, deletion_state: { $exists: false },
+      cost_edit_request: { $type: "objectId" }, $or: [
+        { cost_edit_request: { $in: finalEditRequests.map((request) => request._id) } },
+        { "cost_edit_proposal.context.batch": String(batch._id) },
+      ] })) {
+      if (deletionClaimedHere) {
+        await Batch.collection.updateOne({ _id: batch._id, deletion_state: "Deleting",
+          deletion_started_at: deletion.deletion_started_at, deletion_actor: deletion.deletion_actor,
+          deletion_audit_event_id: deletion.deletion_audit_event_id }, { $unset: {
+            deletion_state: "", deletion_started_at: "", deletion_actor: "", deletion_reason: "",
+            deletion_recorded_work: "", deletion_requires_finance: "", deletion_audit_event_id: "",
+          } });
+      }
+      throw new HttpError(409, "A cost from another batch is waiting for this batch. Nothing was removed; resolve that change before retrying.");
     }
     await BatchMember.deleteMany({ batch: id });
     if (isTestDb && req.nextUrl.searchParams.get("_test_crash_during_deletion_cascade") === "1") {
