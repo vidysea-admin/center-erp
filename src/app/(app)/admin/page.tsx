@@ -1165,12 +1165,13 @@ function Approvals({ error, setError }: any) {
                         on this screen. -309 shipped exactly this cap on the finance filters after
                         a 76-character centre name was measured in production. */}
                     {/* QA-1977: a head-only request is about a head that ALREADY exists and is in use; there is nothing to map. */}
+                    {["Pending", "Applying"].includes(r.status) && r.payload?.kind === "cap-approval" && (<span className="text-xs text-gray-600">Pre-approved policy proposal. The effective policy stays unchanged until a different finance approver agrees.{r.payload?.proposed && <span className="block">Proposed cap: {r.payload.proposed.pre_approved_amount ?? "None"}; unit: {r.payload.proposed.pre_approved_unit ?? "Fixed amount"}; basis: {r.payload.proposed.pre_approved_basis ?? "None"}; minimum billable: {r.payload.proposed.pre_approved_min_billable ?? "None"}</span>}</span>)}
                     {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind === "head-approval" && (
                       <span className="text-xs text-gray-600">
                         This head was added while entering a cost and is already in use, marked &quot;Not approved&quot;. Approving marks it approved; rejecting marks it rejected and keeps the costs filed under it.
                       </span>
                     )}
-                    {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind !== "head-approval" && (
+                    {r.status === "Pending" && r.action === "costcategory.create" && !["head-approval", "cap-approval"].includes(r.payload?.kind) && (
                       <select className={inputCls + " min-w-0 max-w-[13rem]"}
                         value={mapTo[r._id] ?? ""}
                         onChange={(e) => setMapTo({ ...mapTo, [r._id]: e.target.value })}>
@@ -1183,7 +1184,7 @@ function Approvals({ error, setError }: any) {
                     )}
                     {/* QA-2597: say why the only choice is "create as proposed" rather than letting
                         a failed fetch look like an empty master list. */}
-                    {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind !== "head-approval" && catsFailed && (
+                    {r.status === "Pending" && r.action === "costcategory.create" && !["head-approval", "cap-approval"].includes(r.payload?.kind) && catsFailed && (
                       <span className="text-xs text-amber-700">
                         Cost heads could not be loaded, so filing this onto an existing head is unavailable — approving now creates the head as proposed. Reload to try again.
                       </span>
@@ -1297,9 +1298,9 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
       <div className="space-y-3">
         {heads.map((h) => (
           <div key={h._id} className="rounded border border-gray-200 p-2">
-            <CostHeadRow c={h} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} isHead />
+            <CostHeadRow key={`${h._id}:${h.updatedAt}`} c={h} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} isHead />
             <div className="mt-1 space-y-1 border-l-2 border-gray-100 pl-3">
-              {subs(h._id).map((s) => <CostHeadRow key={s._id} c={s} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
+              {subs(h._id).map((s) => <CostHeadRow key={`${s._id}:${s.updatedAt}`} c={s} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
               {subs(h._id).length === 0 && <p className="py-1 text-xs text-gray-400">No subheads.</p>}
             </div>
           </div>
@@ -1309,7 +1310,7 @@ function CostHeads({ items, reload, setError }: { items: any[]; reload: () => vo
         {orphans.length > 0 && (
           <div className="rounded border border-amber-200 bg-amber-50 p-2">
             <p className="mb-1 text-xs font-medium text-amber-800">Subheads whose head is missing</p>
-            {orphans.map((o) => <CostHeadRow key={o._id} c={o} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
+            {orphans.map((o) => <CostHeadRow key={`${o._id}:${o.updatedAt}`} c={o} showMoney={showMoney} canSetPreapproval={canSetPreapproval} onSave={save} />)}
           </div>
         )}
       </div>
@@ -1376,6 +1377,7 @@ function CostHeadRow({ c, showMoney, canSetPreapproval, onSave, isHead }: { c: a
       {/* QA-1977: a head named while entering a cost is in use before anyone has approved it. No flag = approved. */}
       {c.approval_status === "Pending" && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800" title="Added while entering a cost. Approve or reject it under Approvals.">Not approved</span>}
       {c.approval_status === "Rejected" && <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] text-red-700" title="Rejected under Approvals. Costs already filed under it are kept.">Rejected</span>}
+      {c.pre_approval_proposal && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800">Policy approval pending — fields show the effective cap</span>}
       <input className={`${cell} min-w-[12rem] flex-1`} placeholder="Description" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
       {isHead && (
         <select className={cell} value={f.head_type} onChange={(e) => setF({ ...f, head_type: e.target.value })}>

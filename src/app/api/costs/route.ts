@@ -3,7 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
-import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
+import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, expandCostCategoryFilter, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, requireHeadApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { coerceExtras } from "@/app/api/master-lists/[list]/route";
@@ -24,11 +24,23 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // finance.view is the book — and the CEO has since widened the rule far past Operations:
   // "kisi ke bhi paas nahi hogi chaahe super admin ho." An Admin without the grant now 403s here
   // too, which the role hardcode could never have done.
-  await requireFinance(user, "view");
-  await flushPendingFinanceAuditEvents().catch(() => {});
+  //
+  // mtg-b3 R10 (Umesh, 2026-10-07): a creator can edit or delete their own entry, so they must be able to
+  // SEE it. `?mine=1` is that door: costs.manage (the form's right, not the book's) and ONLY rows the
+  // caller entered themselves - never anyone else's, whatever filter is sent. `?deleted=1` lists the
+  // soft-deleted rows (the same scope) so a delete can be undone.
   const sp = req.nextUrl.searchParams;
+  const mine = sp.get("mine") === "1";
+  const deleted = sp.get("deleted") === "1";
+  if (mine) {
+    await requirePerm(user, "costs.manage");
+  } else {
+    await requireFinance(user, "view");
+  }
+  await flushPendingFinanceAuditEvents().catch(() => {});
   const filter: Record<string, unknown> = { ...locationFilter(user) };
-  for (const k of ["location", "batch", "trainer", "category"]) {
+  if (mine) filter.entered_by = user.id;
+  for (const k of ["location", "batch", "trainer"]) {
     const v = sp.get(k);
     if (!v) continue;
     // mtg-a3 review: `location` is the key the scope filter also uses, so a plain assignment let a
@@ -38,13 +50,34 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
   // mtg-a3 R9 / R5: Payment Pending / Paid, and who approved it - read by the SAME parser the
   // register uses, and the approval columns are stamped by the SAME function (stampCostApprovals).
-  const extra = parseCostFilters(sp, ["payment_status", "approved_by", "approved_from", "approved_to"]);
+  const extra = parseCostFilters(sp, ["category", "payment_status", "approved_by", "approved_from", "approved_to"]);
   if (extra.payment_status) filter.payment_status = extra.payment_status;
+  // mtg-b2 R6: head or subhead, read by the SAME function the Finance register and its export use.
+  if (extra.category) filter.category = expandCostCategoryFilter(await CostCategory.find({}).select("parent").lean<any[]>(), extra.category);
   const found = await CostEntry.find(filter)
+    .setOptions(deleted ? { archivedOnly: true } : {})
     .sort({ entry_date: -1 })
     .populate("location", "name code").populate("batch", "code").populate("trainer", "name").populate("category", "name approval_status").populate("entered_by", "name")
     .lean<any[]>();
   await stampCostApprovals(found);
+  // mtg-b3: the two facts the screens need to decide which buttons to show. The client has no user id
+  // (usePerms carries none), so the server says it: `is_mine` = the caller entered this row, and
+  // `edit_pending` = a change to it is already waiting for approval. Display only - PATCH and DELETE
+  // decide for themselves.
+  const waiting = found.length
+    ? await ApprovalRequest.find({
+      action: "cost.post", entity_id: { $in: found.map((e) => e._id) }, status: { $in: ["Pending", "Applying"] }, "payload.kind": "cost-edit",
+    }).select("entity_id").lean<any[]>()
+    : [];
+  const waitingIds = new Set(waiting.map((r) => String(r.entity_id)));
+  const claimedEdits = found.length ? await CostEntry.collection.find({
+    _id: { $in: found.map((e) => e._id) }, cost_edit_request: { $exists: true, $ne: null },
+  }, { projection: { _id: 1 } }).toArray() : [];
+  for (const row of claimedEdits) waitingIds.add(String(row._id));
+  for (const e of found) {
+    e.is_mine = String(e.entered_by?._id ?? e.entered_by ?? "") === String(user.id);
+    e.edit_pending = waitingIds.has(String(e._id));
+  }
   const approver_options = costApproverOptions(found);
   const items = filterCostsByApproval(found, extra);
   return NextResponse.json({ items, approver_options });
@@ -300,10 +333,11 @@ async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body
     && ["Completed", "Closed"].includes(String(terminalBatch.status))
     && String(user.role) === "Admin";
 
-  const parked = (pre.applied || alreadyFinished) ? null : await requireApproval("cost.post", user, {
+  const parked = (!filedUnder.approvalNeeded && (pre.applied || alreadyFinished)) ? null : await requireApproval("cost.post", user, {
     entity: "CostEntry",
     summary: `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${pre.basis ? ` · pre-approved basis: ${pre.basis}` : ""}`,
     payload: { ...body, _pre_approved_basis: pre.basis },
+    ...(filedUnder.approvalNeeded ? { fallbackApproverRole: "Admin" } : {}),
     location: body.location || undefined,
     batch: body.batch || undefined,
     ...(idemKey ? { idempotencyKey: idemKey } : {}),

@@ -189,7 +189,12 @@ export function digestMailContent(d: DailyDigest) {
     "Candidates",
     `Joined into batches: ${c.joined.total}`,
     ...c.joined.by_batch.map((b) => `  ${b.code}${b.location ? ` (${b.location})` : ""}: ${b.count}`),
-    `Enrolled: ${c.enrolled.total}`,
+    `Enrolled: ${c.enrolled.total} (new enrolments on the day)`,
+    `Training started on the day: ${c.training_started.total}`,
+    `Current learners (measured ${c.current.measured_at}): ${c.current.enrolled} enrolled, ${c.current.training_ongoing} Training Ongoing. These are current totals, not historical snapshots.`,
+    ...(c.training_started.exceptions.missing_actual_start || c.training_started.exceptions.missing_join_date
+      ? [`Training-date exceptions (position now): ${c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start, ${c.training_started.exceptions.missing_join_date} missing a roster joining date.`]
+      : []),
     `Batches created: ${c.batches_created.length} | started: ${c.batches_started.length}`,
     ...(c.batches_created.length ? [`  Created: ${c.batches_created.map((b) => b.code).join(", ")}`] : []),
     ...(c.batches_started.length ? [`  Started: ${c.batches_started.map((b) => b.code).join(", ")}`] : []),
@@ -207,7 +212,7 @@ export function digestMailContent(d: DailyDigest) {
           `Payment pending: ${rs(d.costs.payment_pending.amount)} in ${plural(d.costs.payment_pending.count, "entry", "entries")}`,
         ]
       : []),
-    "Mobilised and trainer figures are the position now. For an earlier day, pending and payment-pending count what had been raised by then and is still pending now.",
+    d.live_note,
   ];
   return renderMail({
     title: `Daily digest, ${d.day}`,

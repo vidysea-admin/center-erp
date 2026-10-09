@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
+import { applyApprovedCostEdit, decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -75,11 +75,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // request only flips that flag, so remapping (entries already point at the head) and a partial
   // amount (there is no amount) are refused rather than silently ignored.
   const headOnly = pending.action === "costcategory.create" && (pending.payload as any)?.kind === "head-approval";
+  const capOnly = pending.action === "costcategory.create" && (pending.payload as any)?.kind === "cap-approval" && (pending.payload as any)?.amount === undefined;
   // QA-1977 5B: for a head sign-off the finance approve grant is the whole rule - the queue right is
   // not needed, and neither is the approver role or a named list (decideApproval honours byGrant
   // only for this same request shape). For EVERY other action nothing changes: the queue right is
   // still required and the money gate below still applies.
-  if (queueDenied && !(headOnly && await hasFinanceApprove(user))) throw queueDenied;
+  if (queueDenied && !((headOnly || capOnly) && await hasFinanceApprove(user))) throw queueDenied;
   if (headOnly || MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
   await flushPendingFinanceAuditEvents().catch(() => {});
   // The head this request decides: linked to it, or - if the post that created both died before the
@@ -92,10 +93,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       { approval_request: { $exists: false }, approval_status: "Pending" },
     ],
   });
-  if (headOnly && map_to_category) {
+  if ((headOnly || capOnly) && map_to_category) {
     throw new HttpError(400, "This head already exists and costs are already filed under it, so it cannot be mapped to another head. Approve it, or reject it and move those costs by hand.");
   }
-  if (headOnly && approved_amount !== undefined && approved_amount !== null && approved_amount !== "") {
+  if ((headOnly || capOnly) && approved_amount !== undefined && approved_amount !== null && approved_amount !== "") {
     throw new HttpError(400, "approved_amount is only valid while approving a cost entry.");
   }
   const resuming = pending.status === "Applying" && decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action);
@@ -136,7 +137,30 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // route has no transaction, and a rollback that itself fails would just move the problem. What it
   // does guarantee is that the payload which reaches the replay can produce an entry, so the second
   // write cannot fail on data the first write already committed to.
-  if (decision === "Approved" && pending.action === "costcategory.create" && !headOnly) {
+  const capFilter: Record<string, any> = {};
+  if (decision === "Approved" && capOnly) {
+    const proposal = pending.payload as any;
+    if (!Types.ObjectId.isValid(String(proposal.category)) || !proposal.expected || !proposal.proposed || !Number.isSafeInteger(proposal.expected_revision)) {
+      throw new HttpError(409, "This policy proposal is incomplete and cannot be applied. Reject it and request it again.");
+    }
+    Object.assign(capFilter, {
+      _id: new Types.ObjectId(String(proposal.category)),
+      pre_approval_proposal: new Types.ObjectId(String(id)),
+      ...(proposal.expected_revision === 0
+        ? { $or: [{ pre_approval_revision: 0 }, { pre_approval_revision: { $exists: false } }] }
+        : { pre_approval_revision: proposal.expected_revision }),
+    });
+    for (const [k, v] of Object.entries(proposal.expected)) capFilter[k] = k === "pre_approved" && !v ? { $ne: true } : v;
+    const current = await CostCategory.collection.findOne({ _id: capFilter._id });
+    const alreadyApplied = String(current?.pre_approval_applied_request ?? "") === String(id);
+    if (!alreadyApplied && !(await CostCategory.collection.findOne(capFilter))) {
+      throw new HttpError(409, "The effective policy changed or this proposal lost ownership. Its old snapshot cannot replace the current policy; reject it and request it again.");
+    }
+  }
+  if (decision === "Approved" && pending.action === "cost.post") {
+    await assertActiveCostCategory((pending.payload as any)?.category, { requireApproved: true });
+  }
+  if (decision === "Approved" && pending.action === "costcategory.create" && !headOnly && !capOnly) {
     const pp = (pending.payload ?? {}) as any;
     assertCostEntryValid({ ...pp, amount: sanctionedAmount ?? pp.amount, category: pp.category ?? "pending" }); // Rule 37, before anything is written
     if (pp.payment_mode && !COST_PAYMENT_MODE.includes(pp.payment_mode)) {
@@ -158,11 +182,19 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     approvedAmount: sanctionedAmount,
     applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action) && !headOnly,
     ...(map_to_category !== undefined ? { mapToCategory: String(map_to_category ?? "") } : {}),
-    byGrant: headOnly,
+    byGrant: headOnly || capOnly,
   });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.
   if (decision !== "Approved") {
+    if (capOnly) await CostCategory.collection.updateOne(
+      { _id: new Types.ObjectId(String((request.payload as any).category)), pre_approval_proposal: request._id },
+      { $unset: { pre_approval_proposal: 1 }, $set: { updatedAt: new Date() } },
+    );
+    if (request.action === "cost.post" && (request.payload as any)?.kind === "cost-edit") await CostEntry.collection.updateOne(
+      { _id: new Types.ObjectId(String((request.payload as any).cost_entry)), cost_edit_request: request._id },
+      { $unset: { cost_edit_request: 1, cost_edit_proposal: 1 } },
+    );
     // QA-1977: rejecting a head FLAGS it; it does not delete it. Costs may already be filed under it
     // (cost.post decides those on its own), and removing the head would orphan them. It stays active
     // so those entries still read correctly; an Admin can deactivate it or move its costs by hand.
@@ -255,6 +287,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       break;
     }
     case "costcategory.create": {
+      if (capOnly) {
+        const current = await CostCategory.collection.findOne({ _id: capFilter._id });
+        if (String(current?.pre_approval_applied_request ?? "") !== String(request._id)) {
+          const changed = await CostCategory.collection.updateOne(capFilter, {
+            $set: { ...p.proposed, pre_approval_revision: p.expected_revision + 1, pre_approval_applied_request: request._id, updatedAt: new Date() },
+          });
+          if (changed.modifiedCount !== 1) throw new HttpError(409, "The policy changed while this proposal was applying; no stale policy was written.");
+        }
+        effectApplied = true;
+        break;
+      }
       if (headOnly) {
         // QA-1977: sign-off of a head that already exists. Only the head THIS request owns is flipped.
         const cat = p.category && Types.ObjectId.isValid(String(p.category)) ? new Types.ObjectId(String(p.category)) : null;
@@ -422,6 +465,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       const approvedAmount = Number(request.approved_amount ?? p.amount);
       await assertCostEntryValid({ ...p, amount: approvedAmount });
       await assertActiveCostCategory(p.category);
+      if (p.kind === "cost-edit") {
+        // mtg-b3 R10: a creator's edit of an already-approved cost. Same queue, same decision, but the
+        // effect is an UPDATE of the existing row (it is not created here). See applyApprovedCostEdit.
+        const editedId = await applyApprovedCostEdit(request, approvedAmount, request.decided_by);
+        appliedCostId = editedId;
+        effectApplied = true;
+        break;
+      }
       const costId = new Types.ObjectId(String(request._id));
       const cost = await createBatchScopedCostEntryIdempotently({
         _id: costId,
@@ -600,6 +651,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     await settleFinanceAuditEvents({ costIds: [appliedCostId], failure: auditFailure }).catch(() => {});
   }
   const finalized = await finalizeApprovalDecision(request, user, decision, { approvedAmount: sanctionedAmount });
+  if (capOnly) {
+    await CostCategory.collection.updateOne(
+      { _id: capFilter._id, pre_approval_proposal: request._id, pre_approval_applied_request: request._id },
+      { $unset: { pre_approval_proposal: 1 } },
+    );
+  }
   // Senior review of cycles 2-4: this handed back the RAW request — full `payload` (amount,
   // invoice_no) and the original summary — to whoever decided it. The door here is
   // `approvals.decide`, not `finance.view`, and `decideApproval` admits anyone whose role matches

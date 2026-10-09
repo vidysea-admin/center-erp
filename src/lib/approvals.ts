@@ -210,6 +210,7 @@ export async function ensureCostDeletionAuditEvent(input: {
       _id: costId,
       ...COST_AUDIT_OWNER_ELIGIBLE,
       deletion_state: { $exists: false },
+      cost_edit_request: null,
       updatedAt: input.expectedUpdatedAt,
       // QA-2495 widened the SNAPSHOT and deliberately did NOT widen this predicate to all twelve.
       // `updatedAt` is the concurrency token and already covers every field; these two are
@@ -584,8 +585,18 @@ export async function requireApproval(
     // Stored on the request under a unique sparse index, so a duplicate POST can never open a
     // second request - the loser gets E11000 from the create below, before any bell or mail.
     idempotencyKey?: string;
+    requestId?: Types.ObjectId;
   },
 ): Promise<ApprovalOutcome> {
+  if (ctx.requestId) {
+    const prior = await ApprovalRequest.findById(ctx.requestId);
+    if (prior) {
+      if (prior.action !== action || String(prior.initiator) !== String(user.id)) {
+        throw new HttpError(409, "This approval identifier belongs to a different request.");
+      }
+      return { request: prior };
+    }
+  }
   const configured = await ApprovalRule.findOne({ action, enabled: true }).lean<any>();
   const rule = configured ?? (ctx.fallbackApproverRole ? { approver_role: ctx.fallbackApproverRole, approver_users: [] } : null);
   if (!rule) return null;
@@ -623,6 +634,7 @@ export async function requireApproval(
     ? (await financeApprovers()).filter((h) => h.id !== String(user.id))
     : [];
   const request = await ApprovalRequest.create({
+    ...(ctx.requestId ? { _id: ctx.requestId } : {}),
     action,
     entity: ctx.entity, entity_id: ctx.entity_id,
     summary: ctx.summary, payload: ctx.payload,
@@ -768,11 +780,15 @@ export async function requireHeadApproval(
   user: SessionUser,
   head: { id: Types.ObjectId; name: string; parent?: unknown },
   origin: "cost form" | "master list",
+  capProposal?: { expected: Record<string, unknown>; proposed: Record<string, unknown>; expected_revision: number; requestId?: Types.ObjectId },
 ) {
   const outcome = await requireApproval("costcategory.create", user, {
     entity: "CostCategory", entity_id: head.id,
-    summary: `New cost head "${head.name}" added by ${user.name} — not approved yet`,
-    payload: { kind: "head-approval", category: String(head.id), name: head.name, origin, ...(head.parent ? { parent: String(head.parent) } : {}) },
+    summary: capProposal
+      ? `Pre-approved policy change for "${head.name}" requested by ${user.name} — existing policy stays effective until another finance approver agrees`
+      : `New cost head "${head.name}" added by ${user.name} — not approved yet`,
+    payload: { kind: capProposal ? "cap-approval" : "head-approval", category: String(head.id), name: head.name, origin, ...(head.parent ? { parent: String(head.parent) } : {}), ...(capProposal ? { expected: capProposal.expected, proposed: capProposal.proposed, expected_revision: capProposal.expected_revision } : {}) },
+    ...(capProposal?.requestId ? { requestId: capProposal.requestId } : {}),
     fallbackApproverRole: "Admin",
     decidedByGrant: true,
   });
@@ -780,9 +796,6 @@ export async function requireHeadApproval(
   return outcome;
 }
 
-// Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
-// changes the row and receives a request to replay. Reading Pending and then saving a document is
-// not a claim — two readers can both do that — so do not replace the findOneAndUpdate with save().
 // QA-2852 (Umesh, 2026-10-07): a cost parked under a head that is not approved says so on the approvals
 // screens. The head's state is read NOW, here, not stored in the request: `summary` is written at park
 // time and a mark written there would outlive the head's approval. `masked` is what the caller is about
@@ -806,6 +819,9 @@ export async function attachCostHeads<T extends Record<string, any>>(masked: T[]
   });
 }
 
+// Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
+// changes the row and receives a request to replay. Reading Pending and then saving a document is
+// not a claim — two readers can both do that — so do not replace the findOneAndUpdate with save().
 export async function decideApproval(
   requestId: string,
   user: SessionUser,
@@ -827,7 +843,7 @@ export async function decideApproval(
   // required too (senior review), so such a row keeps the full role rule.
   const byGrant = decisionData.byGrant === true
     && request.action === "costcategory.create"
-    && (request.payload as any)?.kind === "head-approval"
+    && ["head-approval", "cap-approval"].includes((request.payload as any)?.kind)
     && (request.payload as any)?.amount === undefined;
   if (!byGrant) {
     if (user.role !== request.approver_role && user.role !== "Admin") {
@@ -961,4 +977,92 @@ export async function rollbackApprovalDecision(request: ClaimedApproval) {
     throw new Error(`Could not return failed approval ${request._id} to Pending; its claim changed.`);
   }
   return rolledBack;
+}
+
+// mtg-b3 R10 (QA-2898, Umesh 2026-10-07): the replay of a creator's EDIT to an already-approved cost.
+// The edit was parked as a `cost.post` request whose payload carries `kind: "cost-edit"` (see
+// PATCH /api/costs/[id]); deciding it Approved lands HERE instead of creating a row. The ledger row is
+// untouched until this runs, so an edit that nobody approves changes nothing - the same promise a new
+// post makes ("approval IS the write").
+//
+// Safe to replay: a request that already owns the entry (approval_request === this request) returns
+// at once, and the audit event is pushed under a deterministic id exactly once. It refuses, loudly and
+// before writing, when the entry is no longer the one the creator saw - amount, head, batch or centre
+// moved, it was deleted, or it was paid - so an approver is never made to approve a change to a row
+// that has since become something else. A refusal here reopens the request (the route rolls the claim
+// back), and the approver can reject it.
+const COST_EDIT_FIELDS = ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode"] as const;
+export async function applyApprovedCostEdit(request: any, approvedAmount: number, approverId: unknown) {
+  const p = (request.payload ?? {}) as any;
+  const costId = new Types.ObjectId(String(p.cost_entry ?? request.entity_id));
+  const raw: any = await CostEntry.collection.findOne({ _id: costId });
+  if (!raw || raw.deletion_state) throw new HttpError(409, "The cost this edit was for no longer exists. Reject this request.");
+  if (String(raw.approval_request ?? "") === String(request._id)) return costId; // already applied (a resumed claim)
+  if (String(raw.cost_edit_request ?? "") !== String(request._id)) {
+    throw new HttpError(409, "This request no longer owns the cost change. Reject it and ask for the edit again.");
+  }
+  if (raw.archived_at) throw new HttpError(409, "The cost this edit was for has since been deleted. Reject this request.");
+  if (raw.payment_status !== "Payment Pending") throw new HttpError(409, "This cost has been marked paid since the edit was requested, so it can no longer be changed here. Reject this request.");
+  // The row must still be the one the creator edited: its updatedAt is carried in the payload as
+  // `base_updated_at` (a timestamp, not the old amount - the queue masks money keys but not a nested
+  // copy of one, so no figure rides along that the masker cannot see).
+  if (!p.base_updated_at || new Date(raw.updatedAt).toISOString() !== new Date(p.base_updated_at).toISOString()) {
+    throw new HttpError(409, "This cost was changed after the edit was requested, so approving it would overwrite that change. Reject this request and ask for the edit again.");
+  }
+  const { assertActiveCostCategory } = await import("@/lib/rules");
+  await assertActiveCostCategory(p.category, { requireApproved: true });
+  const formulaCommitment = raw.pre_approved_applied && raw.pre_approved_unit === "Per billable passed";
+  const materialChange = Number(raw.amount) !== approvedAmount
+    || ["batch", "category", "location"].some((field) => String(raw[field] ?? "") !== String(p[field] ?? ""));
+  const toValue = (f: string): unknown => {
+    const v = f === "amount" ? approvedAmount : p[f];
+    if (v === undefined || v === null || v === "") return undefined;
+    if (f === "entry_date") return new Date(v);
+    if (["location", "batch", "trainer", "category"].includes(f)) return new Types.ObjectId(String(v));
+    return v;
+  };
+  const set: Record<string, unknown> = {
+    requested_amount: Number(p.amount),
+    approval_request: new Types.ObjectId(String(request._id)),
+    pre_approved_applied: formulaCommitment && !materialChange ? true : false,
+    updatedAt: new Date(),
+  };
+  const unset: Record<string, 1> = {
+    pre_approved_basis: 1, pre_approved_unit: 1, cost_edit_request: 1, cost_edit_proposal: 1,
+  };
+  if (formulaCommitment && materialChange) {
+    // A human has now sanctioned the replacement. Release the old automated commitment in the
+    // same row CAS that applies that decision, never when a proposal is merely submitted.
+    unset.reservation_kind = 1; unset.reservation_state = 1; unset.reservation_expires_at = 1;
+  } else if (formulaCommitment) {
+    delete unset.pre_approved_basis; delete unset.pre_approved_unit;
+  }
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of COST_EDIT_FIELDS) {
+    const v = toValue(f);
+    if (v === undefined) unset[f] = 1; else set[f] = v;
+    if (JSON.stringify(raw[f] ?? null) !== JSON.stringify(v ?? null)) changes[f] = { from: raw[f] ?? null, to: v ?? null };
+  }
+  if (p._pre_approved_basis) set.pre_approved_basis = p._pre_approved_basis;
+  if (p._pre_approved_basis) delete unset.pre_approved_basis;
+  const event = financeAuditEvent(`cost:${costId}:edited-via:${request._id}`, {
+    entity: "CostEntry", entity_id: costId, field: "edited",
+    old_value: { amount: raw.amount, category: raw.category ?? null, batch: raw.batch ?? null, location: raw.location ?? null },
+    new_value: { via_approval: String(request._id), approved_amount: approvedAmount, changes },
+    actor: new Types.ObjectId(String(approverId)),
+  });
+  const updated = await CostEntry.collection.updateOne(
+    {
+      _id: costId, payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
+      updatedAt: raw.updatedAt, cost_edit_request: new Types.ObjectId(String(request._id)),
+      "_audit_events.event_id": { $ne: event.event_id },
+    },
+    { $set: set, $unset: unset, $push: { _audit_events: event } } as any,
+  );
+  if (updated.modifiedCount !== 1) {
+    const now: any = await CostEntry.collection.findOne({ _id: costId }, { projection: { approval_request: 1 } });
+    if (String(now?.approval_request ?? "") === String(request._id)) return costId;
+    throw new HttpError(409, "This cost changed while the edit was being applied. Nothing was changed; refresh and decide it again.");
+  }
+  return costId;
 }

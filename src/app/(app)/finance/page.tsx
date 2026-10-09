@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
-import { Btn, costHeadApprovalNote, DataTable, ErrorBanner } from "@/components/ui";
+import { Btn, costHeadApprovalNote, DataTable, ErrorBanner, useOwnCostActions, ownCostActionable } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { useSession } from "next-auth/react";
 
@@ -67,6 +67,10 @@ function FinanceInner() {
       await load();
     } catch (e: any) { setError(e.message); }
   };
+
+  // mtg-b3 R10 (Umesh, 2026-10-07): a row the caller entered themselves can be edited or deleted by them
+  // until it is paid (an approved one asks first, in a dialog). The server enforces; this only offers.
+  const own = useOwnCostActions({ onChanged: () => load(), onError: (m) => setError(m) });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -507,6 +511,7 @@ function FinanceInner() {
           ]} />
       </Section>
 
+      {own.modal}
       <Section title="Cost entry register" hint="Every entry the filters above select — the list every total on this page is summed from.">
         <DataTable storageKey="finance-register" rows={data?.register ?? []} loading={loading} searchable pageSize={50}
           defaultSort={{ key: "entry_date", dir: "desc" }} cardTitle={(r: any) => `${r.head}${costHeadApprovalNote({ approval_status: r.head_approval_status })} — ₹${Number(r.amount).toLocaleString("en-IN")}`}
@@ -537,9 +542,14 @@ function FinanceInner() {
             { key: "entered_by", label: "Entered by", sortable: true, filterable: true, render: (r: any) => r.entered_by },
             // QA-2483: omitted entirely rather than rendered blank for a finance.view-only reader,
             // so an 18-column table does not grow a nineteenth empty one for most of its audience.
-            ...(canApproveCosts ? [{
+            ...(canApproveCosts || (data?.register ?? []).some((r: any) => r.is_mine) ? [{
               key: "_act", label: "", minWidth: 150,
-              render: (r: any) => (
+              render: (r: any) => !canApproveCosts ? (ownCostActionable(r) ? (
+                <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                  <Btn small kind="ghost" onClick={() => router.push(`/costs?edit=${r.id}`)}>Edit</Btn>
+                  <Btn small kind="danger" onClick={() => own.remove(r)}>Delete</Btn>
+                </span>
+              ) : r.is_mine ? <span className="text-xs text-gray-500">Paid - locked</span> : null) : (
                 <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
                   {/* QA-2499 (checker, cycle 1 FAIL): this read `${BASE_PATH}/costs?edit=...` and was the ONLY
                       router.push in the app carrying that prefix - every other one passes a plain path,
@@ -574,7 +584,7 @@ function HeadApprovals() {
   const load = useCallback(async () => {
     try {
       const r = await api("/api/approvals?status=Pending&kind=head-approval");
-      setRows((r?.items ?? []).filter((x: any) => x.action === "costcategory.create" && x.payload?.kind === "head-approval" && x.status === "Pending"));
+      setRows((r?.items ?? []).filter((x: any) => x.action === "costcategory.create" && ["head-approval", "cap-approval"].includes(x.payload?.kind) && ["Pending", "Applying"].includes(x.status)));
     } catch (e: any) { setErr(e.message); setRows([]); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -607,6 +617,8 @@ function HeadApprovals() {
             <li key={String(r._id)} data-head-approval={String(r._id)} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <span>
                 <span className="font-semibold text-gray-900">{r.payload?.name ?? "(unnamed head)"}</span>
+                {r.payload?.kind === "cap-approval" && <span className="ml-2 text-xs text-amber-800">Policy change — existing cap remains effective until approval</span>}
+                {r.payload?.kind === "cap-approval" && r.payload?.proposed && <span className="block text-xs text-gray-700">{r.payload.expected?.pre_approved ? "Enabled" : "Disabled"} → {r.payload.proposed.pre_approved ? "Enabled" : "Disabled"}; cap {r.payload.expected?.pre_approved_amount == null ? "None" : `₹${Number(r.payload.expected.pre_approved_amount).toLocaleString("en-IN")}`} → {r.payload.proposed.pre_approved_amount == null ? "None" : `₹${Number(r.payload.proposed.pre_approved_amount).toLocaleString("en-IN")}`}; {r.payload.proposed.pre_approved_unit ?? "Fixed amount"}; basis: {r.payload.proposed.pre_approved_basis ?? "None"}; minimum billable: {r.payload.proposed.pre_approved_min_billable ?? "None"}</span>}
                 <span className="ml-2 text-[11px] text-gray-500">added by {r.initiator?.name ?? "someone"}{r.createdAt ? `, ${fmtDT(r.createdAt)}` : ""}</span>
               </span>
               {mine ? (

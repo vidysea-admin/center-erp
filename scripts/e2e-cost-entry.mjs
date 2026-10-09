@@ -1112,12 +1112,27 @@ for (const variant of ["ordinary", "mark_paid"]) {
             && String(unchanged.category?._id ?? unchanged.category) === String(formulaId),
           JSON.stringify(unchanged ? { amount: unchanged.amount, batch: unchanged.batch?._id ?? unchanged.batch, category: unchanged.category?._id ?? unchanged.category } : null));
       }
+      const ownArchived = withinId
+        ? await req(ops, "DELETE", `/api/costs/${withinId}`, { confirm_approved: true, reason: "formula archive capacity pin" })
+        : { status: -1 };
+      const archivedCommitment = withinId ? await rawCosts.findOne({ _id: new ObjectId(withinId) }) : null;
+      ok("formula creator archive [precondition]: the sanctioned liability is hidden while its full cap commitment remains",
+        ownArchived.status === 200 && !!archivedCommitment?.archived_at
+          && archivedCommitment.amount === 50 * billable && archivedCommitment.pre_approved_applied === true
+          && archivedCommitment.reservation_state === "Applied", `got ${ownArchived.status}`);
       const exhausted = await req(ops, "POST", "/api/costs", {
         entry_date: "2026-09-07", batch: closedBatch._id, category: formulaId,
         amount: 1, note: "cumulative cap pin",
       });
-      ok("finance policy: the per-batch commitment is cumulative, so a second entry above the remainder parks",
-        exhausted.status === 202, `got ${exhausted.status}`);
+      const replacementCount = await rawCosts.countDocuments({ category: new ObjectId(formulaId), batch: new ObjectId(closedBatch._id), archived_at: null, pre_approved_applied: true });
+      ok("finance policy: even after a creator soft-deletes the liability, its cap cannot be spent again; the second entry parks with no applied replacement",
+        exhausted.status === 202 && replacementCount === 0, `got ${exhausted.status} applied replacements=${replacementCount}`);
+      const ownRestored = withinId ? await req(ops, "POST", `/api/costs/${withinId}/restore`) : { status: -1 };
+      const restoredCommitment = withinId ? await rawCosts.findOne({ _id: new ObjectId(withinId) }) : null;
+      ok("formula creator restore: the original applied commitment returns without another cost or reservation",
+        ownRestored.status === 200 && !restoredCommitment?.archived_at
+          && restoredCommitment?.amount === 50 * billable && restoredCommitment?.reservation_state === "Applied"
+          && (await rawCosts.countDocuments({ _id: new ObjectId(withinId) })) === 1, `got ${ownRestored.status}`);
     }
 
     const raceFormula = await mkSignedHead({

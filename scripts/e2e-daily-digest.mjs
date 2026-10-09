@@ -1,7 +1,7 @@
 // mtg-c1 (R4) - QA-2871 / QA-2872 / QA-2873.
 //
 // Meeting 2026-10-06, Karunn sir: "all reporting from the system, no Excel". Umesh's decision on the
-// notification noise: "Screen + 1 mail". So:
+// notification noise: the scheduled closing digest, with manual Publish now also allowed. So:
 //   R4   dailyDigest(dayIST, viewer): candidates, trainers, costs (finance.view only), one function,
 //        read by the screen /reports/daily, the Publish-now button and the 21:00 IST mail.
 //   R4b  a 4th scheduler tick: ONE mail per recipient per IST day, lock + durable day key.
@@ -264,6 +264,13 @@ ok("D1: ...grouped by batch: first Planning batch 3, Ready batch 1, nothing else
   eq(byBatchA, { [fx.pa1.code]: 3, [fx.pa2.code]: 1 }), JSON.stringify(byBatchA));
 ok("D1: enrolled on the day = 2 (09:00 and 23:59:30 IST; 23:59 the day before and 00:01 the day after are out; a never-enrolled candidate is out)",
   dA?.candidates?.enrolled?.total === 2, JSON.stringify(dA?.candidates?.enrolled));
+ok("D1: training starts count people, not batches: 3 Ready-batch members plus 4 Active-batch members = 7",
+  dA?.candidates?.training_started?.total === 7, JSON.stringify(dA?.candidates?.training_started));
+ok("D1: current enrolled reuses the Candidates bucket (all five Assigned rows), not daily enrolments; none is Training Ongoing",
+  dA?.candidates?.current?.enrolled === 5 && dA?.candidates?.current?.training_ongoing === 0, JSON.stringify(dA?.candidates?.current));
+ok("D1: current learner totals name a valid measurement time even on the historical chosen day",
+  Number.isFinite(Date.parse(dA?.candidates?.current?.measured_at)) && dA?.candidates?.current?.measured_at?.slice(0, 10) !== D,
+  JSON.stringify(dA?.candidates?.current));
 ok("D1: batches created on the day = 2 (00:01 IST and 23:59 IST; the batch created the previous 23:59 and the next 00:01 are out)",
   eq((dA?.candidates?.batches_created ?? []).map((b) => b.code).sort(), [fx.pa1.code, fx.pa2.code].sort()), JSON.stringify(dA?.candidates?.batches_created));
 ok("D1: batches started on the day = 2 (the Active batch with a typed start date, and the Ready batch stamped at 02:00 IST: an instant whose UTC date is the day before)",
@@ -314,6 +321,10 @@ const dB = rB.data;
 ok("D4: Location B sees only centre B: joined 2, enrolled 1, created 1, mobilised 1 batch / target 30 / mobilised 4 / gap 26",
   dB?.candidates?.joined?.total === 2 && dB?.candidates?.enrolled?.total === 1 && (dB?.candidates?.batches_created ?? []).length === 1
   && eq(dB?.candidates?.mobilised, { batches: 1, target: 30, mobilised: 4, gap: 26 }), JSON.stringify(dB?.candidates));
+ok("D4: Location B's current learner total is its own one row; its Planning batch supplies no training starts or missing-start exception",
+  dB?.candidates?.current?.enrolled === 1 && dB?.candidates?.current?.training_ongoing === 0
+  && dB?.candidates?.training_started?.total === 0 && dB?.candidates?.training_started?.exceptions?.missing_actual_start === 0,
+  JSON.stringify(dB?.candidates));
 ok("D4: Location B's trainers are centre B's: free 1, pipeline 1, added 1; none of centre A's 14", dB?.trainers?.idle === 1 && dB?.trainers?.pipeline?.total === 1 && dB?.trainers?.added === 1 && dB?.trainers?.assigned === 0, JSON.stringify(dB?.trainers));
 const bJson = JSON.stringify(dB);
 ok("D4: no centre-A batch code or centre name is anywhere in Location B's response", !bJson.includes(fx.pa1.code) && !bJson.includes(fx.act.code) && !bJson.includes(locA.name), "");
@@ -346,6 +357,87 @@ ok("D5: 23:59 IST on the 14th is the 14th and 00:01 IST on the 15th is the 15th 
   (await dayOf(istAt(D, 23, 59))) === D && (await dayOf(istAt(NEXT, 0, 1))) === NEXT, `${await dayOf(istAt(D, 23, 59))} / ${await dayOf(istAt(NEXT, 0, 1))}`);
 ok("D5: 00:01 IST is NOT the previous day: the one minute after midnight belongs to the new day", (await dayOf(istAt(D2, 0, 1))) === D2, String(await dayOf(istAt(D2, 0, 1))));
 
+// Learner movement uses actual start instants and roster business dates. These rows are removed
+// before the older exact-count scheduler/UI arms, keeping every oracle independent of this addition.
+const learnerBatches = {};
+for (const [tag, loc, status, actualStart] of [
+  ["edge", locA, "Active", istAt(D, 23, 59)], ["duplicate", locA, "Active", istAt(D, 10, 0)],
+  ["next", locA, "Active", istAt(NEXT, 0, 1)], ["missing", locA, "Active", null],
+  ["planned", locA, "Planning", null], ["scoped", locB, "Active", istAt(D, 10, 0)],
+]) {
+  const made = await req(admin, "POST", "/api/batches", { location: loc._id, program: prog._id, planned_start: today(), target_size: 20 });
+  ok(`[precondition] learner batch ${tag} created`, made.status === 201, String(made.status));
+  learnerBatches[tag] = made.data?.item?._id;
+  if (learnerBatches[tag]) await db.collection("batches").updateOne({ _id: oid(learnerBatches[tag]) }, { $set: { status, planned_start: bizDay(D), actual_start: actualStart } });
+}
+const learnerCandidateIds = Array.from({ length: 8 }, () => new ObjectId());
+const learnerCandidates = [
+  { lifecycle_status: "Enrolled", enrolled_at: istAt(PREV, 9, 0) },
+  { lifecycle_status: "Enrolled", enrolled_at: istAt(PREV, 9, 0) },
+  { lifecycle_status: "Dropped", enrolled_at: istAt(PREV, 9, 0) },
+  { lifecycle_status: "Unassigned", enrolled_at: istAt(PREV, 9, 0) },
+  { lifecycle_status: "Completed", enrolled_at: istAt(PREV, 9, 0) },
+  { lifecycle_status: "Enrolled", enrolled_at: istAt(PREV, 9, 0), archived_at: NOW },
+  { lifecycle_status: "Dropped", enrolled_at: null },
+  { lifecycle_status: "Enrolled", enrolled_at: istAt(PREV, 9, 0) },
+].map((extra, i) => ({ ...cand(locA, `learner-${i}`, extra.enrolled_at), ...extra, _id: learnerCandidateIds[i] }));
+await db.collection("candidates").insertMany(learnerCandidates);
+const duplicateLearner = new ObjectId();
+const lm = (tag, joinedDay, leftDay = null, candidate = new ObjectId()) => ({
+  batch: oid(learnerBatches[tag]), candidate, joined_on: joinedDay ? bizDay(joinedDay) : null,
+  left_on: leftDay ? bizDay(leftDay) : null, enrollment_status: "Completed", createdAt: NOW, updatedAt: NOW,
+});
+await db.collection("batchmembers").insertMany([
+  lm("edge", PREV, null, learnerCandidateIds[1]), // roster before actual start; also current Training Ongoing
+  lm("edge", NEXT),                            // late join starts NEXT, despite the earlier actual start
+  lm("edge", PREV, PREV),                      // left before start: never started
+  lm("edge", PREV, NEXT),                      // left later: historical start remains
+  lm("edge", PREV, D),                         // departure on start day is not departure before it
+  lm("edge", PREV, NEXT, duplicateLearner), lm("duplicate", PREV, NEXT, duplicateLearner),
+  lm("next", PREV), lm("missing", PREV), lm("edge", null), lm("planned", PREV), lm("scoped", PREV),
+]);
+const resultId = new ObjectId();
+await db.collection("candidateresults").insertOne({ _id: resultId, candidate: learnerCandidateIds[7], batch: oid(learnerBatches.edge), result: "Pass", assessed_on: bizDay(D), createdAt: NOW, updatedAt: NOW });
+const learnersD = (await digest(uA.cookie, D)).data;
+const learnersNext = (await digest(uA.cookie, NEXT)).data;
+ok("D6: actual starts count 11 distinct learners: baseline 7 plus before-start roster, later departure, same-day departure and one duplicated candidate",
+  learnersD?.candidates?.training_started?.total === 11, JSON.stringify(learnersD?.candidates?.training_started));
+ok("D6: late join and 00:01 IST actual start count on NEXT only (2); planned dates never produce a learner start",
+  learnersNext?.candidates?.training_started?.total === 2, JSON.stringify(learnersNext?.candidates?.training_started));
+ok("D6: missing actual start and missing roster join are separate measured-now data exceptions, not invented training dates",
+  learnersD?.candidates?.training_started?.exceptions?.missing_actual_start === 1
+  && learnersD?.candidates?.training_started?.exceptions?.missing_join_date === 1,
+  JSON.stringify(learnersD?.candidates?.training_started));
+const currentRows = (await req(uA.cookie, "GET", "/api/candidates?limit=2000")).data?.items ?? [];
+const linkedLearner = currentRows.find((r) => String(r._id) === String(learnerCandidateIds[1]));
+const unlinkedLearner = currentRows.find((r) => String(r._id) === String(learnerCandidateIds[0]));
+ok("NAV: enrolled candidate returns its actual batch id, while a candidate without an active roster stays unlinked",
+  String(linkedLearner?.active_batch?._id) === String(learnerBatches.edge) && !!unlinkedLearner && unlinkedLearner.active_batch === null,
+  JSON.stringify({ linked: linkedLearner?.active_batch, unlinked: unlinkedLearner?.active_batch }));
+// Independent case oracle for these fixtures: Assigned counts enrolled, completed and enrolled-dropout
+// count enrolled, Fresh/archived do not; only the two Enrolled rows without a recorded result are ongoing.
+ok("D7: current totals agree with the exact Candidates rows, including dropout, Fresh, archived and recorded-result precedence",
+  currentRows.length === 13 && learnersD?.candidates?.current?.enrolled === 10 && learnersD?.candidates?.current?.training_ongoing === 2,
+  JSON.stringify({ rows: currentRows.length, current: learnersD?.candidates?.current }));
+ok("D7: choosing another report day leaves current learner totals current, while daily enrolments retain their selected-day meaning",
+  learnersNext?.candidates?.current?.enrolled === 10 && learnersNext?.candidates?.current?.training_ongoing === 2
+  && learnersD?.candidates?.enrolled?.total === 2 && learnersNext?.candidates?.enrolled?.total === 1,
+  JSON.stringify({ day: learnersD?.candidates, next: learnersNext?.candidates }));
+const learnersB = (await digest(uB.cookie, D)).data;
+ok("D7: learner starts and current totals respect centre scope (B sees its one added start and one existing candidate)",
+  learnersB?.candidates?.training_started?.total === 1 && learnersB?.candidates?.current?.enrolled === 1,
+  JSON.stringify(learnersB?.candidates));
+await db.collection("batchmembers").deleteMany({ batch: { $in: Object.values(learnerBatches).map(oid) } });
+await db.collection("batches").deleteMany({ _id: { $in: Object.values(learnerBatches).map(oid) } });
+await db.collection("candidates").deleteMany({ _id: { $in: learnerCandidateIds } });
+await db.collection("candidateresults").deleteOne({ _id: resultId });
+
+const zeroD = "2031-07-01";
+const zero = (await digest(uA.cookie, zeroD)).data;
+ok("D8: a zero-activity day is an explicit report with zero new enrolments, joins and training starts, plus separately current totals",
+  zero?.candidates?.enrolled?.total === 0 && zero?.candidates?.joined?.total === 0 && zero?.candidates?.training_started?.total === 0
+  && zero?.candidates?.current?.enrolled === 5, JSON.stringify(zero?.candidates));
+
 // =================================================================================================
 // recipients, and T6 first (before anything is sent): who is eligible
 // =================================================================================================
@@ -361,6 +453,13 @@ const putR = await setDefaults({ digest_recipients: recipients.join(", ") });
 const readBack = (await req(admin, "GET", "/api/defaults")).data?.item;
 ok("[precondition] the recipient list is stored and read back, and the toggle defaults to OFF", putR.status === 200 && readBack?.digest_recipients === recipients.join(", ") && readBack?.digest_only_approval_mails === false,
   JSON.stringify({ put: putR.status, rb: readBack?.digest_recipients, toggle: readBack?.digest_only_approval_mails }));
+const zeroTick = await tick(istAt(zeroD, 21, 0), "zero-" + s);
+const zeroText = String(zeroTick.data?.results?.find((r) => r.to === uA.email.toLowerCase())?.text ?? "");
+ok("D8: a zero-activity scheduled report still attempts the recipient list and explicitly mails zero daily figures plus current totals",
+  zeroTick.data?.fired === true && (await digestRows(zeroD, recipients)).length === 5
+  && zeroText.includes("Joined into batches: 0") && zeroText.includes("Enrolled: 0")
+  && zeroText.includes("Training started on the day: 0") && zeroText.includes("5 enrolled, 0 Training Ongoing"),
+  JSON.stringify({ fired: zeroTick.data?.fired, text: zeroText.slice(0, 400) }));
 
 // =================================================================================================
 // T1 - the tick fires at 21:00 IST and not at 20:59
@@ -388,6 +487,9 @@ ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, mo
   /Costs/.test(txtF) && txtF.includes("Rs 1,250") && txtF.includes("Rs 5,750") && txtF.includes("Rs 1,100") && txtF.includes("Rs 14,249"), txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: ...and its other sections carry the same exact numbers as the screen (Joined into batches: 4, Enrolled: 2, Mobilised 12 of 30)",
   txtF.includes("Joined into batches: 4") && txtF.includes("Enrolled: 2") && /Mobilised[^\n]*12 of 30/.test(txtF), txtF.replace(/\s+/g, " ").slice(0, 400));
+ok("T5: mail uses the same daily learner start and separately measured current totals as the screen; historical totals are never implied",
+  txtF.includes("Training started on the day: 7") && txtF.includes("5 enrolled, 0 Training Ongoing")
+  && /Current learners \(measured/.test(txtF) && txtF.includes("not historical snapshots"), txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: the SAME digest for a recipient WITHOUT finance.view has no Costs section and no cost figure at all",
   txtN.length > 0 && !/Costs|Rs \d|spend|Payment pending/i.test(txtN) && txtN.includes("Joined into batches: 4"), txtN.replace(/\s+/g, " ").slice(0, 300));
 ok("T5: an Admin recipient gets no Costs section either (no finance.view)", txtAdm.length > 0 && !/Costs|Rs \d/i.test(txtAdm), txtAdm.replace(/\s+/g, " ").slice(0, 200));
@@ -808,6 +910,10 @@ ok("G2: Publish now reports sent/skipped/failed from the outcomes: test env supp
 ok("G2: ...one row per recipient for that day", (await digestRows(PUBDAY, recipients)).length === pubBefore + 5, String((await digestRows(PUBDAY, recipients)).length));
 const pub2 = await req(admin, "POST", "/api/reports/daily/publish", { date: PUBDAY });
 ok("G2: a second press inside the cooldown is a 429, not a second mailing", pub2.status === 429 && (await digestRows(PUBDAY, recipients)).length === pubBefore + 5, `${pub2.status}`);
+const scheduledAfterManual = await tick(istAt(PUBDAY, 21, 0), "after-manual-" + s);
+ok("G2: manual Publish now does not consume the scheduled day: the same day's 21:00 tick also mails all five recipients",
+  scheduledAfterManual.data?.fired === true && (await digestRows(PUBDAY, recipients)).length === pubBefore + 10,
+  JSON.stringify({ fired: scheduledAfterManual.data?.fired, rows: (await digestRows(PUBDAY, recipients)).length }));
 await jobLocks.deleteMany({ _id: "daily-digest-manual" });
 const pubDefaults = await req(admin, "GET", "/api/reports/daily?date=" + D);
 ok("G2: the screen's data carries the mail state so it can warn when email is off (meta.email_enabled, recipients, hour 21)",
@@ -865,6 +971,10 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
     today: await txt(page, "digest-cost-today"), month: await txt(page, "digest-cost-month"), pending: await txt(page, "digest-cost-pending"),
   };
   ok("S1: the tiles read joined 4, enrolled 2, mobilised 12, assigned 2, free 4, pipeline 6", got.joined === "4" && got.enrolled === "2" && got.mobilised === "12" && got.assigned === "2" && got.idle === "4" && got.pipeline === "6", JSON.stringify(got));
+  ok("S1: learner tiles separately show 7 training starts, 5 current enrolled and 0 current Training Ongoing, with a current measurement time",
+    await txt(page, "digest-training-started") === "7" && await txt(page, "digest-current-enrolled") === "5"
+    && await txt(page, "digest-current-training") === "0" && /measured.*IST/.test(await txt(page, "digest-current-measured")),
+    await txt(page, "digest-current-learners"));
   ok("S1: the money tiles read 1,250 today, 5,750 this month, 1,100 pending", /1,250/.test(got.today) && /5,750/.test(got.month) && /1,100/.test(got.pending), JSON.stringify(got));
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");

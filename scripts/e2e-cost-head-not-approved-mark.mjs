@@ -76,28 +76,43 @@ const anyLoc = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items 
 ok("[precondition] a location exists to hang entries on", !!anyLoc);
 const entry = (extra) => ({ entry_date: "2031-05-04", location: anyLoc, amount: 410, ...extra });
 
-const created = { cats: [], requests: [], costs: [] };
+// Real queued requests and explicit historical ledger fixtures have separate cleanup identities.
+const created = { cats: [], requests: [], headRequests: [], costs: [] };
 let ruleBefore = null;
 try {
   // ---- fixtures through the real doors ------------------------------------------------------
   const cfg = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.config ?? [];
   ruleBefore = cfg.find((c) => c.action === "cost.post") ?? { enabled: false, approver_role: "Admin" };
   const rule = (enabled) => req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled, approver_role: ruleBefore.approver_role ?? "Admin" });
-  ok("[precondition] cost.post approval OFF while the ledger rows are posted", (await rule(false)).status === 200);
+  ok("[precondition] cost.post approval OFF while unapproved-head requests are exercised", (await rule(false)).status === 200);
+  const fixtureActor = await db.collection("users").findOne({ email: "ops@vidysea.com" }, { projection: { _id: 1 } });
+  ok("[precondition] historical display fixtures have the real isolated Operations enterer", !!fixtureActor?._id);
 
   // A head named on the cost form exists at once, NOT approved (QA-1977).
   const mkHead = async (name, extra = {}) => {
-    const r = await req(ops, "POST", "/api/costs", entry({ new_subhead: name, note: tag(name === N.pend ? "pend" : name === N.rej ? "rej" : name === N.appr ? "appr" : "sub"), ...extra }));
+    const note = tag(name === N.pend ? "pend" : name === N.rej ? "rej" : name === N.appr ? "appr" : "sub");
+    const r = await req(ops, "POST", "/api/costs", entry({ new_subhead: name, note, ...extra }));
     const head = await rawCats.findOne({ name });
     if (head) created.cats.push(head._id);
-    if (r.data?.item?._id) created.costs.push(String(r.data.item._id));
-    return { r, head, headReq: head ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: head._id }) : null };
+    if (r.data?.item?._id) {
+      if (r.status === 202) created.requests.push(String(r.data.item._id));
+      else if (r.status === 201) created.costs.push(String(r.data.item._id));
+    }
+    const headReq = head ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: head._id }) : null;
+    if (headReq) created.headRequests.push(String(headReq._id));
+    const ledgerCount = await rawCosts.countDocuments({ note });
+    const costRequest = r.data?.item?._id && r.status === 202
+      ? await rawApprovals.findOne({ _id: new ObjectId(String(r.data.item._id)), action: "cost.post", status: "Pending" }) : null;
+    ok(`guard: naming ${name} with cost.post OFF queues the real cost and writes no ledger row`,
+      r.status === 202 && !!costRequest && ledgerCount === 0,
+      JSON.stringify({ status: r.status, queued: !!costRequest, ledgerCount }));
+    return { r, head, headReq, ledgerCount };
   };
   const P = await mkHead(N.pend);
   const R = await mkHead(N.rej);
   const A = await mkHead(N.appr);
-  ok("[precondition] three heads named on the cost form each posted a ledger row and exist Pending",
-    [P, R, A].every((x) => x.r.status === 201 && x.head?.approval_status === "Pending" && x.headReq?.status === "Pending"),
+  ok("[precondition] three heads named on the cost form exist Pending and their costs are queued, with zero ledger writes",
+    [P, R, A].every((x) => x.r.status === 202 && x.ledgerCount === 0 && x.head?.approval_status === "Pending" && x.headReq?.status === "Pending"),
     JSON.stringify([P, R, A].map((x) => [x.r.status, x.head?.approval_status, x.headReq?.status])));
   const S = await mkHead(N.sub, { new_head_parent: String(A.head?._id) });
   // The Approved head is signed off, the Rejected one is rejected, both through the real approvals door.
@@ -108,8 +123,33 @@ try {
     pDoc?.approval_status === "Pending" && rDoc?.approval_status === "Rejected" && aDoc?.approval_status === "Approved"
       && sDoc?.approval_status === "Pending" && String(sDoc?.parent) === String(aDoc?._id) && apprDecision.status === 200 && rejDecision.status === 200,
     JSON.stringify([pDoc?.approval_status, rDoc?.approval_status, aDoc?.approval_status, sDoc?.approval_status, sDoc?.parent && String(sDoc.parent) === String(aDoc?._id), apprDecision.status, rejDecision.status]));
+  const rejectedOff = await req(ops, "POST", "/api/costs", entry({ category: String(rDoc?._id), note: tag("rejected off"), amount: 415 }));
+  if (rejectedOff.status === 202 && rejectedOff.data?.item?._id) created.requests.push(String(rejectedOff.data.item._id));
+  else if (rejectedOff.status === 201 && rejectedOff.data?.item?._id) created.costs.push(String(rejectedOff.data.item._id));
+  ok("guard: an already-Rejected head with cost.post OFF queues the real request and writes no ledger row",
+    rejectedOff.status === 202 && !!rejectedOff.data?.queued && await rawCosts.countDocuments({ note: tag("rejected off") }) === 0,
+    `status=${rejectedOff.status}`);
+
+  // The new write rule correctly prevents these rows from being posted today. They deliberately
+  // model costs recorded before that safeguard, so their CURRENT category-state labels still need
+  // to be readable in Finance/Costs. Raw insertion is isolated test setup, never evidence that an
+  // unapproved head may reach the ledger through POST. No synthetic approval/audit is invented.
+  for (const [key, head] of [["pend", pDoc], ["rej", rDoc], ["appr", aDoc], ["sub", sDoc]]) {
+    const id = new ObjectId();
+    const now = new Date();
+    await rawCosts.insertOne({
+      _id: id, entry_date: new Date("2031-05-04T00:00:00.000Z"), location: new ObjectId(String(anyLoc)),
+      category: head._id, amount: 410, requested_amount: 410, note: tag(key),
+      entered_by: fixtureActor._id, payment_status: "Payment Pending", reservation_state: "Applied",
+      pre_approved_applied: false, createdAt: now, updatedAt: now,
+      _audit_events: [], _audit_delivered_event_ids: [],
+    });
+    created.costs.push(String(id));
+  }
+  ok("[precondition] four explicit historical ledger fixtures preserve Pending/Rejected/Approved/subhead display coverage",
+    await rawCosts.countDocuments({ _id: { $in: created.costs.map((id) => new ObjectId(id)) } }) === 4);
   // A legacy head: an active top-level head whose document has NO approval_status field at all.
-  const legacy = await rawCats.findOne({ approval_status: { $exists: false }, active: { $ne: false }, parent: { $exists: false }, name: { $not: /^(other|misc)/i } });
+  const legacy = await rawCats.findOne({ approval_status: { $exists: false }, active: { $ne: false }, parent: { $exists: false }, pre_approved: { $ne: true }, name: { $not: /^(other|misc)/i } });
   ok("[precondition] a legacy head with no approval_status field exists (the seed's heads carry none)", !!legacy, "none found");
   const L = { head: legacy };
   const legRow = await req(admin, "POST", "/api/costs", entry({ category: String(legacy?._id), note: tag("leg") }));
@@ -121,14 +161,19 @@ try {
   const park = async (head, k) => {
     const r = await req(ops, "POST", "/api/costs", entry({ category: String(head._id), note: tag(`park ${k}`), amount: 420 }));
     const id = r.data?.item?._id ? String(r.data.item._id) : "";
-    if (id) created.requests.push(id);
-    return { status: r.status, id };
+    if (id && r.status === 202) created.requests.push(id);
+    else if (id && r.status === 201) created.costs.push(id);
+    const ledgerCount = await rawCosts.countDocuments({ note: tag(`park ${k}`) });
+    const requestExists = id && r.status === 202
+      ? !!(await rawApprovals.findOne({ _id: new ObjectId(id), action: "cost.post", status: "Pending" })) : false;
+    return { status: r.status, id, ledgerCount, requestExists };
   };
   const pk = {
     pend: await park(pDoc, "pend"), rej: await park(rDoc, "rej"), appr: await park(aDoc, "appr"),
     sub: await park(sDoc, "sub"), leg: await park(legacy, "leg"),
   };
-  ok("[precondition] one cost is parked under each of the five heads", Object.values(pk).every((x) => x.status === 202 && x.id),
+  ok("[precondition] one real cost is parked under each of the five heads, with zero ledger writes",
+    Object.values(pk).every((x) => x.status === 202 && x.id && x.requestExists && x.ledgerCount === 0),
     JSON.stringify(pk));
 
   // Snapshot for the display-only arm.
@@ -143,7 +188,7 @@ try {
   const note = (st) => (st === "Pending" ? NOT_APPROVED : st === "Rejected" ? REJECTED : "");
   const finRows = (await req(admin, "GET", "/api/reports/costs")).data?.register ?? [];
   const finRow = (k) => finRows.find((r) => String(r.note) === tag(k));
-  ok("[precondition] the five posted ledger rows are in the Finance register", ["pend", "rej", "appr", "sub", "leg"].every((k) => !!finRow(k)),
+  ok("[precondition] four historical display fixtures plus the real legacy-head post are in the Finance register", ["pend", "rej", "appr", "sub", "leg"].every((k) => !!finRow(k)),
     JSON.stringify(["pend", "rej", "appr", "sub", "leg"].map((k) => !!finRow(k))));
   ok("fin-reg (API): the register row carries the head's status - Pending, Rejected, Approved, none",
     finRow("pend")?.head_approval_status === "Pending" && finRow("rej")?.head_approval_status === "Rejected"
@@ -215,7 +260,7 @@ try {
     ok("filter: a Pending SUBHEAD under an approved head is marked, and only the subhead",
       lab(N.sub).includes(N.sub + NOT_APPROVED), JSON.stringify(lab(N.sub)));
     ok("legacy (filter): a head with no approval_status is offered with no mark",
-      lab(legacy.name).length > 0 && lab(legacy.name).every((l) => !l.includes(legacy.name + " (not approved)") && !l.includes(legacy.name + " (rejected)")),
+      labels.includes(legacy.name) && !labels.includes(legacy.name + NOT_APPROVED) && !labels.includes(legacy.name + REJECTED),
       JSON.stringify(lab(legacy.name)));
 
     // finance register
@@ -297,10 +342,11 @@ try {
     if (ruleBefore) await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: !!ruleBefore.enabled, approver_role: ruleBefore.approver_role ?? "Admin" });
     const catIds = created.cats;
     await rawApprovals.deleteMany({ $or: [
-      { _id: { $in: created.requests.map((i) => new ObjectId(i)) } },
+      { _id: { $in: [...created.requests, ...created.headRequests].map((i) => new ObjectId(i)) } },
       { entity_id: { $in: catIds } }, { "payload.category": { $in: [...catIds, ...catIds.map(String)] } },
     ] });
-    await rawCosts.deleteMany({ $or: [{ note: { $regex: `^zzmark ${stamp} ` } }, { category: { $in: catIds } }] });
+    await rawCosts.deleteMany({ $or: [{ _id: { $in: created.costs.map((i) => new ObjectId(i)) } },
+      { note: { $regex: `^zzmark ${stamp} ` } }, { category: { $in: catIds } }] });
     await rawCats.deleteMany({ _id: { $in: catIds } });
   } catch (e) { console.log("cleanup note: " + String(e?.message ?? e).slice(0, 200)); }
   await client.close();

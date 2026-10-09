@@ -14,7 +14,7 @@ import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadabl
 import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
-import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
+import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { usePerms } from "@/components/shell";
 import { CandidateEditDrawer } from "@/components/candidate-edit-drawer";
@@ -5943,6 +5943,10 @@ function CostsTab({ batchId, batch, error, setError }: any) {
   const { can: canCostAct, loaded: costPermsReady } = usePerms();
   const canApproveCosts = costPermsReady && canCostAct("finance.approve", "edit");
   const [editId, setEditId] = useState("");
+  // mtg-b3 R10 (Umesh, 2026-10-07): the person who entered a cost can edit or delete it themselves until
+  // it is paid; an approved one asks first in a dialog. The server decides - this only offers.
+  const own = useOwnCostActions({ onChanged: () => load(), onError: (m) => setError(m) });
+  const [editRow, setEditRow] = useState<any>(null);
 
   const [loaded, setLoaded] = useState(false);
   const load = () => Promise.all([
@@ -5988,7 +5992,8 @@ function CostsTab({ batchId, batch, error, setError }: any) {
   }
 
   function openEdit(r: any) {
-    if (!canApproveCosts) return;
+    if (!canApproveCosts && !ownCostActionable(r)) return;
+    setEditRow(r);
     setEditId(String(r._id));
     setForm({
       entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
@@ -6016,8 +6021,17 @@ function CostsTab({ batchId, batch, error, setError }: any) {
         // Blank means "not changing this", exactly as on /costs - the PATCH filters "" out, so an
         // untouched field is not posted back empty.
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
-        await api(`/api/costs/${editId}`, { method: "PATCH", json });
-        setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); load();
+        const sendEdit = async (confirmApproved: boolean, mutationKey?: string) => {
+          await api(`/api/costs/${editId}`, { method: "PATCH", headers: mutationKey ? { "Idempotency-Key": mutationKey } : undefined, json: { ...json, ...(editRow?.updatedAt ? { base_updated_at: editRow.updatedAt } : {}), ...(confirmApproved ? { confirm_approved: true } : {}) } });
+          setEditId(""); setEditRow(null); setForm({ entry_date: toInputDate(new Date()) }); load();
+        };
+        if (!canApproveCosts && editRow) {
+          const idOf = (v: any) => String(v?._id ?? v ?? "");
+          const material = Number(form.amount) !== Number(editRow.amount) || (!!form.category && form.category !== idOf(editRow.category));
+          await own.edit(editRow, material, sendEdit, json);
+        } else {
+          await sendEdit(false);
+        }
         return;
       }
       // mtg-a3 R7: a double click or a retry after a dropped response posts this entry ONCE.
@@ -6031,6 +6045,7 @@ function CostsTab({ batchId, batch, error, setError }: any) {
 
   return (
     <Section title={`Cost entries — total ₹${total.toLocaleString("en-IN")}`}>
+      {own.modal}
       {suggest && !hasTrainerFee && (
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
           <span>Trainer fee suggestion: <b>₹{suggest.amount.toLocaleString("en-IN")}</b> — {suggest.basis} ({suggest.name})</span>
@@ -6050,14 +6065,19 @@ function CostsTab({ batchId, batch, error, setError }: any) {
           { key: "paid_on", label: "Payment date", render: (r: any) => r.paid_on ? fmtDate(r.paid_on) : "—", mobile: false },
           { key: "payment_ref", label: "Payment reference", render: (r: any) => r.payment_ref || "—", mobile: false },
           { key: "entered_by", label: "By", render: (r: any) => r.entered_by?.name, mobile: false },
-          ...(canApproveCosts ? [{
+          ...(canApproveCosts || items.some((i: any) => i.is_mine) ? [{
             key: "_act", label: "", minWidth: 150,
-            render: (r: any) => (
+            render: (r: any) => canApproveCosts ? (
               <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
                 <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
                 <Btn small kind="danger" onClick={() => removeEntry(r)}>Delete</Btn>
               </span>
-            ),
+            ) : ownCostActionable(r) ? (
+              <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                <Btn small kind="danger" onClick={() => own.remove(r)}>Delete</Btn>
+              </span>
+            ) : r.is_mine ? <span className="text-xs text-gray-500">{r.edit_pending ? "Change awaiting approval" : "Paid - locked"}</span> : null,
           }] : []),
         ]} empty="No costs recorded." />
       <div className="mt-3 grid gap-3 md:grid-cols-5">

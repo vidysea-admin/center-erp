@@ -2,13 +2,13 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api } from "@/lib/client";
+import { api, fmtDT } from "@/lib/client";
 import { Btn, ErrorBanner } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
 // mtg-c1 (R4) - the daily digest. Karunn sir, 2026-10-06: "all reporting from the system, no Excel";
-// Umesh's decision on the noise: "Screen + 1 mail". This is the SCREEN. The 21:00 IST mail and the
-// Publish-now button are built from the same `dailyDigest` (lib/rules.ts), so a number here is the
+// Manual Publish now and the 21:00 IST scheduled mail are both allowed. This is the SCREEN. All three
+// read the same `dailyDigest` (lib/rules.ts), so a number here is the
 // number in the mail. The page computes nothing: every figure arrives finished, already limited to the
 // viewer's centres, and the Costs block arrives only for someone who holds the finance right (it is
 // absent from the data, not hidden by this page).
@@ -129,11 +129,24 @@ function DailyDigestInner() {
             <h2 className="text-base font-semibold">Candidates</h2>
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Tile label="Joined into batches" value={c.joined.total} tid="digest-joined" />
-              <Tile label="Enrolled" value={c.enrolled.total} tid="digest-enrolled" />
+              <Tile label="New enrolments on the day" value={c.enrolled.total} tid="digest-enrolled" />
+              <Tile label="Training started on the day" value={c.training_started.total} tid="digest-training-started" />
               <Tile label="Batches created / started" value={`${c.batches_created.length} / ${c.batches_started.length}`} tid="digest-batches" />
               <Tile label="Mobilised (planning batches)" value={c.mobilised.mobilised} tid="digest-mobilised"
                 sub={`of ${n(c.mobilised.target)} target, gap ${n(c.mobilised.gap)}, ${c.mobilised.batches} batch${c.mobilised.batches === 1 ? "" : "es"}`} />
             </div>
+            <div className="grid grid-cols-2 gap-3" data-testid="digest-current-learners">
+              <Tile label="Current enrolled" value={c.current.enrolled} tid="digest-current-enrolled" />
+              <Tile label="Current Training Ongoing" value={c.current.training_ongoing} tid="digest-current-training" />
+            </div>
+            <p className="text-xs text-gray-500" data-testid="digest-current-measured">
+              Current learner totals measured {fmtDT(c.current.measured_at)} IST. These show the position now, including when an earlier report day is chosen.
+            </p>
+            {(c.training_started.exceptions.missing_actual_start > 0 || c.training_started.exceptions.missing_join_date > 0) && (
+              <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="digest-training-exceptions">
+                Training-date exceptions (position now): {c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start; {c.training_started.exceptions.missing_join_date} missing a roster joining date. A roster row contributes a daily training start only when both dates are recorded.
+              </p>
+            )}
             {c.joined.by_batch.length > 0 && (
               <ul className="rounded-lg border border-gray-200 bg-white text-sm" data-testid="digest-by-batch">
                 {c.joined.by_batch.map((b: any) => (

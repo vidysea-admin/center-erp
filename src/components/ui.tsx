@@ -3,10 +3,10 @@ import { ReactNode, useEffect, useMemo, useRef, useState, type PointerEvent as R
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IconTrendDown, IconTrendUp } from "@/components/icons";
-import { sourceLink } from "@/lib/client";
+import { api, clearCostIdempotencyKey, costIdempotencyKey, sourceLink } from "@/lib/client";
 import { plain } from "@/lib/user-copy";
 import { BATCH_STATUS_LABEL, SIGNOFF_PENDING_LABEL, batchStatusLabel } from "@/lib/candidate-journey";
-import { OTHER_HEAD_RE, OTHER_HEAD_NEEDS_NAME, costHeadNameProblem } from "@/lib/validate";
+import { OTHER_HEAD_RE, OTHER_HEAD_NEEDS_NAME, costHeadNameProblem, approvedCostSentence, costIsApproved } from "@/lib/validate";
 
 // 2026-08-14 (Umesh): "jahan bhi table se andar jaate hain, back button hi nahi hai" —
 // every drill-down header carries this. Browser-back when there is history (keeps scroll
@@ -308,7 +308,12 @@ export function CostHeadPicker({ cats, value, onChange, required, allowNew }: {
   cats: any[]; value: unknown; onChange: (id: string) => void; required?: boolean; allowNew?: boolean;
 }) {
   const [q, setQ] = useState("");
-  const all = cats ?? [];
+  // mtg-b2 R6: the posting list offers only heads a cost can be filed under. The master list carries
+  // the inactive ones too (the Finance filter needs them for old entries) and the server refuses a
+  // cost on one (409), so offering it here was a choice that could only fail. The head currently
+  // selected stays, as offerable() does (src/lib/client.ts), so an old entry being edited still shows
+  // where it sits. Here and not at the two call sites, because there are two cost forms (QA-1978).
+  const all = (cats ?? []).filter((c: any) => c?.active !== false || (!!value && String(c?._id) === String(value)));
   const parentIdOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
   const term = q.trim().toLowerCase();
 
@@ -474,6 +479,41 @@ export function CostHeadOptions({ cats }: { cats: any[] }) {
         </optgroup>
       )}
     </>
+  );
+}
+
+// mtg-b2 R6 (meeting 2026-10-06): the Costs ledger could be narrowed by Location and Batch but not by
+// the thing the people reading it ask about first - which cost head. A Head -> Subhead select, the
+// same two levels the posting picker has: "All of <head>" means the head and everything under it (the
+// server expands it - expandCostCategoryFilter in lib/rules.ts - the way the Finance filter does), a
+// subhead means that one only. Inactive heads stay listed because old entries still sit under them.
+export function CostHeadFilter({ cats, value, onChange, className }: {
+  cats: any[]; value: string; onChange: (id: string) => void; className?: string;
+}) {
+  const all = [...(cats ?? [])].sort((a: any, b: any) => String(a?.name ?? "").localeCompare(String(b?.name ?? "")));
+  const parentIdOf = (c: any) => String(c?.parent?._id ?? c?.parent ?? "");
+  const label = (c: any) => `${c.name}${c.active === false ? " (inactive)" : ""}${costHeadApprovalNote(c)}`;
+  const heads = all.filter((c) => !parentIdOf(c));
+  const orphans = all.filter((c) => parentIdOf(c) && !heads.some((h) => String(h._id) === parentIdOf(c)));
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} aria-label="Cost head filter" data-cost-head-filter className={className}>
+      <option value="">All cost heads</option>
+      {heads.map((h) => {
+        const subs = all.filter((c) => parentIdOf(c) === String(h._id));
+        if (!subs.length) return <option key={String(h._id)} value={String(h._id)}>{label(h)}</option>;
+        return (
+          <optgroup key={String(h._id)} label={label(h)}>
+            <option value={String(h._id)}>All of {label(h)}</option>
+            {subs.map((c) => <option key={String(c._id)} value={String(c._id)}>{label(c)}</option>)}
+          </optgroup>
+        );
+      })}
+      {orphans.length > 0 && (
+        <optgroup label="Head no longer listed">
+          {orphans.map((c) => <option key={String(c._id)} value={String(c._id)}>{label(c)}</option>)}
+        </optgroup>
+      )}
+    </select>
   );
 }
 
@@ -1461,4 +1501,107 @@ export function Section({ title, children, actions, titleHref, maxRows }: { titl
       <div className={maxRows ? "overflow-y-auto p-4" : "p-4"} style={maxRows ? { maxHeight: `${maxRows * 3.1 + 2}rem` } : undefined}>{children}</div>
     </div>
   );
+}
+
+// ---------- mtg-b3 R10 (QA-2898, Umesh 2026-10-07): the creator's own edit / delete of a cost entry ----------
+// An in-app dialog, never window.confirm: the approved-entry warning has to be readable, carry the
+// approver's name and date, and be something a browser test can see. It is a courtesy over a rule - the
+// server refuses an approved entry's change or delete that arrives without `confirm_approved: true`.
+export function ConfirmModal({ open, title, message, confirmLabel, kind = "danger", error, onConfirm, onCancel }: {
+  open: boolean; title: string; message: string; confirmLabel: string; kind?: "primary" | "danger"; error?: string;
+  onConfirm: () => unknown; onCancel: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open, onCancel]);
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title} data-testid="confirm-modal">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+        <h2 className="text-base font-semibold">{title}</h2>
+        <p className="mt-2 text-sm text-gray-700" data-testid="confirm-modal-message">{message}</p>
+        {error && <div className="mt-3"><ErrorBanner msg={error} /></div>}
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <Btn kind="ghost" onClick={onCancel}>Cancel</Btn>
+          <Btn kind={kind} onClick={onConfirm}>{confirmLabel}</Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// A row the caller entered themselves, not yet paid, with no change of its own waiting for a decision.
+// Display only - the server decides for itself on every PATCH / DELETE.
+export function ownCostActionable(r: { is_mine?: boolean; payment_status?: string | null; edit_pending?: boolean } | null | undefined): boolean {
+  return !!r?.is_mine && r.payment_status === "Payment Pending" && !r.edit_pending;
+}
+
+// One implementation for the three screens that list cost entries (Costs ledger, Finance register, the
+// batch Costs tab), so the wording, the modal and the rules cannot drift between them (ARCHITECTURE
+// section 3). `edit` takes the screen's own save as `send(confirmApproved)`.
+export function useOwnCostActions({ onChanged, onError, onNotice }: { onChanged: () => unknown; onError: (m: string) => void; onNotice?: (m: string) => void }) {
+  type Ask = { title: string; message: string; confirmLabel: string; run: () => Promise<void>; cancel?: () => void };
+  const [ask, setAsk] = useState<Ask | null>(null);
+  const [askError, setAskError] = useState("");
+  const stampOf = (r: any) => ({ kind: r.approved_by_kind, by: r.approved_by, on: r.approved_on });
+  const idOf = (r: any) => String(r._id ?? r.id);
+
+  const remove = (row: any) => {
+    const scope = `delete-cost:${idOf(row)}:${row.updatedAt ?? ""}`;
+    const send = async (confirm: boolean) => {
+      const json = { ...(confirm ? { confirm_approved: true } : {}), base_updated_at: row.updatedAt };
+      const result = await api(`/api/costs/${idOf(row)}`, {
+        method: "DELETE", json, headers: { "Idempotency-Key": costIdempotencyKey(scope, json) },
+      });
+      clearCostIdempotencyKey(scope);
+      return result;
+    };
+    const done = () => { onNotice?.("Deleted. It is out of every total and can be restored from your deleted entries."); return onChanged(); };
+    if (costIsApproved(stampOf(row))) {
+      setAskError("");
+      setAsk({
+        title: "Delete an approved entry?", message: approvedCostSentence(stampOf(row), "delete"), confirmLabel: "Yes, delete it",
+        run: async () => { await send(true); await done(); },
+      });
+      return Promise.resolve();
+    }
+    return send(false).then(done).catch((e: any) => onError(e.message));
+  };
+
+  // `material`: does the change touch the amount, head, batch or centre? Decides which sentence the
+  // dialog shows. Resolves true once saved, false when the person backed out; rejects with the server's
+  // refusal so the caller's own error handling runs.
+  const edit = (row: any, material: boolean, send: (confirmApproved: boolean, mutationKey: string) => Promise<void>, payload?: unknown) => new Promise<boolean>((resolve, reject) => {
+    const scope = `edit-cost:${idOf(row)}:${row.updatedAt ?? ""}`;
+    const key = costIdempotencyKey(scope, { payload, material, base_updated_at: row.updatedAt });
+    const submit = async (confirmApproved: boolean) => {
+      await send(confirmApproved, key);
+      clearCostIdempotencyKey(scope);
+    };
+    if (!costIsApproved(stampOf(row))) { submit(false).then(() => resolve(true), reject); return; }
+    setAskError("");
+    setAsk({
+      title: "Change an approved entry?", message: approvedCostSentence(stampOf(row), material ? "edit" : "edit-light"),
+      confirmLabel: material ? "Yes, send it back for approval" : "Yes, change it",
+      run: async () => { await submit(true); resolve(true); },
+      cancel: () => resolve(false),
+    });
+  });
+
+  const restore = (row: any) => api(`/api/costs/${idOf(row)}/restore`, { method: "POST" })
+    .then(() => { onNotice?.("Restored. It is back in every total."); return onChanged(); })
+    .catch((e: any) => onError(e.message));
+
+  const modal = (
+    <ConfirmModal open={!!ask} title={ask?.title ?? ""} message={ask?.message ?? ""} confirmLabel={ask?.confirmLabel ?? ""} error={askError}
+      onCancel={() => { ask?.cancel?.(); setAsk(null); setAskError(""); }}
+      onConfirm={async () => {
+        try { await ask?.run(); setAsk(null); setAskError(""); } catch (e: any) { setAskError(e.message ?? String(e)); }
+      }} />
+  );
+  return { remove, edit, restore, modal };
 }

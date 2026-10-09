@@ -1272,6 +1272,13 @@ const CostEntrySchema = new Schema({
   // use `amount` (the sanctioned liability), while this field preserves the raiser's original fact.
   requested_amount: Number,
   approval_request: oid("ApprovalRequest"),
+  // The creator claims an unchanged, unpaid row before opening its edit request. The durable
+  // proposal lets a retry recover a crash between that claim and the approval-queue write.
+  cost_edit_request: { type: Schema.Types.ObjectId, ref: "ApprovalRequest", select: false },
+  cost_edit_proposal: { type: Schema.Types.Mixed, select: false },
+  // The mutation result and audit event commit with the row, so a lost response cannot apply
+  // the same edit/delete twice. These server-side receipts never leave the cost API.
+  own_mutations: { type: [Schema.Types.Mixed], default: undefined, select: false },
   payment_status: { type: String, enum: COST_PAYMENT_STATUS },
   paid_on: Date,
   payment_ref: String,
@@ -1302,6 +1309,14 @@ const CostEntrySchema = new Schema({
   deletion_state: { type: String, enum: ["Pending"], default: undefined, select: false },
   deletion_audit_event_id: { type: String, default: undefined, select: false },
   entered_by: oid("User", true),
+  // mtg-b3 R10 (QA-2898, Umesh 2026-10-07): the creator's SOFT delete. A row with archived_at set is
+  // invisible to every ordinary read (VISIBLE_COST_ENTRY below: ledger, register, rollups, digest,
+  // export) but is still a whole row - restore just unsets these three. Not deletion_state, which is
+  // the hard-delete tombstone and is never recoverable. Set only by DELETE /api/costs/[id] on the
+  // creator's own path, cleared only by POST /api/costs/[id]/restore.
+  archived_at: { type: Date, default: undefined },
+  archived_by: oid("User"),
+  archive_reason: String,
   // mtg-a3 R7 (Umesh, 2026-10-06 meeting): the client-generated key of the POST that created this
   // row, stored as "<user id>:<key>" so one user's key can never match another user's POST. It is
   // what makes a repeated or concurrent POST return the FIRST result instead of a second ledger
@@ -1325,15 +1340,21 @@ CostEntrySchema.index({ reservation_state: 1, reservation_expires_at: 1 });
 // bypasses this middleware and can see Pending/Cancelled rows.
 const VISIBLE_COST_ENTRY = {
   deletion_state: { $exists: false },
+  archived_at: null, // mtg-b3 (QA-2898): a soft-deleted cost is invisible everywhere; null also matches a missing field
   $or: [
     { reservation_state: "Applied" },
     { reservation_state: { $exists: false } },
   ],
 };
+// mtg-b3: the ONE way back to a soft-deleted cost is `.setOptions({ archivedOnly: true })` - used by the
+// Deleted listing and by restore. It selects ONLY archived rows (never both), so a caller that forgets the
+// option sees the ledger, and a caller that sets it cannot pick up a live row by accident.
+const ARCHIVED_COST_ENTRY = { ...VISIBLE_COST_ENTRY, archived_at: { $ne: null } };
 for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {
   CostEntrySchema.pre(op as any, function (this: any) {
     const current = this.getFilter();
-    this.setQuery(Object.keys(current).length ? { $and: [current, VISIBLE_COST_ENTRY] } : VISIBLE_COST_ENTRY);
+    const visible = this.getOptions?.()?.archivedOnly === true ? ARCHIVED_COST_ENTRY : VISIBLE_COST_ENTRY;
+    this.setQuery(Object.keys(current).length ? { $and: [current, visible] } : visible);
   });
 }
 // A batch force-delete must cascade its hidden Formula Pending/Cancelled reservation rows too;
@@ -1991,6 +2012,9 @@ const CostCategorySchema = new Schema({
   approval_status: { type: String, enum: ["Pending", "Approved", "Rejected"] },
   // The costcategory.create request that decides it, so the decision can be traced both ways.
   approval_request: oid("ApprovalRequest"),
+  pre_approval_revision: { type: Number, default: 0 },
+  pre_approval_proposal: oid("ApprovalRequest"),
+  pre_approval_applied_request: oid("ApprovalRequest"),
 }, { timestamps: true });
 const NOT_STAGED_COST_CATEGORY = { staged_by_approval: { $exists: false } };
 for (const op of ["find", "findOne", "findOneAndUpdate", "countDocuments"] as const) {

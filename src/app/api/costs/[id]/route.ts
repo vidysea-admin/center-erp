@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
-import { requireFinance } from "@/lib/permissions";
-import { Batch, CostEntry, COST_PAYMENT_MODE } from "@/models";
-import { assertActiveCostCategory, assertCostEntryValid } from "@/lib/rules";
+import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson, assertLocationInScope } from "@/lib/authz";
+import { hasFinanceApprove, requirePerm } from "@/lib/permissions";
+import { ApprovalRequest, Batch, CostEntry, COST_PAYMENT_MODE } from "@/models";
+import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, COST_MATERIAL_FIELDS, COST_OWN_FIELDS, evaluateCostEditPreApproval, isCostCreator, pendingCostEditRequest, stampCostApprovals } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
-import { costDeletionAuditIsDurable, costDeletionSnapshot, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, settleFinanceAuditEvents } from "@/lib/approvals";
+import { costDeletionAuditIsDurable, costDeletionSnapshot, costFinanceAuditOutboxIsSettled, ensureCostDeletionAuditEvent, financeAuditEvent, garbageCollectSettledCostDeletion, notifyCostCorrection, requireApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { Types } from "mongoose";
-import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
+import { approvedCostSentence, costIsApproved, isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
+import { createHash } from "node:crypto";
 
 // Cost entries were write-once (no update/delete route existed) — but sheet-imported costs
 // (Batch_Master's four cost columns) can carry a wrong amount or category, so an entry must be
@@ -43,19 +44,26 @@ async function loadDeletionTombstoneInScope(user: Awaited<ReturnType<typeof requ
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requireFinance(user, "approve");
-  requireEdit(user);
+  // mtg-b3 R10: everyone WITHOUT the finance approve right takes the creator path below, which asks
+  // for costs.manage and for the entry to be their own. Finance keeps exactly what it had.
   const { id } = await ctx.params;
+  if (!(await hasFinanceApprove(user))) return patchOwnCost(user, req, id);
+  requireEdit(user);
   if (await loadDeletionTombstoneInScope(user, id)) {
     throw new HttpError(409, "This cost has already been deleted and its audit history is being finalized.");
   }
   const doc = await loadInScope(user, id);
   const body = await readJson(req);
+  const pendingOwner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { cost_edit_request: 1 } });
+  if (pendingOwner?.cost_edit_request || await pendingCostEditRequest(doc._id)) {
+    throw new HttpError(409, "A creator change is waiting for approval. Decide it before correcting or paying this cost.");
+  }
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   const patchBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_patch_load") ?? "").slice(0, 100) : "";
   if (patchBarrier) {
     await CostEntry.collection.updateOne(
-      { _id: doc._id, deletion_state: { $exists: false } },
+      { _id: doc._id, deletion_state: { $exists: false }, archived_at: null, cost_edit_request: null,
+        updatedAt: doc.updatedAt, payment_status: { $ne: "Paid" } },
       { $set: { _test_patch_loaded_barrier: patchBarrier } } as any,
     );
     for (let i = 0; i < 100; i++) {
@@ -82,11 +90,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       paid_on: paidOn, payment_ref: paymentRef,
     };
     const updated = await CostEntry.findOneAndUpdate(
-      { _id: doc._id, deletion_state: { $exists: false } },
+      { _id: doc._id, deletion_state: { $exists: false }, archived_at: null, cost_edit_request: null,
+        updatedAt: doc.updatedAt, payment_status: { $ne: "Paid" } },
       { $set: paymentPatch },
       { new: true, runValidators: true },
     );
-    if (!updated) throw new HttpError(409, "This cost was deleted while the payment update was being prepared. Nothing changed.");
+    if (!updated) throw new HttpError(409, "This cost changed while the payment was being prepared. Refresh before recording payment; nothing changed.");
     await auditDiff("CostEntry", updated._id, before, paymentPatch, user.id);
     return NextResponse.json({ item: updated });
   }
@@ -128,7 +137,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     ...(Object.keys(unsetPatch).length ? { $unset: unsetPatch } : {}),
   };
   const updated = await CostEntry.findOneAndUpdate(
-    { _id: doc._id, deletion_state: { $exists: false } },
+    { _id: doc._id, deletion_state: { $exists: false }, archived_at: null, cost_edit_request: null,
+      updatedAt: doc.updatedAt },
     update,
     { new: true, runValidators: true },
   );
@@ -167,9 +177,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
-  await requireFinance(user, "approve");
-  requireEdit(user);
   const { id } = await ctx.params;
+  if (!(await hasFinanceApprove(user))) return deleteOwnCost(user, req, id);
+  requireEdit(user);
   // QA-2484: a stated reason is required before ANY of this runs. Deliberately the first thing
   // after the rights check and ahead of every load, barrier and claim below, so a request that
   // cannot explain itself never reaches the staging update at all - QA-2457's lesson applied on
@@ -183,6 +193,10 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   }
   const tombstone = await loadDeletionTombstoneInScope(user, id);
   const doc = tombstone ?? await loadInScope(user, id);
+  const pendingOwner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { cost_edit_request: 1 } });
+  if (pendingOwner?.cost_edit_request || await pendingCostEditRequest(doc._id)) {
+    throw new HttpError(409, "A creator change is waiting for approval. Decide it before removing this cost.");
+  }
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
   const deleteBarrier = isTestDb ? String(req.nextUrl.searchParams.get("_test_wait_after_delete_load") ?? "").slice(0, 100) : "";
   if (deleteBarrier) {
@@ -245,3 +259,340 @@ export const DELETE = apiHandler(async (req: NextRequest, ctx: { params: Promise
   }
   return NextResponse.json({ ok: true });
 });
+
+// ---------- mtg-b3 R10 (QA-2898 / QA-2899, Umesh 2026-10-07): the creator's own edit and delete ----------
+// "jo create krr rhaa vo chaahe tho khud ki entry edit ya delete krr paayee":
+//   - Payment Pending: the creator may edit or delete their own entry.
+//   - already APPROVED and the amount or the head (and the batch / centre, which are the same kind of
+//     fact) changes: it goes back for approval through the existing cost.post queue - the edit is parked
+//     there, the row is untouched until an approver says yes (approvals/[id] -> applyApprovedCostEdit).
+//   - Paid: locked for the creator. Finance and Admin-with-the-grant keep the paths above, unchanged.
+//   - every edit and delete writes an audit row (the same durable owner-backed outbox the create uses).
+//   - the delete is SOFT (archived_at) and recoverable; finance's delete above stays a hard delete.
+// "Creator" is CostEntry.entered_by and nothing else. The server enforces every rule here whatever the
+// dialog showed: an approved entry is changed or deleted only with `confirm_approved: true` in the body.
+
+type OwnUser = Awaited<ReturnType<typeof requireUser>>;
+
+async function loadOwnCost(user: OwnUser, id: string) {
+  await requirePerm(user, "costs.manage");
+  requireEdit(user);
+  if (await loadDeletionTombstoneInScope(user, id)) {
+    throw new HttpError(409, "This cost has already been deleted and its audit history is being finalized.");
+  }
+  if (!Types.ObjectId.isValid(id)) throw new HttpError(404, "Cost entry not found");
+  // An archived row is read only to recover its already-committed delete receipt. The handlers
+  // refuse every new mutation on it; ordinary listing still uses the schema visibility fence.
+  const doc = await CostEntry.findById(id)
+    ?? await CostEntry.findOne({ _id: id }).setOptions({ archivedOnly: true });
+  if (!doc) throw new HttpError(404, "Cost entry not found");
+  if (isScoped(user) && (!doc.location || !user.location_scope.map(String).includes(String(doc.location)))) {
+    throw new HttpError(403, "Out of scope");
+  }
+  if (!isCostCreator(user, doc)) throw new HttpError(403, "You can change only the cost entries you entered yourself.");
+  const internal: any = await CostEntry.collection.findOne({ _id: doc._id }, {
+    projection: { own_mutations: 1, cost_edit_request: 1, cost_edit_proposal: 1 },
+  });
+  const lean: any = doc.toObject();
+  await stampCostApprovals([lean]);
+  return { doc, internal, stamp: { kind: lean.approved_by_kind as string, by: lean.approved_by as string | null, on: lean.approved_on as Date | null } };
+}
+
+const costCanon = (f: string, v: unknown): string => {
+  if (v === undefined || v === null || v === "") return "";
+  if (f === "entry_date") return String(new Date(v as any).getTime());
+  if (f === "amount") return String(Number(v));
+  return String(v);
+};
+
+async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
+  const { doc, internal, stamp } = await loadOwnCost(user, id);
+  const body = await readJson(req);
+  if (body.mark_paid === true) {
+    throw new HttpError(403, "Recording a payment is for finance. You can change or delete your own entry until it is paid.");
+  }
+  const before: any = doc.toObject();
+  const clientKey = String(req.headers.get("Idempotency-Key") ?? "").trim();
+  if (clientKey.length > 160) throw new HttpError(400, "The edit retry key is too long.");
+  const inputHash = createHash("sha256").update(JSON.stringify(Object.fromEntries(
+    [...COST_OWN_FIELDS, "confirm_approved", "base_updated_at"].filter((f) => body[f] !== undefined)
+      .sort().map((f) => [f, costCanon(f, body[f])]),
+  ))).digest("hex");
+  const base = body.base_updated_at ? new Date(body.base_updated_at) : new Date(before.updatedAt);
+  if (!Number.isFinite(base.getTime())) throw new HttpError(400, "The cost revision is invalid.");
+  const mutationKey = `cost-edit:${user.id}:${id}:${clientKey || `${base.getTime()}:${inputHash}`}`;
+  const queuedResult = async (request: any) => {
+    const result = { queued: true, item: typeof request?.toObject === "function" ? request.toObject() : request };
+    const event = financeAuditEvent(`cost:${doc._id}:edit-request:${request._id}`, {
+      entity: "CostEntry", entity_id: doc._id, field: "edit sent for approval",
+      new_value: { request: String(request._id), by: "creator" }, actor: new Types.ObjectId(String(user.id)),
+    });
+    const written = await CostEntry.collection.updateOne({ _id: doc._id, "own_mutations.key": { $ne: mutationKey } }, {
+      $push: { own_mutations: { key: mutationKey, input_hash: inputHash, http_status: 202, result }, _audit_events: event },
+    } as any);
+    await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
+    if (written.modifiedCount !== 1) {
+      const owner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { own_mutations: 1 } });
+      const first = (owner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+      if (first?.input_hash === inputHash) return NextResponse.json(first.result, { status: 202 });
+      throw new HttpError(409, "The edit result could not be recorded. Refresh and retry.");
+    }
+    return NextResponse.json(result, { status: 202 });
+  };
+  const receipt = (internal?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+  if (receipt) {
+    if (receipt.input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+    return NextResponse.json(receipt.result, { status: receipt.http_status ?? 200 });
+  }
+  // An accepted queue result stays the first result even after approval/rejection or payment.
+  const prior: any = await ApprovalRequest.findOne({
+    action: "cost.post", entity_id: doc._id, initiator: user.id,
+    "payload.kind": "cost-edit", "payload._edit_mutation_key": mutationKey,
+  }).lean();
+  if (prior) {
+    if (prior.payload?._edit_input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+    return queuedResult(prior);
+  }
+  if (doc.archived_at) throw new HttpError(409, "This cost was deleted. Restore it before making another change.");
+  if (doc.payment_status !== "Payment Pending") {
+    throw new HttpError(409, doc.payment_status === "Paid"
+      ? "This cost is already marked paid, so it is locked. Ask finance if it needs to change."
+      : "The payment status of this cost is not recorded. Ask finance to verify it before changing it.");
+  }
+  const recovering = internal?.cost_edit_proposal?.mutation_key === mutationKey
+    && internal.cost_edit_proposal.input_hash === inputHash;
+  if ((internal?.cost_edit_request || await pendingCostEditRequest(doc._id)) && !recovering) {
+    throw new HttpError(409, "A change to this cost is already waiting for approval. Wait for the decision before changing or deleting it again.");
+  }
+  if (new Date(before.updatedAt).getTime() !== base.getTime()) {
+    throw new HttpError(409, "This cost changed after you opened the form. Refresh before editing it.");
+  }
+  // Only the fields that actually CHANGE count: the edit form sends every field back.
+  const patch: Record<string, unknown> = {};
+  for (const f of COST_OWN_FIELDS) {
+    if (body[f] === undefined) continue;
+    const next = body[f] === "" ? undefined : body[f];
+    if (costCanon(f, next) !== costCanon(f, before[f])) patch[f] = next;
+  }
+  if (!Object.keys(patch).length) return NextResponse.json({ item: doc, unchanged: true });
+
+  const merged = { ...before, ...patch };
+  assertCostEntryValid(merged); // Rule 37 on the merged entry
+  if (!String(merged.note ?? "").trim()) {
+    throw new HttpError(400, "Say what this cost was for - the description is what makes it answerable later.");
+  }
+  if (patch.payment_mode && !COST_PAYMENT_MODE.includes(String(patch.payment_mode) as never)) {
+    throw new HttpError(400, "Choose how this payment was made.");
+  }
+  // Scope: an edit may not move an entry onto a centre, batch or trainer the creator cannot reach.
+  if (patch.location) assertLocationInScope(user, String(patch.location));
+  if (patch.batch) await assertBatchInScope(user, String(patch.batch));
+  if (patch.trainer) await assertTrainerInScope(user, String(patch.trainer));
+  const target = await assertActiveCostCategory(merged.category);
+  if (patch.category !== undefined) {
+    if (isBareOtherHeadName(target.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
+  }
+  const material = COST_MATERIAL_FIELDS.some((f) => f in patch);
+  const approvedBefore = costIsApproved(stamp);
+  if (approvedBefore && body.confirm_approved !== true) {
+    throw new HttpError(409, approvedCostSentence(stamp, material ? "edit" : "edit-light"));
+  }
+
+  // Local-only race barrier: both requests have validated the same revision, but neither has
+  // claimed/written it yet. Production query parameters cannot enable the barrier.
+  const testPause = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+    ? Math.max(0, Math.min(1000, Number(req.nextUrl.searchParams.get("_test_pause_before_own_commit_ms")) || 0)) : 0;
+  if (testPause) await new Promise((resolve) => setTimeout(resolve, testPause));
+
+  let preApproval: Awaited<ReturnType<typeof evaluateCostEditPreApproval>> | null = null;
+  if (material || target.approvalNeeded) {
+    // The SAME rule a new post goes through (QA-1977: nothing auto-approves under a Pending or Rejected
+    // head; the cap is checked). An edit is never an easier door than a post. A person who approved
+    // this entry approved THAT amount under THAT head, so for them it always goes back to a person.
+    preApproval = await evaluateCostEditPreApproval(merged.category, Number(merged.amount), merged.batch);
+    const needsPerson = approvedBefore || target.approvalNeeded || !preApproval.applied;
+    if (needsPerson) {
+      const idStr = (v: unknown) => (v ? String(v) : undefined);
+      const requestId = recovering ? new Types.ObjectId(String(internal.cost_edit_request)) : new Types.ObjectId();
+      const context = {
+        requestId,
+        entity: "CostEntry", entity_id: doc._id,
+        summary: `Change to a cost entry: ₹${merged.amount} (was ₹${before.amount}) (${user.name}) - ${merged.note}`,
+        payload: {
+          kind: "cost-edit", cost_entry: String(doc._id), base_updated_at: new Date(before.updatedAt).toISOString(),
+          _edit_mutation_key: mutationKey, _edit_input_hash: inputHash,
+          entry_date: merged.entry_date ? new Date(merged.entry_date).toISOString() : undefined,
+          location: idStr(merged.location), batch: idStr(merged.batch), trainer: idStr(merged.trainer),
+          category: idStr(merged.category), amount: Number(merged.amount), note: merged.note,
+          vendor_payee: merged.vendor_payee || undefined, voucher_no: merged.voucher_no || undefined,
+          payment_mode: merged.payment_mode || undefined,
+          _pre_approved_basis: preApproval.applied ? preApproval.basis : undefined,
+        },
+        location: idStr(merged.location), batch: idStr(merged.batch),
+        // An already-approved entry's change reaches a person even when nobody switched the rule on.
+        ...(approvedBefore || target.approvalNeeded ? { fallbackApproverRole: "Admin" } : {}),
+        idempotencyKey: `${mutationKey}:revision:${base.getTime()}`,
+      };
+      // Claim before crossing into another collection. A parallel edit, deletion, or payment
+      // cannot win after this point; a crash leaves the exact proposal recoverable by its retry.
+      if (!recovering) {
+        const claimed = await CostEntry.collection.updateOne({
+          _id: doc._id, entered_by: new Types.ObjectId(String(user.id)), updatedAt: before.updatedAt,
+          payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
+          cost_edit_request: null, reservation_state: { $ne: "Pending" },
+        }, { $set: {
+          cost_edit_request: requestId,
+          cost_edit_proposal: { mutation_key: mutationKey, input_hash: inputHash, context },
+        } } as any);
+        if (claimed.modifiedCount !== 1) {
+          const winner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { cost_edit_request: 1, cost_edit_proposal: 1 } });
+          if (winner?.cost_edit_proposal?.mutation_key === mutationKey
+              && winner.cost_edit_proposal.input_hash === inputHash) {
+            let parked;
+            try {
+              parked = await requireApproval("cost.post", user, {
+                ...winner.cost_edit_proposal.context, requestId: new Types.ObjectId(String(winner.cost_edit_request)),
+              });
+            } catch (error: any) {
+              if (error?.code !== 11000) throw error;
+              const existing = await ApprovalRequest.findById(winner.cost_edit_request);
+              if (!existing) throw error;
+              parked = { request: existing };
+            }
+            if (parked) return queuedResult(parked.request);
+          }
+          throw new HttpError(409, "This cost changed while the edit was being requested. Refresh and try again.");
+        }
+      }
+      let parked;
+      try {
+        parked = await requireApproval("cost.post", user,
+          recovering ? { ...internal.cost_edit_proposal.context, requestId } : context);
+      } catch (error: any) {
+        if (error?.code !== 11000) throw error;
+        const existing = await ApprovalRequest.findById(requestId);
+        if (!existing) throw error;
+        parked = { request: existing };
+      }
+      if (parked) {
+        return queuedResult(parked.request);
+      }
+      // A concurrently disabled optional rule can yield no queue. Release only our own claim
+      // before the direct-write CAS; mandatory fallbacks above can never take this branch.
+      await CostEntry.collection.updateOne({ _id: doc._id, cost_edit_request: requestId },
+        { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+    }
+  }
+
+  // Applied straight away: a change that stays approved, or a material change the pre-approval rule
+  // (or a switched-off cost.post rule, exactly as for a new post) lets through. A pre-approved head
+  // re-stamps the entry's basis; anything else clears it.
+  const now = new Date();
+  const set: Record<string, unknown> = { updatedAt: now };
+  const unset: Record<string, 1> = {};
+  for (const [f, v] of Object.entries(patch)) {
+    if (v === undefined) { unset[f] = 1; continue; }
+    if (["location", "batch", "trainer", "category"].includes(f)) {
+      if (!Types.ObjectId.isValid(String(v))) throw new HttpError(400, `The ${f} is invalid.`);
+      set[f] = new Types.ObjectId(String(v));
+    } else {
+      set[f] = f === "entry_date" ? new Date(v as any) : f === "amount" ? Number(v) : v;
+    }
+  }
+  if (patch.amount !== undefined) set.requested_amount = Number(patch.amount);
+  if (material) {
+    if (preApproval?.applied) {
+      set.pre_approved_applied = true; set.pre_approved_unit = "Fixed amount";
+      if (preApproval.basis) set.pre_approved_basis = preApproval.basis; else unset.pre_approved_basis = 1;
+    } else {
+      set.pre_approved_applied = false; unset.pre_approved_basis = 1; unset.pre_approved_unit = 1;
+    }
+  }
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of Object.keys(patch)) changes[f] = { from: before[f] ?? null, to: patch[f] ?? null };
+  const event = financeAuditEvent(`cost:${doc._id}:edited-at:${now.getTime()}`, {
+    entity: "CostEntry", entity_id: doc._id, field: "edited",
+    old_value: Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.from])),
+    new_value: { by: "creator", changes: Object.fromEntries(Object.entries(changes).map(([k, v]) => [k, v.to])) },
+    actor: new Types.ObjectId(String(user.id)),
+  });
+  const written = await CostEntry.collection.updateOne(
+    {
+      _id: doc._id, payment_status: "Payment Pending", deletion_state: { $exists: false }, archived_at: null,
+      updatedAt: before.updatedAt, reservation_state: { $ne: "Pending" }, cost_edit_request: null,
+    },
+    { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}), $push: {
+      _audit_events: event,
+      own_mutations: { key: mutationKey, input_hash: inputHash, result: { item: Object.fromEntries(
+        Object.entries({ ...before, ...set }).filter(([field]) => !unset[field]),
+      ) } },
+    } } as any,
+  );
+  if (written.modifiedCount !== 1) {
+    const winner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { own_mutations: 1 } });
+    const first = (winner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+    if (first?.input_hash === inputHash) return NextResponse.json(first.result);
+    throw new HttpError(409, "This cost changed while your edit was being saved (it may have been paid or deleted). Nothing was changed; refresh and try again.");
+  }
+  await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
+  return NextResponse.json({ item: Object.fromEntries(Object.entries({ ...before, ...set }).filter(([field]) => !unset[field])) });
+}
+
+async function deleteOwnCost(user: OwnUser, req: NextRequest, id: string) {
+  const { doc, internal, stamp } = await loadOwnCost(user, id);
+  let body: any = {};
+  try { body = await readJson(req); } catch { /* no body */ }
+  const clientKey = String(req.headers.get("Idempotency-Key") ?? "").trim();
+  if (clientKey.length > 160) throw new HttpError(400, "The delete retry key is too long.");
+  const inputHash = createHash("sha256").update(JSON.stringify({
+    confirm_approved: body?.confirm_approved === true, reason: String(body?.reason ?? "").trim().slice(0, 500),
+    base_updated_at: body?.base_updated_at ?? null,
+  })).digest("hex");
+  const mutationKey = `cost-delete:${user.id}:${id}:${clientKey || `${new Date(doc.updatedAt).getTime()}:${inputHash}`}`;
+  const receipt = (internal?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+  if (receipt) {
+    if (receipt.input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different deletion.");
+    return NextResponse.json(receipt.result);
+  }
+  if (doc.archived_at) throw new HttpError(409, "This cost was already deleted.");
+  if (doc.payment_status !== "Payment Pending") throw new HttpError(409, doc.payment_status === "Paid"
+    ? "This cost is already marked paid, so it is locked. Ask finance if it needs to change."
+    : "The payment status of this cost is not recorded. Ask finance to verify it before deleting it.");
+  if (internal?.cost_edit_request || await pendingCostEditRequest(doc._id)) {
+    throw new HttpError(409, "A change to this cost is already waiting for approval. Decide it before deleting this cost.");
+  }
+  if (body.base_updated_at && new Date(body.base_updated_at).getTime() !== new Date(doc.updatedAt).getTime()) {
+    throw new HttpError(409, "This cost changed after you opened it. Refresh before deleting it.");
+  }
+  if (costIsApproved(stamp) && body?.confirm_approved !== true) {
+    throw new HttpError(409, approvedCostSentence(stamp, "delete"));
+  }
+  // Archiving hides the liability from reports but deliberately retains any Formula commitment:
+  // the native cap query still counts this row, and restoring it cannot spend the cap twice.
+  const reason = String(body?.reason ?? "").trim().slice(0, 500) || "Deleted by the person who entered it";
+  const now = new Date();
+  const event = financeAuditEvent(`cost:${doc._id}:archived-at:${now.getTime()}`, {
+    entity: "CostEntry", entity_id: doc._id, field: "deleted (recoverable)",
+    old_value: costDeletionSnapshot(doc),
+    new_value: { by: "creator", reason, restorable: true },
+    actor: new Types.ObjectId(String(user.id)),
+  });
+  const written = await CostEntry.collection.updateOne(
+    {
+      _id: doc._id, payment_status: "Payment Pending", deletion_state: { $exists: false }, archived_at: null,
+      updatedAt: (doc as any).updatedAt, reservation_state: { $ne: "Pending" }, cost_edit_request: null,
+    },
+    {
+      $set: { archived_at: now, archived_by: new Types.ObjectId(String(user.id)), archive_reason: reason, updatedAt: now },
+      $push: { _audit_events: event, own_mutations: { key: mutationKey, input_hash: inputHash, result: { ok: true, restorable: true } } },
+    } as any,
+  );
+  if (written.modifiedCount !== 1) {
+    const winner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { own_mutations: 1 } });
+    const first = (winner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+    if (first?.input_hash === inputHash) return NextResponse.json(first.result);
+    throw new HttpError(409, "This cost changed while it was being deleted (it may have been paid or already deleted). Nothing was changed; refresh and try again.");
+  }
+  await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
+  return NextResponse.json({ ok: true, restorable: true });
+}

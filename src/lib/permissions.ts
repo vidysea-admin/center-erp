@@ -402,6 +402,10 @@ export function looksLikeMoneyField(field: unknown): boolean {
 // showing nothing because it looks like an answer.
 function stripMoneyKeys<T extends Record<string, unknown>>(obj: T): T {
   const out: Record<string, unknown> = { ...obj };
+  if (obj.kind === "cap-approval") {
+    delete out.expected;
+    delete out.proposed;
+  }
   for (const f of INVOICE_MONEY_FIELDS) delete out[f];
   for (const f of DECISION_MONEY_FIELDS) delete out[f];   // QA-2427
   // QA-1863 (checker on qa-1826/1827): stripping the money KEYS left the free-text ones alone, so

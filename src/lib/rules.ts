@@ -7,7 +7,7 @@ import {
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest, User,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled, isFreshCandidate, journeyOf } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -3070,19 +3070,33 @@ export async function awaitPriorCostPost(scopedKey: string, waitMs = 10_000): Pr
   throw new HttpError(409, "Your first attempt at this entry is still being processed. Wait a few seconds and check the register before submitting it again.");
 }
 
-export async function assertActiveCostCategory(categoryId: unknown) {
+export async function assertActiveCostCategory(categoryId: unknown, options: { requireApproved?: boolean } = {}): Promise<{ [key: string]: any; approvalNeeded: boolean }> {
   if (!categoryId) throw new HttpError(400, "A cost head is required.");
+  // mtg-b2 R6: the head is chosen from the master list, so it arrives as that list's id. A typed
+  // word (or a half id) used to reach `new ObjectId()` and answer 500; it is now a plain refusal -
+  // a free-typed string can never post a cost, the only way to name a head is the new-head box.
+  if (!/^[0-9a-f]{24}$/i.test(String(categoryId))) throw new HttpError(400, "Choose a cost head from the list.");
   // Raw read is intentional: a staged head is hidden by schema middleware, but the write guard
   // must distinguish it from a missing row and refuse it explicitly.
   const category = await CostCategory.collection.findOne(
     { _id: new Types.ObjectId(String(categoryId)) },
-    { projection: { _id: 1, name: 1, active: 1, staged_by_approval: 1 } },
+    { projection: { _id: 1, name: 1, active: 1, staged_by_approval: 1, approval_status: 1, parent: 1 } },
   );
   if (!category) throw new HttpError(400, "That cost head does not exist.");
   if (category.active === false || category.staged_by_approval) {
     throw new HttpError(409, `"${category.name}" is inactive or still being approved, so new costs cannot be filed under it.`);
   }
-  return category;
+  const parent = category.parent
+    ? await CostCategory.collection.findOne({ _id: category.parent }, { projection: { name: 1, active: 1, staged_by_approval: 1, approval_status: 1 } })
+    : null;
+  if (category.parent && (!parent || parent.active === false || parent.staged_by_approval)) {
+    throw new HttpError(409, "This subhead's parent is missing or inactive. Choose an active head and subhead.");
+  }
+  const approvalNeeded = [category, parent].some((c) => c && ["Pending", "Rejected"].includes(String(c.approval_status)));
+  if (options.requireApproved && approvalNeeded) {
+    throw new HttpError(409, "This cost head or its parent is not approved. A different finance approver must approve the head before this cost can be posted.");
+  }
+  return { ...category, approvalNeeded };
 }
 
 async function persistFormulaReservation(
@@ -3161,6 +3175,10 @@ export async function evaluatePreApproval(
     };
   } = {},
 ): Promise<PreApproval> {
+  const categoryState = categoryId ? await assertActiveCostCategory(categoryId) : null;
+  if (categoryState?.approvalNeeded) {
+    return { applied: false, basis: null, reason: "The cost head or its parent is not approved; no pre-approved cap or reservation applies." };
+  }
   const cat = categoryId
     ? await CostCategory.findById(categoryId).select("name parent pre_approved pre_approved_amount pre_approved_basis pre_approved_unit pre_approved_min_billable approval_status").lean<any>()
     : null;
@@ -3445,7 +3463,7 @@ export async function enrichCandidateRows(items: any[]): Promise<any[]> {
     const b: any = byCand.get(String(c._id));
     return {
       ...c, eligibility: candidateEligibility(c, defaults),
-      active_batch: b ? { code: b.code, status: b.status, program: b.program } : null,
+      active_batch: b ? { _id: b._id, code: b.code, status: b.status, program: b.program } : null,
       latest_result: resByCand.get(String(c._id)) ?? null,
     };
   });
@@ -5601,13 +5619,51 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const by_batch = joinBatches
     .map((b) => ({ batch_id: String(b._id), code: b.code, location: b.location?.name ?? null, count: joinedBy.get(String(b._id)) ?? 0 }))
     .sort((a, b) => b.count - a.count || String(a.code).localeCompare(String(b.code)));
-  const [enrolled, created, started, planRows] = await Promise.all([
+  const [enrolled, created, started, planRows, currentCandidates, trainingBatches] = await Promise.all([
     Candidate.countDocuments({ enrolled_at: instants, ...scope }),
     Batch.find({ createdAt: instants, ...scope }).select("code status location").populate("location", "name").sort({ createdAt: 1 }).lean<any[]>(),
     Batch.find({ actual_start: instants, ...scope }).select("code status location").populate("location", "name").sort({ code: 1 }).lean<any[]>(),
     planTrackerRows(scope),
+    Candidate.find({ ...scope, archived_at: null }).lean<any[]>(),
+    // A planned date is never evidence that training happened. An already-started status with
+    // no actual date remains visible as a data exception, rather than borrowing its planned date.
+    Batch.find({ ...scope, $or: [
+      { actual_start: { $ne: null } },
+      { status: { $in: ["Active", "Assessment Awaited", "Closing", "Completed", "Closed"] } },
+    ] }).select("actual_start").lean<any[]>(),
   ]);
   const listOf = (rows: any[]) => rows.map((b) => ({ batch_id: String(b._id), code: b.code, status: b.status, location: b.location?.name ?? null }));
+
+  const [currentRows, trainingMembers] = await Promise.all([
+    enrichCandidateRows(currentCandidates),
+    trainingBatches.length
+      ? BatchMember.find({ batch: { $in: trainingBatches.map((b) => b._id) } }).select("batch candidate joined_on left_on").lean<any[]>()
+      : Promise.resolve([] as any[]),
+  ]);
+  const currentEnrolled = currentRows.filter((r) => !isFreshCandidate(r) && !r.archived_at);
+  const currentOngoing = currentEnrolled.filter((r) => journeyOf({ ...r, active_batch_status: r.active_batch?.status }) === "Training Ongoing");
+  const trainingById = new Map(trainingBatches.map((b) => [String(b._id), b]));
+  const trainingStarted = new Set<string>(), missingActualStart = new Set<string>(), missingJoinDate = new Set<string>();
+  for (const m of trainingMembers) {
+    const candidate = String(m.candidate ?? "");
+    if (!candidate) continue;
+    const b = trainingById.get(String(m.batch));
+    const actual = b?.actual_start ? new Date(b.actual_start) : null;
+    const joined = m.joined_on ? new Date(m.joined_on) : null;
+    const validActual = !!actual && Number.isFinite(actual.getTime());
+    const validJoin = !!joined && Number.isFinite(joined.getTime());
+    if (!validActual) missingActualStart.add(candidate);
+    if (!validJoin) missingJoinDate.add(candidate);
+    if (!validActual || !validJoin) continue;
+    // actual_start is an instant; joined_on/left_on are business dates stored at UTC midnight.
+    // Compare their day keys, never convert a roster business date through the process timezone.
+    const actualDay = istDayOf(actual!), joinedDay = joined!.toISOString().slice(0, 10);
+    const startedDay = actualDay > joinedDay ? actualDay : joinedDay;
+    const left = m.left_on ? new Date(m.left_on) : null;
+    if (left && Number.isFinite(left.getTime()) && left.toISOString().slice(0, 10) < startedDay) continue;
+    if (startedDay === dayIST) trainingStarted.add(candidate);
+  }
+  const learnerMeasuredAt = new Date().toISOString();
 
   // ---- trainers ------------------------------------------------------------------------------------
   const trainers = await Trainer.find(trainerScope).select("pipeline_status status createdAt").lean<any[]>();
@@ -5661,10 +5717,15 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     day: dayIST,
     generated_at: new Date().toISOString(),
     finance,
-    live_note: "Mobilised and trainer availability are live figures: they show the position now, whichever day is chosen. Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
+    live_note: "Current learner totals, training-date exceptions, mobilisation and trainer availability show the position now, whichever day is chosen. They are not historical snapshots. Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
     candidates: {
       joined: { total: by_batch.reduce((s, r) => s + r.count, 0), by_batch },
       enrolled: { total: enrolled },
+      training_started: {
+        total: trainingStarted.size,
+        exceptions: { missing_actual_start: missingActualStart.size, missing_join_date: missingJoinDate.size, measured_at: learnerMeasuredAt },
+      },
+      current: { enrolled: currentEnrolled.length, training_ongoing: currentOngoing.length, measured_at: learnerMeasuredAt },
       batches_created: listOf(created),
       batches_started: listOf(started),
       mobilised: planTrackerSummary(planRows).total,
@@ -6712,6 +6773,17 @@ export const COST_FILTER_KEYS = [
   "payment_status", "approved_by", "approved_from", "approved_to",
 ] as const satisfies readonly (keyof CostFilters)[];
 
+// mtg-b2 R6: the cost-head filter, read in ONE place for the Finance register, its export and the Costs
+// ledger. Choosing a HEAD means the head and everything under it; choosing a subhead means that one
+// only. `cats` is the cost-category master. The Costs ledger used to compare the id for equality, so
+// choosing a head there showed only the entries filed directly on the head and hid every subhead's.
+export function expandCostCategoryFilter(cats: any[], categoryId: string): unknown {
+  const chosen = cats.find((c) => String(c._id) === categoryId);
+  if (!chosen || chosen.parent) return categoryId;
+  const subs = cats.filter((c) => String(c.parent ?? "") === categoryId);
+  return { $in: [chosen._id, ...subs.map((c) => c._id)] };
+}
+
 // One reader for the finance filter keys, shared by the register, its export and the ledger so a key
 // added here reaches all three. Bad values are refused (400) rather than silently ignored: a typo in
 // `payment_status` that returned everything would look like a filtered report and be a wrong one.
@@ -6720,6 +6792,11 @@ export function parseCostFilters(sp: URLSearchParams, keys: readonly (keyof Cost
   for (const k of keys) {
     const v = sp.get(k);
     if (v) filters[k] = v;
+  }
+  // mtg-b2 R6: a cost head is picked from the list, so the filter takes a head id and nothing else. A
+  // typed word used to reach the query and surface as a 500 cast error rather than a refusal.
+  if (filters.category && !/^[0-9a-f]{24}$/i.test(filters.category)) {
+    throw new HttpError(400, "Choose a cost head from the list.");
   }
   if (filters.payment_status && !(COST_PAYMENT_FILTERS as readonly string[]).includes(filters.payment_status)) {
     throw new HttpError(400, "Payment status must be Payment Pending or Paid.");
@@ -6730,7 +6807,8 @@ export function parseCostFilters(sp: URLSearchParams, keys: readonly (keyof Cost
   for (const k of ["approved_from", "approved_to"] as const) {
     const day = filters[k];
     // A real calendar day: 2026-02-31 matches the shape but is not a date (it would roll to March).
-    if (day && (!/^\d{4}-\d{2}-\d{2}$/.test(String(day)) || new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) !== day)) {
+    const parsedDay = day ? new Date(`${day}T00:00:00Z`) : null;
+    if (day && (!/^\d{4}-\d{2}-\d{2}$/.test(String(day)) || !Number.isFinite(parsedDay?.getTime()) || parsedDay?.toISOString().slice(0, 10) !== day)) {
       throw new HttpError(400, "Dates must look like 2026-10-31.");
     }
   }
@@ -6789,6 +6867,50 @@ export function filterCostsByApproval<T extends Record<string, any>>(entries: T[
     out = out.filter((e) => e.approved_on && new Date(e.approved_on).getTime() <= to);
   }
   return out;
+}
+
+// ---------- mtg-b3 R10 (QA-2898 / QA-2899, Umesh 2026-10-07): the creator's own edit / delete ----------
+// "jo create krr rhaa vo chaahe tho khud ki entry edit ya delete krr paayee" - Until Paid; re-approve on
+// change. These are the three things the two doors (PATCH and DELETE /api/costs/[id]) and the approval
+// replay all need to agree on, so they live here once.
+//
+// The fields a creator may change. Payment fields (payment_status, paid_on, payment_ref) are NOT here:
+// recording a payment stays finance's. Neither is the pre-approved snapshot or the approval link.
+export const COST_OWN_FIELDS = ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode"] as const;
+// The fields whose change is a NEW money decision: how much, under which head, for which batch or
+// centre. A change to any of them is re-approved exactly as a new post would be (Umesh named amount and
+// head; batch and centre are the same kind of fact - the approver approved THIS money for THAT place).
+// Description, payee, voucher, payment mode, date and trainer are bookkeeping and stay approved.
+export const COST_MATERIAL_FIELDS = ["amount", "category", "batch", "location"] as const;
+
+export function isCostCreator(user: { id: unknown }, doc: { entered_by?: unknown }): boolean {
+  const by: any = doc?.entered_by;
+  const id = by && typeof by === "object" && "_id" in by ? by._id : by;
+  return !!id && String(id) === String(user.id);
+}
+
+// A creator's edit that is already waiting for a decision. One at a time: a second edit (or a delete)
+// while the first is undecided would either be overwritten by it or leave an approver deciding a
+// change to a row that no longer looks like the one they were shown.
+export async function pendingCostEditRequest(costId: unknown) {
+  return ApprovalRequest.findOne({
+    action: "cost.post", entity_id: costId, status: { $in: ["Pending", "Applying"] }, "payload.kind": "cost-edit",
+  }).select("_id summary").lean<any>();
+}
+
+// Does this (head, amount, batch) pass WITHOUT a person? The same pre-approval rule a new post uses
+// (QA-1977: nothing auto-posts under a Pending or Rejected head, and the cap is checked) - an edit must
+// never be an easier door than a post. A Formula head ("Per billable passed") takes an atomic
+// reservation that only the POST path creates, so an edit onto one is NOT auto-approved: it is sent to
+// a person rather than spending a cap it cannot reserve.
+export async function evaluateCostEditPreApproval(categoryId: unknown, amount: number, batchId: unknown): Promise<PreApproval> {
+  const cat: any = categoryId
+    ? await CostCategory.collection.findOne({ _id: new Types.ObjectId(String(categoryId)) }, { projection: { pre_approved_unit: 1, pre_approved: 1 } })
+    : null;
+  if (cat?.pre_approved && cat.pre_approved_unit === "Per billable passed") {
+    return { applied: false, basis: null, reason: "this head is pre-approved per billable passed, which an edit cannot reserve - a person decides it" };
+  }
+  return evaluatePreApproval(categoryId, amount, { batch: batchId });
 }
 
 // The distinct approvers present in `entries`, for the filter's drop-down.
@@ -6855,12 +6977,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     q.batch = filters.batch ? { $in: ids.filter((i) => String(i) === String(filters.batch)) } : { $in: ids };
   }
   // Choosing a HEAD means the head and everything under it; choosing a subhead means that one only.
-  if (filters.category) {
-    const chosen = catById.get(String(filters.category));
-    q.category = chosen && !chosen.parent
-      ? { $in: [chosen._id, ...subheadsOf(String(chosen._id)).map((c) => c._id)] }
-      : filters.category;
-  }
+  if (filters.category) q.category = expandCostCategoryFilter(cats, String(filters.category));
 
   // find() + populate, never an aggregation over the scope filter — authz builds its `$in` from
   // `.map(String)`, mongoose casts strings inside find() but NOT inside a pipeline, and four live
@@ -6986,6 +7103,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       approved_by: e.approved_by ?? null,
       approved_by_kind: e.approved_by_kind,
       approved_on: e.approved_on ?? null,
+      updatedAt: e.updatedAt ?? null,
       approved_basis: e.approved_basis,
       head: headLabel, subhead: subLabel,
       // QA-2852: the heads' approval state, for the register's "(not approved)" mark. Display only; a head
@@ -7000,6 +7118,9 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       trainer: e.trainer?.name ?? "—",
       note: e.note ?? "",
       entered_by: e.entered_by?.name ?? "—",
+      // mtg-b3: the route turns this into `is_mine` for the caller and drops it - the register's
+      // row actions (edit / delete your own entry) need to know whose row it is.
+      entered_by_id: e.entered_by?._id ? String(e.entered_by._id) : null,
     });
   }
 

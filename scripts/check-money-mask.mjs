@@ -201,5 +201,14 @@ const has = (o, s) => JSON.stringify(o).includes(s);
   ok("QA-2448 [KNOWN RED, -304]: a top-level *_amount NUMBER outside the decision list still carries it", has(topNum, FIG));
 }
 
+{
+  const policy = { kind: "cap-approval", category: "head", expected: { pre_approved_amount: Number(FIG), pre_approved_basis: "rate " + FIG }, proposed: { pre_approved_amount: Number(FIG) + 1 } };
+  const queue = maskApprovalMoney({ summary: "Policy change", payload: policy }, false);
+  const trail = maskMoneyInAuditRow({ entity: "ApprovalRequest", field: "created", new_value: { summary: "Policy change", payload: policy } });
+  ok("CAP: ungranted approval queue removes both nested policy snapshots", !queue.payload.expected && !queue.payload.proposed && !has(queue, FIG));
+  ok("CAP: ungranted approval audit removes both nested policy snapshots", !trail.new_value?.payload?.expected && !trail.new_value?.payload?.proposed && !has(trail, FIG));
+  const granted = maskApprovalMoney({ summary: "Policy change", payload: policy }, true);
+  ok("CAP: finance viewer keeps complete policy snapshots for review", granted.payload.expected.pre_approved_amount === Number(FIG) && granted.payload.proposed.pre_approved_amount === Number(FIG) + 1);
+}
 console.log(`\ncheck-money-mask: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

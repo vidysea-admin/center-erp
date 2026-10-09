@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, postCost, toInputDate, offerable } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
 
@@ -26,11 +26,12 @@ function CostsInner() {
   const fApprover = sp.get("approved_by") ?? "";
   const fAppFrom = sp.get("approved_from") ?? "";
   const fAppTo = sp.get("approved_to") ?? "";
+  const fCat = sp.get("category") ?? ""; // mtg-b2 R6: a head, or one subhead of it
   const ledgerQs = new URLSearchParams(
-    Object.entries({ location: fLoc, batch: fBatch, payment_status: fPay, approved_by: fApprover, approved_from: fAppFrom, approved_to: fAppTo })
+    Object.entries({ location: fLoc, batch: fBatch, category: fCat, payment_status: fPay, approved_by: fApprover, approved_from: fAppFrom, approved_to: fAppTo })
       .filter(([, v]) => v) as [string, string][],
   ).toString();
-  const setFilter = (k: "location" | "batch" | "payment_status" | "approved_by" | "approved_from" | "approved_to", v: string) => {
+  const setFilter = (k: "location" | "batch" | "category" | "payment_status" | "approved_by" | "approved_from" | "approved_to", v: string) => {
     const next = new URLSearchParams(ledgerQs);
     if (v) next.set(k, v); else next.delete(k);
     const tabQ = sp.get("tab") ? `tab=${sp.get("tab")}&` : "";
@@ -49,6 +50,13 @@ function CostsInner() {
   const { can, role, loaded: permsLoaded } = usePerms();
   const postOnly = !permsLoaded || !can("finance.view");
   const canApproveCosts = permsLoaded && can("finance.approve", "edit");
+  // mtg-b3 R10 (Umesh, 2026-10-07): whoever entered a cost can edit or delete their OWN entry until it
+  // is paid. These three are the screen's half of it; /api/costs/[id] is the rule.
+  const canManageCosts = permsLoaded && can("costs.manage", "edit");
+  const own = useOwnCostActions({ onChanged: () => load(postOnly), onError: (m) => setError(m), onNotice: (m) => setNotice(m) });
+  const [ownRows, setOwnRows] = useState<any[]>([]);
+  const [deletedRows, setDeletedRows] = useState<any[]>([]);
+  const [editRow, setEditRow] = useState<any>(null);
   const [tab, setTab] = useState(sp.get("tab") === "Invoices" ? "Invoices" : "Costs");
   const [costs, setCosts] = useState<any[]>([]);
   const [approverOptions, setApproverOptions] = useState<{ value: string; label: string }[]>([]);
@@ -78,6 +86,9 @@ function CostsInner() {
       ? Promise.resolve()
       : api(`/api/costs${ledgerQs ? `?${ledgerQs}` : ""}`).then((d) => { setCosts(d.items); setApproverOptions(d.approver_options ?? []); }),
     asPostOnly ? Promise.resolve() : api("/api/invoices").then((d) => setInvoices(d.items)),
+    // mtg-b3: the caller's own entries (a creator has no ledger) and the soft-deleted ones to restore.
+    canManageCosts ? api("/api/costs?mine=1").then((d) => setOwnRows(d.items ?? [])) : Promise.resolve(),
+    canManageCosts ? api(`/api/costs?deleted=1${canApproveCosts ? "" : "&mine=1"}`).then((d) => setDeletedRows(d.items ?? [])) : Promise.resolve(),
     api("/api/master-lists/cost-categories").then((d) => setCats(d.items)),
     role === "Trainer" ? Promise.resolve() : api("/api/locations?limit=2000").then((d) => setLocations(d.items)),
     api("/api/batches?limit=2000").then((d) => setBatches(d.items ?? [])),
@@ -85,7 +96,7 @@ function CostsInner() {
   ]).catch((e) => setError(e.message)).finally(() => setLoading(false));
   // Wait for the RIGHTS, not the session (QA-1825) — the first paint does not know them yet, and
   // firing the ledger fetch for a post-only user would just banner their own 403 at them.
-  useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly, ledgerQs]);
+  useEffect(() => { if (permsLoaded) load(postOnly); }, [permsLoaded, postOnly, ledgerQs, canManageCosts]);
 
   // QA-2483: the finance register's Edit lands here with ?edit=<id>. It opens the row in the form
   // ONLY once the ledger has actually arrived and only for someone who may correct it - otherwise
@@ -95,17 +106,33 @@ function CostsInner() {
   const editParam = sp.get("edit");
   const [deepLinked, setDeepLinked] = useState("");
   useEffect(() => {
-    if (!editParam || deepLinked === editParam || !canApproveCosts || !costs.length) return;
-    const row = costs.find((c: any) => String(c._id) === String(editParam));
+    if (!editParam || deepLinked === editParam || !(canApproveCosts || canManageCosts) || !(costs.length || ownRows.length)) return;
+    const row = [...costs, ...ownRows].find((c: any) => String(c._id) === String(editParam));
     if (row) { setDeepLinked(editParam); openEdit(row); }
-  }, [editParam, deepLinked, canApproveCosts, costs]);
+  }, [editParam, deepLinked, canApproveCosts, canManageCosts, costs, ownRows]);
 
   async function addCost() {
     try {
       if (editId) {
         // blank select = "not changing this" (imported entries may anchor on batch, not location)
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
-        await api(`/api/costs/${editId}`, { method: "PATCH", json });
+        const sendEdit = async (confirmApproved: boolean, mutationKey?: string) => {
+          const res: any = await api(`/api/costs/${editId}`, { method: "PATCH", headers: mutationKey ? { "Idempotency-Key": mutationKey } : undefined, json: { ...json, ...(editRow?.updatedAt ? { base_updated_at: editRow.updatedAt } : {}), ...(confirmApproved ? { confirm_approved: true } : {}) } });
+          if (res?.queued) setNotice("Sent back to the Admin for approval - the entry stays as it is until it is approved.");
+          setForm({ entry_date: toInputDate(new Date()) }); setEditId(""); setEditRow(null); load(postOnly);
+        };
+        if (!canApproveCosts && editRow) {
+          // Your own entry. If a person has already approved it, the dialog asks first (the server asks too).
+          const idOf = (v: any) => String(v?._id ?? v ?? "");
+          const material = Number(form.amount) !== Number(editRow.amount)
+            || (!!form.category && form.category !== idOf(editRow.category))
+            || (!!form.batch && form.batch !== idOf(editRow.batch))
+            || (!!form.location && form.location !== idOf(editRow.location));
+          await own.edit(editRow, material, sendEdit, json);
+        } else {
+          await sendEdit(false);
+        }
+        return;
       } else {
         // mtg-a3 R7: sent with an idempotency key (kept in sessionStorage until this entry succeeds),
         // so a double click or a retry after a dropped response cannot post it twice.
@@ -120,7 +147,8 @@ function CostsInner() {
   // loads the entry into the form for correction or removal (finance.approve holders only; the API
   // 403s everyone else).
   function openEdit(r: any) {
-    if (!canApproveCosts) return;
+    if (!canApproveCosts && !ownCostActionable(r)) return;
+    setEditRow(r);
     setEditId(r._id);
     setForm({
       entry_date: toInputDate(r.entry_date), amount: r.amount, note: r.note ?? "",
@@ -175,6 +203,7 @@ function CostsInner() {
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">{postOnly ? "Costs — post an expense" : "Costs & Invoices"}</h1>
       <ErrorBanner msg={error} onDismiss={() => setError("")} />
+      {own.modal}
       {notice && (
         <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
           <span>{notice}</span>
@@ -229,7 +258,7 @@ function CostsInner() {
                   {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
-              {editId && (
+              {editId && canApproveCosts && (
                 <>
                   <Field label="Payment date"><input type="date" className={inputCls} value={form.paid_on ?? toInputDate(new Date())} onChange={(e) => setForm({ ...form, paid_on: e.target.value })} /></Field>
                   <Field label="Payment reference"><input className={inputCls} value={form.payment_ref ?? ""} onChange={(e) => setForm({ ...form, payment_ref: e.target.value })} /></Field>
@@ -265,7 +294,7 @@ function CostsInner() {
                   at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
               <div className="flex flex-wrap items-end gap-2 md:col-span-6">
                 <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form, cats, !!editId) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
-                {editId && canApproveCosts && <Btn kind="ghost" onClick={() => { setEditId(""); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
+                {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setEditRow(null); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
                 {editId && canApproveCosts && (
                   <span className="flex flex-wrap items-end gap-2 md:ml-auto">
                     {form.payment_status !== "Paid" && <Btn kind="ghost" feedback onClick={markPaymentDone}>Mark payment done</Btn>}
@@ -319,7 +348,7 @@ function CostsInner() {
               actor, and /api/audit/CostEntry/<id> serves them. No screen had ever asked. So this is
               a missing CALL, not a missing feature - which is exactly why nothing ever went red
               over it. Shown beside the entry being corrected, where the question is actually asked. */}
-          {editId && <Activity entity="CostEntry" id={editId} />}
+          {editId && canApproveCosts && <Activity entity="CostEntry" id={editId} />}
           {/* QA-2295: this used to be the post-only ARM of a ternary, so a finance.view holder saw
               the ledger INSTEAD of their own submissions and never read why one was rejected.
               It is now unconditional - gated on having submitted anything, not on lacking a right -
@@ -341,6 +370,45 @@ function CostsInner() {
                   { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.decided_by?.name ?? "—" },
                 ]} empty="Nothing submitted yet — post your first entry above." />
               <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost.</p>
+            </Section>
+          )}
+          {postOnly && canManageCosts && ownRows.length > 0 && (
+            <Section title="Entries you entered">
+              <DataTable rows={ownRows} loading={loading}
+                cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+                defaultSort={{ key: "entry_date", dir: "desc" }}
+                columns={[
+                  { key: "entry_date", label: "Date", sortable: true, sortValue: (r: any) => r.entry_date ? new Date(r.entry_date).getTime() : null, render: (r: any) => fmtDate(r.entry_date) },
+                  { key: "category", label: "Category", render: (r: any) => r.category?.name },
+                  { key: "amount", label: "Amount", render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
+                  { key: "payment_status", label: "Payment", render: (r: any) => r.payment_status ?? "Not recorded" },
+                  { key: "approved_by", label: "Approved by", render: (r: any) => r.approved_by ?? "—" },
+                  { key: "batch", label: "Batch", mobile: false, render: (r: any) => r.batch?.code ?? "—" },
+                  { key: "note", label: "Note", mobile: false },
+                  {
+                    key: "_act", label: "", minWidth: 150,
+                    render: (r: any) => ownCostActionable(r) ? (
+                      <span className="flex items-center gap-1">
+                        <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                        <Btn small kind="danger" onClick={() => own.remove(r)}>Delete</Btn>
+                      </span>
+                    ) : <span className="text-xs text-gray-500">{r.edit_pending ? "Change awaiting approval" : "Paid - locked"}</span>,
+                  },
+                ]} empty="You have not entered any cost yet." />
+              <p className="mt-2 text-xs text-gray-500">You can change or delete your own entry until it is paid. If a person has already approved it, changing the amount or the head sends it back for approval first.</p>
+            </Section>
+          )}
+          {canManageCosts && deletedRows.length > 0 && (
+            <Section title="Deleted entries - restorable">
+              <DataTable rows={deletedRows} loading={loading}
+                cardTitle={(r: any) => `₹${r.amount} · ${r.category?.name}`}
+                columns={[
+                  { key: "entry_date", label: "Date", render: (r: any) => fmtDate(r.entry_date) },
+                  { key: "category", label: "Category", render: (r: any) => r.category?.name },
+                  { key: "amount", label: "Amount", render: (r: any) => `₹${(r.amount ?? 0).toLocaleString("en-IN")}` },
+                  { key: "archive_reason", label: "Why", mobile: false, render: (r: any) => r.archive_reason ?? "—" },
+                  { key: "_act", label: "", minWidth: 110, render: (r: any) => <Btn small kind="ghost" onClick={() => own.restore(r)}>Restore</Btn> },
+                ]} empty="Nothing deleted." />
             </Section>
           )}
           {!postOnly && (
@@ -371,6 +439,10 @@ function CostsInner() {
                     .sort((a: any, b: any) => String(a.code ?? "").localeCompare(String(b.code ?? "")))
                     .map((b: any) => <option key={b._id} value={b._id}>{b.code}{b.location?.name ? ` · ${b.location.name}` : ""}</option>)}
                 </select>
+              </label>
+              <label className="text-xs text-gray-500">Cost head
+                <CostHeadFilter cats={cats} value={fCat} onChange={(id) => setFilter("category", id)}
+                  className="mt-1 block w-full min-w-0 max-w-[13rem] rounded-lg border border-gray-200 px-2 py-1.5 text-sm" />
               </label>
               <label className="text-xs text-gray-500">Payment status
                 <select value={fPay} onChange={(e) => setFilter("payment_status", e.target.value)} aria-label="Payment status filter"
@@ -433,14 +505,19 @@ function CostsInner() {
                 // an interaction with no label, no icon and nothing to discover.
                 // The column is omitted entirely rather than rendered empty for someone without the
                 // right, so the table does not grow a blank stripe for most of its readers.
-                ...(canApproveCosts ? [{
+                ...(canApproveCosts || costs.some((c: any) => c.is_mine) ? [{
                   key: "_act", label: "", minWidth: 150,
-                  render: (r: any) => (
+                  render: (r: any) => canApproveCosts ? (
                     <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
                       <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
                       <Btn small kind="danger" onClick={() => deleteCost(r)}>Delete</Btn>
                     </span>
-                  ),
+                  ) : ownCostActionable(r) ? (
+                    <span onClick={(e: any) => e.stopPropagation()} className="flex items-center gap-1">
+                      <Btn small kind="ghost" onClick={() => openEdit(r)}>Edit</Btn>
+                      <Btn small kind="danger" onClick={() => own.remove(r)}>Delete</Btn>
+                    </span>
+                  ) : r.is_mine ? <span className="text-xs text-gray-500">{r.edit_pending ? "Change awaiting approval" : "Paid - locked"}</span> : null,
                 }] : []),
               ]} empty="No cost entries." />
           </Section>

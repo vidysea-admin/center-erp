@@ -97,6 +97,10 @@ const SUITES = [
   // QA-1828b/c: the cost entry taxonomy. Own file for the same reason as e2e-password - a
   // concurrent session holds e2e-roles.mjs. It toggles the cost.post approval rule and puts it back.
   "e2e-cost-entry.mjs",
+  // mtg-b2 (R6, meeting 2026-10-06): the cost head is chosen from a Head -> Subhead dropdown on both cost
+  // forms; a typed head string never posts; the Costs ledger filters by head or subhead (a head means
+  // its subheads too) on the same function as the register and the export. Its own file and browser.
+  "e2e-cost-head-dropdown.mjs",
   // QA-1996/QA-1997: the last-Admin floor, and it RACES on purpose. The guard was reported to
   // Umesh as unreachable twice, on the strength of a pin that only ever sent one request at a
   // time; a checker reached the zero-Admin lockout 3 of 3 rounds by sending two. Its own file
@@ -140,6 +144,9 @@ const SUITES = [
   // "(rejected)" in the Finance cost-head filter, the Finance register and Costs ledger rows, and the approvals
   // summary of a parked cost (Admin queue and My submissions); a head with no flag reads as approved. Its own file.
   "e2e-cost-head-not-approved-mark.mjs",
+  // mtg-b3 (QA-2898/2899, Umesh 2026-10-07): the person who entered a cost edits / deletes it themselves
+  // (Pending: free; Approved: asks, amount/head change goes back through cost.post; Paid: locked; soft delete).
+  "e2e-cost-own-edit-delete.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

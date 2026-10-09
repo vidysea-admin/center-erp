@@ -454,3 +454,27 @@ export const OTHER_HEAD_NEEDS_NAME = "Name the new head for this cost - a cost c
 export function isBareOtherHeadName(v: unknown): boolean {
   return OTHER_HEAD_RE.test(normalizeCostHeadName(v));
 }
+
+// mtg-b3 R10b (QA-2899, Umesh 2026-10-07 01:37 IST: "aur already apporve wali ko change krnee k liye
+// proper confirmation aana chaiye ki are you really sure?"). ONE sentence, read by the modal on all
+// three cost screens AND by the server's refusal when the acknowledgement is missing, so the words
+// the person confirmed and the words the server would have said cannot drift apart.
+// `kind` is stampCostApprovals' approved_by_kind. A pre-approved entry was approved by a head's cap,
+// not by a person, so it is not given a name it never had.
+export type ApprovedCostStamp = { kind?: string | null; by?: string | null; on?: string | Date | null };
+export function costIsApproved(s: ApprovedCostStamp | null | undefined): boolean {
+  return s?.kind === "approver" || s?.kind === "pre-approved";
+}
+function istDay(v: string | Date): string {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" });
+}
+export function approvedCostSentence(s: ApprovedCostStamp, action: "edit" | "delete" | "edit-light"): string {
+  const day = s.on ? istDay(s.on) : "";
+  const who = s.kind === "pre-approved" ? "pre-approved by its cost head" : `approved by ${s.by || "a finance approver"}`;
+  const head = `This entry is already ${who}${day ? ` on ${day}` : ""}.`;
+  if (action === "edit") return `${head} Changing it sends it back for approval. Are you really sure?`;
+  if (action === "edit-light") return `${head} This change does not touch the amount, head, batch or centre, so it stays approved. Are you really sure?`;
+  return `${head} Deleting it takes it out of every total, and it can be restored. Are you really sure?`;
+}

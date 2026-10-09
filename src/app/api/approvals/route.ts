@@ -52,7 +52,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // Asked only where it changes the answer (senior review: two permission lookups per GET otherwise).
   const headRight = (!queueRight || isScoped(user)) ? await hasFinanceApprove(user) : false;
   if (!queueRight && !headRight) await requireView(user, "approvals.decide");
-  const HEAD_APPROVALS = { action: "costcategory.create", "payload.kind": "head-approval" };
+  const HEAD_APPROVALS = { action: "costcategory.create", "payload.kind": { $in: ["head-approval", "cap-approval"] } };
   const status = req.nextUrl.searchParams.get("status") ?? "Pending";
   // Applying is a recoverable in-flight finance claim, not a completed decision. Keep it in the
   // default approver queue so a process restart cannot turn durable work into an invisible orphan.

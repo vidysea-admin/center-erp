@@ -453,6 +453,31 @@ re-notify the approver. (3) The key lives in `sessionStorage`, which is per tab:
 protection is for a double click or a retry in the same tab, not for two tabs. (4) Rows posted BEFORE this unit
 carry no key, so existing duplicates are not collapsed (Manish's cleanup is a separate, human-gated job).
 
+### 3.0g "May this person edit or delete this cost?" — one door, one rule (mtg-b3, Umesh 2026-10-07, QA-2898/2899)
+
+The creator (`CostEntry.entered_by`) edits or deletes their OWN entry through `patchOwnCost` / `deleteOwnCost` in
+`api/costs/[id]/route.ts`; a `finance.approve` holder still takes the unchanged finance path above them (the route
+branches on `hasFinanceApprove`). Rules: Payment Pending = free; Paid = locked (409); someone else's entry = 403;
+location scope is checked on the entry and on any centre / batch / trainer it moves to. An entry a person (or a cap)
+already approved needs `confirm_approved` (409 with `approvedCostSentence` from `lib/validate.ts` otherwise - the
+dialog, `ConfirmModal` in `components/ui.tsx`, shows the same sentence; the server does not trust the dialog).
+**"Back for approval" is the EXISTING `cost.post` queue**, not a new one: an approved entry whose amount, head, batch
+or centre changes parks an `ApprovalRequest` with `payload.kind = "cost-edit"`; the row is untouched until
+`applyApprovedCostEdit` (`lib/approvals.ts`, called from the replay switch in `approvals/[id]/route.ts`) updates
+the SAME row. The payload carries `base_updated_at` as a fence (no nested money keys: the approvals masker strips
+only top-level ones); if the row moved since, the approval refuses and the request stays open. An edit is never an
+easier door than a post: `evaluateCostEditPreApproval` (`lib/rules.ts`) reuses `evaluatePreApproval`, so QA-1977 (no
+auto-apply under a Pending / Rejected head) and the per-entry cap apply, a per-billable Formula head always goes to a
+person, and an approved entry reaches a person even when the `cost.post` rule is switched off (`fallbackApproverRole`
+Admin). One edit may wait at a time (`pendingCostEditRequest`); a delete is refused while one waits.
+**Delete by the creator is SOFT**: `archived_at` / `archived_by` / `archive_reason` on `CostEntry`; `VISIBLE_COST_ENTRY`
+(`models/index.ts`) filters `archived_at: null`, so the ledger, the register, rollups and the export drop it with no
+per-route code; the only way back is `.setOptions({ archivedOnly: true })` (the `?deleted=1` listing and
+`POST /api/costs/[id]/restore`). Finance's DELETE stays the HARD delete. Creators without `finance.view` read
+`GET /api/costs?mine=1` (their own rows, `is_mine`, `edit_pending`); the register rows carry `is_mine` and never
+the enterer's id. Every edit / delete / restore writes a `financeAuditEvent` through the durable outbox. Suite:
+`scripts/e2e-cost-own-edit-delete.mjs`.
+
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.
