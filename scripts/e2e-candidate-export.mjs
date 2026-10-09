@@ -237,11 +237,41 @@ let browser;
 try { browser = await chromium.launch({ headless: true }); crashGuardBrowser = browser; }
 catch (e) { ok("[precondition] chromium launches from the `playwright` devDependency", false, String(e.message).slice(0, 200)); finish(); }
 
-const newPage = async (email, password) => {
+const newPage = async (email, password, expected) => {
   const ctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, acceptDownloads: true });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => { errors.push(String(e.message).slice(0, 160)); pageErrors.push(String(e.message).slice(0, 160)); });
+  const starts = new WeakMap();
+  page.__cxNavigation = 0;
+  page.__cxLists = [];
+  page.__cxFailures = [];
+  page.__cxErrors = errors;
+  page.__cxPersona = expected.role;
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame()) { page.__cxNavigation++; page.__cxLists = []; }
+  });
+  page.on("request", (request) => {
+    starts.set(request, { started: Date.now(), navigation: page.__cxNavigation });
+  });
+  page.on("requestfailed", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (/\/api\/(auth(?:\/|$)|candidates$)/.test(pathname)) {
+      page.__cxFailures.push({ path: pathname, failure: String(request.failure()?.errorText ?? "failed").slice(0, 100) });
+      page.__cxFailures = page.__cxFailures.slice(-4);
+    }
+  });
+  page.on("response", async (response) => {
+    const request = response.request(), pathname = new URL(response.url()).pathname;
+    if (request.method() !== "GET" || pathname !== `${new URL(BASE).pathname.replace(/\/$/, "")}/api/candidates`) return;
+    const start = starts.get(request);
+    if (!start || start.navigation !== page.__cxNavigation) return;
+    const record = { path: pathname, status: response.status(), ms: Date.now() - start.started, validItems: false };
+    try { record.validItems = response.ok() && Array.isArray((await response.json())?.items); }
+    catch { /* Invalid/failed JSON remains a failed screen-response precondition. */ }
+    if (start.navigation === page.__cxNavigation) page.__cxLists.push(record);
+  });
+  try {
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(800);
   const emailBox = page.locator('input[type="email"], input[name="email"], input[id="email"]').first();
@@ -249,14 +279,31 @@ const newPage = async (email, password) => {
     await emailBox.fill(email);
     await page.locator('input[type="password"]').first().fill(password);
     await page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
-    await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+    await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 });
+  }
+  const sessionResponse = await ctx.request.get(`${BASE}/api/auth/session`);
+  let session;
+  try { session = await sessionResponse.json(); } catch { /* Checked below. */ }
+  const user = session?.user;
+  const sameScope = !expected.location_scope || (Array.isArray(user?.location_scope)
+    && JSON.stringify(user.location_scope.map(String).sort()) === JSON.stringify(expected.location_scope.map(String).sort()));
+  if (!sessionResponse.ok() || !user?.id || String(user.email ?? "").trim().toLowerCase() !== email.trim().toLowerCase()
+      || user.role !== expected.role || (expected.id !== undefined && (!expected.id || String(user.id) !== String(expected.id)))
+      || !sameScope || (expected.can_edit !== undefined && user.can_edit !== expected.can_edit)) {
+    throw new Error(`Intended ${expected.role} session identity/scope was not established (session status ${sessionResponse.status()}).`);
   }
   page.setDefaultTimeout(20000);
   return { ctx, page, errors };
+  } catch (error) {
+    const detail = JSON.stringify({ persona: expected.role, path: new URL(page.url()).pathname,
+      failures: page.__cxFailures, errors: errors.slice(0, 3) }).slice(0, 450);
+    await ctx.close();
+    throw new Error(`${String(error?.message ?? error).slice(0, 220)} ${detail}`);
+  }
 };
 const arm = async (name, page, fn) => {
   try { await fn(); }
-  catch (e) { ok(`${name} [arm ran to its end]`, false, String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 260)); }
+  catch (e) { ok(`${name} [arm ran to its end]`, false, String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 700)); }
 };
 const PICK = '[title="Choose which columns are visible"]';
 const openPicker = async (page) => {
@@ -272,11 +319,24 @@ const setPick = async (page, label, on) => {
 };
 const headers = async (page) => (await page.locator("table thead th").allTextContents()).map((t) => t.replace(/[▲▼↕⏷]/g, "").trim()).filter(Boolean);
 const settle = async (page, text) => {
-  await page.locator("table tbody tr").first().waitFor();
-  await page.waitForFunction((t) => document.body.innerText.includes(t), text, { timeout: 30000 }).catch(() => {});
+  const deadline = Date.now() + 20000;
+  try {
+    while (!page.__cxLists.length && Date.now() < deadline) await page.waitForTimeout(50);
+    const list = page.__cxLists.at(-1);
+    if (!list?.validItems) throw new Error("The screen's candidate-list GET did not return successful items JSON.");
+    await page.locator("table tbody tr").first().waitFor({ timeout: Math.max(1, deadline - Date.now()) });
+    await page.locator("table tbody").getByText(text).first().waitFor({ timeout: 30000 });
+  } catch (error) {
+    const body = await page.locator("body").innerText({ timeout: 1000 }).catch(() => "");
+    const context = body.split(/\n/).filter((line) => /error|denied|access|loading|sign in|log in|no candidate/i.test(line)).slice(0, 3).join(" | ").slice(0, 180);
+    throw new Error(`${String(error?.message ?? error).replace(/\s+/g, " ").slice(0, 180)} ${JSON.stringify({
+      persona: page.__cxPersona, path: new URL(page.url()).pathname, lists: page.__cxLists.slice(-2),
+      failures: page.__cxFailures, errors: page.__cxErrors.slice(0, 3), context,
+    }).slice(0, 500)}`);
+  }
 };
 
-const ui = await newPage("admin@vidysea.com", ADMIN_PASSWORD);
+const ui = await newPage("admin@vidysea.com", ADMIN_PASSWORD, { role: "Admin" });
 ok("[precondition] the browser is logged in as Admin", !/login/i.test(ui.page.url()), ui.page.url());
 
 await arm("C2/C5/C1 candidates page", ui.page, async () => {
@@ -383,7 +443,7 @@ await arm("C5 reports rollup", ui.page, async () => {
 });
 
 await arm("persona Location (scoped) in the browser", ui.page, async () => {
-  const lu = await newPage(locUser.email, PW);
+  const lu = await newPage(locUser.email, PW, { role: "Location", id: locUser.id, location_scope: [String(locA._id)], can_edit: true });
   try {
     const page = lu.page;
     await page.goto(`${BASE}/candidates?q=${encodeURIComponent(s)}`, { waitUntil: "domcontentloaded" });
@@ -396,7 +456,7 @@ await arm("persona Location (scoped) in the browser", ui.page, async () => {
   } finally { await lu.ctx.close(); }
 });
 await arm("persona Operations in the browser", ui.page, async () => {
-  const ou = await newPage(opsUser.email, PW);
+  const ou = await newPage(opsUser.email, PW, { role: "Operations", id: opsUser.id, location_scope: [], can_edit: true });
   try {
     const page = ou.page;
     await page.goto(`${BASE}/candidates?q=${encodeURIComponent(s)}`, { waitUntil: "domcontentloaded" });
@@ -407,7 +467,7 @@ await arm("persona Operations in the browser", ui.page, async () => {
   } finally { await ou.ctx.close(); }
 });
 
-ok("browser: no uncaught page error on any screen driven here", ui.errors.length === 0, ui.errors.slice(0, 3).join(" | "));
+ok("browser: no uncaught page error on any screen driven here", pageErrors.length === 0, pageErrors.slice(0, 3).join(" | "));
 await browser.close();
 
 // ---- cleanup: the throwaway personas -----------------------------------------------------------------

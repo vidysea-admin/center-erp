@@ -636,26 +636,38 @@ for (const variant of ["ordinary", "mark_paid"]) {
     continue;
   }
   const barrier = `delete-first-${variant}-${stamp}`;
-  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`, { reason: DEL_REASON });
+  let deleteFinished = false;
+  const deletePromise = req(admin, "DELETE", `/api/costs/${costId}?_test_wait_after_delete_load=${barrier}`, { reason: DEL_REASON })
+    .finally(() => { deleteFinished = true; });
+  const barrierDeadline = Date.now() + 5_000;
   let barrierSeen = false;
-  for (let i = 0; i < 100 && !barrierSeen; i++) {
+  while (Date.now() < barrierDeadline && !barrierSeen && !deleteFinished) {
     const row = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
     barrierSeen = row?._test_delete_loaded_barrier === barrier;
     if (!barrierSeen) await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  const markerHeld = barrierSeen && !deleteFinished && Date.now() < barrierDeadline;
   const patchBody = variant === "ordinary"
     ? { amount: original.amount + 100, note: `patch-won-${variant}-${stamp}` }
     : { mark_paid: true, paid_on: "2026-09-08", payment_ref: `RACE-${stamp}`, vendor_payee: `paid-${stamp}`, payment_mode: "UPI" };
-  const patchResult = await req(admin, "PATCH", `/api/costs/${costId}`, patchBody);
-  await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_delete_loaded_barrier: "" } });
+  let patchResult = { status: -1 };
+  let patchError = null;
+  try {
+    if (markerHeld) patchResult = await req(admin, "PATCH", `/api/costs/${costId}`, patchBody);
+  } catch (error) {
+    patchError = error;
+  } finally {
+    await rawCosts.updateOne({ _id: new ObjectId(String(costId)) }, { $unset: { _test_delete_loaded_barrier: "" } });
+  }
   const deleteResult = await deletePromise;
+  if (patchError) throw patchError;
   const after = await rawCosts.findOne({ _id: new ObjectId(String(costId)) });
   const deletionAudits = await rawAudits.countDocuments({
     entity: "CostEntry", entity_id: new ObjectId(String(costId)), field: "deleted",
   });
   ok(`DELETE-loads/${variant} [precondition]: route barrier proves DELETE loaded before the PATCH won`,
-    barrierSeen && patchResult.status === 200,
-    JSON.stringify({ barrierSeen, patch: patchResult.status }));
+    markerHeld && patchResult.status === 200,
+    JSON.stringify({ barrierSeen, markerHeld, patch: patchResult.status }));
   ok(`DELETE-loads/${variant}: stale tombstone claim loses with 409 and writes no deletion event/audit`,
     deleteResult.status === 409 && after?.deletion_state === undefined && deletionAudits === 0
       && (variant === "ordinary"
@@ -795,8 +807,24 @@ for (const variant of ["ordinary", "mark_paid"]) {
 // observed before its post-persist pause could end; raw reads then prove no late cost/request survives.
 {
   const template = await rawBatches.findOne({});
-  const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
-    .find((c) => !c.pre_approved && c.active !== false);
+  const materializationParent = await mkSignedHead({ name: `ZZ C12 Parent ${stamp}`, active: true });
+  const materializationParentId = materializationParent.data?.item?._id;
+  const materializationHead = materializationParentId
+    ? await mkSignedHead({ name: `ZZ C12 Subhead ${stamp}`, parent: materializationParentId, active: true })
+    : { data: {} };
+  const materializationHeadId = materializationHead.data?.item?._id;
+  const [materializationParentRow, cat] = await Promise.all([
+    materializationParentId ? rawCategories.findOne({ _id: new ObjectId(String(materializationParentId)) }) : null,
+    materializationHeadId ? rawCategories.findOne({ _id: new ObjectId(String(materializationHeadId)) }) : null,
+  ]);
+  const materializationHeadsApproved = materializationParentRow?.active === true
+    && materializationParentRow.approval_status === "Approved"
+    && cat?.active === true && cat.approval_status === "Approved" && cat.pre_approved !== true
+    && String(cat.parent) === String(materializationParentRow._id);
+  ok("batch materialization [precondition]: its own active parent and subhead were independently Approved",
+    materializationHeadsApproved,
+    JSON.stringify({ parent: materializationParentRow?.approval_status, parentActive: materializationParentRow?.active,
+      category: cat?.approval_status, categoryActive: cat?.active, categoryParent: cat?.parent }));
   const makeBatch = async (suffix) => {
     const batchId = new ObjectId();
     await rawBatches.insertOne({
@@ -807,14 +835,15 @@ for (const variant of ["ordinary", "mark_paid"]) {
     return batchId;
   };
   const waitFor = async (read) => {
-    for (let i = 0; i < 100; i++) {
+    const until = Date.now() + 5_000;
+    while (Date.now() < until) {
       const value = await read();
-      if (value) return value;
+      if (value && Date.now() < until) return value;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     return null;
   };
-  if (template?.location && template?.program && cat?._id) {
+  if (template?.location && template?.program && cat?._id && materializationHeadsApproved) {
     const directBatch = await makeBatch("DIRECT");
     const directNote = `c12-direct-${stamp}`;
     const directPauseMs = 5_000;
@@ -867,17 +896,23 @@ for (const variant of ["ordinary", "mark_paid"]) {
       _id: replayId, action: "cost.post", entity: "CostEntry", entity_id: replayId,
       summary: `c12 applying replay ${stamp}`,
       payload: { entry_date: "2026-09-07", location: template.location, batch: replayBatch, category: cat._id,
-        amount: 703, note: `c12-replay-${stamp}`, _test_pause_after_cost_create_ms: 2500 },
+        amount: 703, note: `c12-replay-${stamp}`, _test_pause_after_cost_create_ms: 5_000 },
       location: template.location, batch: replayBatch, initiator: opsUser?._id ?? new ObjectId(),
       approver_role: "Admin", approver_users: [], status: "Pending", createdAt: new Date(), updatedAt: new Date(),
     });
     const replayPromise = req(admin, "POST", `/api/approvals/${replayId}`, { decision: "Approved", note: "cycle 12 replay race" });
     const replayNewborn = await waitFor(() => rawCosts.findOne({ _id: replayId, batch: replayBatch }));
     const replayDelete = await req(admin, "DELETE", `/api/batches/${replayBatch}`, { reason: "cycle 12 applying replay race" });
+    const replayBatchAfterDelete = await rawBatches.findOne({ _id: replayBatch });
+    const replayDeletionObservedAt = Date.now();
+    const replayEarliestResumeAt = new Date(replayNewborn?.createdAt ?? Number.NaN).getTime() + 5_000;
     const replayResult = await replayPromise;
     ok("batch materialization [precondition]: Applying replay created its deterministic cost before final fence",
-      !!replayNewborn && replayDelete.status === 200,
-      JSON.stringify({ newborn: !!replayNewborn, cascade: replayDelete.status }));
+      !!replayNewborn && replayDelete.status === 200 && !replayBatchAfterDelete
+        && Number.isFinite(replayEarliestResumeAt) && replayDeletionObservedAt < replayEarliestResumeAt,
+      JSON.stringify({ newborn: !!replayNewborn, cascade: replayDelete.status, batch: !!replayBatchAfterDelete,
+        deletionObservedAt: replayDeletionObservedAt, earliestResumeAt: replayEarliestResumeAt,
+        remainingPauseMs: replayEarliestResumeAt - replayDeletionObservedAt }));
     ok("batch materialization: Applying replay race returns 409 with neither request nor deterministic cost left behind",
       replayResult.status === 409 && !(await rawApprovals.findOne({ _id: replayId }))
         && !(await rawCosts.findOne({ _id: replayId })),
@@ -1181,20 +1216,53 @@ for (const variant of ["ordinary", "mark_paid"]) {
       const totalCap = 50 * billable;
       const zombieNote = `expired zombie ${stamp}`;
       const winnerNote = `barrier winner ${stamp}`;
+      const zombiePauseMs = 5_000;
       const zombiePromise = req(ops, "POST", "/api/costs", {
         entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
         amount: totalCap, note: zombieNote,
-        _test_formula_ttl_ms: 100, _test_formula_pause_after_reserve_ms: 350,
+        _test_formula_ttl_ms: 100, _test_formula_pause_after_reserve_ms: zombiePauseMs,
       });
-      await new Promise((resolve) => setTimeout(resolve, 160));
+      const ownerDeadline = Date.now() + 5_000;
+      let heldOwner = null;
+      while (Date.now() < ownerDeadline && !heldOwner) {
+        heldOwner = await rawCosts.findOne({
+          category: new ObjectId(String(recoveryId)), batch: new ObjectId(String(closedBatch._id)),
+          note: zombieNote, reservation_kind: "Formula", reservation_state: "Pending",
+        });
+        if (!heldOwner) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const ownerObservedAt = Date.now();
+      const ownerExpiresAt = new Date(heldOwner?.reservation_expires_at ?? Number.NaN).getTime();
+      const ownerEarliestResumeAt = new Date(heldOwner?.createdAt ?? Number.NaN).getTime() + zombiePauseMs;
+      while (Date.now() <= ownerExpiresAt && Date.now() < ownerDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const winnerStartedAt = Date.now();
       const recovered = await req(ops, "POST", "/api/costs", {
         entry_date: "2026-09-07", batch: closedBatch._id, category: recoveryId,
         amount: totalCap, note: winnerNote, _test_ambiguous_after_create: true,
       });
+      const [recoveredWinner, expiredOwner] = await Promise.all([
+        rawCosts.findOne({ category: new ObjectId(String(recoveryId)), batch: new ObjectId(String(closedBatch._id)),
+          note: winnerNote, reservation_kind: "Formula", reservation_state: "Applied" }),
+        heldOwner ? rawCosts.findOne({ _id: heldOwner._id }) : null,
+      ]);
+      const winnerObservedAt = Date.now();
+      ok("formula fencing [instrument precondition]: a persisted Pending owner expired and the recovered winner applied before that owner could resume",
+        !!heldOwner && ownerObservedAt < ownerDeadline && Number.isFinite(ownerExpiresAt)
+          && winnerStartedAt > ownerExpiresAt && Number.isFinite(ownerEarliestResumeAt)
+          && !!recoveredWinner && expiredOwner?.reservation_state === "Cancelled"
+          && expiredOwner.reservation_cancel_reason === "expired" && winnerObservedAt < ownerEarliestResumeAt,
+        JSON.stringify({ owner: !!heldOwner, ownerObservedAt, ownerExpiresAt, winnerStartedAt,
+          winnerApplied: !!recoveredWinner, ownerState: expiredOwner?.reservation_state,
+          ownerReason: expiredOwner?.reservation_cancel_reason, winnerObservedAt, ownerEarliestResumeAt,
+          remainingPauseMs: ownerEarliestResumeAt - winnerObservedAt }));
       const zombie = await zombiePromise;
-      ok("formula fencing: the expired Pending owner's resumed zombie is refused with 409 while the recovered winner alone applies",
-        recovered.status === 201 && zombie.status === 409
-          && /reservation expired before it could be applied/i.test(String(zombie.data?.error ?? "")),
+      // The winner exhausts the cap before this owner resumes. The resumed request therefore
+      // parks under REQ-426; the expired-owner CAS refusal is a different, still-available branch.
+      ok("formula fencing: the recovered winner alone applies and the expired owner's resumed over-cap cost parks for approval",
+        recovered.status === 201 && zombie.status === 202 && zombie.data?.queued === true
+          && /above the remaining pre-approved amount 0/i.test(String(zombie.data?.pre_approval ?? "")),
         JSON.stringify({ winner: recovered.status, winnerBody: recovered.data, zombie: zombie.status, zombieBody: zombie.data }));
 
       const rawReservationRows = await rawCosts.find({
@@ -1209,10 +1277,13 @@ for (const variant of ["ordinary", "mark_paid"]) {
       const zombieLedgerCount = await rawCosts.countDocuments({
         note: zombieNote, reservation_state: { $nin: ["Pending", "Cancelled"] },
       });
-      const zombieApprovalCount = await rawApprovals.countDocuments({ action: "cost.post", "payload.note": zombieNote });
-      ok("formula fencing: refused expired zombie creates neither a visible ledger liability nor a cost approval request",
-        zombieLedgerCount === 0 && zombieApprovalCount === 0,
-        JSON.stringify({ ledger: zombieLedgerCount, approvals: zombieApprovalCount }));
+      const zombieApprovals = await rawApprovals.find({ action: "cost.post", "payload.note": zombieNote,
+        "payload.category": String(recoveryId), batch: new ObjectId(String(closedBatch._id)) }).toArray();
+      ok("formula fencing: the resumed over-cap zombie creates one Pending human approval and no visible ledger liability",
+        zombieLedgerCount === 0 && zombieApprovals.length === 1 && zombieApprovals[0].status === "Pending"
+          && String(zombieApprovals[0]._id) === String(zombie.data?.item?._id)
+          && Number(zombieApprovals[0].payload?.amount) === totalCap,
+        JSON.stringify({ ledger: zombieLedgerCount, approvals: zombieApprovals.map((r) => ({ id: r._id, status: r.status })) }));
 
       const recoveryRows = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${recoveryId}`)).data?.items ?? [])
         .filter((c) => String(c.category?._id ?? c.category) === String(recoveryId) && c.pre_approved_applied === true);
@@ -1724,34 +1795,42 @@ for (const variant of ["ordinary", "mark_paid"]) {
       JSON.stringify(filed ? { cat: filed.category?.name } : null));
   }
 
-  // Umesh, 2026-09-07: an Admin already creates heads (Rule 40) and IS the evaluator, so routing
-  // them through a queue would mean waiting for another Admin - this system refuses self-approval.
+  // Umesh, 2026-10-06: Admin-created heads also start Pending and need a second approver.
+  // Scope every cardinality to this head: the global status=all list is capped at 100.
   const inlineName = `ZZ Inline ${stamp}`;
-  const reqsBefore = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
-    .filter((r) => r.action === "costcategory.create").length;
   const inline = await req(admin, "POST", "/api/costs", { ...baseEntry({ amount: 654 }), new_subhead: inlineName });
-
-  // THIS PIN WAS WRONG ON ITS FIRST RUN and the code was right. It expected 201, and got 202 -
-  // because `cost.post` is enabled in this suite and QA-1826 DELETED the Admin short-circuit that
-  // used to let a configured approver skip their own queue. So an Admin's COST parks like anybody
-  // else's, which is the two-point check working: *"जो रेज करेगा वो खुद ही अप्रूव नहीं करेगा"*.
-  //
-  // What is Admin-specific is the HEAD, not the cost. So that is what this asserts now: the head
-  // exists immediately and no costcategory.create request was raised. Asserting the status code was
-  // asserting the wrong thing about the right behaviour.
+  const inlineHead = await rawCategories.findOne({ name: inlineName });
+  const inlineHeadId = inlineHead?._id ?? new ObjectId();
+  const inlineAdmin = await rawUsers.findOne({ email: "admin@vidysea.com" }, { projection: { _id: 1 } });
+  const inlineCostRequests = await rawApprovals.find({
+    action: "cost.post", initiator: inlineAdmin?._id ?? new ObjectId(), "payload.category": String(inlineHeadId),
+  }).toArray();
+  const inlineLedgerCount = await rawCosts.countDocuments({ category: inlineHeadId });
   ok("QA-1828c: an Admin's cost still goes through the cost.post queue like everyone else's",
-    inline.status === 201 || inline.status === 202, `got ${inline.status}`);
+    inline.status === 202 && inline.data?.queued === true && inlineCostRequests.length === 1
+      && inlineCostRequests[0].status === "Pending"
+      && String(inlineCostRequests[0]._id) === String(inline.data?.item?._id)
+      && Number(inlineCostRequests[0].payload?.amount) === 654 && inlineLedgerCount === 0,
+    JSON.stringify({ status: inline.status, costs: inlineLedgerCount,
+      requests: inlineCostRequests.map((r) => ({ id: r._id, status: r.status })) }));
   const inlineCats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
   // DELIBERATE CONTRACT CHANGE (Umesh, 2026-10-06 ~22:00, "Admin heads also wait"): these two pins
   // used to assert that an Admin's head needed no approval because the Admin "is the evaluator". The
   // owner reversed that: whoever creates a head, a SECOND finance approver signs it off.
   ok("QA-1828c: ...the HEAD they named exists straight away (selectable) but marked not approved",
-    inlineCats.some((c) => c.name === inlineName && c.approval_status === "Pending"),
+    inlineHead?.active === true && inlineHead.approval_status === "Pending"
+      && inlineCats.some((c) => String(c._id) === String(inlineHeadId) && c.name === inlineName && c.approval_status === "Pending"),
     JSON.stringify(inlineCats.find((c) => c.name === inlineName) ?? null));
-  const reqsAfter = ((await req(admin, "GET", "/api/approvals?status=all")).data?.items ?? [])
-    .filter((r) => r.action === "costcategory.create").length;
+  const inlineHeadRequests = await rawApprovals.find({
+    action: "costcategory.create", entity_id: inlineHeadId,
+    "payload.kind": "head-approval", "payload.category": String(inlineHeadId),
+  }).toArray();
   ok("QA-1828c: ...and exactly one head-approval request was raised for it - an Admin's head waits too",
-    reqsAfter === reqsBefore + 1, `${reqsBefore} -> ${reqsAfter}`);
+    inlineHeadRequests.length === 1 && inlineHeadRequests[0].status === "Pending"
+      && String(inlineHeadRequests[0].initiator) === String(inlineAdmin?._id)
+      && String(inlineHeadRequests[0]._id) === String(inlineHead?.approval_request),
+    JSON.stringify({ head: inlineHeadId, linkedRequest: inlineHead?.approval_request,
+      requests: inlineHeadRequests.map((r) => ({ id: r._id, status: r.status, initiator: r.initiator })) }));
 }
 
 
@@ -3018,7 +3097,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
             await ap.locator('button[type="submit"]').first().click();
             await ap.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
           }
-          await ap.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
+          await ap.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "domcontentloaded" });
           // Find the status filter by its OPTIONS, never by position - a new <select> above it
           // would silently make this pin drive the wrong control.
           // FLAKY ONCE, FIXED HERE: the first version passed one run and failed the next on the
@@ -3029,7 +3108,9 @@ for (const variant of ["ordinary", "mark_paid"]) {
           // asserts the selection took, and re-tries once through the 'all' option.
           const pickStatus = async (want) => {
             const sels = ap.locator("select");
-            await ap.waitForFunction(() => document.querySelectorAll("select option").length > 0, undefined, { timeout: 30000 }).catch(() => {});
+            await ap.waitForFunction((requested) => Array.from(document.querySelectorAll("select option"))
+              .some((option) => option.textContent?.trim().toLowerCase() === requested.toLowerCase()),
+            want, { timeout: 30000 }).catch(() => {});
             for (let n = 0; n < (await sels.count()); n++) {
               const opts = await sels.nth(n).locator("option").allTextContents();
               const hit = opts.find((o) => o.trim().toLowerCase() === want.toLowerCase());

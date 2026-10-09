@@ -67,7 +67,8 @@ const finish = () => {
 };
 let browser = null;
 const onFatal = async (e) => {
-  ok("MC1: the suite ran to its end without an uncaught error", false, `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 300)} - every arm after this point did not run`);
+  const cause = [e?.cause?.code, e?.cause?.message].filter((v) => v != null).map((v) => String(v).replace(/\s+/g, " ").slice(0, 160)).join(": ");
+  ok("MC1: the suite ran to its end without an uncaught error", false, `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 300)}${cause ? `; cause: ${cause}` : ""} - every arm after this point did not run`);
   try { if (browser) await browser.close(); } catch { /* nothing left */ }
   finish();
 };
@@ -75,6 +76,12 @@ process.on("uncaughtException", onFatal);
 process.on("unhandledRejection", onFatal);
 
 const s = stamp("MC1");
+// Capture source before HTTP so the synchronous walk cannot outlive an idle keep-alive socket.
+const srcRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
+const walkSrc = (dir) => readdirSync(dir).flatMap((n) => { const f = path.join(dir, n); return statSync(f).isDirectory() ? walkSrc(f) : /\.(ts|tsx)$/.test(n) ? [f] : []; });
+const fullViewUsers = walkSrc(srcRoot).filter((f) => /fullView/.test(readFileSync(f, "utf8"))).map((f) => path.relative(srcRoot, f).split(path.sep).join("/")).sort();
+const ddSrc = readFileSync(path.join(srcRoot, "lib", "daily-digest.ts"), "utf8");
+const ddCode = ddSrc.split("\n").filter((l) => /fullView/.test(l) && !/^\s*\/\//.test(l));
 const admin = await adminLogin();
 const MURL = process.env.MONGODB_URL || process.env.MONGODB_URI;
 if (!MURL) { ok("[precondition] MONGODB_URL is set", false, "refusing to guess a connection string"); finish(); }
@@ -811,12 +818,7 @@ await jobLocks.deleteMany({ _id: "daily-digest-manual" });
 await setDefaults({ digest_recipients: listAll });
 
 // ---- U12 fullView is reachable ONLY from lib/daily-digest.ts, and only for a typed address that matches no account
-const srcRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
-const walkSrc = (dir) => readdirSync(dir).flatMap((n) => { const f = path.join(dir, n); return statSync(f).isDirectory() ? walkSrc(f) : /\.(ts|tsx)$/.test(n) ? [f] : []; });
-const fullViewUsers = walkSrc(srcRoot).filter((f) => /fullView/.test(readFileSync(f, "utf8"))).map((f) => path.relative(srcRoot, f).split(path.sep).join("/")).sort();
 ok("U12: `fullView` appears only in lib/rules.ts (the option) and lib/daily-digest.ts (its one caller)", eq(fullViewUsers, ["lib/daily-digest.ts", "lib/rules.ts"]), fullViewUsers.join(","));
-const ddCode = readFileSync(path.join(srcRoot, "lib", "daily-digest.ts"), "utf8").split("\n").filter((l) => /fullView/.test(l) && !/^\s*\/\//.test(l));
-const ddSrc = readFileSync(path.join(srcRoot, "lib", "daily-digest.ts"), "utf8");
 ok("U10b: a claim is settled only by its CURRENT holder: the settle write is conditional on {instance, attempt, status sending}, so a slow first sender whose claim was re-taken cannot overwrite the re-taker (source shape; the race itself is not drivable through the door)",
   /async function settleClaim\([^)]*instance: string/.test(ddSrc) && /\{ _id: `digest-sent:\$\{day\}:\$\{to\}` as any, instance, attempts: attempt, status: "sending" \}/.test(ddSrc), "");
 ok("U12: ...and daily-digest.ts passes it on exactly one code line, only when the recipient is a typed address with no account (r.full)", ddCode.length === 1 && /r\.full \? \{ fullView: true \} : undefined/.test(ddCode[0]), JSON.stringify(ddCode));

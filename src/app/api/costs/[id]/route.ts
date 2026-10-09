@@ -308,7 +308,9 @@ const costCanon = (f: string, v: unknown): string => {
 };
 
 async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
-  const { doc, internal, stamp } = await loadOwnCost(user, id);
+  const loaded = await loadOwnCost(user, id);
+  const { doc, stamp } = loaded;
+  let internal = loaded.internal;
   const body = await readJson(req);
   // Native writes must keep the schema's text contract before any queue/receipt effects.
   for (const field of ["note", "vendor_payee", "voucher_no", "payment_mode"]) {
@@ -353,10 +355,11 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
     return NextResponse.json(receipt.result, { status: receipt.http_status ?? 200 });
   }
   // An accepted queue result stays the first result even after approval/rejection or payment.
-  const prior: any = await ApprovalRequest.findOne({
+  const priorQuery = {
     action: "cost.post", entity_id: doc._id, initiator: user.id,
     "payload.kind": "cost-edit", "payload._edit_mutation_key": mutationKey,
-  }).lean();
+  };
+  const prior: any = await ApprovalRequest.findOne(priorQuery).lean();
   if (prior) {
     if (prior.payload?._edit_input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
     return queuedResult(prior);
@@ -367,10 +370,35 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
       ? "This cost is already marked paid, so it is locked. Ask finance if it needs to change."
       : "The payment status of this cost is not recorded. Ask finance to verify it before changing it.");
   }
-  const recovering = internal?.cost_edit_proposal?.mutation_key === mutationKey
+  let recovering = internal?.cost_edit_proposal?.mutation_key === mutationKey
     && internal.cost_edit_proposal.input_hash === inputHash;
   if ((internal?.cost_edit_request || await pendingCostEditRequest(doc._id)) && !recovering) {
-    throw new HttpError(409, "A change to this cost is already waiting for approval. Wait for the decision before changing or deleting it again.");
+    // The pending query is newer than loadOwnCost's snapshot. A matching peer may have
+    // acquired our durable claim between those reads; recover that owner, never a new one.
+    const owner: any = await CostEntry.collection.findOne({ _id: doc._id }, {
+      projection: { own_mutations: 1, cost_edit_request: 1, cost_edit_proposal: 1 },
+    });
+    const first = (owner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
+    if (first) {
+      if (first.input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+      return NextResponse.json(first.result, { status: first.http_status ?? 200 });
+    }
+    const proposal = owner?.cost_edit_proposal;
+    if (owner?.cost_edit_request && proposal?.context
+        && String(proposal.context.requestId) === String(owner.cost_edit_request)
+        && proposal.mutation_key === mutationKey && proposal.input_hash === inputHash) {
+      internal = owner;
+      recovering = true;
+    } else {
+      // Approval/rejection may have settled ownership during the reread. Its first result
+      // remains replayable only through the same actor/cost/kind/key-scoped request lookup.
+      const completed: any = await ApprovalRequest.findOne(priorQuery).lean();
+      if (completed) {
+        if (completed.payload?._edit_input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+        return queuedResult(completed);
+      }
+      throw new HttpError(409, "A change to this cost is already waiting for approval. Wait for the decision before changing or deleting it again.");
+    }
   }
   if (new Date(before.updatedAt).getTime() !== base.getTime()) {
     throw new HttpError(409, "This cost changed after you opened the form. Refresh before editing it.");
