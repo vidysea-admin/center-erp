@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-322";
+export const RELEASE = "2026.08.14-323";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -286,6 +286,42 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "No other screen, figure or permission changes in this release.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-323 changes the Candidates, Locations, Batches and Reports screens, and changes how a new "  +
+  "cost head is approved. "  +
+  "On the Candidates screen, a Download Excel button saves the candidates that match the current "  +
+  "filters and search, with the columns the table is showing, in the order it shows them. The "  +
+  "Columns picker offers extra optional columns that start hidden: email, alternate phone, "  +
+  "gender, date of birth, father's name, district, education and the SIDH candidate id. Aadhaar "  +
+  "and APAAR numbers are not offered and are not in the file. The button is not shown on the "  +
+  "Archived tab. "  +
+  "When someone hides a column on the Candidates table, or on a table built the same way, a chip "  +
+  "beside it says how many columns are hidden, and Reset brings the default columns back. On the "  +
+  "Locations screen the Approval (centre) column now shows by default. "  +
+  "On Batches, creating a batch with the trainer or the room left on Assign later already worked, "  +
+  "and still does; a trainer or room that is chosen is checked for a clash, and one left on "  +
+  "Assign later is not. What changes is the message when a trainer or room is already booked: it "  +
+  "now names the batch that holds it and the date that booking runs until, and suggests Assign "  +
+  "later. The batch edit form now reads assign later for an empty trainer or room instead of a "  +
+  "bare dash. Choosing a trainer or room afterwards goes through the same clash check. "  +
+  "The Planning tab on Batches shows Target, Mobilised and Gap against the planned batches it lists, with a "  +
+  "summary at the top for the batches starting this week, India time: total target, total "  +
+  "mobilised and total gap. Target is the seats planned for the batch. Mobilised is the "  +
+  "candidates currently on its roster. Gap is Target less Mobilised, counted as zero for a batch "  +
+  "that is over-filled, and the total gap adds up those per-batch figures. "  +
+  "Reports has a Recently approved strip: centre and job role targets approved in a recent period "  +
+  "the person picks, grouped by centre and job role with a count, for the centres that person's "  +
+  "access covers. Approvals made before this release carry no date, so they are not in the strip, "  +
+  "and the strip says that; it fills as new approvals are made from now on. "  +
+  "A new cost head, whether typed in the cost form or added in Master Lists, is created at once "  +
+  "and marked not approved until a finance approver other than the person who created it approves "  +
+  "it. This now includes a head created by an Admin. In the cost form, choosing Others asks for a "  +
+  "name for the new head, and a cost cannot be filed under the bare Others head; Other, Others, "  +
+  "Misc and Miscellaneous are not accepted as the new name. That naming rule is on the cost form; "  +
+  "Master Lists does not apply it, and a cost that was already waiting for approval under Others "  +
+  "before this release is not re-checked.";
+
+// -323: the -322 note moved here as its own literal string, never an alias (the -310 defect).
+const RELEASE_NOTE_ARCHIVE_322 =
   "-322 lets the public attendance lookup send that second-factor code by email, not only by "  +
   "text message. "  +
   "A candidate with no date of birth on file needs a one-time code before an attendance link is "  +
@@ -2010,6 +2046,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -323: ARCHIVE_322 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_322 + " " +
   // -322: ARCHIVE_321 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_321 + " " +
   RELEASE_NOTE_ARCHIVE_320 + " " +
