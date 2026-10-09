@@ -400,10 +400,161 @@ const rows5 = {};
   const ownQ = await req(scopedV.cookie, "GET", `/api/costs?location=${ownLoc._id}`);
   ok("scope: naming their OWN centre still works (200)", ownQ.status === 200, `got ${ownQ.status}`);
 
-  // approved_from / approved_to must be real days
-  const badDay = await req(admin, "GET", "/api/costs?approved_from=2026-02-31");
-  const goodDay = await req(admin, "GET", "/api/costs?approved_from=2026-02-28");
-  ok("R5 filter: a date that is not a real day (2026-02-31) is a 400, a real one is a 200", badDay.status === 400 && goodDay.status === 200, `${badDay.status}/${goodDay.status}`);
+  // All four date keys must be real calendar days on every finance reader. The invalid reads run
+  // BEFORE any valid read: Costs GET drains audit owners, so an empty queue would prove nothing.
+  // Guard-removal falsification: remove parseCostFilters' calendar loop; the exact-400 arm must go
+  // red, and an invalid Costs GET must also turn this seeded raw zero-write arm red by draining it.
+  {
+    const rawAudits = db.collection("auditlogs");
+    const dateNotes = ["before", "leap", "after"].map((suffix) => `${TAG}-calendar-${suffix}`);
+    const dateDays = ["2024-02-28", "2024-02-29", "2024-03-01"];
+    const dateCostIds = dateDays.map(() => new ObjectId());
+    const dateRequestIds = dateDays.map(() => new ObjectId());
+    const dateAmounts = [281, 292, 303];
+    const costEventId = new ObjectId(), approvalEventId = new ObjectId(), tombstoneEventId = new ObjectId();
+    const tombstoneId = new ObjectId();
+    const dateNow = new Date();
+    const dateCosts = dateDays.map((day, i) => ({
+      _id: dateCostIds[i], entry_date: new Date(`${day}T00:00:00Z`),
+      location: new ObjectId(String(ownLoc._id)), category: new ObjectId(String(plain._id)),
+      amount: dateAmounts[i], note: dateNotes[i], entered_by: adminRow._id,
+      approval_request: dateRequestIds[i], reservation_state: "Applied", payment_status: "Payment Pending",
+      createdAt: new Date(`${day}T12:01:00+05:30`), updatedAt: new Date(`${day}T12:01:00+05:30`),
+    }));
+    dateCosts[1]._audit_events = [{
+      event_id: costEventId.toHexString(), entity: "CostEntry", entity_id: dateCostIds[1], field: null,
+      old_value: null, new_value: { amount: dateAmounts[1], note: dateNotes[1] }, actor: adminRow._id, actor_type: "USER",
+    }];
+    dateCosts[1]._audit_delivered_event_ids = [];
+    const dateRequests = dateDays.map((day, i) => ({
+      _id: dateRequestIds[i], action: "cost.post", entity: "CostEntry", entity_id: dateCostIds[i],
+      summary: dateNotes[i], payload: { entry_date: day, location: String(ownLoc._id), category: String(plain._id), amount: dateAmounts[i], note: dateNotes[i] },
+      location: new ObjectId(String(ownLoc._id)), initiator: adminRow._id, approver_role: "Admin",
+      status: "Approved", approved_amount: dateAmounts[i], decided_by: new ObjectId(String(approverB.id)),
+      decided_at: new Date(`${day}T12:00:00+05:30`), createdAt: new Date(`${day}T08:00:00+05:30`), updatedAt: new Date(`${day}T12:00:00+05:30`),
+    }));
+    dateRequests[1]._audit_events = [{
+      event_id: approvalEventId.toHexString(), entity: "ApprovalRequest", entity_id: dateRequestIds[1],
+      field: "status", old_value: "Applying", new_value: "Approved", actor: new ObjectId(String(approverB.id)), actor_type: "USER",
+    }];
+    dateRequests[1]._audit_delivered_event_ids = [];
+    // This is the hidden hard-delete tombstone (not a recoverable archived cost): a normal drain
+    // collects it even though its deletion event is already acknowledged and needs no new delivery.
+    const tombstoneCost = { ...dateCosts[0], _id: tombstoneId, note: `${TAG}-calendar-tombstone`, amount: 17, updatedAt: dateNow };
+    delete tombstoneCost.approval_request; // omit it, rather than storing null in the unique sparse index
+    const tombstoneEvent = {
+      event_id: tombstoneEventId.toHexString(), entity: "CostEntry", entity_id: tombstoneId, field: "deleted",
+      old_value: {
+        entry_date: tombstoneCost.entry_date, location: tombstoneCost.location, batch: null, trainer: null,
+        category: tombstoneCost.category, amount: tombstoneCost.amount, vendor_payee: null, voucher_no: null,
+        payment_mode: null, paid_on: null, payment_ref: null, note: tombstoneCost.note,
+      },
+      new_value: { deleted: true, reason: "calendar refusal fixture" }, actor: adminRow._id, actor_type: "USER",
+    };
+    const dateState = async () => {
+      const [costs, approvals, audits] = await Promise.all([
+        rawCosts.find({}).sort({ _id: 1 }).toArray(), rawApprovals.find({}).sort({ _id: 1 }).toArray(),
+        rawAudits.find({}).sort({ _id: 1 }).toArray(),
+      ]);
+      return { costs, approvals, audits };
+    };
+    try {
+      await rawCosts.insertMany([...dateCosts, {
+        ...tombstoneCost, deletion_state: "Pending", deletion_audit_event_id: tombstoneEvent.event_id,
+        _audit_events: [tombstoneEvent], _audit_delivered_event_ids: [tombstoneEvent.event_id],
+      }]);
+      await rawApprovals.insertMany(dateRequests);
+      const { event_id, ...durableTombstoneEvent } = tombstoneEvent;
+      await rawAudits.insertOne({ _id: tombstoneEventId, ...durableTombstoneEvent, created_at: dateNow });
+      const dateBefore = await dateState();
+      const queuedCost = dateBefore.costs.find((r) => String(r._id) === String(dateCostIds[1]));
+      const queuedRequest = dateBefore.approvals.find((r) => String(r._id) === String(dateRequestIds[1]));
+      const settledTombstone = dateBefore.costs.find((r) => String(r._id) === String(tombstoneId));
+      ok("calendar refusal [precondition]: Applied cost and Approved request have undelivered audits; an acknowledged deletion tombstone is drain-eligible",
+        queuedCost?.reservation_state === "Applied" && queuedCost._audit_events?.[0]?.event_id === costEventId.toHexString()
+          && queuedCost._audit_delivered_event_ids?.length === 0
+          && queuedRequest?.status === "Approved" && queuedRequest._audit_events?.[0]?.event_id === approvalEventId.toHexString()
+          && queuedRequest._audit_delivered_event_ids?.length === 0
+          && settledTombstone?.deletion_state === "Pending" && settledTombstone.deletion_audit_event_id === tombstoneEvent.event_id
+          && settledTombstone._audit_delivered_event_ids?.includes(tombstoneEvent.event_id)
+          && !dateBefore.audits.some((r) => [String(costEventId), String(approvalEventId)].includes(String(r._id)))
+          && dateBefore.audits.some((r) => String(r._id) === String(tombstoneEventId)));
+      const beforeBytes = Object.fromEntries(Object.entries(dateBefore).map(([k, rows]) => [k, JSON.stringify(rows)]));
+      const doors = [
+        ["Costs", "/api/costs"], ["Finance", "/api/reports/costs"], ["Excel", "/api/reports/costs/export"],
+      ];
+      const invalidDays = ["2026-13-01", "2026-02-29"];
+      const invalidQueries = ["approved_from=2026-02-31", ...["from", "to", "approved_from", "approved_to"]
+        .flatMap((key) => invalidDays.map((day) => `${key}=${day}`))];
+      let badDay;
+      for (const [door, path] of doors) {
+        for (const query of invalidQueries) {
+          // Keep the original rolled-over approval-date assertion on Costs; the two-class matrix
+          // covers every key on every door without multiplying redundant ordinary-day examples.
+          if (query === "approved_from=2026-02-31" && door !== "Costs") continue;
+          const response = door === "Excel" ? await reqBuffer(admin, `${path}?${query}`) : await req(admin, "GET", `${path}?${query}`);
+          if (query === "approved_from=2026-02-31") badDay = response;
+          ok(`calendar refusal: ${door} ${query} returns exactly 400`, response.status === 400, `got ${response.status}`);
+          const after = await dateState();
+          const changed = Object.keys(beforeBytes).filter((k) => JSON.stringify(after[k]) !== beforeBytes[k]);
+          ok(`calendar refusal: ${door} ${query} leaves raw money, requests, audits and outbox/tombstone ownership unchanged`,
+            changed.length === 0, `changed=${changed.join(",")}`);
+        }
+      }
+      // First valid read is the negative control: these exact queues MUST deliver and the settled
+      // tombstone MUST disappear, proving the invalid no-write assertions had something to protect.
+      const goodDay = await req(admin, "GET", "/api/costs?approved_from=2026-02-28");
+      ok("R5 filter: a date that is not a real day (2026-02-31) is a 400, a real one is a 200", badDay.status === 400 && goodDay.status === 200, `${badDay.status}/${goodDay.status}`);
+      const drainedCost = await rawCosts.findOne({ _id: dateCostIds[1] });
+      const drainedRequest = await rawApprovals.findOne({ _id: dateRequestIds[1] });
+      ok("calendar refusal negative control: a valid Costs GET delivers both pending events exactly once and collects the settled deletion tombstone",
+        goodDay.status === 200 && drainedCost?._audit_delivered_event_ids?.includes(costEventId.toHexString())
+          && drainedRequest?._audit_delivered_event_ids?.includes(approvalEventId.toHexString())
+          && await rawAudits.countDocuments({ _id: { $in: [costEventId, approvalEventId] } }) === 2
+          && !await rawCosts.findOne({ _id: tombstoneId }));
+
+      const leapCases = [
+        { query: "from=2024-02-29", finance: [1, 2], costs: [0, 1, 2] },
+        { query: "to=2024-02-29", finance: [0, 1], costs: [0, 1, 2] },
+        { query: "approved_from=2024-02-29", finance: [1, 2], costs: [1, 2] },
+        { query: "approved_to=2024-02-29", finance: [0, 1], costs: [0, 1] },
+        { query: "from=2024-02-29&to=2024-02-29", finance: [1], costs: [0, 1, 2] },
+        { query: "approved_from=2024-02-29&approved_to=2024-02-29", finance: [1], costs: [1] },
+      ];
+      for (const test of leapCases) {
+        const ledger = await req(admin, "GET", `/api/costs?${test.query}`);
+        const finance = await req(admin, "GET", `/api/reports/costs?${test.query}`);
+        const excel = await reqBuffer(admin, `/api/reports/costs/export?${test.query}`);
+        const register = finance.data?.register ?? [];
+        const workbook = excel.status === 200 ? XLSX.read(excel.data, { type: "buffer" }) : null;
+        const xRows = workbook ? XLSX.utils.sheet_to_json(workbook.Sheets["cost entry register"]) : [];
+        ok(`calendar leap-day: all three readers accept ${test.query} (200)`,
+          ledger.status === 200 && finance.status === 200 && excel.status === 200, `${ledger.status}/${finance.status}/${excel.status}`);
+        const ledgerIds = (ledger.data?.items ?? []).filter((r) => dateNotes.includes(r.note)).map((r) => String(r._id)).sort();
+        const expectedLedger = test.costs.map((i) => String(dateCostIds[i])).sort();
+        ok(`calendar leap-day: Costs ${test.query} has exactly the expected fixture IDs (valid from/to remain ignored)`,
+          JSON.stringify(ledgerIds) === JSON.stringify(expectedLedger), `${ledgerIds.length}/${expectedLedger.length}`);
+        const registerIds = register.filter((r) => dateNotes.includes(r.note)).map((r) => String(r.id)).sort();
+        const expectedRegister = test.finance.map((i) => String(dateCostIds[i])).sort();
+        const excelNotes = xRows.filter((r) => dateNotes.includes(r.Description)).map((r) => r.Description).sort();
+        const expectedNotes = test.finance.map((i) => dateNotes[i]).sort();
+        ok(`calendar leap-day: Finance/Excel ${test.query} include the known leap fixtures and exclude the known neighbouring days`,
+          JSON.stringify(registerIds) === JSON.stringify(expectedRegister) && JSON.stringify(excelNotes) === JSON.stringify(expectedNotes),
+          `finance=${registerIds.length} excel=${excelNotes.length} expected=${expectedNotes.length}`);
+        const registerRows = register.map((r) => JSON.stringify([
+          r.note, r.amount, new Date(r.entry_date).toISOString().slice(0, 10), r.approved_on ? istDay(r.approved_on) : "—",
+        ])).sort();
+        const excelRows = xRows.map((r) => JSON.stringify([r.Description, r.Amount, r.Date, r["Approved on"]])).sort();
+        ok(`calendar leap-day: Finance and Excel ${test.query} have identical rows, dates and amounts; Finance totals tie`,
+          JSON.stringify(registerRows) === JSON.stringify(excelRows) && finance.data?.totals?.entries === register.length
+            && finance.data?.totals?.actual === register.reduce((sum, r) => sum + r.amount, 0), `finance=${register.length} excel=${xRows.length}`);
+      }
+    } finally {
+      await rawCosts.deleteMany({ _id: { $in: [...dateCostIds, tombstoneId] } });
+      await rawApprovals.deleteMany({ _id: { $in: dateRequestIds } });
+      await rawAudits.deleteMany({ _id: { $in: [costEventId, approvalEventId, tombstoneEventId] } });
+    }
+  }
 
   // an orphaned (expired) Formula reservation must not park the key behind a 409 for ever
   const adminId = String(adminRow._id);
