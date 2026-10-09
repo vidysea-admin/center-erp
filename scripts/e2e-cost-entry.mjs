@@ -791,8 +791,8 @@ for (const variant of ["ordinary", "mark_paid"]) {
 }
 
 // Cycle 12: every batch-backed finance materialisation has to lose cleanly even when the force
-// delete already passed deleteMany.  These are ordered races (we observe the newborn row before
-// deleting), not timing guesses; raw reads prove no late cost/request survives the 409.
+// delete already passed deleteMany. The direct-post arm independently proves that deletion was
+// observed before its post-persist pause could end; raw reads then prove no late cost/request survives.
 {
   const template = await rawBatches.findOne({});
   const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
@@ -817,16 +817,26 @@ for (const variant of ["ordinary", "mark_paid"]) {
   if (template?.location && template?.program && cat?._id) {
     const directBatch = await makeBatch("DIRECT");
     const directNote = `c12-direct-${stamp}`;
+    const directPauseMs = 5_000;
     const directPromise = req(admin, "POST", "/api/costs", baseEntry({
       batch: directBatch, category: cat._id, amount: 701, note: directNote,
-      _test_pause_after_cost_create_ms: 2500,
+      _test_pause_after_cost_create_ms: directPauseMs,
     }));
     const directNewborn = await waitFor(() => rawCosts.findOne({ batch: directBatch, note: directNote }));
     const directDelete = await req(admin, "DELETE", `/api/batches/${directBatch}`, { reason: "cycle 12 direct post race" });
+    const directBatchAfterDelete = await rawBatches.findOne({ _id: directBatch });
+    const directDeletionObservedAt = Date.now();
+    // Server and test run on this host. createBatchScopedCostEntryIdempotently awaits persistence
+    // before starting this pause, so persisted createdAt + pause is a conservative earliest resume.
+    // If the window is exceeded, this instrument precondition fails; 201 is never accepted instead.
+    const directEarliestResumeAt = new Date(directNewborn?.createdAt ?? Number.NaN).getTime() + directPauseMs;
     const directResult = await directPromise;
-    ok("batch materialization [precondition]: fixed direct cost reached its final batch fence after its row existed",
-      !!directNewborn && directDelete.status === 200,
-      JSON.stringify({ newborn: !!directNewborn, cascade: directDelete.status }));
+    ok("batch materialization [instrument precondition]: deletion is committed before the fixed direct cost can resume its final batch fence",
+      !!directNewborn && directDelete.status === 200 && !directBatchAfterDelete
+        && Number.isFinite(directEarliestResumeAt) && directDeletionObservedAt < directEarliestResumeAt,
+      JSON.stringify({ newborn: !!directNewborn, cascade: directDelete.status, batch: !!directBatchAfterDelete,
+        deletionObservedAt: directDeletionObservedAt, earliestResumeAt: directEarliestResumeAt,
+        remainingPauseMs: directEarliestResumeAt - directDeletionObservedAt }));
     ok("batch materialization: fixed direct post loses the post-cascade race with 409 and leaves no late cost",
       directResult.status === 409 && !(await rawCosts.findOne({ batch: directBatch, note: directNote }))
         && !(await rawBatches.findOne({ _id: directBatch })),
@@ -1182,8 +1192,9 @@ for (const variant of ["ordinary", "mark_paid"]) {
         amount: totalCap, note: winnerNote, _test_ambiguous_after_create: true,
       });
       const zombie = await zombiePromise;
-      ok("formula fencing: an expired Pending owner is CAS-cancelled, and its resumed zombie cannot bypass the normal approval queue",
-        recovered.status === 201 && zombie.status === 202 && zombie.data?.queued === true,
+      ok("formula fencing: the expired Pending owner's resumed zombie is refused with 409 while the recovered winner alone applies",
+        recovered.status === 201 && zombie.status === 409
+          && /reservation expired before it could be applied/i.test(String(zombie.data?.error ?? "")),
         JSON.stringify({ winner: recovered.status, winnerBody: recovered.data, zombie: zombie.status, zombieBody: zombie.data }));
 
       const rawReservationRows = await rawCosts.find({
@@ -1192,9 +1203,16 @@ for (const variant of ["ordinary", "mark_paid"]) {
       }).toArray();
       ok("formula fencing: the durable states prove one Applied winner and one Cancelled zombie",
         rawReservationRows.length === 2
-          && rawReservationRows.filter((r) => r.reservation_state === "Applied").length === 1
-          && rawReservationRows.filter((r) => r.reservation_state === "Cancelled").length === 1,
+          && rawReservationRows.filter((r) => r.reservation_state === "Applied" && r.note === winnerNote).length === 1
+          && rawReservationRows.filter((r) => r.reservation_state === "Cancelled" && r.note === zombieNote).length === 1,
         JSON.stringify(rawReservationRows.map((r) => ({ note: r.note, state: r.reservation_state }))));
+      const zombieLedgerCount = await rawCosts.countDocuments({
+        note: zombieNote, reservation_state: { $nin: ["Pending", "Cancelled"] },
+      });
+      const zombieApprovalCount = await rawApprovals.countDocuments({ action: "cost.post", "payload.note": zombieNote });
+      ok("formula fencing: refused expired zombie creates neither a visible ledger liability nor a cost approval request",
+        zombieLedgerCount === 0 && zombieApprovalCount === 0,
+        JSON.stringify({ ledger: zombieLedgerCount, approvals: zombieApprovalCount }));
 
       const recoveryRows = ((await req(admin, "GET", `/api/costs?batch=${closedBatch._id}&category=${recoveryId}`)).data?.items ?? [])
         .filter((c) => String(c.category?._id ?? c.category) === String(recoveryId) && c.pre_approved_applied === true);
@@ -1626,6 +1644,57 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // The old whole-entry shape (one costcategory.create request carrying the full entry) can still be
   // sitting Pending in production - the rule has been ON there since 2026-09-14. Its replay must keep
   // working, so the "both writes in one decision" pins move onto a request of that OLD shape.
+  // Explicit legacy requests in this isolated DB must not use mapping or new-parent staging to
+  // bypass the selected head's or parent's current sign-off. Successful replay pins remain below.
+  for (const status of ["Pending", "Rejected"]) {
+    const blockedHead = new ObjectId();
+    const approvedChild = new ObjectId();
+    await rawCategories.insertMany([
+      { _id: blockedHead, name: `ZZ Legacy Guard ${status} Head ${stamp}`, active: true, approval_status: status,
+        createdAt: new Date(), updatedAt: new Date() },
+      { _id: approvedChild, name: `ZZ Legacy Guard ${status} Child ${stamp}`, active: true,
+        parent: blockedHead, approval_status: "Approved", createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    for (const [path, mappedCategory, newParent] of [
+      ["mapped selected head", blockedHead, null],
+      ["mapped subhead with unapproved parent", approvedChild, null],
+      ["new subhead with unapproved parent", null, blockedHead],
+    ]) {
+      const proposedName = `ZZ Legacy Refused ${status} ${path} ${stamp}`;
+      const parked = await parkLegacyHeadRequest({ ...baseEntry({ amount: 503, note: `${stamp}-legacy-guard-${status}-${path}` }),
+        new_subhead: proposedName, ...(newParent ? { new_head_parent: String(newParent) } : {}) });
+      const requestId = new ObjectId(parked.data.item._id);
+      const requestBefore = await rawApprovals.findOne({ _id: requestId });
+      const targetBefore = await rawCategories.find({ _id: { $in: [blockedHead, approvedChild] } }).sort({ _id: 1 }).toArray();
+      ok(`legacy guard [precondition]: ${status} ${path} has a whole-entry Pending request and explicit target sign-off states`,
+        requestBefore?.action === "costcategory.create" && requestBefore?.status === "Pending"
+          && !requestBefore?.payload?.kind && requestBefore?.payload?.amount === 503
+          && targetBefore.find((head) => head._id.equals(blockedHead))?.approval_status === status
+          && targetBefore.find((head) => head._id.equals(approvedChild))?.approval_status === "Approved");
+      const [costCountBefore, categoryCountBefore, auditCountBefore] = await Promise.all([
+        rawCosts.countDocuments({}), rawCategories.countDocuments({}), rawAudits.countDocuments({}),
+      ]);
+      const refused = await req(admin, "POST", `/api/approvals/${requestId}`,
+        { decision: "Approved", note: "legacy guard must refuse before effects",
+          ...(mappedCategory ? { map_to_category: String(mappedCategory) } : {}) });
+      const [requestAfter, targetAfter, costCountAfter, categoryCountAfter, auditCountAfter, ownedCostCount, proposedHead] = await Promise.all([
+        rawApprovals.findOne({ _id: requestId }),
+        rawCategories.find({ _id: { $in: [blockedHead, approvedChild] } }).sort({ _id: 1 }).toArray(),
+        rawCosts.countDocuments({}), rawCategories.countDocuments({}), rawAudits.countDocuments({}),
+        rawCosts.countDocuments({ $or: [{ _id: requestId }, { approval_request: requestId }] }),
+        rawCategories.findOne({ $or: [{ _id: requestId }, { name: proposedName }] }),
+      ]);
+      ok(`legacy guard: ${status} ${path} approval is refused (409), remains Pending, and writes no cost, category or audit effect`,
+        refused.status === 409 && requestAfter?.status === "Pending"
+          && JSON.stringify(requestAfter?.payload) === JSON.stringify(requestBefore?.payload)
+          && JSON.stringify(targetAfter) === JSON.stringify(targetBefore)
+          && costCountAfter === costCountBefore && categoryCountAfter === categoryCountBefore
+          && auditCountAfter === auditCountBefore && ownedCostCount === 0 && !proposedHead,
+        JSON.stringify({ status: refused.status, request: requestAfter?.status,
+          costs: costCountAfter - costCountBefore, categories: categoryCountAfter - categoryCountBefore,
+          audits: auditCountAfter - auditCountBefore, ownedCostCount, proposedHead: !!proposedHead }));
+    }
+  }
   const legacyName = `ZZ Legacy ${stamp}`;
   const lq = await parkLegacyHeadRequest({ ...baseEntry({ amount: 502 }), new_subhead: legacyName });
   const ld = await req(admin, "POST", `/api/approvals/${lq.data.item._id}`, { decision: "Approved", note: "pin" });
@@ -1732,20 +1801,57 @@ for (const variant of ["ordinary", "mark_paid"]) {
     [201, 202].includes(c.status) && !!headC && headC.approval_status === "Pending" && headC.active === true && reqsC === 1,
     `got ${c.status} head=${!!headC} flag=${headC?.approval_status} headRequests=${reqsC}`);
 
-  // REJECT: file one entry under the head first, then reject the head. The entry must survive.
+  // REJECT: the new API must refuse approval replay under this Pending head. Separately seed an
+  // explicitly historical Approved liability in this isolated DB: rejecting the head must preserve it.
   if (headA && reqsA[0]) {
     const catIn = { $in: [String(headA._id), headA._id] };
     const costReqA = await rawApprovals.findOne({ action: "cost.post", status: "Pending", "payload.category": catIn });
-    const approvedA = costReqA ? await req(admin, "POST", `/api/approvals/${costReqA._id}`, { decision: "Approved", note: "pin" }) : { status: -1 };
+    const replayAttempt = costReqA ? await req(admin, "POST", `/api/approvals/${costReqA._id}`, { decision: "Approved", note: "pin" }) : { status: -1 };
+    const refusedLedgerCount = await rawCosts.countDocuments({ category: headA._id });
+    const pendingCostAfterReplay = costReqA ? await rawApprovals.findOne({ _id: costReqA._id }) : null;
+    ok("QA-1977: approval replay under a Pending head is refused (409), keeps its request Pending, and writes no ledger or reservation row",
+      replayAttempt.status === 409 && pendingCostAfterReplay?.status === "Pending" && refusedLedgerCount === 0,
+      JSON.stringify({ status: replayAttempt.status, request: pendingCostAfterReplay?.status, ledger: refusedLedgerCount }));
+    const historicalCostId = new ObjectId();
+    const historicalApprovalId = new ObjectId();
+    const historicalWhen = new Date("2026-09-07T09:00:00.000Z");
+    const historicalNote = `QA-1977 historical approved ledger fixture ${stamp}`;
+    const historicalPayload = baseEntry({ category: String(headA._id), amount: 216, note: historicalNote });
+    const historicalApprover = await rawUsers.findOne({ email: "admin@vidysea.com" });
+    await rawApprovals.insertOne({
+      _id: historicalApprovalId, action: "cost.post", entity: "CostEntry", entity_id: historicalCostId,
+      summary: `Historical approved cost fixture under ${headA.name}`, payload: historicalPayload,
+      location: new ObjectId(String(anyLoc)), initiator: opsUserRow?._id,
+      approver_role: "Admin", approver_users: [], status: "Approved",
+      decided_by: historicalApprover?._id, decided_at: historicalWhen, approved_amount: 216,
+      decision_note: "Isolated legacy fixture: approval predates the head safeguard.",
+      createdAt: historicalWhen, updatedAt: historicalWhen,
+    });
+    await rawCosts.insertOne({
+      _id: historicalCostId, ...historicalPayload, entry_date: new Date("2026-09-07"),
+      location: new ObjectId(String(anyLoc)), category: headA._id, entered_by: opsUserRow?._id,
+      approval_request: historicalApprovalId, payment_status: "Payment Pending",
+      reservation_state: "Applied", pre_approved_applied: false,
+      createdAt: historicalWhen, updatedAt: historicalWhen,
+    });
     const filedBefore = await rawCosts.countDocuments({ category: headA._id });
-    ok("QA-1977 [precondition]: one entry is filed under the unapproved head", approvedA.status === 200 && filedBefore >= 1, `got ${approvedA.status} filed=${filedBefore}`);
+    const historicalApproval = await rawApprovals.findOne({ _id: historicalApprovalId });
+    const headBeforeRejection = await rawCategories.findOne({ _id: headA._id });
+    ok("QA-1977 [precondition]: one explicitly historical Approved liability exists while the head is Pending",
+      filedBefore === 1 && !!opsUserRow?._id && !!historicalApprover?._id
+        && historicalApproval?.status === "Approved" && headBeforeRejection?.approval_status === "Pending",
+      JSON.stringify({ filed: filedBefore, approval: historicalApproval?.status, head: headBeforeRejection?.approval_status }));
     const rejected = await req(admin, "POST", `/api/approvals/${reqsA[0]._id}`, { decision: "Rejected", note: "not a real head" });
     const headAfter = await rawCategories.findOne({ _id: headA._id });
     const filedAfter = await rawCosts.countDocuments({ category: headA._id });
     ok("QA-1977: rejecting a head flags it Rejected and keeps it (active) - it does not delete it",
       rejected.status === 200 && headAfter?.approval_status === "Rejected" && headAfter?.active === true,
       `got ${rejected.status} ${JSON.stringify(rejected.data ?? {}).slice(0, 120)} flag=${headAfter?.approval_status} active=${headAfter?.active}`);
-    ok("QA-1977: ...and NO cost entry filed under it is deleted or moved", filedAfter === filedBefore, `filed ${filedBefore}->${filedAfter}`);
+    const historicalAfter = await rawCosts.findOne({ _id: historicalCostId });
+    ok("QA-1977: ...and NO cost entry filed under it is deleted or moved",
+      filedAfter === filedBefore && String(historicalAfter?.category) === String(headA._id)
+        && historicalAfter?.amount === 216 && String(historicalAfter?.approval_request) === String(historicalApprovalId),
+      `filed ${filedBefore}->${filedAfter} preserved=${!!historicalAfter}`);
   } else {
     ok("QA-1977 [precondition]: the reject arms had a Pending head and its request to work on", false, `head=${!!headA} headRequests=${reqsA.length}`);
   }
@@ -1781,8 +1887,8 @@ for (const variant of ["ordinary", "mark_paid"]) {
       `got ${ok2.status} flag=${selfAfter?.approval_status} link=${selfAfter?.approval_request}`);
   }
 
-  // With cost.post approval OFF the entry is written straight to the ledger, exactly as today - and
-  // the head it names is still created flagged and still gets its request.
+  // Head sign-off is mandatory even with cost.post approval OFF: the proposed cost stays queued,
+  // and neither a ledger write nor a formula reservation may bypass the Pending head.
   {
     const offName = `ZZ PostOff ${stamp}`;
     const offPost = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
@@ -1791,9 +1897,12 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const h = await rawCategories.findOne({ name: offName });
     const hr = h ? await rawApprovals.countDocuments({ action: "costcategory.create", entity_id: h._id }) : -1;
     const filed = h ? await rawCosts.countDocuments({ category: h._id }) : -1;
-    ok("QA-1977: with cost.post approval OFF the entry lands in the ledger (201) under the new head, still flagged Pending with its request",
-      offPost.status === 200 && r.status === 201 && h?.approval_status === "Pending" && hr === 1 && filed === 1,
-      `got ${r.status} flag=${h?.approval_status} headRequests=${hr} filed=${filed} ${JSON.stringify(r.data ?? {}).slice(0, 120)}`);
+    const parked = h ? await rawApprovals.countDocuments({ action: "cost.post", status: "Pending",
+      "payload.category": { $in: [String(h._id), h._id] } }) : -1;
+    ok("QA-1977: with cost.post approval OFF a new Pending head still queues one cost request (202) and writes no ledger or reservation row",
+      offPost.status === 200 && r.status === 202 && r.data?.queued === true
+        && h?.approval_status === "Pending" && hr === 1 && parked === 1 && filed === 0,
+      `got ${r.status} flag=${h?.approval_status} headRequests=${hr} costRequests=${parked} filed=${filed} ${JSON.stringify(r.data ?? {}).slice(0, 120)}`);
   }
 
   // One head left Pending on purpose, for the browser block to look at.
@@ -2299,10 +2408,18 @@ for (const variant of ["ordinary", "mark_paid"]) {
   {
     const offPost = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
     const offCat = await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });
-    ok("QA-2741 [precondition]: cost.post and costcategory.create approval are OFF, so the fixture lands in the ledger rather than the queue",
+    ok("QA-2741 [precondition]: automatic cost.post routing is OFF; fixture heads still require independent sign-off",
       offPost.status === 200 && offCat.status === 200, `post=${offPost.status} cat=${offCat.status}`);
-    const mkCat = async (name, parent) => (await req(admin, "POST", "/api/master-lists/cost-categories",
-      parent ? { name, parent } : { name })).data?.item?._id;
+    const mkCat = async (name, parent) => {
+      const made = await req(admin, "POST", "/api/master-lists/cost-categories", parent ? { name, parent } : { name });
+      const id = made.data?.item?._id;
+      const signedOff = id ? await signOffHead(id) : 0;
+      const signedHead = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }) : null;
+      ok("QA-2741 [precondition]: independently approved filter category exists before its ledger fixture is posted",
+        made.status === 201 && !!id && signedOff === 200 && signedHead?.approval_status === "Approved",
+        JSON.stringify({ name, created: made.status, signedOff, flag: signedHead?.approval_status }));
+      return id;
+    };
     const cutHead = await mkCat(`ZZ Cut Head ${stamp}`, null);
     const cutSalary = cutHead ? await mkCat(`ZZ Cut Salary ${stamp}`, cutHead) : null;
     const cutFood = cutHead ? await mkCat(`ZZ Cut Food ${stamp}`, cutHead) : null;
@@ -2554,12 +2671,16 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const pR = await postUnder(cR, "R");
     const pA = await postUnder(cA, "A");
     const pL = await postUnder(cL, "L");
+    const rejectedHeadForUi = ((await req(ops, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+      .find((head) => String(head._id) === String(cR.head?._id));
     ok("owner 2026-10-07: a cost WITHIN the cap of a PENDING head does not auto-post - 202, one Pending cost.post request, no ledger row, and the reason names the head as not approved",
       pP.status === 202 && pP.parked === 1 && pP.ledger === 0 && /not approved/i.test(pP.reason), JSON.stringify(pP));
     ok("owner 2026-10-07: ...and the parked request does not advertise a 'pre-approved basis' for the cap it ignored",
       pP.status === 202 && !/pre-approved basis/i.test(pP.summary), pP.summary.slice(0, 160));
     ok("owner 2026-10-07: a cost WITHIN the cap of a REJECTED head does not auto-post either - 202, one Pending cost.post request, no ledger row",
-      pR.status === 202 && pR.parked === 1 && pR.ledger === 0 && /rejected/i.test(pR.reason), JSON.stringify(pR));
+      pR.status === 202 && pR.parked === 1 && pR.ledger === 0
+        && rejectedHeadForUi?.approval_status === "Rejected" && /rejected|not approved/i.test(pR.reason),
+      JSON.stringify({ ...pR, headStatus: rejectedHeadForUi?.approval_status }));
     ok("owner 2026-10-07 [regression guard]: the same cost under the same cap on an APPROVED head still auto-posts - 201, pre_approved_applied, nothing parked",
       pA.status === 201 && pA.applied === true && pA.ledger === 1 && pA.parked === 0, JSON.stringify(pA));
     ok("owner 2026-10-07 [regression guard]: ...and on a legacy head with NO flag (reads as approved) it auto-posts exactly as before - 201, pre_approved_applied, nothing parked",

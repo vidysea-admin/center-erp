@@ -449,23 +449,27 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
 
 // ======================================================= scope
 {
-  const id = await mkDirect(creator, "scope");
-  const toForeign = await req(creator.cookie, "PATCH", `/api/costs/${id}`, { location: foreignLoc._id });
+  // Operations is a central, unscoped role. A Location persona exercises Rule 38 without
+  // pretending that assigning location_scope changes the meaning of an Operations account.
+  const scopedCreator = await mkUser(`Scoped Creator ${stamp}`, `zz.b3.scoped.${stamp}@vidysea-test.local`, "Location", ["costs.manage"], [ownLoc._id]);
+  ok("[precondition] an explicitly Location-scoped creator signs in", !!scopedCreator.id && !!scopedCreator.cookie, `${scopedCreator.made.status}`);
+  const id = await mkDirect(scopedCreator, "scope");
+  const toForeign = await req(scopedCreator.cookie, "PATCH", `/api/costs/${id}`, { location: foreignLoc._id });
   ok("scope: an edit cannot move the entry onto a centre outside the creator's scope (403); the row keeps its centre",
     toForeign.status === 403 && String((await raw(id))?.location) === String(ownLoc._id), `${toForeign.status} ${JSON.stringify(toForeign.data)}`);
   // an entry of the creator's that sits at a foreign centre (written raw): not writable by a scoped user
   const foreignId = new ObjectId();
   await rawCosts.insertOne({
     _id: foreignId, entry_date: new Date("2026-09-07"), location: new ObjectId(foreignLoc._id), category: new ObjectId(plain._id), amount: 77,
-    requested_amount: 77, payment_status: "Payment Pending", note: `${TAG}-foreign`, entered_by: new ObjectId(creator.id), reservation_state: "Applied",
+    requested_amount: 77, payment_status: "Payment Pending", note: `${TAG}-foreign`, entered_by: new ObjectId(scopedCreator.id), reservation_state: "Applied",
     createdAt: new Date(), updatedAt: new Date(),
   });
-  const foreignEdit = await req(creator.cookie, "PATCH", `/api/costs/${foreignId}`, { amount: 78 });
-  const foreignDel = await req(creator.cookie, "DELETE", `/api/costs/${foreignId}`, { reason: "x" });
+  const foreignEdit = await req(scopedCreator.cookie, "PATCH", `/api/costs/${foreignId}`, { amount: 78 });
+  const foreignDel = await req(scopedCreator.cookie, "DELETE", `/api/costs/${foreignId}`, { reason: "x" });
   ok("scope: the creator's own entry at a foreign centre is out of scope for edit and delete (403)", foreignEdit.status === 403 && foreignDel.status === 403 && (await raw(foreignId))?.amount === 77, `${foreignEdit.status}/${foreignDel.status}`);
-  const mineForeign = await req(creator.cookie, "GET", "/api/costs?mine=1");
+  const mineForeign = await req(scopedCreator.cookie, "GET", "/api/costs?mine=1");
   ok("scope: ?mine=1 stays inside the creator's location scope", !(mineForeign.data?.items ?? []).some((r) => String(r._id) === String(foreignId)));
-  const noBatchLoc = await req(creator.cookie, "PATCH", `/api/costs/${id}`, { location: "", batch: "" });
+  const noBatchLoc = await req(scopedCreator.cookie, "PATCH", `/api/costs/${id}`, { location: "", batch: "" });
   ok("scope: removing every anchor (centre, batch, trainer) is refused by Rule 37 (400)", noBatchLoc.status === 400 && String((await raw(id))?.location) === String(ownLoc._id), `${noBatchLoc.status}`);
   await rawCosts.deleteOne({ _id: foreignId });
 }
@@ -642,6 +646,180 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       && String(replaced?.approval_request) === String(replacementRequest?._id), `${replacement.status}/${sanctioned.status}`);
 }
 
+// ======================================================= takeover regressions: destination ownership and input guards
+{
+  const rawBatches = db.collection("batches");
+  const rawCategories = db.collection("costcategories");
+  // Raw snapshots include internal receipts, proposal ownership and audit outboxes, not just amounts.
+  const snapshot = async (costIds, batchIds = []) => {
+    const costOids = costIds.map((id) => new ObjectId(String(id)));
+    const batchOids = batchIds.map((id) => new ObjectId(String(id)));
+    const costs = await rawCosts.find({ _id: { $in: costOids } }).sort({ _id: 1 }).toArray();
+    const refs = costs.flatMap((row) => [row.approval_request, row.cost_edit_request]).filter(Boolean);
+    const [batches, requests, auditRows, costCount, requestCount, auditCount] = await Promise.all([
+      rawBatches.find({ _id: { $in: batchOids } }).sort({ _id: 1 }).toArray(),
+      rawApprovals.find({ $or: [{ _id: { $in: refs } }, { entity_id: { $in: costOids } },
+        { "payload.cost_entry": { $in: costIds.map(String) } }] }).sort({ _id: 1 }).toArray(),
+      rawAudits.find({ entity_id: { $in: [...costOids, ...batchOids, ...refs] } }).sort({ _id: 1 }).toArray(),
+      rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
+    ]);
+    return JSON.stringify({ costs, batches, requests, auditRows, costCount, requestCount, auditCount });
+  };
+  const template = await rawBatches.findOne({ program: { $type: "objectId" } });
+  ok("takeover [precondition]: a program exists for isolated empty batch fixtures", !!template?.program);
+  const makeBatch = async (suffix) => {
+    const id = new ObjectId();
+    // Explicit synthetic Planning batch: no member, cost or approval is invented under it.
+    await rawBatches.insertOne({ _id: id, code: `ZZ-B3-${suffix}-${stamp}`, status: "Planning",
+      location: new ObjectId(ownLoc._id), program: template.program, target_size: 1,
+      planned_start: new Date("2026-09-01"), planned_end: new Date("2026-09-30"),
+      createdAt: new Date(), updatedAt: new Date() });
+    return id;
+  };
+  if (template?.program) {
+    const fromBatch = await makeBatch("FROM");
+    const toBatch = await makeBatch("TO");
+    const id = await mkApproved(creator, "destination-owner", { batch: String(fromBatch) });
+    ok("takeover [precondition]: the source liability exists before its real batch-change proposal", !!id);
+    if (id) {
+      const queued = await req(creator.cookie, "PATCH", `/api/costs/${id}`,
+        { batch: String(toBatch), confirm_approved: true });
+      const proposed = await waitingEdit(id);
+      const held = await raw(id);
+      ok("destination [precondition]: actual A-to-B edit is queued and durably owns the unchanged source cost",
+        queued.status === 202 && !!proposed && String(held?.batch) === String(fromBatch)
+          && String(held?.cost_edit_request) === String(proposed?._id)
+          && proposed?.payload?.batch === String(toBatch) && String(proposed?.batch) === String(toBatch), `${queued.status}`);
+      if (proposed) {
+        for (const status of ["Pending", "Applying"]) {
+          // Applying is the existing request's synthetic in-flight decision state, not a new request.
+          await rawApprovals.updateOne({ _id: proposed._id }, { $set: { status } });
+          const before = await snapshot([id], [fromBatch, toBatch]);
+          const removed = await req(admin, "DELETE", `/api/batches/${toBatch}`, { reason: `${TAG}-held-${status}-destination` });
+          ok(`destination: ${status} edit refuses destination batch deletion (409), with both batches, cost, request, lock and audit byte-unchanged`,
+            removed.status === 409 && (await snapshot([id], [fromBatch, toBatch])) === before,
+            `${removed.status} ${removed.data?.error ?? ""}`);
+        }
+        await rawApprovals.updateOne({ _id: proposed._id }, { $set: { status: "Pending" } });
+        const rejected = await decide(proposed._id, "Rejected");
+        ok("destination: rejected batch change clears its ownership for later reconciliation", rejected.status === 200 && !(await raw(id))?.cost_edit_request);
+      }
+
+      const emptyDestination = await makeBatch("CLAIM-EMPTY");
+      const claimId = new ObjectId();
+      // Explicit crash fixture between the cost ownership CAS and creation of the approval row.
+      await rawCosts.updateOne({ _id: new ObjectId(id) }, { $set: {
+        cost_edit_request: claimId,
+        cost_edit_proposal: { mutation_key: `${TAG}-crash-before-queue`, input_hash: "synthetic-crash-fixture",
+          context: { batch: String(emptyDestination), payload: { kind: "cost-edit", cost_entry: id, batch: String(emptyDestination) } } },
+      } });
+      ok("destination [precondition]: durable claim targets an empty batch before any request row exists",
+        !(await rawApprovals.findOne({ _id: claimId })) && await rawCosts.countDocuments({ batch: emptyDestination }) === 0);
+      const beforeClaimDelete = await snapshot([id], [emptyDestination]);
+      const emptyDelete = await req(admin, "DELETE", `/api/batches/${emptyDestination}`, { reason: `${TAG}-claim-before-queue` });
+      ok("destination: claim-before-queue protects an EMPTY destination (409), with cost ownership, batch and all effects unchanged",
+        emptyDelete.status === 409 && (await snapshot([id], [emptyDestination])) === beforeClaimDelete,
+        `${emptyDelete.status} ${emptyDelete.data?.error ?? ""}`);
+      await rawCosts.updateOne({ _id: new ObjectId(id) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+
+      // The existing deletion-fence hook lets the claim arrive after deletion has been claimed.
+      const fencedDestination = await makeBatch("CLAIM-LATE");
+      const localCost = await mkDirect(creator, "destination-history", { batch: String(fencedDestination) });
+      const batchBefore = JSON.stringify(await rawBatches.findOne({ _id: fencedDestination }));
+      const localBefore = JSON.stringify(await raw(localCost));
+      const auditBefore = await rawAudits.countDocuments({});
+      const deletePromise = req(admin, "DELETE", `/api/batches/${fencedDestination}?_test_pause_after_deletion_fence_ms=5000`,
+        { reason: `${TAG}-late-claim` });
+      let fenceSeen = null;
+      for (let attempt = 0; attempt < 150 && !fenceSeen; attempt++) {
+        fenceSeen = await rawBatches.findOne({ _id: fencedDestination, deletion_state: "Deleting" });
+        if (!fenceSeen) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      ok("destination [instrument precondition]: recorded-work deletion reached its durable fence before the external claim",
+        !!localCost && !!fenceSeen);
+      let lateCostBefore = "";
+      if (fenceSeen) {
+        await rawCosts.updateOne({ _id: new ObjectId(id) }, { $set: {
+          cost_edit_request: claimId,
+          cost_edit_proposal: { mutation_key: `${TAG}-late-crash`, input_hash: "synthetic-late-claim",
+            context: { batch: String(fencedDestination), payload: { kind: "cost-edit", cost_entry: id, batch: String(fencedDestination) } } },
+        } });
+        lateCostBefore = JSON.stringify(await raw(id));
+      }
+      const lateDelete = await deletePromise;
+      ok("destination: a post-fence external claim refuses deletion (409), rolls back its own batch marker and preserves both costs, claim and audit",
+        !!fenceSeen && lateDelete.status === 409
+          && JSON.stringify(await rawBatches.findOne({ _id: fencedDestination })) === batchBefore
+          && JSON.stringify(await raw(localCost)) === localBefore && JSON.stringify(await raw(id)) === lateCostBefore
+          && !(await rawApprovals.findOne({ _id: claimId })) && await rawAudits.countDocuments({}) === auditBefore,
+        `${lateDelete.status} ${lateDelete.data?.error ?? ""}`);
+      await rawCosts.updateOne({ _id: new ObjectId(id) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+    }
+  }
+
+  // Synthetic legacy rows under unapproved taxonomy exercise the merged material edit, including
+  // omission of category. Description-only correction remains possible for a Pending legacy row.
+  for (const status of ["Pending", "Rejected"]) {
+    for (const blockedAt of ["selected", "parent"]) {
+      const parentId = new ObjectId(), categoryId = new ObjectId();
+      if (blockedAt === "parent") await rawCategories.insertOne({ _id: parentId, name: `ZZ ${TAG}-${status}-parent`, active: true, approval_status: status });
+      await rawCategories.insertOne({ _id: categoryId, name: `ZZ ${TAG}-${status}-${blockedAt}-category`, active: true,
+        approval_status: blockedAt === "selected" ? status : "Approved", ...(blockedAt === "parent" ? { parent: parentId } : {}) });
+      const id = await mkDirect(creator, `legacy-${status}-${blockedAt}`);
+      ok(`taxonomy [precondition]: legacy ${status} ${blockedAt} cost fixture exists`, !!id);
+      if (!id) continue;
+      await rawCosts.updateOne({ _id: new ObjectId(id) }, { $set: { category: categoryId } });
+      for (const patch of [{ amount: 876 }, { location: foreignLoc._id }]) {
+        const before = await snapshot([id]);
+        const changed = await req(approverB.cookie, "PATCH", `/api/costs/${id}`, patch);
+        ok(`taxonomy: finance material ${Object.keys(patch)[0]} edit under ${status} ${blockedAt} is refused (409) even when category is omitted; entry and all effects unchanged`,
+          changed.status === 409 && (await snapshot([id])) === before, `${changed.status} ${changed.data?.error ?? ""}`);
+      }
+      if (status === "Pending") {
+        const corrected = await req(approverB.cookie, "PATCH", `/api/costs/${id}`, { note: `${TAG}-legacy-description-${blockedAt}` });
+        ok(`taxonomy: a Pending legacy ${blockedAt} still permits descriptive correction (200) without moving money or head`,
+          corrected.status === 200 && (await raw(id))?.amount === 321 && String((await raw(id))?.category) === String(categoryId), `${corrected.status}`);
+      }
+    }
+  }
+
+  const malformedId = await mkApproved(creator, "malformed-fields");
+  ok("text [precondition]: approved liability exists for malformed creator material-edit attempts", !!malformedId);
+  if (malformedId) {
+    for (const field of ["note", "vendor_payee", "voucher_no", "payment_mode"]) {
+      for (const [kind, value] of [["object", { text: "Cash" }], ["array", ["Cash"]], ["number", 123]]) {
+        const before = await snapshot([malformedId]);
+        const changed = await req(creator.cookie, "PATCH", `/api/costs/${malformedId}`,
+          { amount: 765, confirm_approved: true, [field]: value }, { "Idempotency-Key": `${TAG}-bad-${field}-${kind}` });
+        ok(`text: creator ${field} ${kind} is refused (400) before any ledger, approval, audit, receipt, ownership or outbox change`,
+          changed.status === 400 && (await snapshot([malformedId])) === before, `${changed.status} ${changed.data?.error ?? ""}`);
+      }
+    }
+  }
+
+  for (const [field, value] of [["note", { text: "bad" }], ["vendor_payee", ["bad"]], ["voucher_no", 123], ["payment_mode", ["Cash"]]]) {
+    const id = await mkApproved(creator, `stored-malformed-${field}`);
+    const queued = id ? await req(creator.cookie, "PATCH", `/api/costs/${id}`, { amount: 654, confirm_approved: true }) : { status: 0 };
+    const proposed = id ? await waitingEdit(id) : null;
+    ok(`text [precondition]: actual queued ${field} proposal exists before explicit stored-payload corruption`, queued.status === 202 && !!proposed);
+    if (!proposed) continue;
+    // Explicit legacy/corrupt stored request fixture: API submission remains strictly typed.
+    await rawApprovals.updateOne({ _id: proposed._id }, { $set: { [`payload.${field}`]: value } });
+    const costBefore = JSON.stringify(await raw(id));
+    const costCountBefore = await rawCosts.countDocuments({});
+    const auditBefore = await rawAudits.countDocuments({});
+    const approved = await decide(proposed._id, "Approved");
+    const requestAfter = await rawApprovals.findOne({ _id: proposed._id });
+    ok(`text: stored malformed ${field} approval is refused (400), rolls request back to Pending, and leaves liability, ownership, receipts, outbox and audit unchanged`,
+      approved.status === 400 && requestAfter?.status === "Pending"
+        && JSON.stringify(requestAfter?.payload?.[field]) === JSON.stringify(value)
+        && JSON.stringify(await raw(id)) === costBefore && await rawCosts.countDocuments({}) === costCountBefore
+        && await rawAudits.countDocuments({}) === auditBefore, `${approved.status} ${approved.data?.error ?? ""}`);
+    const rejected = await decide(proposed._id, "Rejected");
+    ok(`text: malformed ${field} request remains rejectable and releases its ownership`, rejected.status === 200 && !(await raw(id))?.cost_edit_request);
+  }
+}
+
 // ======================================================= browser: the dialog is for approved entries only
 let browser;
 try {
@@ -651,6 +829,10 @@ try {
   ok("[precondition] chromium launches from the `playwright` devDependency", false, String(e.message).slice(0, 200));
 }
 if (browser) {
+  // Keep the browser fixture below DataTable's 25-row page boundary. API cases above still
+  // exercise the original Operations creator; this fresh Operations persona has the same rights.
+  const uiCreator = await mkUser(`UI Creator ${stamp}`, `zz.b3.ui.${stamp}@vidysea-test.local`, "Operations", ["costs.manage"], [ownLoc._id]);
+  ok("[precondition] the UI creator has the same cost-entry rights and signs in", !!uiCreator.id && !!uiCreator.cookie, `${uiCreator.made.status}`);
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   const page = await ctx.newPage();
   page.setDefaultTimeout(20000);
@@ -659,16 +841,23 @@ if (browser) {
   const arm = async (name, fn) => {
     try { await fn(); } catch (e) { ok(`${name} [arm ran to its end]`, false, String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 240)); }
   };
-  const approvedUi = await mkApproved(creator, "ui-approved");
-  const directUi = await mkDirect(creator, "ui-direct");
+  const approvedUi = await mkApproved(uiCreator, "ui-approved");
+  // Deleted entries do not render Note; this distinct amount identifies exactly this row.
+  const directUi = await mkDirect(uiCreator, "ui-direct", { amount: 642 });
+  ok("[precondition] the approved and direct UI entries exist and belong to the UI creator",
+    !!approvedUi && !!directUi && String((await raw(approvedUi))?.entered_by) === String(uiCreator.id)
+      && String((await raw(directUi))?.entered_by) === String(uiCreator.id));
   await page.goto(BASE + "/login", { waitUntil: "domcontentloaded" });
-  await page.locator('input[type="email"], input[name="email"], input[id="email"]').first().fill(creator.email);
+  await page.locator('input[type="email"], input[name="email"], input[id="email"]').first().fill(uiCreator.email);
   await page.locator('input[type="password"]').first().fill(PW);
   await page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
   await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
   ok("[precondition] the creator is logged in in the browser", !/login/i.test(page.url()), page.url());
   await page.goto(BASE + "/costs", { waitUntil: "domcontentloaded" });
-  const rowOf = (note) => page.locator("tr", { hasText: `${TAG}-${note}` }).first();
+  // Section renders h3 -> header div -> enclosing card. My submissions appears before
+  // Entries you entered and repeats approved notes, so a global tr.first() is the wrong row.
+  const cardOf = (title) => page.getByRole("heading", { name: title, exact: true, level: 3 }).locator("..").locator("..");
+  const rowOf = (note) => cardOf("Entries you entered").locator("tr", { hasText: `${TAG}-${note}` }).first();
   const modal = page.getByTestId("confirm-modal");
 
   await arm("ui: the own-entries table lists the creator's rows with Edit and Delete", async () => {
@@ -680,7 +869,7 @@ if (browser) {
     await rowOf("ui-approved").getByRole("button", { name: "Delete" }).click();
     await modal.waitFor();
     const text = (await modal.innerText()).replace(/\s+/g, " ");
-    const listed = (await req(creator.cookie, "GET", "/api/costs?mine=1")).data?.items?.find((r) => String(r._id) === approvedUi);
+    const listed = (await req(uiCreator.cookie, "GET", "/api/costs?mine=1")).data?.items?.find((r) => String(r._id) === approvedUi);
     ok("ui: the dialog says who approved it and when, and asks 'Are you really sure?'", text.includes(sentence(approverName, istDay(listed.approved_on))) && text.includes("Are you really sure?"), text);
     ok("ui: it is an in-app dialog, not window.confirm", nativeDialogs === 0, `native dialogs: ${nativeDialogs}`);
     await modal.getByRole("button", { name: "Cancel" }).click();
@@ -707,8 +896,12 @@ if (browser) {
     while (Date.now() < until && !(await raw(directUi))?.archived_at) await page.waitForTimeout(200);
     ok("ui: no dialog appeared for the unapproved entry, and it is archived", (await modal.count()) === 0 && !!(await raw(directUi))?.archived_at && nativeDialogs === 0);
     await page.getByText("Deleted entries - restorable").waitFor();
-    await rowOf("ui-direct").getByRole("button", { name: "Restore" }).waitFor().catch(() => {});
-    const restoreBtn = page.locator("tr", { hasText: "Restore" }).getByRole("button", { name: "Restore" }).first();
+    const deletedRow = cardOf("Deleted entries - restorable").locator("tr").filter({ has: page.getByRole("cell", { name: "₹642", exact: true }) });
+    // Database acknowledgement precedes the client refresh; prove the row after it renders.
+    await deletedRow.waitFor();
+    ok("[precondition] the deleted list identifies exactly the direct UI entry", await deletedRow.count() === 1 && (await raw(directUi))?.amount === 642);
+    const restoreBtn = deletedRow.getByRole("button", { name: "Restore", exact: true });
+    await restoreBtn.waitFor();
     await restoreBtn.click();
     const until2 = Date.now() + 15000;
     while (Date.now() < until2 && (await raw(directUi))?.archived_at) await page.waitForTimeout(200);
@@ -716,7 +909,7 @@ if (browser) {
   });
 
   await arm("ui: editing an approved entry's amount asks first, then sends it back for approval", async () => {
-    const id = await mkApproved(creator, "ui-edit");
+    const id = await mkApproved(uiCreator, "ui-edit");
     await page.reload({ waitUntil: "domcontentloaded" });
     await rowOf("ui-edit").waitFor();
     await rowOf("ui-edit").getByRole("button", { name: "Edit" }).click();
@@ -735,7 +928,7 @@ if (browser) {
   });
 
   await arm("ui: an unapproved entry's edit saves with no dialog", async () => {
-    const id = await mkDirect(creator, "ui-edit-direct");
+    const id = await mkDirect(uiCreator, "ui-edit-direct");
     await page.reload({ waitUntil: "domcontentloaded" });
     await rowOf("ui-edit-direct").waitFor();
     await rowOf("ui-edit-direct").getByRole("button", { name: "Edit" }).click();

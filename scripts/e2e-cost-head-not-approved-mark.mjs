@@ -123,11 +123,13 @@ try {
     pDoc?.approval_status === "Pending" && rDoc?.approval_status === "Rejected" && aDoc?.approval_status === "Approved"
       && sDoc?.approval_status === "Pending" && String(sDoc?.parent) === String(aDoc?._id) && apprDecision.status === 200 && rejDecision.status === 200,
     JSON.stringify([pDoc?.approval_status, rDoc?.approval_status, aDoc?.approval_status, sDoc?.approval_status, sDoc?.parent && String(sDoc.parent) === String(aDoc?._id), apprDecision.status, rejDecision.status]));
-  const rejectedOff = await req(ops, "POST", "/api/costs", entry({ category: String(rDoc?._id), note: tag("rejected off"), amount: 415 }));
+  // Keep the note free of status words: the later display-only assertion deliberately hunts
+  // those words in stored requests, so a caller's own note must not impersonate the marker.
+  const rejectedOff = await req(ops, "POST", "/api/costs", entry({ category: String(rDoc?._id), note: tag("hold off"), amount: 415 }));
   if (rejectedOff.status === 202 && rejectedOff.data?.item?._id) created.requests.push(String(rejectedOff.data.item._id));
   else if (rejectedOff.status === 201 && rejectedOff.data?.item?._id) created.costs.push(String(rejectedOff.data.item._id));
   ok("guard: an already-Rejected head with cost.post OFF queues the real request and writes no ledger row",
-    rejectedOff.status === 202 && !!rejectedOff.data?.queued && await rawCosts.countDocuments({ note: tag("rejected off") }) === 0,
+    rejectedOff.status === 202 && !!rejectedOff.data?.queued && await rawCosts.countDocuments({ note: tag("hold off") }) === 0,
     `status=${rejectedOff.status}`);
 
   // The new write rule correctly prevents these rows from being posted today. They deliberately
