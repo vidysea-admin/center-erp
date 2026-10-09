@@ -34,7 +34,7 @@ function* walk(dir) {
 // flag whitelist NEVER ran on either approvals route, the two routes this whole unit is about. Two
 // statements of one rule, inside the file whose job is catching exactly that. One list now; both
 // regexes are built from it.
-const MONEY_MASKERS = ["maskInvoiceMoney", "maskInvoiceMoneyList", "maskMoneyInAuditRow", "maskApprovalMoney"];
+const MONEY_MASKERS = ["maskInvoiceMoney", "maskInvoiceMoneyList", "maskMoneyInAuditRow", "maskApprovalMoney", "maskCostCategoryMoney", "maskCostCategoryMoneyList"];
 // `g` only where the caller iterates. A global regex reused with `.test()` carries `lastIndex`
 // between calls and starts answering false on the second file — a stateful pin that looks fine.
 const MASKER_CALL_RE = (flags = "") => new RegExp("(?:" + MONEY_MASKERS.join("|") + ")\\(", flags);
@@ -3263,10 +3263,16 @@ for (const file of walk(root)) {
     // `scripts/e2e-roles.mjs`, which walks real endpoints as an ungranted Admin and greps the wire:
     // every one of the five leaks was found that way and none by a structural pin. If a sixth door
     // appears, the right response is to widen the PROBE's endpoint list, not this regex.
-    .filter((f) => /\b(Invoice|CostEntry|AuditLog|ApprovalRequest)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
+    .filter((f) => /\b(Invoice|CostEntry|CostCategory|AuditLog|ApprovalRequest)\b/.test(stripComments(fs.readFileSync(f, "utf-8"))))
     .map((f) => path.relative(root, f).split(path.sep).join("/"))
     .sort();
   const bad = [];
+  // These protected doors must remain in the model-derived census. Deleting a file or its model
+  // references must not evade its body checks merely because the overall population stays large.
+  for (const rel of ["app/api/costs/[id]/route.ts", "app/api/costs/[id]/restore/route.ts",
+    "app/api/master-lists/[list]/route.ts", "app/api/master-lists/[list]/[id]/route.ts"]) {
+    if (!doors.includes(rel)) bad.push(`${rel}: protected finance target is missing or absent from the parsed population`);
+  }
   // QA-1857 follow-on: this ran ABOVE `bad` in its first draft, so the day it actually fired the
   // whole wall would have crashed with `Cannot access 'bad' before initialization` instead of
   // reporting — a pin that destroys the run it was meant to inform. Found by mutation, not by
@@ -3279,8 +3285,125 @@ for (const file of walk(root)) {
   if (doors.length < 8) bad.push("only " + doors.length + " Invoice/CostEntry route(s) found — the walk is broken, not the codebase");
   for (const rel of doors) {
     if (rel in EXEMPT) continue;
-    const raw = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/'/g, '"').replace(/\s+/g, " ");
-    const gated = /requireFinance\(/.test(raw);
+    const source = stripComments(fs.readFileSync(path.join(root, rel), "utf-8")).replace(/\s+/g, " ");
+    const raw = source.replace(/'/g, '"');
+    // R10 deliberately splits money mutations between finance and the entry's creator. A helper
+    // name/import is not a door: attribute every control to its own brace-bounded handler/helper.
+    // Normalize only the exported apiHandler prefix in memory; fnBody still matches parameters
+    // and the actual handler braces (including typed/destructured parameters).
+    // A native same-named function is not the export. Reserve a parser-only name and refuse a
+    // collision rather than accidentally reading a sibling/decoy as the actual exported handler.
+    const bodies = /\bfunction __finance_handler_/.test(source) ? ""
+      : source.replace(/export const (\w+) = apiHandler\(async\s*/g, "function __finance_handler_$1");
+    let splitGated = false;
+    const controls = [];
+    if (rel === "app/api/costs/[id]/route.ts") {
+      const patch = fnBody(bodies, "__finance_handler_PATCH"), del = fnBody(bodies, "__finance_handler_DELETE");
+      const load = fnBody(source, "loadOwnCost"), scoped = fnBody(source, "loadInScope");
+      const tombstone = fnBody(source, "loadDeletionTombstoneInScope");
+      const ownPatch = fnBody(source, "patchOwnCost"), ownDelete = fnBody(source, "deleteOwnCost");
+      for (const [verb, body, own] of [["PATCH", patch, "patchOwnCost"], ["DELETE", del, "deleteOwnCost"]]) {
+        controls.push([`${verb} unique parsed export`, [...source.matchAll(new RegExp(`export const ${verb} = apiHandler\\(async\\s`, "g"))].length === 1 && !!body]);
+        const dispatch = `if (!(await hasFinanceApprove(user))) return ${own}(user, req, id);`;
+        const at = body.indexOf(dispatch), firstWrite = body.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/);
+        controls.push([`${verb} negative-finance dispatch before writes`, !!body && at >= 0
+          && body.indexOf("await requireUser()") < at && body.indexOf("await requireUser()") >= 0
+          && body.indexOf("requireEdit(user);", at) > at && (firstWrite < 0 || at < firstWrite)]);
+        controls.push([`${verb} finance scoped loader`, /await loadInScope\(user, id\)/.test(body)]);
+        controls.push([`${verb} finance pending-owner refusal before writes`,
+          /if \(pendingOwner\?\.cost_edit_request \|\| await pendingCostEditRequest\(doc\._id\)\) \{ throw new HttpError\(409,/.test(body)
+          && body.indexOf("if (pendingOwner?.cost_edit_request") < firstWrite]);
+      }
+      for (const [name, body] of [["finance scope", scoped], ["finance tombstone scope", tombstone], ["creator scope", load]]) {
+        const firstWrite = body.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/);
+        controls.push([name, !!body && /if \(isScoped\(user\)/.test(body)
+          && /!doc\.location \|\| !user\.location_scope\.map\(String\)\.includes\(String\(doc\.location\)\)/.test(body)
+          && /throw new HttpError\(403, "Out of scope"\)/.test(body)
+          && body.indexOf('throw new HttpError(403, "Out of scope")') < body.lastIndexOf("return")
+          && (firstWrite < 0 || body.indexOf('throw new HttpError(403, "Out of scope")') < firstWrite)]);
+      }
+      controls.push(["creator costs.manage/Edit before load", /^function loadOwnCost\([^]*?\{ await requirePerm\(user, "costs.manage"\); requireEdit\(user\);/.test(load)]);
+      controls.push(["creator ownership refusal before internal read", /if \(!isCostCreator\(user, doc\)\) throw new HttpError\(403,/.test(load)
+        && load.indexOf("if (!isCostCreator(user, doc))") < load.indexOf("CostEntry.collection.findOne(")
+        && (load.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/) < 0
+          || load.indexOf("if (!isCostCreator(user, doc))") < load.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/))]);
+      for (const [name, body] of [["creator PATCH", ownPatch], ["creator DELETE", ownDelete]]) {
+        const firstWrite = body.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/);
+        controls.push([`${name} protected loader`, !!body && /await loadOwnCost\(user, id\)/.test(body)
+          && body.indexOf("await loadOwnCost(user, id)") < firstWrite]);
+        controls.push([`${name} Paid/unknown refusal`, /if \(doc\.payment_status !== "Payment Pending"\)\s*\{?\s*throw new HttpError\(409, doc\.payment_status === "Paid"/.test(body)]);
+        controls.push([`${name} pending-owner refusal`, /internal\?\.cost_edit_request \|\| await pendingCostEditRequest\(doc\._id\)/.test(body)
+          && /throw new HttpError\(409, "A change to this cost is already waiting for approval\./.test(body)]);
+        controls.push([`${name} approved confirmation`, /(?:approvedBefore|costIsApproved\(stamp\)) && body\??\.confirm_approved !== true/.test(body)
+          && /throw new HttpError\(409, approvedCostSentence\(stamp,/.test(body)]);
+        // PATCH also persists replay receipts in queuedResult; the final named write changes the
+        // liability. Never let that earlier receipt qualify the actual ledger CAS (or vice versa).
+        const writeStart = body.lastIndexOf("const written = await CostEntry.collection.updateOne(");
+        const writeEnd = body.indexOf("if (written.modifiedCount", writeStart);
+        const write = writeStart >= 0 && writeEnd > writeStart ? body.slice(writeStart, writeEnd) : "";
+        controls.push([`${name} liability write after Paid/pending/confirmation guards`, !!write
+          && body.indexOf('if (doc.payment_status !== "Payment Pending")') < writeStart
+          && body.indexOf("await pendingCostEditRequest(doc._id)") < writeStart
+          && body.indexOf("approvedCostSentence(stamp,") < writeStart]);
+        for (const [field, re] of [["Paid", /payment_status: "Payment Pending"/], ["revision", /updatedAt: (?:before|\(doc as any\))\.updatedAt/],
+          ["pending owner", /cost_edit_request: null/], ["reservation", /reservation_state: \{ \$ne: "Pending" \}/],
+          ["archive", /archived_at: null/], ["deletion", /deletion_state: \{ \$exists: false \}/]]) {
+          // Only the update FILTER qualifies, never a value stored in the update/receipt payload.
+          const filterEnd = write.indexOf("}, {");
+          const filter = filterEnd >= 0 ? write.slice(0, filterEnd) : "";
+          controls.push([`${name} ${field} CAS`, !!filter && re.test(filter)]);
+        }
+      }
+      controls.push(["creator PATCH cannot mark paid", /if \(body\.mark_paid === true\) \{ throw new HttpError\(403,/.test(ownPatch)]);
+      const claimStart = ownPatch.indexOf("const claimed = await CostEntry.collection.updateOne(");
+      const claimEnd = ownPatch.indexOf("if (claimed.modifiedCount", claimStart);
+      const claim = claimStart >= 0 && claimEnd > claimStart ? ownPatch.slice(claimStart, claimEnd) : "";
+      const claimFilterEnd = claim.indexOf("}, {");
+      const claimFilter = claimFilterEnd >= 0 ? claim.slice(0, claimFilterEnd) : "";
+      controls.push(["creator PATCH material queue before direct liability write", /const material = COST_MATERIAL_FIELDS\.some\(\(f\) => f in patch\);/.test(ownPatch)
+        && /if \(material \|\| target\.approvalNeeded\)/.test(ownPatch)
+        && /const needsPerson = approvedBefore \|\| target\.approvalNeeded \|\| !preApproval\.applied; if \(needsPerson\)/.test(ownPatch)
+        && /await requireApproval\(/.test(ownPatch) && /return queuedResult\(/.test(ownPatch.slice(claimEnd))
+        && claimStart > ownPatch.indexOf("approvedCostSentence(stamp,") && claimStart < ownPatch.lastIndexOf("const written =")]);
+      for (const [field, re] of [["creator", /entered_by: new Types\.ObjectId\(String\(user\.id\)\)/],
+        ["Paid", /payment_status: "Payment Pending"/], ["revision", /updatedAt: before\.updatedAt/], ["pending owner", /cost_edit_request: null/],
+        ["reservation", /reservation_state: \{ \$ne: "Pending" \}/], ["archive", /archived_at: null/], ["deletion", /deletion_state: \{ \$exists: false \}/]]) {
+        controls.push([`creator PATCH material-claim ${field} CAS`, !!claimFilter && re.test(claimFilter)]);
+      }
+      const updates = [...patch.matchAll(/const updated = await CostEntry\.findOneAndUpdate\( (\{[^]*?\}), (?:\{ \$set: paymentPatch \}|update),/g)].map((m) => m[1]);
+      controls.push(["finance PATCH both parsed CAS filters", updates.length === 2]);
+      for (const [n, filter] of updates.entries()) {
+        for (const [field, re] of [["revision", /updatedAt: doc\.updatedAt/], ["pending owner", /cost_edit_request: null/],
+          ["archive", /archived_at: null/], ["deletion", /deletion_state: \{ \$exists: false \}/]]) controls.push([`finance PATCH ${n} ${field} CAS`, re.test(filter)]);
+      }
+      controls.push(["finance payment Paid CAS", updates.length === 2 && /payment_status: \{ \$ne: "Paid" \}/.test(updates[0])]);
+      controls.push(["finance DELETE durable revision claim", /await ensureCostDeletionAuditEvent\(\{[^]*?expectedUpdatedAt: doc\.updatedAt,/.test(del)]);
+      splitGated = controls.every(([, ok]) => ok);
+    } else if (rel === "app/api/costs/[id]/restore/route.ts") {
+      const body = fnBody(bodies, "__finance_handler_POST");
+      controls.push(["restore unique parsed export", [...source.matchAll(/export const POST = apiHandler\(async\s/g)].length === 1 && !!body]);
+      const at = body.indexOf("const finance = await hasFinanceApprove(user);");
+      const firstWrite = body.search(/CostEntry\.(?:collection\.)?(?:updateOne|findOneAndUpdate|deleteOne|create)\(/);
+      const writeStart = body.indexOf("const written = await CostEntry.collection.updateOne(");
+      const filterEnd = body.indexOf("}, {", writeStart);
+      const filter = writeStart >= 0 && filterEnd > writeStart ? body.slice(writeStart, filterEnd) : "";
+      controls.push(["restore parsed CAS filter", !!filter]);
+      controls.push(["restore parsed finance decision before write", !!body && at >= 0 && at < firstWrite
+        && body.indexOf("await requireUser()") >= 0 && body.indexOf("await requireUser()") < at]);
+      controls.push(["restore creator permission/Edit", /if \(!finance\) await requirePerm\(user, "costs.manage"\); requireEdit\(user\);/.test(body)]);
+      controls.push(["restore scoped refusal", /if \(isScoped\(user\) && \(!doc\.location \|\| !user\.location_scope\.map\(String\)\.includes\(String\(doc\.location\)\)\)\) \{ throw new HttpError\(403, "Out of scope"\)/.test(body)]);
+      controls.push(["restore creator refusal", /if \(!finance && !isCostCreator\(user, doc\)\) \{ throw new HttpError\(403,/.test(body)]);
+      controls.push(["restore Paid/unknown refusal", /if \(!finance && doc\.payment_status !== "Payment Pending"\) \{ throw new HttpError\(409, doc\.payment_status === "Paid"/.test(body)]);
+      for (const guard of ["if (isScoped(user)", "if (!finance && !isCostCreator(user, doc))", 'if (!finance && doc.payment_status !== "Payment Pending")', 'if (!finance) await requirePerm(user, "costs.manage");']) {
+        controls.push([`restore guard before write: ${guard}`, body.indexOf(guard) >= 0 && body.indexOf(guard) < firstWrite]);
+      }
+      for (const [field, re] of [["revision", /updatedAt: doc\.updatedAt/], ["pending owner", /cost_edit_request: null/],
+        ["archive", /archived_at: \{ \$ne: null \}/], ["deletion", /deletion_state: \{ \$exists: false \}/],
+        ["conditional Paid", /\.\.\.\(!finance \? \{ payment_status: "Payment Pending" \} : \{\}\)/]]) controls.push([`restore ${field} CAS`, !!filter && re.test(filter)]);
+      splitGated = controls.every(([, ok]) => ok);
+    }
+    for (const [name, ok] of controls) if (!ok) bad.push(`${rel}: protected ${name} is missing, weakened, unparsed or ordered after its write`);
+    const gated = /requireFinance\(/.test(raw) || splitGated;
     const masked = MASKERS.test(raw);
     if (!gated && !masked) {
       bad.push(rel + " reads Invoice/CostEntry/AuditLog but neither calls requireFinance() nor masks the money out");
@@ -3291,6 +3414,23 @@ for (const file of walk(root)) {
     // CALLED, not that it is called with a real decision, is a pin that can be satisfied by a
     // constant. So the flag must come from an actual permission question in the same file, and a
     // literal is refused outright.
+    {
+      // The two taxonomy readers return money from distinct handlers/branches. Importing a masker
+      // or calling it in a sibling cannot protect either returned payload (including effective_cap).
+      if (rel === "app/api/master-lists/[list]/route.ts") {
+        const body = fnBody(bodies, "__finance_handler_GET");
+        if ([...source.matchAll(/export const GET = apiHandler\(async\s/g)].length !== 1 || !body || !/if \(list === "cost-categories"\) \{ items = maskCostCategoryMoneyList\(items as any\[\], await hasPermission\(user, FINANCE_VIEW\)\); \} return NextResponse\.json\(\{ items \}\)/.test(body)) {
+          bad.push(`${rel}: returned GET category money branch lost its FINANCE_VIEW mask`);
+        }
+      }
+      if (rel === "app/api/master-lists/[list]/[id]/route.ts") {
+        const body = fnBody(bodies, "__finance_handler_PATCH");
+        if ([...source.matchAll(/export const PATCH = apiHandler\(async\s/g)].length !== 1 || !body || !/const item = list === "cost-categories" \? maskCostCategoryMoney\(doc\.toObject\(\), await hasPermission\(user, FINANCE_VIEW\)\) : doc;/.test(body)
+          || !/return NextResponse\.json\(\{ item, [^]*?effective_cap: maskCostCategoryMoney\(doc\.toObject\(\), await hasPermission\(user, FINANCE_VIEW\)\)/.test(body)) {
+          bad.push(`${rel}: returned PATCH category item/effective-cap money branch lost its FINANCE_VIEW mask`);
+        }
+      }
+    }
     if (masked) {
       // The flag is the LAST argument, and finding it needs paren-balancing, not a regex: the
       // /api/home call wraps a whole ternary with `Invoice.find(...).populate(...)` inside it, so
@@ -3306,6 +3446,9 @@ for (const file of walk(root)) {
       // that identifier in this file must be an `await hasPermission(… FINANCE_VIEW …)` expression.
       for (const args of maskerArgLists(raw)) {
         const last = lastTopLevelArg(args);
+        // Existing category calls ask the permission inline. This exact expression is the same
+        // decision as the named flag; wrappers, constants and short-circuits are still refused.
+        if (last === "await hasPermission(user, FINANCE_VIEW)") continue;
         if (!/^[A-Za-z_$][\w$]*$/.test(last)) {
           bad.push(rel + " passes `" + last.slice(0, 40) + "` as a money-mask flag — it must be a named flag, not an expression");
           continue;
@@ -3685,6 +3828,10 @@ for (const file of walk(root)) {
     }
   }
   const permsSrc = stripComments(fs.readFileSync(path.join(root, "lib/permissions.ts"), "utf-8")).replace(/\s+/g, " ");
+  const financeDecision = fnBody(permsSrc, "hasFinanceApprove");
+  if (!/^function hasFinanceApprove\(user: SessionUser\): Promise<boolean> \{ return \(await hasPermission\(user, FINANCE_VIEW\)\) && \(await hasEditLevel\(user, FINANCE_APPROVE\)\); \}$/.test(financeDecision)) {
+    bad.push("lib/permissions.ts: hasFinanceApprove must be exactly FINANCE_VIEW AND edit-level FINANCE_APPROVE; a missing/unparsed body or unconditional finance decision cannot qualify a split door");
+  }
   // Every Admin short-circuit must name the exempt set close enough to be governing it. Written as
   // "how many did NOT" rather than a count of the guarded ones, so ADDING a fourth unguarded
   // short-circuit fails instead of quietly moving a total.
