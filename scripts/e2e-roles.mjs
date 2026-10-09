@@ -8,7 +8,7 @@
 // `requireLocalBase` already existed in db-guard.mjs and seed-sample.mjs already used it — this
 // file did not. On 2026-08-24 an entire day went into proving the live matrix had NOT changed; one
 // accidental run of this script would have made that impossible to prove.
-import { requireLocalBase } from "./db-guard.mjs";
+import { requireLocalBase, requireSafeDb } from "./db-guard.mjs";
 // QA-2280: the QA-2250 arm reads BATCH_STATUS out of the model rather than hand-typing the list
 // beside a comment claiming it is complete. Read-only, and it reads the copy this suite runs in.
 import fs from "node:fs";
@@ -3258,40 +3258,109 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const r = await req(plainAdmin, method, path);
       ok(`QA-1825: an Admin without finance.view is refused ${label}`, r.status === 403, `${path} got ${r.status}`);
     }
-    const del = await req(plainAdmin, "DELETE", "/api/costs/000000000000000000000000");
-    ok("QA-1825: ...and cannot delete a ledger row either (finance.approve, not costs.manage)",
-      del.status === 403, `got ${del.status}`);
+    // R10 permits creator changes; this negative control must reach FOREIGN ownership, not 404.
+    const { MongoClient, ObjectId } = await import("mongodb");
+    const db1825Name = requireSafeDb("e2e-roles ownership");
+    if (!/^center_erp_ci(?:_|$)/.test(db1825Name)) throw new Error("QA-1825 requires an isolated CI database");
+    const mc1825 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mc1825.connect();
+    const db1825 = mc1825.db(db1825Name);
+    const rule1825 = ((await req(admin, "GET", "/api/approvals")).data.config ?? []).find((r) => r.action === "cost.post");
+    let foreign1825 = null;
+    try {
+      const cats1825 = (await req(admin, "GET", "/api/master-lists/cost-categories")).data.items ?? [];
+      const cat1825 = cats1825.find((c) => c.active !== false && !["Pending", "Rejected"].includes(c.approval_status)
+        && (!c.parent || cats1825.some((h) => String(h._id) === String(c.parent) && h.active !== false && !["Pending", "Rejected"].includes(h.approval_status))));
+      const loc1825 = (await req(admin, "GET", "/api/locations?q=JPR03")).data.items?.find((l) => l.code === "JPR03");
+      const off1825 = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false });
+      const made1825 = cat1825 && loc1825 ? await req(admin, "POST", "/api/costs", {
+        location: loc1825._id, category: cat1825._id, entry_date: new Date().toISOString().slice(0, 10),
+        amount: 1825, note: `QA-1825 foreign ownership ${s1825}`,
+      }) : { status: 0, data: {} };
+      foreign1825 = made1825.data.item?._id ? new ObjectId(String(made1825.data.item._id)) : null;
+      const raw1825 = foreign1825 ? await db1825.collection("costentries").findOne({ _id: foreign1825 }) : null;
+      const actor1825 = await db1825.collection("users").findOne({ email: em1825 });
+      ok("QA-1825 fixture: an actual in-scope unpaid row belongs to a DIFFERENT creator",
+        off1825.status === 200 && made1825.status === 201 && !!raw1825?.entered_by
+          && String(raw1825.entered_by) !== String(actor1825?._id) && raw1825.payment_status === "Payment Pending"
+          && String(raw1825.location) === String(loc1825?._id) && actor1825?.role === "Admin" && actor1825.can_edit === true && actor1825.location_scope?.length === 0,
+        `post=${made1825.status} unpaid=${raw1825?.payment_status} foreign=${!!raw1825 && String(raw1825.entered_by) !== String(actor1825?._id)}`);
+      const foreignBefore1825 = foreign1825 ? JSON.stringify({
+        cost: await db1825.collection("costentries").findOne({ _id: foreign1825 }),
+        requests: await db1825.collection("approvalrequests").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+        audit: await db1825.collection("auditlogs").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+      }) : null;
+      const del = foreign1825 ? await req(plainAdmin, "DELETE", `/api/costs/${foreign1825}`, { confirm_approved: true, reason: "QA-1825 forbidden foreign delete" }) : { status: 0, data: {} };
+      ok("QA-1825: ...and cannot delete another creator's ledger row (exact ownership refusal)",
+        del.status === 403 && /only.*entered yourself/i.test(String(del.data.error ?? "")), `got ${del.status}`);
+      const foreignAfter1825 = foreign1825 ? JSON.stringify({
+        cost: await db1825.collection("costentries").findOne({ _id: foreign1825 }),
+        requests: await db1825.collection("approvalrequests").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+        audit: await db1825.collection("auditlogs").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+      }) : null;
+      ok("QA-1825: foreign refusal leaves raw cost, receipts, audit, requests and deletion ownership unchanged",
+        foreignBefore1825 !== null && foreignAfter1825 === foreignBefore1825);
+      const own1825 = cat1825 && loc1825 ? await req(plainAdmin, "POST", "/api/costs", {
+        location: loc1825._id, category: cat1825._id, entry_date: new Date().toISOString().slice(0, 10),
+        amount: 1826, note: `QA-1825 own unpaid positive ${s1825}`,
+      }) : { status: 0, data: {} };
+      const ownId1825 = own1825.data.item?._id ? new ObjectId(String(own1825.data.item._id)) : null;
+      const ownBefore1825 = ownId1825 ? await db1825.collection("costentries").findOne({ _id: ownId1825 }) : null;
+      ok("QA-1825 control: the ungranted Admin actually OWNS an unpaid ledger row",
+        own1825.status === 201 && ownBefore1825?.payment_status === "Payment Pending" && String(ownBefore1825?.entered_by) === String(actor1825?._id));
+      const ownDel1825 = ownId1825 ? await req(plainAdmin, "DELETE", `/api/costs/${ownId1825}`, { confirm_approved: true, reason: "QA-1825 allowed creator delete" }) : { status: 0 };
+      const ownAfter1825 = ownId1825 ? await db1825.collection("costentries").findOne({ _id: ownId1825 }) : null;
+      ok("QA-1825 control: a confirmed own-unpaid deletion reaches the permitted path and is persisted",
+        ownDel1825.status === 200 && !!ownAfter1825?.archived_at && String(ownAfter1825.entered_by) === String(actor1825?._id), `got ${ownDel1825.status}`);
 
-    // Their OTHER Admin powers are untouched — this is a narrow exception, not a demotion. If this
-    // fails, the change went too far and broke the Admin bypass generally.
-    ok("QA-1825: the same Admin still reads the user list (the bypass is narrow, not removed)",
-      (await req(plainAdmin, "GET", "/api/users")).status === 200);
-    ok("QA-1825: ...and still reads locations",
-      (await req(plainAdmin, "GET", "/api/locations?limit=1")).status === 200);
+      // Their OTHER Admin powers are untouched — this is a narrow exception, not a demotion. If this
+      // fails, the change went too far and broke the Admin bypass generally.
+      ok("QA-1825: the same Admin still reads the user list (the bypass is narrow, not removed)",
+        (await req(plainAdmin, "GET", "/api/users")).status === 200);
+      ok("QA-1825: ...and still reads locations",
+        (await req(plainAdmin, "GET", "/api/locations?limit=1")).status === 200);
 
-    // /api/permissions/me must tell the SAME story the routes do, or the shell will render doors
-    // the server refuses — that is the QA-806/QA-813 fault, one screen along.
-    const me1825 = await req(plainAdmin, "GET", "/api/permissions/me");
-    ok("QA-1825: /api/permissions/me withholds finance from an ungranted Admin",
-      me1825.status === 200 && me1825.data.role === "Admin"
-        && !me1825.data.levels?.["finance.view"] && !me1825.data.levels?.["finance.approve"],
-      JSON.stringify({ fv: me1825.data.levels?.["finance.view"] ?? null, fa: me1825.data.levels?.["finance.approve"] ?? null }));
-    ok("QA-1825: ...while still reporting every other right at edit (users.manage, costs.manage)",
-      me1825.data.levels?.["users.manage"] === "edit" && me1825.data.levels?.["costs.manage"] === "edit",
-      JSON.stringify(me1825.data.levels));
-    ok("QA-1825: ...and it SHIPS the exempt list, so the shell never keeps its own copy",
-      Array.isArray(me1825.data.no_admin_bypass)
-        && me1825.data.no_admin_bypass.includes("finance.view")
-        && me1825.data.no_admin_bypass.includes("finance.approve"),
-      JSON.stringify(me1825.data.no_admin_bypass ?? null));
+      // /api/permissions/me must tell the SAME story the routes do, or the shell will render doors
+      // the server refuses — that is the QA-806/QA-813 fault, one screen along.
+      const me1825 = await req(plainAdmin, "GET", "/api/permissions/me");
+      ok("QA-1825: /api/permissions/me withholds finance from an ungranted Admin",
+        me1825.status === 200 && me1825.data.role === "Admin"
+          && !me1825.data.levels?.["finance.view"] && !me1825.data.levels?.["finance.approve"],
+        JSON.stringify({ fv: me1825.data.levels?.["finance.view"] ?? null, fa: me1825.data.levels?.["finance.approve"] ?? null }));
+      ok("QA-1825: ...while still reporting every other right at edit (users.manage, costs.manage)",
+        me1825.data.levels?.["users.manage"] === "edit" && me1825.data.levels?.["costs.manage"] === "edit",
+        JSON.stringify(me1825.data.levels));
+      ok("QA-1825: ...and it SHIPS the exempt list, so the shell never keeps its own copy",
+        Array.isArray(me1825.data.no_admin_bypass)
+          && me1825.data.no_admin_bypass.includes("finance.view")
+          && me1825.data.no_admin_bypass.includes("finance.approve"),
+        JSON.stringify(me1825.data.no_admin_bypass ?? null));
 
-    // Granting it live must actually open the door — a right nobody can switch on is not a right.
-    await req(admin, "PATCH", `/api/users/${mk1825.data.item?._id}`, { extra_permissions: ["finance.view"] });
-    const after = await login(em1825, pw1825);
-    ok("QA-1825: granting finance.view to that Admin opens the ledger",
-      !!after && (await req(after, "GET", "/api/costs")).status === 200);
-    ok("QA-1825: ...but reading is not deciding — the ledger row delete still refuses without finance.approve",
-      !!after && (await req(after, "DELETE", "/api/costs/000000000000000000000000")).status === 403);
+      // Granting it live must actually open the door — a right nobody can switch on is not a right.
+      await req(admin, "PATCH", `/api/users/${mk1825.data.item?._id}`, { extra_permissions: ["finance.view"] });
+      const after = await login(em1825, pw1825);
+      ok("QA-1825: granting finance.view to that Admin opens the ledger",
+        !!after && (await req(after, "GET", "/api/costs")).status === 200);
+      const viewBefore1825 = foreign1825 ? JSON.stringify({
+        cost: await db1825.collection("costentries").findOne({ _id: foreign1825 }),
+        requests: await db1825.collection("approvalrequests").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+        audit: await db1825.collection("auditlogs").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+      }) : null;
+      const viewDel1825 = after && foreign1825 ? await req(after, "DELETE", `/api/costs/${foreign1825}`, { confirm_approved: true, reason: "QA-1825 view-only foreign delete" }) : { status: 0, data: {} };
+      ok("QA-1825: ...but reading is not deciding — a finance.view grant still refuses the foreign ledger delete",
+        viewDel1825.status === 403 && /only.*entered yourself/i.test(String(viewDel1825.data.error ?? "")), `got ${viewDel1825.status}`);
+      const viewAfter1825 = foreign1825 ? JSON.stringify({
+        cost: await db1825.collection("costentries").findOne({ _id: foreign1825 }),
+        requests: await db1825.collection("approvalrequests").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+        audit: await db1825.collection("auditlogs").find({ entity_id: { $in: [foreign1825, String(foreign1825)] } }).sort({ _id: 1 }).toArray(),
+      }) : null;
+      ok("QA-1825: the view-only foreign refusal writes nothing to raw cost/receipt/request/audit ownership",
+        viewBefore1825 !== null && viewAfter1825 === viewBefore1825);
+    } finally {
+      const restored1825 = await req(admin, "PUT", "/api/approvals", rule1825 ?? { action: "cost.post", enabled: false, approver_role: "Admin", approver_users: [] });
+      ok("QA-1825 cleanup: the fixture restores cost.post configuration", restored1825.status === 200);
+      await mc1825.close();
+    }
   }
 
   // Positive control: the seeded admin IS one of the three, and sees everything.
@@ -4677,107 +4746,85 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   // a number" is satisfied by a wrong number; each of these binds the ARITHMETIC or the honesty
   // rule the number is supposed to obey.
   {
-    // SELF-SEEDING, and the first wall is why. The accrual pin needs a batch that has BOTH a
-    // certified head-count and a rate on its scheme, and the fixtures carry closures with the
-    // first and schemes without the second - so `valued` was empty and the pin reported
-    // "0 row(s) checked". It FAILED rather than passing on an empty set, which is the only reason
-    // that was visible at all; the same block written as `wrong.length === 0` would have gone
-    // green over an assertion that never ran. That is QA-1919's lesson, one unit later: a pin whose
-    // precondition the fixture does not guarantee has to establish it itself.
-    const RATE = 1850;
+    const { MongoClient, ObjectId } = await import("mongodb");
+    const pnlDbName = requireSafeDb("e2e-roles P&L fixtures");
+    if (!/^center_erp_ci(?:_|$)/.test(pnlDbName)) throw new Error("P&L fixtures require an isolated CI database");
+    const pnlClient = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await pnlClient.connect();
+    const pnlDb = pnlClient.db(pnlDbName);
+    const pnlStamp = Date.now().toString(36);
     const TODAY_PNL = new Date(Date.now() + 5.5 * 3600_000).toISOString().slice(0, 10);
-    const schemes = (await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [];
-    let seeded = 0;
-    for (const sc of schemes) {
-      if (sc.amount_received === null || sc.amount_received === undefined) {
-        const up = await req(admin, "PATCH", `/api/master-lists/schemes/${sc._id}`, { amount_received: RATE });
-        if (up.status === 200) seeded++;
-      }
-    }
-    ok("QA-1831 fixture: at least one scheme carries a rate per certified candidate",
-      schemes.length > 0 && (seeded > 0 || schemes.some((sc) => sc.amount_received > 0)),
-      `${schemes.length} scheme(s), ${seeded} given a rate`);
-    // ...and a batch that has actually been assessed. The wall's fixtures never run one through to
-    // a closure - the invoice they seed is inserted straight into Mongo - so `valued` was still
-    // empty after the scheme rates were seeded, and the pin failed a third time. It kept failing
-    // rather than passing on an empty set, which is the whole reason the emptiness was ever
-    // visible; `wrong.length === 0` alone would have been green through all three runs.
-    //
-    // Setting batch-level figures (rather than per-candidate results) is deliberate: it is Rule 41's
-    // LEGACY shape, where a batch keeps its stored figures because it has no per-candidate rows.
-    // That path is the fallback pnlRollup uses, and nothing else in the wall exercises it.
+    const schemeName = "RPL-AVPL"; // Program.scheme enum string, joined to Scheme.name.
+    const schemeBefore = await pnlDb.collection("schemes").findOne({ name: schemeName });
+    const RATE = Number(schemeBefore?.amount_received) > 0 ? Number(schemeBefore.amount_received) : 1850;
+    const pnlRule = ((await req(admin, "GET", "/api/approvals")).data.config ?? []).find((r) => r.action === "cost.post");
     let seededBatch = null;
-    let seedWhy = "no batch tried";
-    for (const b of (await req(admin, "GET", "/api/batches?limit=50")).data?.items ?? []) {
-      // A Completed / Cancelled / Closed batch has its closure fields locked (2026-08-13), so those
-      // are skipped rather than counted as refusals.
-      if (["Completed", "Cancelled", "Closed"].includes(b.status)) continue;
-      // The SMALLEST figures that still exercise the multiplication. Rule 34 caps appeared by the
-      // roster ON THE ASSESSMENT DATE, and this fixture's rosters are small and partly future-dated
-      // (QA-1024 pre-registers members into batches that start later, deliberately). Asking for 12
-      // was the third thing this pin got wrong; 1 is enough to multiply.
-      const put = await req(admin, "PUT", `/api/batches/${b._id}/closure`, {
-        assessment_status: "Completed", assessment_date: TODAY_PNL, appeared: 1, passed: 1,
-        certification_status: "Completed", certification_date: TODAY_PNL, certificates_issued: 1,
-      });
-      if (put.status === 200) {
-        // ...and the batch's JOB ROLE has to point at a scheme that carries a rate, or the row is
-        // still unvaluable and the pin still has nothing to multiply. This was the FOURTH thing
-        // this fixture had to establish: a rate on the scheme, a certified head-count on the
-        // closure, an unlocked batch, and finally the link between the two ends. Seeded rather than
-        // assumed, because each of the first three was assumed once and was wrong.
-        // The batch's job role already NAMES a scheme - `Program.scheme` is an enum string, not a
-        // ref - so nothing needs linking. What has to be true is that the Scheme MASTER row of that
-        // name carries a rate. The previous version PATCHed the programme with a scheme ObjectId
-        // and got a 400 every time, then reported "linked" anyway because it asserted on the
-        // scheme it had FOUND rather than on the write it had made.
-        //
-        // That 400 is what exposed the real defect: pnlRollup was populating `scheme` as if it were
-        // a ref, which is silently a no-op, so every rate was null and the whole accrual was inert.
-        // NOT b.program.scheme. GET /api/batches populates program with only
-        // "name code duration_days" (batches/route.ts:54), so `scheme` is never in that payload and
-        // reading it there always yields undefined - which is how this fixture came to report
-        // "no scheme on the job role" for a batch that has one, while pnlRollup (which does its own
-        // populate) valued it correctly. The fixture was measuring the wrong endpoint and blaming
-        // the product; the programme itself is the source of truth for its own field.
-        const progId0 = String(b.program?._id ?? b.program ?? "");
-        const progDoc = progId0 ? (await req(admin, "GET", `/api/programs/${progId0}`)).data : null;
-        const schemeName = (progDoc?.item?.scheme ?? progDoc?.scheme) ? String(progDoc.item?.scheme ?? progDoc.scheme) : null;
-        let rateStatus = "no scheme on the job role";
-        if (schemeName) {
-          const row = schemes.find((sc) => String(sc.name) === schemeName);
-          if (row && Number(row.amount_received) > 0) rateStatus = `already ${row.amount_received}`;
-          else if (row) {
-            const up = await req(admin, "PATCH", `/api/master-lists/schemes/${row._id}`, { amount_received: RATE });
-            rateStatus = `set -> ${up.status}`;
-          } else {
-            const mk = await req(admin, "POST", "/api/master-lists/schemes", { name: schemeName, amount_received: RATE });
-            rateStatus = `created -> ${mk.status}`;
-          }
-        }
-        // Read back what pnlRollup will actually see, rather than trusting the write.
-        const backSchemes = (await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [];
-        const effective = backSchemes.find((sc) => String(sc.name) === schemeName);
-        seedWhy = `batch=${b.code ?? b._id} scheme=${schemeName ?? "NONE"} rate=${rateStatus} readBack=${effective ? effective.amount_received : "absent"}`;
-        seededBatch = { id: String(b._id), passed: 1, scheme: schemeName, linked: !!(effective && Number(effective.amount_received) > 0) };
-        break;
+    let unknownBatch = null;
+    const pnlInputs = {};
+    try {
+      const schemeWrite = schemeBefore
+        ? await req(admin, "PATCH", `/api/master-lists/schemes/${schemeBefore._id}`, { amount_received: RATE })
+        : await req(admin, "POST", "/api/master-lists/schemes", { name: schemeName, amount_received: RATE });
+      const pnlCats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data.items ?? [];
+      const pnlCostCat = pnlCats.find((c) => c.active !== false && !["Pending", "Rejected"].includes(c.approval_status)
+        && (!c.parent || pnlCats.some((h) => String(h._id) === String(c.parent) && h.active !== false && !["Pending", "Rejected"].includes(h.approval_status))));
+      const pnlOff = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false });
+      ok("QA-1951 fixture: approved category and OFF rule permit nonzero independent batch liabilities", !!pnlCostCat && pnlOff.status === 200);
+      const rawScheme = await pnlDb.collection("schemes").findOne({ name: schemeName });
+      ok("QA-1831 fixture: the enum-named Scheme has a positive raw rate",
+        [200, 201].includes(schemeWrite.status) && rawScheme?.amount_received === RATE && RATE > 0);
+      for (const kind of ["rated", "unknown"]) {
+        const suffix = `${pnlStamp}${kind === "rated" ? "R" : "U"}`;
+        const loc = await req(admin, "POST", "/api/locations", { code: `PL${suffix}`, name: `P&L ${kind} ${suffix}`, approval_status: "Approved" });
+        const prog = await req(admin, "POST", "/api/programs", { code: `PP${suffix}`, name: `P&L ${kind} role ${suffix}`,
+          duration_days: 1, buffer_days: 0, default_batch_size: 1, completion_deadline_days: 90,
+          ...(kind === "rated" ? { scheme: schemeName } : {}) });
+        const batch = loc.data.item && prog.data.item ? await req(admin, "POST", "/api/batches", {
+          location: loc.data.item._id, program: prog.data.item._id, planned_start: TODAY_PNL, target_size: 1,
+        }) : { status: 0, data: {} };
+        const cand = loc.data.item && prog.data.item ? await req(admin, "POST", "/api/candidates", {
+          name: `P&L ${kind} candidate ${suffix}`, phone: "9" + String(Date.now()).slice(-9), location: loc.data.item._id, program: prog.data.item._id,
+        }) : { status: 0, data: {} };
+        const member = batch.data.item && cand.data.item ? await req(admin, "POST", `/api/batches/${batch.data.item._id}/members`, {
+          candidate: cand.data.item._id, joined_on: TODAY_PNL,
+        }) : { status: 0 };
+        const closure = batch.data.item ? await req(admin, "PUT", `/api/batches/${batch.data.item._id}/closure`, {
+          assessment_status: "Completed", assessment_date: TODAY_PNL, appeared: 1, passed: 1,
+          certification_status: "Completed", certification_date: TODAY_PNL, certificates_issued: 1,
+        }) : { status: 0 };
+        const id = batch.data.item?._id ? new ObjectId(String(batch.data.item._id)) : null;
+        const rawProgram = prog.data.item?._id ? await pnlDb.collection("programs").findOne({ _id: new ObjectId(String(prog.data.item._id)) }) : null;
+        const rawClosure = id ? await pnlDb.collection("closures").findOne({ batch: id }) : null;
+        const rawMembers = id ? await pnlDb.collection("batchmembers").find({ batch: id, left_on: null }).toArray() : [];
+        const rawResults = id ? await pnlDb.collection("candidateresults").countDocuments({ batch: id }) : -1;
+        const expectedCost = kind === "rated" ? 173 : 271;
+        const costPost = id && pnlCostCat ? await req(admin, "POST", "/api/costs", {
+          batch: String(id), location: loc.data.item._id, category: pnlCostCat._id, entry_date: TODAY_PNL,
+          amount: expectedCost, note: `QA-1951 exact ${kind} liability ${suffix}`,
+        }) : { status: 0, data: {} };
+        const rawCost = costPost.data.item?._id ? await pnlDb.collection("costentries").findOne({ _id: new ObjectId(String(costPost.data.item._id)) }) : null;
+        ok(`QA-1951 fixture: ${kind} group has a positive exact raw ledger liability`,
+          costPost.status === 201 && rawCost?.amount === expectedCost && String(rawCost.batch) === String(id)
+            && !rawCost.archived_at && !rawCost.deletion_state && rawCost.reservation_state === "Applied", `got ${costPost.status}`);
+        ok(`QA-1831 fixture: ${kind} batch has an exact raw certified legacy count and current roster`,
+          loc.status === 201 && prog.status === 201 && batch.status === 201 && cand.status === 201 && member.status === 201
+            && closure.status === 200 && rawMembers.length === 1 && rawClosure?.passed === 1 && rawClosure?.certificates_issued === 1 && rawResults === 0,
+          `location=${loc.status} program=${prog.status} batch=${batch.status} candidate=${cand.status} member=${member.status} closure=${closure.status} results=${rawResults}`);
+        const input = { id: id ? String(id) : null, passed: rawClosure?.billable_passed ?? rawClosure?.passed,
+          scheme: rawProgram?.scheme ?? null, rate: kind === "rated" ? rawScheme?.amount_received : null,
+          location: loc.data.item?.name, program: rawProgram?.name };
+        pnlInputs[kind] = input;
+        if (kind === "rated") seededBatch = { ...input, linked: input.scheme === schemeName && input.rate === RATE };
+        else unknownBatch = input;
       }
-      // Keep the LAST refusal, so a future failure of this fixture says why instead of just "no".
-      // Every previous version of this block failed silently and cost a whole wall cycle to
-      // diagnose; the message is the difference between one run and three.
-      seedWhy = `${b.code ?? b._id}: ${put.status} ${JSON.stringify(put.data?.error ?? put.data ?? "").slice(0, 150)}`;
+      ok("QA-1831 fixture: ...and its job role is linked to a scheme that carries a rate", !!seededBatch?.linked);
+      ok("QA-1831 fixture: a separate certified unknown group genuinely names no scheme",
+        unknownBatch?.passed === 1 && unknownBatch?.scheme === null);
+    } finally {
+      const restoredPnlRule = await req(admin, "PUT", "/api/approvals", pnlRule ?? { action: "cost.post", enabled: false, approver_role: "Admin", approver_users: [] });
+      ok("QA-1951 cleanup: independent-liability fixture restores cost.post configuration", restoredPnlRule.status === 200);
+      await pnlClient.close();
     }
-    ok("QA-1831 fixture: a batch with a certified head-count exists to value",
-      !!seededBatch, seedWhy);
-    // The link is its own assertion. Folding it into the one above would let a half-built fixture
-    // report success and push the failure two assertions downstream, which is exactly how the last
-    // three cycles were spent.
-    ok("QA-1831 fixture: ...and its job role is linked to a scheme that carries a rate",
-      !!seededBatch?.linked, seedWhy);
-
-
-
-
 
     const pnl = await req(admin, "GET", "/api/reports/pnl");
     ok("QA-1831: the granted admin gets the P&L", pnl.status === 200, `got ${pnl.status}`);
@@ -4809,6 +4856,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // certified-but-unrated rather than to whatever the fixture happened to contain.
     const ratedRows = reg.filter((r) => r.billable !== null && r.rate !== null);
     const badMath = ratedRows.filter((r) => r.accrued !== r.billable * r.rate);
+    const exactRated = reg.find((r) => String(r.key) === seededBatch?.id);
+    ok("QA-1831: the exact fixture revenue equals raw certified count times raw Scheme rate",
+      !!exactRated && exactRated.billable === pnlInputs.rated?.passed && exactRated.rate === pnlInputs.rated?.rate
+        && exactRated.accrued === pnlInputs.rated.passed * pnlInputs.rated.rate,
+      JSON.stringify({ actual: exactRated?.accrued, certified: pnlInputs.rated?.passed, rate: pnlInputs.rated?.rate }));
     ok("QA-1831: every row with BOTH a head-count and a rate is valued at their product",
       ratedRows.length > 0 && badMath.length === 0,
       badMath.length ? JSON.stringify(badMath.slice(0, 2)) : `${ratedRows.length} row(s) checked`);
@@ -4894,29 +4946,40 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const schemeRow = ((await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [])
         .find((sc) => String(sc.name) === seededBatch.scheme);
       if (schemeRow) {
-        await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: null });
-        const pnl2 = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
-        const row2 = (pnl2.register ?? []).find((r) => String(r.key) === seededBatch.id);
-        // The read-back IS the precondition: if the clear did not land, `rate` is still a number and
-        // this fails as a fixture problem rather than passing as a product result.
-        ok("QA-1950 fixture: the rate can be taken off a scheme that a certified batch depends on",
-          !!row2 && row2.billable !== null && row2.rate === null,
-          JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate } : null));
-        // THE MUTANT KILLER. `(rate ?? 0)` makes this 0. Nothing else in the wall distinguishes the
-        // two, and the manifest's declared mutant ran 35/35 green until this line existed.
-        ok("QA-1950: with the rate removed, a certified batch reports NULL - not 0, not billable x 0",
-          !!row2 && row2.accrued === null,
-          JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate, accrued: row2.accrued, basis: row2.accrual_basis } : null));
-        ok("QA-1950: ...and it is filed under the no-rate cause, not under no-closure",
-          (pnl2.totals?.accrued_unknown_no_rate ?? 0) >= 1
-            && (pnl2.detail?.unknown_rate?.rows ?? []).some((r) => String(r.key) === seededBatch.id),
-          JSON.stringify({ noRate: pnl2.totals?.accrued_unknown_no_rate, inCard: (pnl2.detail?.unknown_rate?.rows ?? []).length }));
-        // Put it back, so every assertion after this block sees the fixture it was written against.
-        await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: RATE });
+        const savedRate = schemeRow.amount_received;
+        try {
+          const clearRate = await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: null });
+          const rateClient = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+          await rateClient.connect();
+          try {
+            const rawNoRate = await rateClient.db(pnlDbName).collection("schemes").findOne({ _id: new ObjectId(String(schemeRow._id)) });
+            ok("QA-1950 fixture: the exact raw Scheme master really has its rate cleared",
+              clearRate.status === 200 && rawNoRate?.name === seededBatch.scheme && rawNoRate.amount_received === null);
+          } finally { await rateClient.close(); }
+          const pnl2 = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+          const row2 = (pnl2.register ?? []).find((r) => String(r.key) === seededBatch.id);
+          // The read-back IS the precondition: if the clear did not land, `rate` is still a number and
+          // this fails as a fixture problem rather than passing as a product result.
+          ok("QA-1950 fixture: the rate can be taken off a scheme that a certified batch depends on",
+            !!row2 && row2.billable !== null && row2.rate === null,
+            JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate } : null));
+          // THE MUTANT KILLER. `(rate ?? 0)` makes this 0. Nothing else in the wall distinguishes the
+          // two, and the manifest's declared mutant ran 35/35 green until this line existed.
+          ok("QA-1950: with the rate removed, a certified batch reports NULL - not 0, not billable x 0",
+            !!row2 && row2.accrued === null,
+            JSON.stringify(row2 ? { billable: row2.billable, rate: row2.rate, accrued: row2.accrued, basis: row2.accrual_basis } : null));
+          ok("QA-1950: ...and it is filed under the no-rate cause, not under no-closure",
+            (pnl2.totals?.accrued_unknown_no_rate ?? 0) >= 1
+              && (pnl2.detail?.unknown_rate?.rows ?? []).some((r) => String(r.key) === seededBatch.id),
+            JSON.stringify({ noRate: pnl2.totals?.accrued_unknown_no_rate, inCard: (pnl2.detail?.unknown_rate?.rows ?? []).length }));
+          // Put it back, so every assertion after this block sees the fixture it was written against.
+        } finally {
+          await req(admin, "PATCH", `/api/master-lists/schemes/${schemeRow._id}`, { amount_received: savedRate });
+        }
         const restored = ((await req(admin, "GET", "/api/master-lists/schemes")).data?.items ?? [])
           .find((sc) => String(sc.name) === seededBatch.scheme);
         ok("QA-1950 cleanup: the rate is put back, verified by reading it",
-          !!restored && Number(restored.amount_received) === RATE, JSON.stringify(restored?.amount_received));
+          !!restored && restored.amount_received === savedRate, JSON.stringify(restored?.amount_received));
       }
     }
 
@@ -4974,6 +5037,26 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // withholds everything. Neither alone distinguishes the fix from either failure mode.
     {
       const groups = [...(d.by_location ?? []), ...(d.by_job_role ?? []), ...(d.by_scheme ?? [])];
+      const marginClient = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await marginClient.connect();
+      try {
+        const marginDb = marginClient.db(pnlDbName);
+        for (const kind of ["rated", "unknown"]) {
+          const input = pnlInputs[kind];
+          const inputId = input?.id ? new ObjectId(input.id) : null;
+          const costs = inputId ? await marginDb.collection("costentries").find({ batch: inputId, archived_at: null, deletion_state: { $exists: false }, $or: [{ reservation_state: "Applied" }, { reservation_state: { $exists: false } }] }).toArray() : [];
+          const cost = costs.reduce((n, row) => n + Number(row.amount), 0);
+          const group = (d.by_job_role ?? []).find((g) => g.label === input?.program);
+          const groupRows = reg.filter((r) => r.job_role === input?.program);
+          ok(`QA-1951 fixture: the exact ${kind} job-role group contains only its synthetic batch`,
+            !!inputId && !!group && group.batches === 1 && groupRows.length === 1 && String(groupRows[0].key) === input.id
+              && costs.length === 1 && cost === (kind === "rated" ? 173 : 271));
+          ok(`QA-1951: the exact ${kind} margin follows independent certified/rate/ledger inputs`,
+            !!group && group.cost === cost && (kind === "rated"
+              ? group.accrued_unknown === 0 && group.accrued === input.passed * input.rate && group.margin === input.passed * input.rate - cost
+              : group.accrued_unknown === 1 && group.accrued === 0 && group.margin === null && typeof group.margin_note === "string"));
+        }
+      } finally { await marginClient.close(); }
       const incomparable = groups.filter((g) => (g.accrued_unknown ?? 0) > 0);
       const comparable = groups.filter((g) => (g.accrued_unknown ?? 0) === 0);
       ok("QA-1951 fixture: the payload holds groups of BOTH kinds, so neither arm below is vacuous",
@@ -5008,99 +5091,205 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       // necessarily STRICTLY less than the whole; then the narrowed figure is compared against an
       // INDEPENDENT sum taken from the cost ledger, not against the report's own other number.
       const locsAll = ((await req(admin, "GET", "/api/locations?limit=5")).data?.items ?? []);
-      const catsAll = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
-      const leafCat = catsAll.find((c) => c.parent) ?? catsAll[0];
-      if (locsAll.length >= 2 && leafCat) {
-        // Distinctive amounts: a coincidental equality with pre-existing fixture data would make
-        // the strict-narrowing assertion pass for the wrong reason.
-        const AMT_A = 1234567, AMT_B = 7654321;
-        const mkCost = (loc, amount) => req(admin, "POST", "/api/costs", {
-          entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount,
-          note: "QA-1960 fixture: untagged cost seeded to prove a centre filter narrows it",
-        });
-        const seedA = await mkCost(locsAll[0], AMT_A);
-        const seedB = await mkCost(locsAll[1], AMT_B);
-        // 201 explicitly, never "not an error": a parked entry answers 202 and writes NO ledger
-        // row, which would leave the fixture absent and the assertions below vacuously true.
-        ok("QA-1960 fixture: untagged cost written to TWO different centres (201, not parked)",
-          seedA.status === 201 && seedB.status === 201,
-          JSON.stringify({ a: seedA.status, b: seedB.status, cat: leafCat?.name }));
-
-        const whole = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
-        const narrowed = (await req(admin, "GET", `/api/reports/pnl?location=${locsAll[0]._id}`)).data ?? {};
-        // The independent figure: that centre's own untagged rows, summed from the LEDGER.
-        const ledger = ((await req(admin, "GET", `/api/costs?location=${locsAll[0]._id}`)).data?.items ?? []);
-        const expected = ledger.filter((x) => !x.batch).reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
-
-        ok("QA-1960: the narrowed untagged-cost figure EQUALS that centre's own untagged ledger rows",
-          narrowed.totals?.cost_unattributed === expected,
-          JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, expected, rows: ledger.length }));
-        ok("QA-1960: ...and is STRICTLY less than the whole organisation's - the equality the old pin allowed",
-          typeof narrowed.totals?.cost_unattributed === "number"
-            && typeof whole.totals?.cost_unattributed === "number"
-            && narrowed.totals.cost_unattributed < whole.totals.cost_unattributed,
-          JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, whole: whole.totals?.cost_unattributed }));
-        // ---- QA-1964. Umesh's ruling (qa/gates/qa-1831-untagged-cost-under-a-date-window.md,
-        // 2026-09-07): a DATED P&L discloses the organisation-wide untagged total with an explicit
-        // out-of-window label, rather than withholding it. REQ-432 is about a PERIOD and nothing may
-        // fall outside it. Cycle 3 shipped the opposite behaviour with NO assertion either way - the
-        // checker reverted it, the payload moved null -> 17,831,953, and nothing failed. So BOTH
-        // arms are pinned here, and the third assertion is the one that kills a re-added date
-        // narrowing: the dated figure must EQUAL the undated one, because it is the same total.
-        {
-          const undated = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
-          const wide = (await req(admin, "GET", "/api/reports/pnl?from=2020-01-01&to=2030-12-31")).data ?? {};
-          const narrow = (await req(admin, "GET", "/api/reports/pnl?from=2026-06-01&to=2026-06-30")).data ?? {};
-
-          ok("QA-1964: WITHOUT a date filter the untagged figure is a real number, scoped, and carries no caveat",
-            typeof undated.totals?.cost_unattributed === "number"
-              && undated.totals?.cost_unattributed_scoped !== false
-              && !undated.totals?.cost_unattributed_note,
-            JSON.stringify({ v: undated.totals?.cost_unattributed, scoped: undated.totals?.cost_unattributed_scoped, note: undated.totals?.cost_unattributed_note }));
-
-          ok("QA-1964: UNDER a date filter it is DISCLOSED, never null - nothing falls outside the period",
-            typeof wide.totals?.cost_unattributed === "number",
-            JSON.stringify({ v: wide.totals?.cost_unattributed }));
-
-          ok("QA-1964: ...and it is flagged NOT scoped to the window, with a reason a reader can act on",
-            wide.totals?.cost_unattributed_scoped === false
-              && /not scoped/i.test(String(wide.totals?.cost_unattributed_note ?? "")),
-            JSON.stringify({ scoped: wide.totals?.cost_unattributed_scoped, note: String(wide.totals?.cost_unattributed_note).slice(0, 80) }));
-
-          // The mutant-killer. If anyone re-narrows this figure by entry_date, a June-only window
-          // stops equalling the whole; if anyone reverts to withholding, both go null and the
-          // typeof assertions above fail first.
-          ok("QA-1964: the dated figure IS the organisation-wide total - a narrow window and a wide one and no window all agree",
-            typeof undated.totals?.cost_unattributed === "number"
-              && wide.totals?.cost_unattributed === undated.totals?.cost_unattributed
-              && narrow.totals?.cost_unattributed === undated.totals?.cost_unattributed,
-            JSON.stringify({ undated: undated.totals?.cost_unattributed, wide: wide.totals?.cost_unattributed, narrowJune: narrow.totals?.cost_unattributed }));
-
-          // The distinction the ruling turns on: does-not-APPLY still withholds. A batch filter is
-          // a different fact from a date window and must not be swept into the same behaviour.
-          const someBatchId = reg[0]?.key;
-          if (someBatchId) {
-            const byB = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatchId}`)).data ?? {};
-            ok("QA-1964: a BATCH filter still WITHHOLDS - cannot-be-scoped and does-not-apply stay different facts",
-              byB.totals?.cost_unattributed === null && typeof byB.totals?.cost_unattributed_note === "string",
-              JSON.stringify({ v: byB.totals?.cost_unattributed }));
+      const headClient1960 = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await headClient1960.connect();
+      const headDb1960 = headClient1960.db(pnlDbName);
+      const rule1960 = ((await req(admin, "GET", "/api/approvals")).data.config ?? []).find((r) => r.action === "cost.post");
+      let leafCat = null;
+      try {
+        const secondEmail1960 = `q1960.second.${pnlStamp}@vidysea-test.local`;
+        const secondPassword1960 = "Q1960Synthetic!xyz";
+        const secondUser1960 = await req(admin, "POST", "/api/users", { name: `Q1960 second approver ${pnlStamp}`,
+          email: secondEmail1960, password: secondPassword1960, role: "Enrollment", can_edit: true, location_scope: [],
+          extra_permissions: ["finance.view", "finance.approve"] });
+        const second1960 = await login(secondEmail1960, secondPassword1960);
+        const rawSecond1960 = await headDb1960.collection("users").findOne({ email: secondEmail1960 });
+        const adminRow1960 = await headDb1960.collection("users").findOne({ email: "admin@vidysea.com" });
+        const secondPerm1960 = second1960 ? await req(second1960, "GET", "/api/permissions/me") : { data: {} };
+        ok("QA-1960 fixture: a distinct second person holds both finance grants at the required level",
+          secondUser1960.status === 201 && !!second1960 && String(rawSecond1960?._id) !== String(adminRow1960?._id)
+            && secondPerm1960.data.levels?.["finance.view"] && secondPerm1960.data.levels?.["finance.approve"] === "edit");
+        const off1960 = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false });
+        ok("QA-1960 fixture: cost.post is OFF for independent held-head zero-write controls", off1960.status === 200);
+        for (const held of ["parent-Pending", "parent-Rejected", "leaf-Pending", "leaf-Rejected", "Approved"]) {
+          const label = `${pnlStamp}-${held}`;
+          const madeHead = await req(admin, "POST", "/api/master-lists/cost-categories", {
+            name: `QA1960 Head ${label}`, active: true, pre_approved: true, pre_approved_unit: "Fixed amount", pre_approved_amount: 99999999,
+            pre_approved_basis: "QA-1960 fixed amount control",
+          });
+          const madeLeaf = madeHead.data.item?._id ? await req(admin, "POST", "/api/master-lists/cost-categories", {
+            name: `QA1960 Leaf ${label}`, active: true, parent: madeHead.data.item._id,
+          }) : { status: 0, data: {} };
+          const pairIds = [madeHead.data.item?._id, madeLeaf.data.item?._id].filter(Boolean).map((id) => new ObjectId(String(id)));
+          ok(`QA-1960 fixture: ${held} parent and leaf are actually created Pending`,
+            madeHead.status === 201 && madeLeaf.status === 201 && madeHead.data.item.approval_status === "Pending" && madeLeaf.data.item.approval_status === "Pending");
+          for (const [part, made] of [["parent", madeHead], ["leaf", madeLeaf]]) {
+            const id = made.data.item?._id ? new ObjectId(String(made.data.item._id)) : null;
+            const headRequest = id ? await headDb1960.collection("approvalrequests").findOne({
+              action: "costcategory.create", entity_id: id, "payload.kind": "head-approval", status: "Pending",
+            }) : null;
+            ok(`QA-1960 fixture: ${held} ${part} has its exact real creator-owned approval request`,
+              !!headRequest && String(headRequest.initiator) === String(adminRow1960?._id)
+                && String(made.data.item?.approval_request) === String(headRequest._id));
+            if (held === "Approved") {
+              const beforeSelf = headRequest ? JSON.stringify({
+                head: await headDb1960.collection("costcategories").findOne({ _id: id }),
+                request: await headDb1960.collection("approvalrequests").findOne({ _id: headRequest._id }),
+              }) : null;
+              const self = headRequest ? await req(admin, "POST", `/api/approvals/${headRequest._id}`, { decision: "Approved" }) : { status: 0 };
+              const afterSelf = headRequest ? JSON.stringify({
+                head: await headDb1960.collection("costcategories").findOne({ _id: id }),
+                request: await headDb1960.collection("approvalrequests").findOne({ _id: headRequest._id }),
+              }) : null;
+              ok(`QA-1960: creator self-approval of the ${part} is 403 with unchanged head/request`,
+                self.status === 403 && beforeSelf !== null && afterSelf === beforeSelf);
+            }
+            const holdsThisPart = held.startsWith(`${part}-`);
+            const decision = holdsThisPart ? (held.endsWith("Rejected") ? "Rejected" : null) : "Approved";
+            if (decision) {
+              const signed = headRequest && second1960 ? await req(second1960, "POST", `/api/approvals/${headRequest._id}`, { decision, note: "QA-1960 second-person fixture" }) : { status: 0 };
+              const rawHead = id ? await headDb1960.collection("costcategories").findOne({ _id: id }) : null;
+              const rawRequest = headRequest ? await headDb1960.collection("approvalrequests").findOne({ _id: headRequest._id }) : null;
+              ok(`QA-1960 fixture: the second person persists ${held} ${part} as ${decision}`,
+                signed.status === 200 && rawHead?.approval_status === decision && rawRequest?.status === decision
+                  && String(rawRequest?.decided_by) === String(rawSecond1960?._id), `got ${signed.status}`);
+            }
+          }
+          const rawPair = pairIds.length === 2 ? await headDb1960.collection("costcategories").find({ _id: { $in: pairIds } }).toArray() : [];
+          const rawHead1960 = rawPair.find((h) => !h.parent);
+          const rawLeaf1960 = rawPair.find((h) => String(h.parent) === String(rawHead1960?._id));
+          if (held === "Approved") {
+            ok("QA-1960 fixture: both the selected leaf and its parent are active and Approved",
+              rawPair.length === 2 && rawHead1960?.active === true && rawLeaf1960?.active === true
+                && rawHead1960.approval_status === "Approved" && rawLeaf1960.approval_status === "Approved");
+            leafCat = rawLeaf1960;
+          } else {
+            const heldPart = held.startsWith("parent-") ? rawHead1960 : rawLeaf1960;
+            const otherPart = held.startsWith("parent-") ? rawLeaf1960 : rawHead1960;
+            ok(`QA-1960 fixture: ${held} alone is the held approval state`,
+              heldPart?.approval_status === held.split("-")[1] && otherPart?.approval_status === "Approved"
+                && heldPart.active === true && otherPart.active === true);
+            const beforeHeld = JSON.stringify(await headDb1960.collection("costentries").find({ category: { $in: pairIds } }).sort({ _id: 1 }).toArray());
+            const heldNote = `QA-1960 OFF held ${label}`;
+            const heldPost = locsAll[0] && rawLeaf1960 ? await req(admin, "POST", "/api/costs", {
+              entry_date: "2026-06-15", location: locsAll[0]._id, category: rawLeaf1960._id, amount: 1960, note: heldNote,
+            }) : { status: 0, data: {} };
+            const afterHeld = JSON.stringify(await headDb1960.collection("costentries").find({ category: { $in: pairIds } }).sort({ _id: 1 }).toArray());
+            const heldRequests = await headDb1960.collection("approvalrequests").find({ action: "cost.post", "payload.note": heldNote }).toArray();
+            ok(`QA-1960: OFF-rule ${held} still parks exactly one request and writes zero ledger or Formula reservations`,
+              heldPost.status === 202 && heldPost.data.queued === true && beforeHeld === "[]" && afterHeld === beforeHeld
+                && heldRequests.length === 1 && heldRequests[0].status === "Pending", `status=${heldPost.status} requests=${heldRequests.length}`);
           }
         }
+        ok("QA-1960 fixture: TWO distinct centres and the second-person approved leaf are available",
+          locsAll.length >= 2 && String(locsAll[0]._id) !== String(locsAll[1]._id) && !!leafCat);
+        if (locsAll.length >= 2 && leafCat) {
+          // Distinctive amounts: a coincidental equality with pre-existing fixture data would make
+          // the strict-narrowing assertion pass for the wrong reason.
+          const AMT_A = 1234567, AMT_B = 7654321;
+          const mkCost = (loc, amount) => req(admin, "POST", "/api/costs", {
+            entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount,
+            note: "QA-1960 fixture: untagged cost seeded to prove a centre filter narrows it",
+          });
+          const seedA = await mkCost(locsAll[0], AMT_A);
+          const seedB = await mkCost(locsAll[1], AMT_B);
+          const rawSeedA = seedA.data.item?._id ? await headDb1960.collection("costentries").findOne({ _id: new ObjectId(String(seedA.data.item._id)) }) : null;
+          const rawSeedB = seedB.data.item?._id ? await headDb1960.collection("costentries").findOne({ _id: new ObjectId(String(seedB.data.item._id)) }) : null;
+          ok("QA-1960 fixture: both exact distinctive costs are read back from raw ledger at their own centres",
+            rawSeedA?.amount === AMT_A && rawSeedB?.amount === AMT_B && !rawSeedA.batch && !rawSeedB.batch
+              && String(rawSeedA.location) === String(locsAll[0]._id) && String(rawSeedB.location) === String(locsAll[1]._id)
+              && String(rawSeedA.category) === String(leafCat._id) && String(rawSeedB.category) === String(leafCat._id)
+              && String(rawSeedA.entered_by) === String(adminRow1960?._id) && String(rawSeedB.entered_by) === String(adminRow1960?._id)
+              && !rawSeedA.archived_at && !rawSeedB.archived_at && rawSeedA.reservation_state === "Applied" && rawSeedB.reservation_state === "Applied");
+          // 201 explicitly, never "not an error": a parked entry answers 202 and writes NO ledger
+          // row, which would leave the fixture absent and the assertions below vacuously true.
+          ok("QA-1960 fixture: untagged cost written to TWO different centres (201, not parked)",
+            seedA.status === 201 && seedB.status === 201,
+            JSON.stringify({ a: seedA.status, b: seedB.status, cat: leafCat?.name }));
 
-        ok("QA-1960: the OTHER centre's untagged cost is present in the whole and absent from this narrowing",
-          typeof whole.totals?.cost_unattributed === "number"
-            && whole.totals.cost_unattributed - narrowed.totals.cost_unattributed >= AMT_B,
-          JSON.stringify({ diff: (whole.totals?.cost_unattributed ?? 0) - (narrowed.totals?.cost_unattributed ?? 0), atLeast: AMT_B }));
-      }
-      const someBatch = reg[0]?.key;
-      if (someBatch) {
-        const byBatch = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatch}`)).data ?? {};
-        // A batch filter selects BATCHES, and untagged cost belongs to no batch - so the honest
-        // answer is "does not apply", never 0. A 0 would read as "nothing is untagged", which is a
-        // claim rather than an absence.
-        ok("QA-1952: under a batch filter the figure is withheld WITH A REASON, never zeroed",
-          byBatch.totals?.cost_unattributed === null && typeof byBatch.totals?.cost_unattributed_note === "string",
-          JSON.stringify({ v: byBatch.totals?.cost_unattributed, note: String(byBatch.totals?.cost_unattributed_note).slice(0, 60) }));
+          const whole = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+          const narrowed = (await req(admin, "GET", `/api/reports/pnl?location=${locsAll[0]._id}`)).data ?? {};
+          // The independent figure: that centre's own untagged rows, summed from the LEDGER.
+          const ledger = await headDb1960.collection("costentries").find({ location: new ObjectId(String(locsAll[0]._id)),
+            archived_at: null, deletion_state: { $exists: false },
+            $or: [{ reservation_state: "Applied" }, { reservation_state: { $exists: false } }],
+          }).toArray();
+          const expected = ledger.filter((x) => !x.batch).reduce((acc, x) => acc + (Number(x.amount) || 0), 0);
+
+          ok("QA-1960: the narrowed untagged-cost figure EQUALS that centre's own untagged ledger rows",
+            narrowed.totals?.cost_unattributed === expected,
+            JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, expected, rows: ledger.length }));
+          ok("QA-1960: ...and is STRICTLY less than the whole organisation's - the equality the old pin allowed",
+            typeof narrowed.totals?.cost_unattributed === "number"
+              && typeof whole.totals?.cost_unattributed === "number"
+              && narrowed.totals.cost_unattributed < whole.totals.cost_unattributed,
+            JSON.stringify({ narrowed: narrowed.totals?.cost_unattributed, whole: whole.totals?.cost_unattributed }));
+          // ---- QA-1964. Umesh's ruling (qa/gates/qa-1831-untagged-cost-under-a-date-window.md,
+          // 2026-09-07): a DATED P&L discloses the organisation-wide untagged total with an explicit
+          // out-of-window label, rather than withholding it. REQ-432 is about a PERIOD and nothing may
+          // fall outside it. Cycle 3 shipped the opposite behaviour with NO assertion either way - the
+          // checker reverted it, the payload moved null -> 17,831,953, and nothing failed. So BOTH
+          // arms are pinned here, and the third assertion is the one that kills a re-added date
+          // narrowing: the dated figure must EQUAL the undated one, because it is the same total.
+          {
+            const undated = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
+            const wide = (await req(admin, "GET", "/api/reports/pnl?from=2020-01-01&to=2030-12-31")).data ?? {};
+            const narrow = (await req(admin, "GET", "/api/reports/pnl?from=2026-06-01&to=2026-06-30")).data ?? {};
+
+            ok("QA-1964: WITHOUT a date filter the untagged figure is a real number, scoped, and carries no caveat",
+              typeof undated.totals?.cost_unattributed === "number"
+                && undated.totals?.cost_unattributed_scoped !== false
+                && !undated.totals?.cost_unattributed_note,
+              JSON.stringify({ v: undated.totals?.cost_unattributed, scoped: undated.totals?.cost_unattributed_scoped, note: undated.totals?.cost_unattributed_note }));
+
+            ok("QA-1964: UNDER a date filter it is DISCLOSED, never null - nothing falls outside the period",
+              typeof wide.totals?.cost_unattributed === "number",
+              JSON.stringify({ v: wide.totals?.cost_unattributed }));
+
+            ok("QA-1964: ...and it is flagged NOT scoped to the window, with a reason a reader can act on",
+              wide.totals?.cost_unattributed_scoped === false
+                && /not scoped/i.test(String(wide.totals?.cost_unattributed_note ?? "")),
+              JSON.stringify({ scoped: wide.totals?.cost_unattributed_scoped, note: String(wide.totals?.cost_unattributed_note).slice(0, 80) }));
+
+            // The mutant-killer. If anyone re-narrows this figure by entry_date, a June-only window
+            // stops equalling the whole; if anyone reverts to withholding, both go null and the
+            // typeof assertions above fail first.
+            ok("QA-1964: the dated figure IS the organisation-wide total - a narrow window and a wide one and no window all agree",
+              typeof undated.totals?.cost_unattributed === "number"
+                && wide.totals?.cost_unattributed === undated.totals?.cost_unattributed
+                && narrow.totals?.cost_unattributed === undated.totals?.cost_unattributed,
+              JSON.stringify({ undated: undated.totals?.cost_unattributed, wide: wide.totals?.cost_unattributed, narrowJune: narrow.totals?.cost_unattributed }));
+
+            // The distinction the ruling turns on: does-not-APPLY still withholds. A batch filter is
+            // a different fact from a date window and must not be swept into the same behaviour.
+            const someBatchId = reg[0]?.key;
+            if (someBatchId) {
+              const byB = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatchId}`)).data ?? {};
+              ok("QA-1964: a BATCH filter still WITHHOLDS - cannot-be-scoped and does-not-apply stay different facts",
+                byB.totals?.cost_unattributed === null && typeof byB.totals?.cost_unattributed_note === "string",
+                JSON.stringify({ v: byB.totals?.cost_unattributed }));
+            }
+          }
+
+          ok("QA-1960: the OTHER centre's untagged cost is present in the whole and absent from this narrowing",
+            typeof whole.totals?.cost_unattributed === "number"
+              && whole.totals.cost_unattributed - narrowed.totals.cost_unattributed >= AMT_B,
+            JSON.stringify({ diff: (whole.totals?.cost_unattributed ?? 0) - (narrowed.totals?.cost_unattributed ?? 0), atLeast: AMT_B }));
+        }
+        const someBatch = reg[0]?.key;
+        if (someBatch) {
+          const byBatch = (await req(admin, "GET", `/api/reports/pnl?batch=${someBatch}`)).data ?? {};
+          // A batch filter selects BATCHES, and untagged cost belongs to no batch - so the honest
+          // answer is "does not apply", never 0. A 0 would read as "nothing is untagged", which is a
+          // claim rather than an absence.
+          ok("QA-1952: under a batch filter the figure is withheld WITH A REASON, never zeroed",
+            byBatch.totals?.cost_unattributed === null && typeof byBatch.totals?.cost_unattributed_note === "string",
+            JSON.stringify({ v: byBatch.totals?.cost_unattributed, note: String(byBatch.totals?.cost_unattributed_note).slice(0, 60) }));
+        }
+      } finally {
+        const restored1960 = await req(admin, "PUT", "/api/approvals", rule1960 ?? { action: "cost.post", enabled: false, approver_role: "Admin", approver_users: [] });
+        ok("QA-1960 cleanup: the held-head probes restore cost.post configuration", restored1960.status === 200);
+        await headClient1960.close();
       }
     }
 

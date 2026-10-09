@@ -35,6 +35,8 @@ import * as XLSX from "xlsx";
 import { writeFileSync as wfs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as pjoin } from "node:path";
+import { MongoClient, ObjectId } from "mongodb";
+import { requireSafeDb } from "./db-guard.mjs";
 import { ok, req, login, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PASSWORD } from "./e2e-lib.mjs";
 
 // QA-2441, THIRD instance in this one file, and the reason this is a FILE-level guard rather than a
@@ -52,10 +54,12 @@ import { ok, req, login, adminLogin, finish, stamp, phone, today, BASE, ADMIN_PA
 // than a new one. The browser is closed on the way out so a crashed run leaves no chromium holding
 // the isolated copy open.
 let crashGuardBrowser = null;
+let rawClient = null;
 const onFatal = async (e) => {
   ok("QA-2441: the rendered-candidates journey ran to its end without an uncaught error", false,
     `ABORTED: ${String(e?.message ?? e).replace(/\s+/g, " ").slice(0, 240)} - every arm after this point did not run`);
   try { if (crashGuardBrowser) await crashGuardBrowser.close(); } catch { /* nothing left to close */ }
+  try { if (rawClient) await rawClient.close(); } catch { /* retain the original failure */ }
   finish();
 };
 process.on("uncaughtException", onFatal);
@@ -67,6 +71,19 @@ const STORED = ["Assigned", "Enrolled", "Completed", "Failed"];
 const CONTROLS = ["Dropped", "Fresh Lead", "NotARealValue"];
 
 const s = stamp("RC");
+const rawDbName = requireSafeDb("e2e-rendered-candidates");
+const rawMongoUrl = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
+if (!/^center_erp_ci(?:_|$)/.test(rawDbName) || !["localhost", "127.0.0.1", "[::1]"].includes(new URL(rawMongoUrl).hostname)) {
+  throw new Error("Rendered fixture read-back requires an explicit local center_erp_ci database");
+}
+rawClient = new MongoClient(rawMongoUrl, { serverSelectionTimeoutMS: 8000 });
+await rawClient.connect();
+const rawDb = rawClient.db(rawDbName);
+const rawCategories = rawDb.collection("costcategories");
+const rawResults = rawDb.collection("candidateresults");
+const rawCosts = rawDb.collection("costentries");
+const rawApprovals = rawDb.collection("approvalrequests");
+const rawClosures = rawDb.collection("closures");
 const admin = await adminLogin();
 
 // ---- fixture: this suite owns BOTH buckets. QA-1245: leaning on seed:sample for the Enrolled side
@@ -751,8 +768,12 @@ try {
       url: page.url(),
       oldClosureUnmounted: await page.getByLabel("Certificate distribution date").count() === 0,
     };
-    const switchRow = page.getByRole("row", { name: new RegExp(closureSwitchBatch.code) }).first();
+    const batchSearch = page.locator("main").getByPlaceholder("Search all columns…", { exact: true });
+    await batchSearch.waitFor({ state: "visible", timeout: 30000 });
+    await batchSearch.fill(closureSwitchBatch.code);
+    const switchRow = page.locator("main").getByRole("row").filter({ has: page.getByRole("cell", { name: closureSwitchBatch.code, exact: true }) });
     await switchRow.waitFor({ timeout: 30000 });
+    if (await switchRow.count() !== 1) throw new Error("A-to-B search did not identify exactly one fixture batch row");
     await switchRow.click();
     await page.waitForURL((u) => u.pathname.endsWith(`/batches/${closureSwitchBatch._id}`), { timeout: 30000 });
     const closureTabB = page.getByRole("button", { name: "Closure", exact: true });
@@ -774,6 +795,8 @@ try {
   } catch (e) {
     routerHopReached = false;
     routerHopError = String((e && e.message) || e).replace(/\s+/g, " ").slice(0, 200);
+  } finally {
+    heldOldPut(); // release the owned request even when navigation failed; that failure stays red
   }
   ok("QA-2420 [precondition] the A->B client-router hop could be driven at all",
     routerHopReached,
@@ -791,49 +814,90 @@ try {
     isPath(certCompletionBatch._id, resultPath)(response.url()) && response.request().method() === "GET", { timeout: 30000 }).catch(() => null);
   await page.getByRole("button", { name: "Start per-candidate marking", exact: true }).click();
   const ordinaryResultResponse = await ordinaryResultResponsePromise;
-  const ordinaryFailControls = page.getByRole("button", { name: "Fail", exact: true });
+  const ordinaryCard = page.getByText(certCompletionCandidate.name, { exact: true })
+    .locator('xpath=ancestor::div[.//input[@placeholder="Candidate ID"]][1]')
+    .and(page.locator("div:visible"));
+  const ordinaryFailControls = ordinaryCard.getByRole("button", { name: "Fail", exact: true });
+  await ordinaryFailControls.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+  await page.waitForFunction((name) => [...document.querySelectorAll('input[placeholder="Candidate ID"]')]
+    .some((input) => input.getClientRects().length && input.closest(".rounded-xl")?.textContent?.includes(name)
+      && [...input.closest(".rounded-xl").querySelectorAll("button")].some((button) => button.textContent?.trim() === "Fail" && !button.disabled)),
+  certCompletionCandidate.name, { timeout: 30000 }).catch(() => {});
   const ordinaryInitialResults = await req(admin, "GET", ordinaryResultPath);
   const ordinaryStart = {
     responseStatus: ordinaryResultResponse?.status() ?? null,
     apiStatus: ordinaryInitialResults.status,
     apiItems: ordinaryInitialResults.data?.items?.length ?? null,
+    fixtureMember: ordinaryInitialResults.data?.items?.[0]?.member ?? null,
+    visibleCards: await ordinaryCard.count(),
     failControls: await ordinaryFailControls.count(),
+    candidateIdControls: await ordinaryCard.getByPlaceholder("Candidate ID", { exact: true }).count(),
+    failEnabled: await ordinaryFailControls.isEnabled().catch(() => false),
   };
   const ordinaryResultControlReady = ordinaryStart.responseStatus === 200 && ordinaryStart.apiStatus === 200
-    && ordinaryStart.apiItems === 1 && ordinaryStart.failControls === 1;
+    && ordinaryStart.apiItems === 1 && String(ordinaryStart.fixtureMember) === String(certCompletionMember._id)
+    && ordinaryStart.visibleCards === 1 && ordinaryStart.failControls === 1
+    && ordinaryStart.candidateIdControls === 1 && ordinaryStart.failEnabled;
   ok("QA-2420 [precondition]: ordinary-completion result GET, item count, and Fail control agree before marking",
     ordinaryResultControlReady, JSON.stringify(ordinaryStart));
-  const ordinaryFail = ordinaryFailControls.first();
-  if (ordinaryResultControlReady) await ordinaryFail.click();
-  // The completion-plan fetch is intentionally separate from a result refresh. Reopen this real
-  // route after the child write so its unmarked precondition is freshly derived before pressing
-  // the ordinary Assessment completion door.
+  let ordinaryPutStatus = null;
+  let ordinaryReadBackStatus = null;
+  if (ordinaryResultControlReady) {
+    const resultPut = page.waitForResponse((response) => isPath(certCompletionBatch._id, resultPath)(response.url())
+      && response.request().method() === "PUT", { timeout: 30000 }).catch(() => null);
+    const resultReadBack = page.waitForResponse((response) => isPath(certCompletionBatch._id, resultPath)(response.url())
+      && response.request().method() === "GET", { timeout: 30000 }).catch(() => null);
+    await ordinaryFailControls.click();
+    const putResponse = await resultPut;
+    if (putResponse) await putResponse.finished();
+    ordinaryPutStatus = putResponse?.status() ?? null;
+    const readBackResponse = await resultReadBack;
+    if (readBackResponse) await readBackResponse.finished();
+    ordinaryReadBackStatus = readBackResponse?.status() ?? null;
+    await ordinaryCard.getByRole("button", { name: "✓ Fail", exact: true }).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+  }
+  // A sole Fail derives Assessment completion. With no Pass, Certification stays Pending;
+  // its ordinary sign-off is the real control that exercises the local freeze projection.
+  // Remount after the child write to derive fresh blockers and retain the candidate grid.
   if (ordinaryResultControlReady) await openClosure(certCompletionBatch._id);
   const ordinaryPersistedResults = await req(admin, "GET", ordinaryResultPath);
   const ordinaryPersistedFailCount = (ordinaryPersistedResults.data?.items ?? [])
-    .filter((item) => item?.result?.result === "Fail").length;
+    .filter((item) => String(item.member) === String(certCompletionMember._id) && item?.result?.result === "Fail").length;
+  const ordinaryRawResults = await rawResults.find({ batch: new ObjectId(String(certCompletionBatch._id)), batch_member: new ObjectId(String(certCompletionMember._id)) },
+    { projection: { result: 1 }, maxTimeMS: 5000 }).toArray();
   const ordinaryMarks = page.getByRole("button", { name: "Mark Completed", exact: true });
   if (ordinaryResultControlReady) await page.waitForFunction(() => {
     const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
-    return !!buttons[0] && !buttons[0].disabled;
+    return buttons.length === 2 && buttons[0].disabled && !buttons[1].disabled;
   }, undefined, { timeout: 30000 }).catch(() => {});
+  const ordinaryBeforeClosure = await req(admin, "GET", closurePath(certCompletionBatch._id));
+  const ordinaryRawClosure = await rawClosures.findOne({ batch: new ObjectId(String(certCompletionBatch._id)) }, { maxTimeMS: 5000 });
   const ordinaryAssessmentControls = {
     resultStatus: ordinaryPersistedResults.status,
     persistedFailCount: ordinaryPersistedFailCount,
+    putStatus: ordinaryPutStatus,
+    readBackStatus: ordinaryReadBackStatus,
+    rawFailCount: ordinaryRawResults.filter((row) => row.result === "Fail").length,
     markControls: await ordinaryMarks.count(),
     assessmentEnabled: await ordinaryMarks.first().isEnabled().catch(() => false),
+    assessmentDisabled: await ordinaryMarks.first().isDisabled().catch(() => false),
+    certificationEnabled: await ordinaryMarks.nth(1).isEnabled().catch(() => false),
+    closureStatus: ordinaryBeforeClosure.status,
+    assessmentStatus: ordinaryBeforeClosure.data?.closure?.assessment_status,
+    certificationStatus: ordinaryBeforeClosure.data?.closure?.certification_status,
+    rawAssessmentStatus: ordinaryRawClosure?.assessment_status,
+    rawCertificationStatus: ordinaryRawClosure?.certification_status,
   };
   const ordinaryAssessmentReady = ordinaryResultControlReady && ordinaryAssessmentControls.resultStatus === 200
     && ordinaryAssessmentControls.persistedFailCount === 1 && ordinaryAssessmentControls.markControls === 2
-    && ordinaryAssessmentControls.assessmentEnabled;
+    && ordinaryPutStatus === 200 && ordinaryReadBackStatus === 200 && ordinaryRawResults.length === 1
+    && ordinaryAssessmentControls.rawFailCount === 1
+    && ordinaryAssessmentControls.assessmentDisabled && ordinaryAssessmentControls.certificationEnabled
+    && ordinaryAssessmentControls.closureStatus === 200
+    && ordinaryAssessmentControls.assessmentStatus === "Completed" && ordinaryAssessmentControls.certificationStatus === "Pending"
+    && ordinaryAssessmentControls.rawAssessmentStatus === "Completed" && ordinaryAssessmentControls.rawCertificationStatus === "Pending";
   ok("QA-2420 [precondition]: ordinary-completion persisted Fail count and both transition controls agree",
     ordinaryAssessmentReady, JSON.stringify(ordinaryAssessmentControls));
-  if (ordinaryAssessmentReady) await ordinaryMarks.first().click();
-  if (ordinaryAssessmentReady) await page.getByRole("status").filter({ hasText: "Assessment marked completed." }).waitFor({ timeout: 30000 }).catch(() => {});
-  if (ordinaryAssessmentReady) await page.waitForFunction(() => {
-    const buttons = [...document.querySelectorAll("button")].filter((b) => b.textContent?.trim() === "Mark Completed");
-    return !!buttons[1] && !buttons[1].disabled;
-  }, undefined, { timeout: 30000 }).catch(() => {});
   const ordinaryParentFaultMatcher = isPath(certCompletionBatch._id, parentPath);
   const ordinaryParentFault = ordinaryAssessmentReady ? await installFaultRoute(ordinaryParentFaultMatcher, async (route) => {
     if (route.request().method() === "GET") {
@@ -845,19 +909,33 @@ try {
     && await ordinaryMarks.nth(1).isEnabled().catch(() => false);
   ok("QA-2420 [precondition]: ordinary Certification control is enabled after persisted Assessment completion",
     ordinaryCertificationEnabled, JSON.stringify({ ordinaryAssessmentReady, markControls: await ordinaryMarks.count(), certificationEnabled: ordinaryCertificationEnabled }));
+  const ordinaryCertificationPutPromise = ordinaryCertificationEnabled
+    ? page.waitForResponse((response) => isPath(certCompletionBatch._id, closurePath)(response.url())
+      && response.request().method() === "PUT", { timeout: 30000 }).catch(() => null)
+    : Promise.resolve(null);
   if (ordinaryCertificationEnabled) await ordinaryMarks.nth(1).click();
+  const ordinaryCertificationPut = await ordinaryCertificationPutPromise;
+  if (ordinaryCertificationPut) await ordinaryCertificationPut.finished();
   if (ordinaryCertificationEnabled) await page.getByRole("alert").filter({ hasText: "batch summary could not be refreshed" }).waitFor({ timeout: 30000 }).catch(() => {});
   const ordinaryClosure = await req(admin, "GET", closurePath(certCompletionBatch._id));
+  const ordinaryCompletedRawClosure = await rawClosures.findOne({ batch: new ObjectId(String(certCompletionBatch._id)) }, { maxTimeMS: 5000 });
   const ordinaryFreeze = {
     ordinaryCertificationPersisted: ordinaryClosure.data?.closure?.certification_status,
+    certificationPutStatus: ordinaryCertificationPut?.status() ?? null,
+    rawCertificationPersisted: ordinaryCompletedRawClosure?.certification_status,
     parentRefreshFailureVisible: /batch summary could not be refreshed/i.test(await page.locator("body").innerText()),
-    resultButtonDisabled: await ordinaryFail.isDisabled(),
-    candidateIdDisabled: await page.getByPlaceholder("Candidate ID").isDisabled(),
+    visibleCards: await ordinaryCard.count(),
+    candidateIdControls: await ordinaryCard.getByPlaceholder("Candidate ID", { exact: true }).count(),
+    resultButtonDisabled: await ordinaryCard.getByRole("button", { name: /^(?:✓ )?Fail$/ }).isDisabled().catch(() => false),
+    candidateIdDisabled: await ordinaryCard.getByPlaceholder("Candidate ID", { exact: true }).isDisabled().catch(() => false),
     bulkCertificateInputDisabled: await page.locator('input[type="file"][multiple]').isDisabled(),
   };
   ok("QA-2420: ordinary certification completion freezes candidate result/certificate controls immediately even when the parent refresh fails",
     ordinaryCertificationEnabled && ordinaryFreeze.ordinaryCertificationPersisted === "Completed"
+      && ordinaryClosure.status === 200 && ordinaryFreeze.rawCertificationPersisted === "Completed"
+      && ordinaryFreeze.certificationPutStatus === 200
       && ordinaryFreeze.parentRefreshFailureVisible
+      && ordinaryFreeze.visibleCards === 1 && ordinaryFreeze.candidateIdControls === 1
       && ordinaryFreeze.resultButtonDisabled && ordinaryFreeze.candidateIdDisabled
       && ordinaryFreeze.bulkCertificateInputDisabled,
     JSON.stringify(ordinaryFreeze));
@@ -1302,16 +1380,49 @@ if (bulkRowVisible) {
   // Create the condition rather than hunt for it (the QA-1950 move): a distinctive amount, so a
   // coincidental match with pre-existing fixture data cannot make the comparison pass by accident.
   const UNTAGGED = 9182736;
-  const cats = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? []);
-  const leafCat = cats.find((c) => c.parent) ?? cats[0];
+  const signerEmail = `zzcheck.qa1971.${s}@vidysea-test.local`;
+  const signerMade = await req(admin, "POST", "/api/users", { name: "ZZ QA1971 head signer " + s,
+    email: signerEmail, password: "CiOnly@123", role: "Admin", can_edit: true, location_scope: [] });
+  const signerId = signerMade.data?.item?._id;
+  const signerGrant = signerId ? await req(admin, "PATCH", `/api/users/${signerId}`,
+    { extra_permissions: ["finance.view", "finance.approve"] }) : { status: 0 };
+  const signerCookie = signerGrant.status === 200 ? await login(signerEmail, "CiOnly@123") : null;
+  const parentMade = await req(admin, "POST", "/api/master-lists/cost-categories", { name: "ZZ QA1971 Head " + s });
+  const parentId = parentMade.data?.item?._id;
+  const leafMade = parentId ? await req(admin, "POST", "/api/master-lists/cost-categories",
+    { name: "ZZ QA1971 Leaf " + s, parent: parentId }) : { status: 0 };
+  const leafId = leafMade.data?.item?._id;
+  const signoffs = [];
+  for (const id of [parentId, leafId]) {
+    const pending = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(id)),
+      "payload.kind": "head-approval", status: "Pending" }, { maxTimeMS: 5000 }) : null;
+    const signed = pending && signerCookie ? await req(signerCookie, "POST", `/api/approvals/${pending._id}`,
+      { decision: "Approved", note: "QA1971 second-person fixture sign-off" }) : { status: 0 };
+    signoffs.push({ id: id ?? null, pending: !!pending, status: signed.status });
+  }
+  const parentCat = parentId ? await rawCategories.findOne({ _id: new ObjectId(String(parentId)) }, { maxTimeMS: 5000 }) : null;
+  const leafCat = leafId ? await rawCategories.findOne({ _id: new ObjectId(String(leafId)) }, { maxTimeMS: 5000 }) : null;
+  const categoryReady = signerMade.status === 201 && signerGrant.status === 200 && !!signerCookie
+    && parentMade.status === 201 && leafMade.status === 201 && signoffs.every((r) => r.pending && r.status === 200)
+    && parentCat?.active === true && parentCat.approval_status === "Approved"
+    && leafCat?.active === true && leafCat.approval_status === "Approved" && String(leafCat.parent) === String(parentCat._id);
+  ok("QA-1971 [precondition]: own active parent and leaf were signed off by a second finance actor",
+    categoryReady, JSON.stringify({ signoffs, parentStatus: parentCat?.approval_status, leafStatus: leafCat?.approval_status,
+      parentActive: parentCat?.active, leafActive: leafCat?.active }));
   // 201 explicitly, never "not an error": a parked cost entry answers 202 and writes NO ledger row,
   // which would leave the figure at whatever it already was and the assertions below unearned.
-  const seeded = leafCat ? await req(admin, "POST", "/api/costs", {
+  const seeded = categoryReady ? await req(signerCookie, "POST", "/api/costs", {
     entry_date: "2026-06-15", location: loc._id, category: leafCat._id, amount: UNTAGGED,
     note: "QA-1971 fixture: untagged cost, so the dated screen has a real number to disclose",
   }) : { status: 0 };
   ok("QA-1971 fixture: an untagged cost entry exists (201, not parked)",
     seeded.status === 201, JSON.stringify({ status: seeded.status, cat: leafCat?.name }));
+  const seededId = seeded.data?.item?._id;
+  const seededRaw = seededId ? await rawCosts.findOne({ _id: new ObjectId(String(seededId)) }, { maxTimeMS: 5000 }) : null;
+  ok("QA-1971 [precondition]: the exact distinctive cost is on the ledger with no batch tag",
+    seeded.status === 201 && seededRaw?.amount === UNTAGGED && !seededRaw.batch
+      && String(seededRaw.category) === String(leafId) && String(seededRaw.location) === String(loc._id),
+    JSON.stringify({ status: seeded.status, found: !!seededRaw, amount: seededRaw?.amount, batch: seededRaw?.batch ?? null }));
 
   const DATED = "from=2020-01-01&to=2030-12-31";
   const payload = (await req(admin, "GET", `/api/reports/pnl?${DATED}`)).data ?? {};
@@ -2301,9 +2412,16 @@ for (const r of results) {
       inApp.length === 0,
       inApp.length ? "visible from " + inApp[0] + "ms for " + inApp.length + " sample(s)" : "never");
 
-    const finalText = await pg.locator("body").innerText().catch(() => "");
+    const terminalDenial = pg.locator("main").getByText("This screen is not part of your role's work.", { exact: true });
+    const denialVisible = await terminalDenial.waitFor({ state: "visible", timeout: 30000 }).then(() => true).catch(() => false);
+    const finalPath = new URL(pg.url()).pathname;
+    const financePath = new URL(BASE + "/finance").pathname;
+    const finalText = await pg.locator("main").innerText().catch(() => "");
     ok("QA-1943: ...and what they DO get is the closed door, not a blank screen",
-      /not part of your role|Checking your access/i.test(finalText), finalText.slice(0, 90).replace(/\n/g, " "));
+      finalPath === financePath && denialVisible && await terminalDenial.count() === 1
+        && await terminalDenial.isVisible().catch(() => false),
+      JSON.stringify({ pathname: finalPath, expectedPathname: financePath, denialVisible,
+        financeView: lvl, mainText: finalText.replace(/\s+/g, " ").slice(0, 900), coldHits: cold.length, navigationHits: inApp.length }));
   }
   await c.close();
 }
@@ -2889,6 +3007,25 @@ for (const r of results) {
       const rhead = await mkCat(`ZZ Rendered Head ${cs2}`, null);
       const rsub1 = rhead ? await mkCat(`ZZ Rendered Salary ${cs2}`, rhead) : null;
       const rsub2 = rhead ? await mkCat(`ZZ Rendered Food ${cs2}`, rhead) : null;
+      const approvedLabelName = `ZZ Approved Label ${cs2}`;
+      const rejectedLabelName = `ZZ Rejected Label ${cs2}`;
+      const approvedLabelId = await mkCat(approvedLabelName, null);
+      const rejectedLabelId = await mkCat(rejectedLabelName, null);
+      const labelSignoffs = [];
+      for (const [id, decision] of [[approvedLabelId, "Approved"], [rejectedLabelId, "Rejected"]]) {
+        const pending = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(id)),
+          "payload.kind": "head-approval", status: "Pending" }, { maxTimeMS: 5000 }) : null;
+        const before = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }, { maxTimeMS: 5000 }) : null;
+        const decided = pending && financeCookie && String(pending.initiator) !== String(financeUserId)
+          ? await req(financeCookie, "POST", `/api/approvals/${pending._id}`, { decision, note: "Rendered label second-person fixture decision" })
+          : { status: 0 };
+        const after = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }, { maxTimeMS: 5000 }) : null;
+        labelSignoffs.push({ id, decision, before: before?.approval_status, active: after?.active,
+          after: after?.approval_status, status: decided.status, secondPerson: !!pending && String(pending.initiator) !== String(financeUserId) });
+      }
+      ok("QA-2756 [precondition]: Approved and Rejected label controls start Pending and receive real second-person decisions",
+        labelSignoffs.length === 2 && labelSignoffs.every((r) => r.id && r.before === "Pending" && r.secondPerson
+          && r.status === 200 && r.after === r.decision && r.active === true), JSON.stringify(labelSignoffs));
       ok("QA-2747 [precondition]: a head with two subheads exists to be offered",
         !!(rhead && rsub1 && rsub2), JSON.stringify({ rhead: !!rhead, rsub1: !!rsub1, rsub2: !!rsub2 }));
       // QA-2768 (cycle-4 checker): with the `orphanSubs.length > 0 &&` guard removed, a database with ZERO
@@ -2970,6 +3107,14 @@ for (const r of results) {
       const retirePlain = rretplain ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${rretplain}`, { active: false }) : null;
       const retireOSub = oretsub ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${oretsub}`, { active: false }) : null;
       const readback = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
+      const rawLabelFixtures = await rawCategories.find({ _id: { $in: [rhead, rsub1, rsub2, rplain, rretsub, ohead, osub, oretsub, rretplain]
+        .filter(Boolean).map((id) => new ObjectId(String(id))) } },
+      { projection: { name: 1, approval_status: 1, active: 1, parent: 1 }, maxTimeMS: 5000 }).toArray();
+      ok("QA-2756 [precondition]: each original own label fixture is read back Pending, with its identity and active state",
+        rawLabelFixtures.length === 9 && rawLabelFixtures.every((c) => c.approval_status === "Pending"
+          && readback.some((api) => String(api._id) === String(c._id) && api.name === c.name && api.active === c.active
+            && api.approval_status === c.approval_status)),
+        JSON.stringify(rawLabelFixtures.map((c) => ({ id: String(c._id), name: c.name, approval: c.approval_status, active: c.active }))));
       const oheadRow = readback.find((c) => String(c._id) === String(ohead));
       const osubRow = readback.find((c) => String(c._id) === String(osub));
       ok("QA-2754 [precondition]: a RETIRED head (read back active:false) keeps a LIVE subhead",
@@ -3079,6 +3224,13 @@ for (const r of results) {
 
         // B5: a head with NO subheads is still offered - once, as a plain option outside every optgroup.
         const plainOpts = optsOf(rplain);
+        const approvedLabelOpt = optsOf(approvedLabelId);
+        const rejectedLabelOpt = optsOf(rejectedLabelId);
+        ok("QA-2756: an Approved active head has its exact bare name and a Rejected active head has the exact rejected marker",
+          labelSignoffs.every((r) => r.status === 200 && r.after === r.decision && r.active === true)
+            && approvedLabelOpt.length === 1 && approvedLabelOpt[0].text === approvedLabelName
+            && rejectedLabelOpt.length === 1 && rejectedLabelOpt[0].text === `${rejectedLabelName} (rejected)`,
+          JSON.stringify({ approved: approvedLabelOpt.map((o) => o.text), rejected: rejectedLabelOpt.map((o) => o.text) }));
         ok("QA-2756/B5: a head with NO subheads is still offered by the rendered filter - exactly once, as a plain option outside every optgroup",
           !!rplain && plainOpts.length === 1 && plainOpts[0].inGroup === false,
           JSON.stringify({ count: plainOpts.length, inGroup: plainOpts.map((o) => o.inGroup), groups: plainOpts.map((o) => o.group) }));
@@ -3086,17 +3238,18 @@ for (const r of results) {
         // B4: the head's own option inside its group reads "All of <head name>".
         const allOf = grp ? grp.options.find((o) => o.value === String(rhead)) : null;
         ok('QA-2756/B4: the head\'s own option inside its group reads "All of <head name>"',
-          !!allOf && allOf.text === `All of ${RHEAD_NAME}`, JSON.stringify({ text: allOf ? allOf.text : null, want: `All of ${RHEAD_NAME}` }));
+          !!allOf && allOf.text === `All of ${RHEAD_NAME} (not approved)`, JSON.stringify({ text: allOf ? allOf.text : null, want: `All of ${RHEAD_NAME} (not approved)` }));
 
         // B15 (added in cycle 4): the optgroup is labelled with the head's name - it is how a reader
         // knows which head a subhead belongs to.
         ok("QA-2756/B15: the head's optgroup is labelled with the head's own name",
-          !!grp && grp.label === RHEAD_NAME, JSON.stringify({ label: grp ? grp.label : null, want: RHEAD_NAME }));
+          !!grp && grp.label === `${RHEAD_NAME} (not approved)`, JSON.stringify({ label: grp ? grp.label : null, want: `${RHEAD_NAME} (not approved)` }));
 
-        // B13 (added in cycle 4): a LIVE row's label is its bare name - " (inactive)" is only for a retired row.
+        // B13: approval and operational state are independent. These LIVE Pending rows need
+        // their complete not-approved labels and must not acquire an inactive marker.
         const sub1Opt = optsOf(rsub1)[0];
-        ok('QA-2756/B13: a LIVE head and a LIVE subhead are labelled with their bare names - no " (inactive)" suffix',
-          !!sub1Opt && sub1Opt.text === RSUB1_NAME && plainOpts.length > 0 && plainOpts[0].text === RPLAIN_NAME,
+        ok('QA-2756/B13: a LIVE Pending head and subhead have exact not-approved labels without an inactive suffix',
+          !!sub1Opt && sub1Opt.text === `${RSUB1_NAME} (not approved)` && plainOpts.length > 0 && plainOpts[0].text === `${RPLAIN_NAME} (not approved)`,
           JSON.stringify({ sub: sub1Opt ? sub1Opt.text : null, plain: plainOpts[0] ? plainOpts[0].text : null }));
 
         // B14 (added in cycle 4): a subhead under a LIVE head is offered exactly once - the orphan group
@@ -3157,6 +3310,8 @@ for (const r of results) {
         const aOpt = selOpt(linked, ohead);
         ok('QA-2767/a: /finance?category=<RETIRED head WITH a subhead> labels that head\'s optgroup with " (inactive)"',
           linked.found === true && linked.value === String(ohead) && !!aOpt && aOpt.inGroup === true && endsInactive(aOpt.group)
+            && aOpt.group === `ZZ Retired Head ${cs2} (not approved) (inactive)`
+            && aOpt.text === `All of ZZ Retired Head ${cs2} (not approved) (inactive)`
             && (linked.groups ?? []).some((g) => g.label === aOpt.group && (g.options ?? []).some((o) => o.value === String(osub))),
           JSON.stringify({ value: linked.value === String(ohead), inGroup: aOpt ? aOpt.inGroup : null, group: aOpt ? aOpt.group : null }));
 
@@ -3168,7 +3323,9 @@ for (const r of results) {
         const bOpt = selOpt(linkedB, rretplain);
         ok('QA-2767/b: /finance?category=<RETIRED head with NO subheads> selects it as a plain option whose text ends " (inactive)"',
           linkedB.found === true && linkedB.value === String(rretplain) && !!bOpt && bOpt.inGroup === false
-            && endsInactive(linkedB.selectedText) && endsInactive(bOpt.text),
+            && endsInactive(linkedB.selectedText) && endsInactive(bOpt.text)
+            && linkedB.selectedText === `ZZ Retired Plain ${cs2} (not approved) (inactive)`
+            && bOpt.text === `ZZ Retired Plain ${cs2} (not approved) (inactive)`,
           JSON.stringify({ value: linkedB.value === String(rretplain), inGroup: bOpt ? bOpt.inGroup : null, selectedText: linkedB.selectedText }));
 
         // (c) the SUBHEAD option inside a head group - `{catLabel(s)}` - for a selected retired subhead under a live head.
@@ -3178,8 +3335,10 @@ for (const r of results) {
         const linkedC = await readCostHeadSelect();
         const cOpt = selOpt(linkedC, rretsub);
         ok('QA-2767/c: /finance?category=<RETIRED subhead under a live head> selects it inside that head\'s group, text ending " (inactive)"',
-          linkedC.found === true && linkedC.value === String(rretsub) && !!cOpt && cOpt.group === RHEAD_NAME
-            && endsInactive(linkedC.selectedText) && endsInactive(cOpt.text),
+          linkedC.found === true && linkedC.value === String(rretsub) && !!cOpt && cOpt.group === `${RHEAD_NAME} (not approved)`
+            && endsInactive(linkedC.selectedText) && endsInactive(cOpt.text)
+            && linkedC.selectedText === `ZZ Retired Sub ${cs2} (not approved) (inactive)`
+            && cOpt.text === `ZZ Retired Sub ${cs2} (not approved) (inactive)`,
           JSON.stringify({ value: linkedC.value === String(rretsub), group: cOpt ? cOpt.group : null, selectedText: linkedC.selectedText }));
 
         // (d) the ORPHAN option - `{catLabel(s)}` in the retired-head group - for a selected retired subhead under a retired head.
@@ -3190,8 +3349,27 @@ for (const r of results) {
         const dOpt = selOpt(linkedD, oretsub);
         ok('QA-2767/d: /finance?category=<RETIRED subhead under a RETIRED head> selects it in the orphan group, text ending " (inactive)"',
           linkedD.found === true && linkedD.value === String(oretsub) && !!dOpt && /head has been retired/i.test(dOpt.group || "")
-            && endsInactive(linkedD.selectedText) && endsInactive(dOpt.text),
+            && endsInactive(linkedD.selectedText) && endsInactive(dOpt.text)
+            && linkedD.selectedText === `ZZ Orphan Retired Sub ${cs2} (not approved) (inactive)`
+            && dOpt.text === `ZZ Orphan Retired Sub ${cs2} (not approved) (inactive)`,
           JSON.stringify({ value: linkedD.value === String(oretsub), group: dOpt ? dOpt.group : null, selectedText: linkedD.selectedText }));
+        for (const [id, name, approval, expected] of [
+          [approvedLabelId, approvedLabelName, "Approved", `${approvedLabelName} (inactive)`],
+          [rejectedLabelId, rejectedLabelName, "Rejected", `${rejectedLabelName} (rejected) (inactive)`],
+        ]) {
+          const retired = id ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${id}`, { active: false }) : { status: 0 };
+          const raw = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }, { maxTimeMS: 5000 }) : null;
+          await fpage.goto(`${BASE}/finance?category=${id}`, { waitUntil: "domcontentloaded" });
+          await waitForCostHeadOptions(id);
+          const retiredShape = await readCostHeadSelect();
+          const option = selOpt(retiredShape, id);
+          ok(`QA-2767: selected retired ${approval} head retains its complete approval/inactive label`,
+            retired.status === 200 && raw?.name === name && raw.approval_status === approval && raw.active === false
+              && retiredShape.found === true && retiredShape.value === String(id) && !!option && option.inGroup === false
+              && option.text === expected && retiredShape.selectedText === expected,
+            JSON.stringify({ approval: raw?.approval_status, active: raw?.active, value: retiredShape.value,
+              text: retiredShape.selectedText, expected }));
+        }
       }
     }
 
@@ -3310,4 +3488,5 @@ await browser.close();
   }
 }
 
+await rawClient.close();
 finish();

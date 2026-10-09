@@ -880,6 +880,45 @@ await retireSubject();
           ok(`QA-2099 [${label}] the fixture account was created`, false, `got ${made2.status} - this pin measured nothing`);
           continue;
         }
+        // Observe complete raw reset attempts, including skipped/failed transport. The mail
+        // panel is capped and welcome mail can finish after account creation returns. The reset
+        // sender deliberately supplies no entity_id, so one must not be required by this query.
+        let mailReadFailed = false;
+        const mailRows = async (email = stEmail, entity = "PublicToken", subject = "****** is your password reset code") => {
+          try {
+            return await db.collection("maillogs").countDocuments({ to: email, entity, subject }, { maxTimeMS: 1000 });
+          } catch {
+            mailReadFailed = true;
+            return null; // A failed observation is never evidence of zero attempts.
+          }
+        };
+        const controlEmail = `fpcontrol.${label}.${stamp}@vidysea-test.local`;
+        const controlMade = await req(admin, "POST", "/api/users", {
+          name: `FP control ${label} ${stamp}`, email: controlEmail, password: "StateFix@123",
+          role: "Trainer", active: true, approval_status: "Approved",
+        });
+        const controlId = controlMade.data?.item?._id;
+        let controlRow = null;
+        try {
+          controlRow = await db.collection("users").findOne({ email: controlEmail }, {
+            projection: { active: 1, dropped: 1, approval_status: 1 }, maxTimeMS: 1000,
+          });
+        } catch { mailReadFailed = true; }
+        const controlEligible = controlMade.status === 201 && !!controlId && controlRow?.active === true
+          && controlRow.dropped !== true && controlRow.approval_status === "Approved";
+        ok(`QA-2099 [${label}] the fresh positive control is eligible to request a reset`, controlEligible,
+          `create status=${controlMade.status}; eligible=${controlEligible}`);
+        const welcomeDeadline = Date.now() + 5000;
+        let welcomeRows = await mailRows(stEmail, "User", "Your Center ERP account is ready");
+        let controlWelcomeRows = await mailRows(controlEmail, "User", "Your Center ERP account is ready");
+        while (!mailReadFailed && (welcomeRows !== 1 || controlWelcomeRows !== 1) && Date.now() < welcomeDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          welcomeRows = await mailRows(stEmail, "User", "Your Center ERP account is ready");
+          controlWelcomeRows = await mailRows(controlEmail, "User", "Your Center ERP account is ready");
+        }
+        ok(`QA-2099 [${label}] both welcome attempts completed before the state mutation`,
+          !mailReadFailed && welcomeRows === 1 && controlWelcomeRows === 1,
+          `welcome attempts=${welcomeRows}; control welcome attempts=${controlWelcomeRows}; read failed=${mailReadFailed}`);
         await mutate(made2.data.item._id, stEmail);
 
         // The approval-only fixtures are worth nothing if the write did not land the way they
@@ -898,13 +937,9 @@ await retireSubject();
         // them while "fixing" a pin that could not fail — a wrong pin is the same defect class as
         // an inert one, arriving from the other side.
         //
-        //   (a) COUNTING MAIL ROWS ABSOLUTELY. `POST /api/users` sends a welcome mail
-        //       (`users/route.ts:101`), so a freshly created account ALREADY has one row before
-        //       this door is touched. `mailed === 0` measured that welcome mail and called it a
-        //       leaked reset code. The version I replaced used a before/after DELTA and was immune;
-        //       I dropped the delta while removing the stale-address bug and swapped one fixture
-        //       defect for another. The delta is back, and it is taken AFTER the mutation so the
-        //       welcome mail is inside the baseline where it belongs.
+        //   (a) COUNTING UNRELATED MAIL. `POST /api/users` sends a fire-and-forget welcome.
+        //       Await it above, then count only the masked PublicToken reset subject in raw
+        //       MailLog. A skipped row is still an attempted reset, not proof of refusal.
         //
         //   (b) THE PER-IP BUDGET IS SHARED BY THE WHOLE SUITE. The door is
         //       `rateLimit("pwreset-req:" + clientKey(req), 5, 1h)` — five per hour per CLIENT, and
@@ -914,15 +949,46 @@ await retireSubject();
         //       (`rate-limit.ts`, last hop). That is the production keying path, exercised rather
         //       than bypassed — no guard is weakened and no test-only escape hatch exists to rot.
         const from = { "x-forwarded-for": `203.0.113.${1 + idx}` };
-        const mailRows = async () => ((await req(admin, "GET", "/api/test-email")).data?.log ?? []).filter((l) => l.to === stEmail).length;
         const before = await mailRows();
+        const controlBefore = await mailRows(controlEmail);
+        let freshTokenRows = null;
+        try {
+          freshTokenRows = await db.collection("publictokens").countDocuments({
+            purpose: "password_reset", email: { $in: [stEmail, controlEmail] },
+          }, { maxTimeMS: 1000 });
+        } catch { mailReadFailed = true; }
+        ok(`QA-2099 [${label}] both addresses have fresh reset budgets`,
+          !mailReadFailed && before === 0 && controlBefore === 0 && freshTokenRows === 0,
+          `reset attempts=${before}; control attempts=${controlBefore}; prior challenges=${freshTokenRows}; read failed=${mailReadFailed}`);
         const r = await req("", "POST", "/api/public/forgot-password", { action: "request", email: stEmail }, from);
-        const after = await mailRows();
+        const controlRequest = controlEligible
+          ? await req("", "POST", "/api/public/forgot-password", { action: "request", email: controlEmail }, {
+            "x-forwarded-for": `198.51.100.${101 + idx}`,
+          }) : { status: 0 };
+        const positiveDeadline = Date.now() + 5000;
+        let controlAfter = await mailRows(controlEmail);
+        while (!mailReadFailed && controlAfter === controlBefore && Date.now() < positiveDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          controlAfter = await mailRows(controlEmail);
+        }
+        const positiveObserved = !mailReadFailed && controlEligible && controlRequest.status === 200
+          && controlBefore === 0 && controlAfter === 1;
+        ok(`QA-2099 [${label}] raw mailbox observation sees the eligible reset attempt`, positiveObserved,
+          `request status=${controlRequest.status}; control reset attempts=${controlBefore} -> ${controlAfter}; read failed=${mailReadFailed}`);
+        if (controlId) await req(admin, "PATCH", `/api/users/${controlId}`, { drop: true });
+        const negativeDeadline = Date.now() + 5000;
+        let after = await mailRows();
+        while (!mailReadFailed && after === before && Date.now() < negativeDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          after = await mailRows();
+        }
+        const negativeComplete = !mailReadFailed && Date.now() >= negativeDeadline;
 
         ok(`QA-2099 [${label}] the answer is the SAME - the door does not leak the account's state`,
           r.status === 200, `got ${r.status}${r.status === 429 ? " - the per-IP budget was spent; this pin measured the queue, not the door" : ""}`);
         ok(`QA-2099 [${label}] ...and NO code is mailed, on an address that has never asked before`,
-          after === before, `mail rows for ${stEmail}: ${before} -> ${after}. The address is fresh, so the 60s cooldown cannot be the reason; the welcome mail is inside the baseline.`);
+          positiveObserved && negativeComplete && freshTokenRows === 0 && before === 0 && after === before,
+          `reset attempts=${before} -> ${after}; positive observed=${positiveObserved}; bounded observation complete=${negativeComplete}; read failed=${mailReadFailed}`);
 
         // QA-2161 — MEASURED, NOT ASSUMED: I mutated the state guard to `canSignIn = !!doc` and
         // rebuilt. [deactivated] and [rejected] both went RED (1 -> 2 mail rows), so those two
