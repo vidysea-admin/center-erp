@@ -185,8 +185,8 @@ function duplicateKeyMessage(msg: string): string {
 // caller instead of only the one that happened to import it first.
 export function translateError(e: unknown): { status: number; message: string } {
   if (e instanceof HttpError) {
-    // -111: every error a user can read passes through plain() — the ledger codes ("Rule 45",
-    // "DEC-6") stay in code and audit, never on a screen. Chokepoint, so a message written
+    // -111: every error a user can read passes through plain() — the ledger codes ("rule identifier",
+    // "decision identifier") stay in code and audit, never on a screen. Chokepoint, so a message written
     // tomorrow with a code in it is still clean at the door.
     return { status: e.status, message: plain(e.message) };
   }

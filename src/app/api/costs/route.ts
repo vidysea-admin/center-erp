@@ -37,7 +37,6 @@ export const GET = apiHandler(async (req: NextRequest) => {
   } else {
     await requireFinance(user, "view");
   }
-  await flushPendingFinanceAuditEvents().catch(() => {});
   const filter: Record<string, unknown> = { ...locationFilter(user) };
   if (mine) filter.entered_by = user.id;
   for (const k of ["location", "batch", "trainer"]) {
@@ -50,7 +49,8 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
   // mtg-a3 R9 / R5: Payment Pending / Paid, and who approved it - read by the SAME parser the
   // register uses, and the approval columns are stamped by the SAME function (stampCostApprovals).
-  const extra = parseCostFilters(sp, ["category", "payment_status", "approved_by", "approved_from", "approved_to"]);
+  const extra = parseCostFilters(sp, ["from", "to", "category", "payment_status", "approved_by", "approved_from", "approved_to"]);
+  await flushPendingFinanceAuditEvents().catch(() => {});
   if (extra.payment_status) filter.payment_status = extra.payment_status;
   // mtg-b2 R6: head or subhead, read by the SAME function the Finance register and its export use.
   if (extra.category) filter.category = expandCostCategoryFilter(await CostCategory.find({}).select("parent").lean<any[]>(), extra.category);

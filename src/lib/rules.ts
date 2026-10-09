@@ -6804,7 +6804,7 @@ export function parseCostFilters(sp: URLSearchParams, keys: readonly (keyof Cost
   if (filters.approved_by && !["pre-approved", "direct"].includes(filters.approved_by) && !Types.ObjectId.isValid(filters.approved_by)) {
     throw new HttpError(400, "Choose an approver from the list.");
   }
-  for (const k of ["approved_from", "approved_to"] as const) {
+  for (const k of ["from", "to", "approved_from", "approved_to"] as const) {
     const day = filters[k];
     // A real calendar day: 2026-02-31 matches the shape but is not a date (it would roll to March).
     const parsedDay = day ? new Date(`${day}T00:00:00Z`) : null;
