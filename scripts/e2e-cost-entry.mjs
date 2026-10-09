@@ -2217,36 +2217,105 @@ for (const variant of ["ordinary", "mark_paid"]) {
   // it; after replay it is published once with its one deterministic associated cost.
   {
     const nm = `ZZ Staged Race ${stamp}`;
+    const directNote = `must not use staged ${stamp}`;
+    const sameNameNote = `must not reuse staged ${stamp}`;
+    const childName = `ZZ Child Race ${stamp}`;
     const parked = await parkLegacyHeadRequest(baseEntry({
-      amount: 779, new_subhead: nm, payment_mode: "Cash", _test_pause_after_head_ms: 450,
+      amount: 779, new_subhead: nm, payment_mode: "Cash", _test_pause_after_head_ms: 5000,
     }));
     const requestId = parked.data?.item?._id;
     if (requestId) {
-      const approvalPromise = req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "staged race pin" });
+      const requestOid = new ObjectId(String(requestId));
+      let approvalSettled = false;
+      const approvalPromise = req(admin, "POST", `/api/approvals/${requestId}`, { decision: "Approved", note: "staged race pin" })
+        .finally(() => { approvalSettled = true; });
       let stagedRaw = null;
       for (let i = 0; i < 20 && !stagedRaw; i++) {
         await new Promise((resolve) => setTimeout(resolve, 25));
-        stagedRaw = await rawCategories.findOne({ _id: new ObjectId(String(requestId)) });
+        stagedRaw = await rawCategories.findOne({ _id: requestOid });
       }
+      // Raw creation precedes the server's pause, so this is a conservative earliest resume.
+      const earliestResume = new Date(stagedRaw?.createdAt ?? "invalid").getTime() + 5000;
+      let observedAt = Date.now();
+      let stagedTiming = JSON.stringify({ active: stagedRaw?.active, owner: stagedRaw?.staged_by_approval, settled: approvalSettled,
+        createdAt: stagedRaw?.createdAt, observedAt: new Date(observedAt), earliestResume: Number.isFinite(earliestResume) ? new Date(earliestResume) : null, remainingMs: earliestResume - observedAt });
+      console.log("INFO staged head persisted", stagedTiming);
       ok("staged head [precondition]: replay persisted its own inactive head before the associated cost",
-        stagedRaw?.active === false && String(stagedRaw?.staged_by_approval) === String(requestId),
-        JSON.stringify(stagedRaw && { active: stagedRaw.active, owner: stagedRaw.staged_by_approval }));
+        stagedRaw?.active === false && String(stagedRaw?.staged_by_approval) === String(requestId)
+          && !approvalSettled && Number.isFinite(earliestResume) && observedAt < earliestResume,
+        stagedTiming);
 
       const visibleWhileStaged = (await catList()).some((c) => String(c._id) === String(requestId));
-      const directCost = await req(admin, "POST", "/api/costs", baseEntry({ category: requestId, amount: 11, note: `must not use staged ${stamp}` }));
-      const child = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ Child Race ${stamp}`, parent: requestId });
-      const sameName = await req(admin, "POST", "/api/costs", baseEntry({ new_subhead: nm, amount: 12, note: `must not reuse staged ${stamp}` }));
+      let heldHead = await rawCategories.findOne({ _id: requestOid });
+      observedAt = Date.now();
+      stagedTiming = JSON.stringify({ active: heldHead?.active, owner: heldHead?.staged_by_approval, settled: approvalSettled,
+        createdAt: heldHead?.createdAt, observedAt: new Date(observedAt), earliestResume: Number.isFinite(earliestResume) ? new Date(earliestResume) : null, remainingMs: earliestResume - observedAt });
+      console.log("INFO staged head after hidden-list observation", stagedTiming);
+      ok("staged head [precondition]: hidden-list observation completed inside the unpublished replay window",
+        heldHead?.active === false && String(heldHead?.staged_by_approval) === String(requestId)
+          && !approvalSettled && Number.isFinite(earliestResume) && observedAt < earliestResume,
+        stagedTiming);
+      const directCost = await req(admin, "POST", "/api/costs", baseEntry({ category: requestId, amount: 11, note: directNote }));
+      heldHead = await rawCategories.findOne({ _id: requestOid });
+      observedAt = Date.now();
+      stagedTiming = JSON.stringify({ active: heldHead?.active, owner: heldHead?.staged_by_approval, settled: approvalSettled,
+        createdAt: heldHead?.createdAt, observedAt: new Date(observedAt), earliestResume: Number.isFinite(earliestResume) ? new Date(earliestResume) : null, remainingMs: earliestResume - observedAt });
+      console.log("INFO staged head after direct-cost attack", stagedTiming);
+      ok("staged head [precondition]: direct-cost attack completed inside the unpublished replay window",
+        heldHead?.active === false && String(heldHead?.staged_by_approval) === String(requestId)
+          && !approvalSettled && Number.isFinite(earliestResume) && observedAt < earliestResume,
+        stagedTiming);
+      const child = await req(admin, "POST", "/api/master-lists/cost-categories", { name: childName, parent: requestId });
+      heldHead = await rawCategories.findOne({ _id: requestOid });
+      observedAt = Date.now();
+      stagedTiming = JSON.stringify({ active: heldHead?.active, owner: heldHead?.staged_by_approval, settled: approvalSettled,
+        createdAt: heldHead?.createdAt, observedAt: new Date(observedAt), earliestResume: Number.isFinite(earliestResume) ? new Date(earliestResume) : null, remainingMs: earliestResume - observedAt });
+      console.log("INFO staged head after child-head attack", stagedTiming);
+      ok("staged head [precondition]: child-head attack completed inside the unpublished replay window",
+        heldHead?.active === false && String(heldHead?.staged_by_approval) === String(requestId)
+          && !approvalSettled && Number.isFinite(earliestResume) && observedAt < earliestResume,
+        stagedTiming);
+      const sameName = await req(admin, "POST", "/api/costs", baseEntry({ new_subhead: nm, amount: 12, note: sameNameNote }));
+      heldHead = await rawCategories.findOne({ _id: requestOid });
+      observedAt = Date.now();
+      stagedTiming = JSON.stringify({ active: heldHead?.active, owner: heldHead?.staged_by_approval, settled: approvalSettled,
+        createdAt: heldHead?.createdAt, observedAt: new Date(observedAt), earliestResume: Number.isFinite(earliestResume) ? new Date(earliestResume) : null, remainingMs: earliestResume - observedAt });
+      console.log("INFO staged head after same-name attack", stagedTiming);
+      ok("staged head [precondition]: same-name attack completed inside the unpublished replay window",
+        heldHead?.active === false && String(heldHead?.staged_by_approval) === String(requestId)
+          && !approvalSettled && Number.isFinite(earliestResume) && observedAt < earliestResume,
+        stagedTiming);
       ok("staged head race: the unpublished head is hidden and every normal cost/child/same-name write rejects it",
         !visibleWhileStaged && directCost.status === 409 && child.status === 409 && sameName.status === 409,
         JSON.stringify({ visibleWhileStaged, directCost: directCost.status, child: child.status, sameName: sameName.status }));
 
       const approved = await approvalPromise;
+      const [attackCosts, attackApprovals, attackChildren, publishedHeads, publishedCosts] = await Promise.all([
+        rawCosts.countDocuments({ note: { $in: [directNote, sameNameNote] } }),
+        rawApprovals.countDocuments({ $or: [
+          { "payload.note": { $in: [directNote, sameNameNote] } },
+          { "payload.name": childName },
+          { "payload.parent": String(requestId) },
+        ] }),
+        rawCategories.countDocuments({ $or: [{ name: childName }, { parent: requestOid }] }),
+        rawCategories.find({ $or: [{ _id: requestOid }, { name: nm }] }).toArray(),
+        rawCosts.find({ $or: [{ approval_request: requestOid }, { category: requestOid }] }).toArray(),
+      ]);
+      ok("staged head race: rejected attacks leave zero raw cost, approval or child-head rows",
+        attackCosts === 0 && attackApprovals === 0 && attackChildren === 0,
+        JSON.stringify({ costs: attackCosts, approvals: attackApprovals, children: attackChildren }));
       const afterHead = (await catList()).find((c) => String(c._id) === String(requestId));
       const afterCosts = ((await req(admin, "GET", "/api/costs")).data?.items ?? [])
         .filter((c) => String(c.approval_request) === String(requestId));
       ok("staged head publish: approval publishes exactly its own head and one associated cost",
-        approved.status === 200 && afterHead?.active !== false && afterCosts.length === 1 && afterCosts[0].amount === 779,
-        JSON.stringify({ approval: approved.status, head: afterHead && { id: afterHead._id, active: afterHead.active }, costs: afterCosts.map((c) => ({ id: c._id, amount: c.amount })) }));
+        approved.status === 200 && afterHead?.active !== false && afterCosts.length === 1 && afterCosts[0].amount === 779
+          && publishedHeads.length === 1 && String(publishedHeads[0]._id) === String(requestId)
+          && publishedHeads[0].active === true && !publishedHeads[0].staged_by_approval
+          && publishedCosts.length === 1 && String(publishedCosts[0]._id) === String(requestId)
+          && String(publishedCosts[0].approval_request) === String(requestId)
+          && publishedCosts[0].amount === 779 && publishedCosts[0].reservation_state === "Applied",
+        JSON.stringify({ approval: approved.status, head: afterHead && { id: afterHead._id, active: afterHead.active }, costs: afterCosts.map((c) => ({ id: c._id, amount: c.amount })),
+          rawHeads: publishedHeads.map((c) => ({ id: c._id, active: c.active, owner: c.staged_by_approval })), rawCosts: publishedCosts.map((c) => ({ id: c._id, amount: c.amount, state: c.reservation_state })) }));
     } else {
       ok("staged head [precondition]: a valid unknown-head request parked", false, `got ${parked.status}`);
     }
