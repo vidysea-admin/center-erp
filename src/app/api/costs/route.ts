@@ -136,7 +136,7 @@ async function replayCostPost(user: Awaited<ReturnType<typeof requireUser>>, pri
   for (const stored of prior.status === 202 ? [raw, payload] : [raw]) {
     for (const dimension of ["location", "batch", "trainer"] as const) {
       const value = stored[dimension];
-      if (value === undefined || value === null) continue;
+      if (value === undefined || value === null || value === "") continue;
       const id = String(value?._id ?? value);
       if (!/^[a-f0-9]{24}$/i.test(id)) {
         throw new HttpError(403, "The stored cost submission cannot be authorized.");

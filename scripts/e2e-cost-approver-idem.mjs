@@ -228,6 +228,31 @@ let parkedA = null; // the request approved later, for the R5 join arm
   // Location session and the real user PATCH so the same live cookie observes revocation now.
   const scopedPoster = await mkUser(`Replay scope ${stamp}`, `zz.a3.replay.${stamp}@vidysea-test.local`, "Location", ["costs.manage"], [String(ownLoc._id)]);
   ok("R7 replay scope [precondition]: dedicated editable Location poster exists", !!scopedPoster.id && !!scopedPoster.cookie);
+  const batchOnly = await db.collection("batches").findOne({ location: new ObjectId(String(ownLoc._id)), archived_at: null,
+    deletion_state: { $exists: false }, status: { $nin: ["Completed", "Closed", "Cancelled"] } });
+  const trainerOnly = await db.collection("trainers").findOne({ archived_at: null, $or: [
+    { nominated_for_location: new ObjectId(String(ownLoc._id)) }, { home_location: new ObjectId(String(ownLoc._id)) },
+    { capable_locations: new ObjectId(String(ownLoc._id)) },
+  ] });
+  ok("R7 empty-reference [precondition]: a live own-centre batch and scoped trainer exist", !!batchOnly && !!trainerOnly);
+  for (const queued of [false, true]) {
+    await rule(queued);
+    for (const [dimension, association] of [["batch", batchOnly], ["trainer", trainerOnly]]) {
+      const emptyKey = `k-empty-${dimension}-${queued}-${stamp}`, note = `empty-${dimension}-${queued}`;
+      const submitted = entry(note, { location: "", batch: "", trainer: "", [dimension]: String(association?._id ?? "") });
+      const original = await req(scopedPoster.cookie, "POST", "/api/costs", submitted, { "Idempotency-Key": emptyKey });
+      const expectedStatus = queued ? 202 : 201;
+      ok(`R7 empty-reference ${dimension} ${queued ? "queued" : "direct"}: actual first POST accepts explicit empty unused references`,
+        original.status === expectedStatus && !!original.data?.item?._id, `got ${original.status}`);
+      const collections = [rawCosts, rawApprovals, db.collection("auditlogs"), db.collection("costcategories"), db.collection("batches")];
+      const before = await Promise.all(collections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+      const replay = await req(scopedPoster.cookie, "POST", "/api/costs", submitted, { "Idempotency-Key": emptyKey });
+      const after = await Promise.all(collections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+      ok(`R7 empty-reference ${dimension} ${queued ? "queued" : "direct"}: replay returns first ID/status/header without effects`,
+        replay.status === expectedStatus && String(replay.data?.item?._id) === String(original.data?.item?._id)
+          && replay.headers.get("Idempotent-Replay") === "true" && JSON.stringify(after) === JSON.stringify(before), `got ${replay.status}`);
+    }
+  }
   await rule(false);
   const directKey = `k-revoke-direct-${stamp}`, queuedKey = `k-revoke-queued-${stamp}`;
   const directFirst = await req(scopedPoster.cookie, "POST", "/api/costs", entry("revoke-direct"), { "Idempotency-Key": directKey });
@@ -308,6 +333,7 @@ let parkedA = null; // the request approved later, for the R5 join arm
       ["queued payload foreign", rawApprovals, queuedId, queuedKey, originals[1], { "payload.location": String(foreignLoc._id) }, {}],
       ["queued metadata foreign", rawApprovals, queuedId, queuedKey, originals[1], { location: new ObjectId(String(foreignLoc._id)) }, {}],
       ["queued malformed trainer", rawApprovals, queuedId, queuedKey, originals[1], { "payload.trainer": "not-an-id" }, {}],
+      ["queued whitespace trainer", rawApprovals, queuedId, queuedKey, originals[1], { "payload.trainer": " " }, {}],
       ["queued actor", rawApprovals, queuedId, queuedKey, originals[1], { initiator: adminRow._id }, {}],
     ]) {
       try {
