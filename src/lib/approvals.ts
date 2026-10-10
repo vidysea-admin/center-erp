@@ -955,7 +955,10 @@ export async function rollbackApprovalDecision(request: ClaimedApproval) {
   const rolledBack = await ApprovalRequest.findOneAndUpdate(
     {
       _id: request._id,
-      status: { $in: ["Applying", "Approved"] },
+      // A cap's durable policy receipt is forward-only. Its cancellation fence is owned by the
+      // caller, and even a late recovery of that claim must never reopen a finalized decision.
+      status: request.action === "costcategory.create" && (request as any).payload?.kind === "cap-approval"
+        ? "Applying" : { $in: ["Applying", "Approved"] },
       decided_by: request.decided_by,
       decided_at: request.decided_at,
     },

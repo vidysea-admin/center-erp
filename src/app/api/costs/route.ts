@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
-import { requirePerm, requireFinance } from "@/lib/permissions";
+import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
+import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, expandCostCategoryFilter, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, requireHeadApproval, settleFinanceAuditEvents } from "@/lib/approvals";
@@ -88,7 +88,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requirePerm(user, "costs.manage");
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
-  await flushPendingFinanceAuditEvents().catch(() => {});
   const body = await readJson(req);
   // mtg-a3 R7: the key travels in the `Idempotency-Key` header (or, equivalently, `idempotency_key`
   // in the body) and is taken OUT of the body at once - it is plumbing, so it must never reach the
@@ -96,28 +95,75 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // and index entry is per user.
   const idemKey = scopedIdempotencyKey(user.id, req.headers.get("idempotency-key") ?? body.idempotency_key);
   delete body.idempotency_key;
-  if (!idemKey) return postCostEntry(user, body, null);
-  await Promise.all([CostEntry.init(), ApprovalRequest.init()]); // the unique indexes must exist before the race is decided by them
-  // A repeat of a POST that already finished returns that first result, same status, creates nothing.
-  const first = await findPriorCostPost(idemKey);
-  if (first) return replayCostPost(first.status === "in-flight" ? await awaitPriorCostPost(idemKey) : first);
-  try {
-    return await postCostEntry(user, body, idemKey);
-  } catch (error) {
-    // Same key, same instant: the unique index let one POST in. This one replays that winner.
-    if (isIdempotencyKeyCollision(error)) return replayCostPost(await awaitPriorCostPost(idemKey));
-    throw error;
+  let response: NextResponse;
+  if (!idemKey) {
+    response = await postCostEntry(user, body, null);
+  } else {
+    await Promise.all([CostEntry.init(), ApprovalRequest.init()]); // the unique indexes must exist before the race is decided by them
+    // Stored results need current authority just as a first post does. The retry body grants none.
+    const first = await findPriorCostPost(idemKey);
+    if (first) {
+      response = await replayCostPost(user, first.status === "in-flight" ? await awaitPriorCostPost(idemKey) : first);
+    } else {
+      try {
+        response = await postCostEntry(user, body, idemKey);
+      } catch (error) {
+        // Same key, same instant: the unique index let one POST in. Authorize that winner too.
+        if (!isIdempotencyKeyCollision(error)) throw error;
+        response = await replayCostPost(user, await awaitPriorCostPost(idemKey));
+      }
+    }
   }
+  // Resolve authorization and the successful response first. A denied replay must leave unrelated
+  // audit outboxes and settled deletion tombstones untouched; ordinary successful posts still drain.
+  await flushPendingFinanceAuditEvents().catch(() => {});
+  return response;
 });
 
-function replayCostPost(prior: SettledCostPost) {
+async function replayCostPost(user: Awaited<ReturnType<typeof requireUser>>, prior: SettledCostPost) {
+  const raw = typeof prior.item?.toObject === "function" ? prior.item.toObject() : prior.item;
+  const actor = prior.status === 202 ? raw?.initiator : raw?.entered_by;
+  if (!raw || String(actor?._id ?? actor ?? "") !== String(user.id)) {
+    throw new HttpError(403, "This cost submission is not yours.");
+  }
+  const payload = prior.status === 202 ? raw.payload : null;
+  if (prior.status === 202 && (!payload || typeof payload !== "object" || Array.isArray(payload))) {
+    throw new HttpError(403, "The stored cost submission cannot be authorized.");
+  }
+  let scopedDimension = false;
+  // Check every stored association, including both queue metadata and its replay payload. Never
+  // let a valid payload association cover a foreign top-level one, or vice versa.
+  for (const stored of prior.status === 202 ? [raw, payload] : [raw]) {
+    for (const dimension of ["location", "batch", "trainer"] as const) {
+      const value = stored[dimension];
+      if (value === undefined || value === null) continue;
+      const id = String(value?._id ?? value);
+      if (!/^[a-f0-9]{24}$/i.test(id)) {
+        throw new HttpError(403, "The stored cost submission cannot be authorized.");
+      }
+      scopedDimension = true;
+      if (dimension === "location") assertLocationInScope(user, id);
+      else if (dimension === "batch") await assertBatchInScope(user, id);
+      else await assertTrainerInScope(user, id);
+    }
+  }
+  if (isScoped(user) && !scopedDimension) {
+    throw new HttpError(403, "The stored cost submission has no authorized location, batch or trainer.");
+  }
   const headers = { "Idempotent-Replay": "true" };
   if (prior.status === 202) {
+    const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+    const item: any = maskApprovalMoney(raw, canSeeMoney);
+    if (!canSeeMoney) {
+      delete item.decision_note;
+      // Match the own-request policy: only the raiser's original requested amount is theirs to see.
+      if (payload.amount !== undefined) item.payload = { ...(item.payload ?? {}), amount: payload.amount };
+    }
     // pre_approval (the sentence explaining why it parked) is not stored on the request and is not
     // reconstructed here: the request, its summary and its status are the first result.
-    return NextResponse.json({ queued: true, item: prior.item, pre_approval: null }, { status: 202, headers });
+    return NextResponse.json({ queued: true, item, pre_approval: null }, { status: 202, headers });
   }
-  return NextResponse.json({ item: prior.item }, { status: 201, headers });
+  return NextResponse.json({ item: raw }, { status: 201, headers });
 }
 
 async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body: Record<string, any>, idemKey: string | null) {

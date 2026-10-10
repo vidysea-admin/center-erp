@@ -406,6 +406,124 @@ try {
   const basisChange = await capPatch({ pre_approved_unit: "Per billable passed", pre_approved_min_billable: 5, pre_approved_basis: "changed formula basis" });
   ok("CAP unit/basis change is proposed without replacing effective unit", basisChange.status === 200 && !!basisChange.data?.pending_cap_approval && (await capDoc()).pre_approved_unit === "Fixed amount");
   await capDecide(basisChange, "Rejected");
+  // QA-2905: raw CI markers establish each ordering; elapsed sleeps never establish a winner.
+  if (!/^center_erp_ci(?:_|$)/.test(db.databaseName)) throw new Error("CAP recovery controls require an isolated center_erp_ci database");
+  const capPolicy = (d) => JSON.stringify(Object.fromEntries([
+    "pre_approved", "pre_approved_amount", "pre_approved_unit", "pre_approved_basis", "pre_approved_min_billable", "pre_approval_revision",
+  ].map((k) => [k, d[k] ?? null])));
+  const capClaim = (d) => JSON.stringify([d.status, String(d.decided_by ?? ""), d.decided_at, d.decision_note ?? null, d._audit_events ?? [], d._audit_delivered_event_ids ?? []]);
+  const capRequest = (r) => new ObjectId(r.data.pending_cap_approval.request_id);
+  const capMark = (rid, values) => rawApprovals.updateOne({ _id: rid }, { $set: Object.fromEntries(Object.entries(values).map(([k, v]) => [`payload._test_cap_${k}`, v])) });
+  const capReached = async (rid, stage) => {
+    for (let attempt = 0; attempt < 160; attempt++) {
+      const d = await rawApprovals.findOne({ _id: rid });
+      if (d?.payload?.[`_test_cap_reached_${stage}`] === true) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
+  };
+  const capAudits = (rid) => db.collection("auditlogs").find({ entity: "ApprovalRequest", entity_id: rid, field: "status" }).toArray();
+  const approvedCapState = async (rid, before, target) => {
+    const d = await capDoc(), a = await rawApprovals.findOne({ _id: rid }), events = await capAudits(rid);
+    const expected = { ...before, ...a.payload.proposed, pre_approval_revision: Number(before.pre_approval_revision ?? 0) + 1 };
+    return a.status === "Approved" && String(a.decided_by) === approverB.id
+      && a.decided_at instanceof Date && capPolicy(d) === capPolicy(expected) && d.pre_approved_amount === target
+      && !d.pre_approval_proposal && String(d.pre_approval_applied_request) === String(rid)
+      && events.length === 1 && events[0].new_value === "Approved" && String(events[0].actor) === approverB.id
+      && (a._audit_events ?? []).length === 1 && (a._audit_delivered_event_ids ?? []).length === 1
+      && String(events[0]._id) === a._audit_events[0].event_id;
+  };
+  const cancelledCapState = async (rid, before) => {
+    const d = await capDoc(), a = await rawApprovals.findOne({ _id: rid });
+    return capPolicy(d) === capPolicy(before) && !d.pre_approval_proposal
+      && String(d.pre_approval_applied_request ?? "") === String(before.pre_approval_applied_request ?? "")
+      && a.status === "Pending" && !a.decided_by && !a.decided_at && !(a._audit_events ?? []).length
+      && !(a._audit_delivered_event_ids ?? []).length && (await capAudits(rid)).length === 0;
+  };
+  // Apply wins its CAS, but is held before finalization. A failing resumed worker must stay forward.
+  {
+    const before = await capDoc(), target = before.pre_approved_amount + 1000;
+    const r = await capPatch({ pre_approved_amount: target }), rid = capRequest(r);
+    await capMark(rid, { pause_after_apply: true });
+    const winner = capDecide(r);
+    const reached = await capReached(rid, "after_apply"), claim = await rawApprovals.findOne({ _id: rid });
+    ok("CAP recovery apply winner reaches barrier with one revision/receipt and Applying claim",
+      reached && claim.status === "Applying" && (await capDoc()).pre_approval_revision === Number(before.pre_approval_revision ?? 0) + 1
+        && String((await capDoc()).pre_approval_applied_request) === String(rid) && (await capAudits(rid)).length === 0);
+    await capMark(rid, { pause_after_apply: false, fail_before_apply: true });
+    const loser = await capDecide(r), still = await rawApprovals.findOne({ _id: rid });
+    ok("CAP recovery apply winner: loser cannot reopen or discard the Applying claim/outbox",
+      loser.status === 409 && capClaim(still) === capClaim(claim) && (await capAudits(rid)).length === 0);
+    await capMark(rid, { fail_before_apply: false, release_after_apply: true });
+    const finished = await winner;
+    ok("CAP recovery apply winner finalizes once with exact raw policy, revision and audit", finished.status === 200 && await approvedCapState(rid, before, target));
+    const cost = await post(ops, row(H1, "cap-recovery-applied", { amount: target - 1 }));
+    ok("CAP recovery applied cap is effective for a cost above the previous cap", cost.status === 201
+      && await rawCosts.countDocuments({ note: TAG("cap-recovery-applied"), pre_approved_applied: true }) === 1);
+  }
+  // Recovery reads no receipt, then another worker applies AND finalizes before its fence runs.
+  {
+    const before = await capDoc(), target = before.pre_approved_amount + 1000;
+    const r = await capPatch({ pre_approved_amount: target }), rid = capRequest(r);
+    await capMark(rid, { fail_before_apply: true, pause_before_fence: true });
+    const loser = capDecide(r);
+    const reached = await capReached(rid, "before_fence");
+    ok("CAP receipt-before-fence control reaches recovery after a no-receipt read", reached
+      && capPolicy(await capDoc()) === capPolicy(before) && (await rawApprovals.findOne({ _id: rid })).status === "Applying");
+    await capMark(rid, { fail_before_apply: false, pause_before_fence: false });
+    const winner = await capDecide(r), finalized = await rawApprovals.findOne({ _id: rid });
+    await capMark(rid, { release_before_fence: true });
+    const late = await loser;
+    ok("CAP receipt-before-fence: applied receipt beats cancellation and late Approved recovery",
+      winner.status === 200 && late.status === 409 && capClaim(await rawApprovals.findOne({ _id: rid })) === capClaim(finalized)
+        && await approvedCapState(rid, before, target));
+    const refusedReject = await capDecide(r, "Rejected");
+    ok("CAP finalized approval cannot be contradicted by a late rejection", refusedReject.status === 409 && await approvedCapState(rid, before, target));
+  }
+  // A held policy writer loses when cancellation removes its category owner first.
+  {
+    const before = await capDoc(), target = before.pre_approved_amount + 1000;
+    const r = await capPatch({ pre_approved_amount: target }), rid = capRequest(r);
+    await capMark(rid, { pause_before_apply: true });
+    const held = capDecide(r);
+    const reached = await capReached(rid, "before_apply");
+    ok("CAP cancellation control reaches held apply before any policy write", reached && capPolicy(await capDoc()) === capPolicy(before));
+    await capMark(rid, { pause_before_apply: false, fail_before_apply: true });
+    const cancellation = await capDecide(r);
+    ok("CAP cancellation winner reopens only after owner removal, with zero policy/audit effect",
+      cancellation.status === 409 && await cancelledCapState(rid, before));
+    await capMark(rid, { fail_before_apply: false, release_before_apply: true });
+    const staleWriter = await held;
+    ok("CAP held apply cannot pass the cancelled proposal fence", [409, 500].includes(staleWriter.status) && await cancelledCapState(rid, before));
+    const cannotReapply = await capDecide(r);
+    const reject = await capDecide(r, "Rejected"), final = await rawApprovals.findOne({ _id: rid }), events = await capAudits(rid);
+    ok("CAP fenced Pending proposal refuses reapply but remains rejectable", cannotReapply.status === 409 && reject.status === 200
+      && final.status === "Rejected" && capPolicy(await capDoc()) === capPolicy(before) && !(await capDoc()).pre_approval_proposal
+      && events.length === 1 && events[0].new_value === "Rejected" && String(events[0].actor) === approverB.id);
+    const cost = await post(ops, row(H1, "cap-recovery-cancelled", { amount: target - 1 }));
+    ok("CAP cancelled cap stays ineffective for a cost above the preserved cap", cost.status === 202
+      && await rawCosts.countDocuments({ note: TAG("cap-recovery-cancelled") }) === 0);
+  }
+  // Interruption after owner removal must retain Applying; a retry can finish safe cancellation.
+  {
+    const before = await capDoc(), target = before.pre_approved_amount + 1000;
+    const r = await capPatch({ pre_approved_amount: target }), rid = capRequest(r);
+    await capMark(rid, { fail_before_apply: true, pause_after_fence: true, fail_after_fence: true });
+    const interrupted = capDecide(r);
+    const reached = await capReached(rid, "after_fence"), heldClaim = await rawApprovals.findOne({ _id: rid });
+    ok("CAP interruption reaches after-fence barrier with owner removed and original policy", reached && heldClaim.status === "Applying"
+      && capPolicy(await capDoc()) === capPolicy(before) && !(await capDoc()).pre_approval_proposal && (await capAudits(rid)).length === 0);
+    await capMark(rid, { release_after_fence: true });
+    const failed = await interrupted;
+    ok("CAP interruption after fence preserves exact Applying claim/outbox", failed.status === 409
+      && capClaim(await rawApprovals.findOne({ _id: rid })) === capClaim(heldClaim));
+    await capMark(rid, { fail_before_apply: false, pause_after_fence: false, fail_after_fence: false });
+    const retried = await capDecide(r);
+    ok("CAP Applying ownership mismatch reaches recovery and safely returns fenced Pending", retried.status === 409 && await cancelledCapState(rid, before));
+    const rejected = await capDecide(r, "Rejected");
+    ok("CAP interrupted cancellation remains rejectable with preserved cap", rejected.status === 200
+      && (await rawApprovals.findOne({ _id: rid })).status === "Rejected" && capPolicy(await capDoc()) === capPolicy(before));
+  }
   // Every guarded branch must leave neither a posted ledger row nor a Formula reservation.
   for (const enabledRule of [false, true]) {
     await rule(enabledRule);

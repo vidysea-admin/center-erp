@@ -223,6 +223,146 @@ let parkedA = null; // the request approved later, for the R5 join arm
       && (await rawCosts.countDocuments({ note: `${TAG}-park` })) === 1,
     `got ${after.status}; costs=${await rawCosts.countDocuments({ note: `${TAG}-park` })}`);
   parkedA = { requestId: first.data.item._id };
+
+  // Current authority belongs to the stored submission, never the retry body. Use a dedicated
+  // Location session and the real user PATCH so the same live cookie observes revocation now.
+  const scopedPoster = await mkUser(`Replay scope ${stamp}`, `zz.a3.replay.${stamp}@vidysea-test.local`, "Location", ["costs.manage"], [String(ownLoc._id)]);
+  ok("R7 replay scope [precondition]: dedicated editable Location poster exists", !!scopedPoster.id && !!scopedPoster.cookie);
+  await rule(false);
+  const directKey = `k-revoke-direct-${stamp}`, queuedKey = `k-revoke-queued-${stamp}`;
+  const directFirst = await req(scopedPoster.cookie, "POST", "/api/costs", entry("revoke-direct"), { "Idempotency-Key": directKey });
+  await rule(true);
+  const queuedFirst = await req(scopedPoster.cookie, "POST", "/api/costs", entry("revoke-queued", { amount: 846 }), { "Idempotency-Key": queuedKey });
+  ok("R7 replay scope [precondition]: direct and queued originals were accepted at the original centre",
+    directFirst.status === 201 && queuedFirst.status === 202 && !!directFirst.data?.item?._id && !!queuedFirst.data?.item?._id,
+    `direct=${directFirst.status} queued=${queuedFirst.status}`);
+  const scopeRevoked = await req(admin, "PATCH", `/api/users/${scopedPoster.id}`, { location_scope: [String(foreignLoc._id)] });
+  ok("R7 replay scope [precondition]: real user API revoked the original centre and retained another centre", scopeRevoked.status === 200
+    && JSON.stringify(scopeRevoked.data?.item?.location_scope) === JSON.stringify([String(foreignLoc._id)]));
+
+  const rawAudits = db.collection("auditlogs");
+  const directId = new ObjectId(String(directFirst.data.item._id)), queuedId = new ObjectId(String(queuedFirst.data.item._id));
+  const costEventId = new ObjectId(), requestEventId = new ObjectId(), tombstoneEventId = new ObjectId(), tombstoneId = new ObjectId();
+  const ownedAuditIds = [costEventId, requestEventId, tombstoneEventId];
+  const now = new Date();
+  const costEvent = { event_id: String(costEventId), entity: "CostEntry", entity_id: directId, field: "created", new_value: { amount: 321 }, actor: new ObjectId(String(scopedPoster.id)), actor_type: "USER" };
+  const requestEvent = { event_id: String(requestEventId), entity: "ApprovalRequest", entity_id: queuedId, field: "status", old_value: "Applying", new_value: "Approved", actor: new ObjectId(String(approverB.id)), actor_type: "USER" };
+  const tombstoneEvent = { event_id: String(tombstoneEventId), entity: "CostEntry", entity_id: tombstoneId, field: "deleted", old_value: { amount: 17 }, new_value: { deleted: true }, actor: new ObjectId(String(scopedPoster.id)), actor_type: "USER" };
+  // The approved raw request is a drain owner only; the real partial-decision acceptance below
+  // has its own fresh request and goes through the actual approver endpoint.
+  await rawCosts.updateOne({ _id: directId }, { $push: { _audit_events: costEvent } });
+  await rawApprovals.updateOne({ _id: queuedId }, { $set: { status: "Approved" }, $push: { _audit_events: requestEvent } });
+  const tombstone = { ...(await rawCosts.findOne({ _id: directId })), _id: tombstoneId, note: `${TAG}-replay-tombstone`, amount: 17,
+    deletion_state: "Pending", deletion_audit_event_id: String(tombstoneEventId), _audit_events: [tombstoneEvent], _audit_delivered_event_ids: [String(tombstoneEventId)] };
+  delete tombstone.idempotency_key;
+  delete tombstone.approval_request;
+  try {
+    await rawCosts.insertOne(tombstone);
+    const { event_id, ...durableTombstoneEvent } = tombstoneEvent;
+    await rawAudits.insertOne({ _id: tombstoneEventId, ...durableTombstoneEvent, created_at: now });
+    const protectedCollections = [rawCosts, rawApprovals, rawAudits, db.collection("costcategories"), db.collection("batches")];
+    const before = await Promise.all(protectedCollections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+    const pendingCost = before[0].find((row) => String(row._id) === String(directId));
+    const pendingRequest = before[1].find((row) => String(row._id) === String(queuedId));
+    const settledTombstone = before[0].find((row) => String(row._id) === String(tombstoneId));
+    ok("R7 denied replay [precondition]: real undelivered cost/request audits and an acknowledged settled tombstone are drain-eligible",
+      pendingCost?.reservation_state === "Applied" && pendingCost._audit_events.some((event) => event.event_id === String(costEventId))
+        && !pendingCost._audit_delivered_event_ids?.includes(String(costEventId))
+        && pendingRequest?.status === "Approved" && pendingRequest._audit_events.some((event) => event.event_id === String(requestEventId))
+        && !pendingRequest._audit_delivered_event_ids?.includes(String(requestEventId))
+        && settledTombstone?.deletion_state === "Pending" && settledTombstone._audit_delivered_event_ids?.includes(String(tombstoneEventId))
+        && !before[2].some((row) => [String(costEventId), String(requestEventId)].includes(String(row._id)))
+        && before[2].some((row) => String(row._id) === String(tombstoneEventId)));
+    const beforeBytes = before.map((rows) => JSON.stringify(rows));
+    for (const [kind, key] of [["direct", directKey], ["queued", queuedKey]]) {
+      const denied = await req(scopedPoster.cookie, "POST", "/api/costs", entry(`revoke-${kind}`, { location: foreignLoc._id }), { "Idempotency-Key": key });
+      ok(`R7 current scope: ${kind} replay is exactly 403 despite a currently permitted retry body`, denied.status === 403, `got ${denied.status}`);
+      const after = await Promise.all(protectedCollections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+      const changed = after.map((rows, i) => JSON.stringify(rows) !== beforeBytes[i] ? protectedCollections[i].collectionName : null).filter(Boolean);
+      ok(`R7 denied replay: ${kind} leaves raw costs, approvals, audits, outboxes, tombstone, categories and batches unchanged`, changed.length === 0, `changed=${changed.join(",")}`);
+    }
+    const restored = await req(admin, "PATCH", `/api/users/${scopedPoster.id}`, { location_scope: [String(ownLoc._id)] });
+    ok("R7 replay scope [precondition]: original centre restored through the real user API", restored.status === 200);
+    for (const [kind, key, original, status] of [["direct", directKey, directFirst, 201], ["queued", queuedKey, queuedFirst, 202]]) {
+      const restoredReplay = await req(scopedPoster.cookie, "POST", "/api/costs", entry(`revoke-${kind}`, { location: foreignLoc._id, amount: 999 }), { "Idempotency-Key": key });
+      ok(`R7 restored scope: ${kind} returns original ID/status/header and original requested amount despite foreign retry body`, restoredReplay.status === status
+        && String(restoredReplay.data?.item?._id) === String(original.data.item._id)
+        && restoredReplay.headers.get("Idempotent-Replay") === "true"
+        && (status === 201 ? restoredReplay.data.item.amount === 321 : restoredReplay.data.item.payload?.amount === 846));
+    }
+    const drainedCost = await rawCosts.findOne({ _id: directId }), drainedRequest = await rawApprovals.findOne({ _id: queuedId });
+    ok("R7 authorized replay positive: both pending audit events deliver exactly once and the settled tombstone is collected",
+      drainedCost?._audit_delivered_event_ids?.includes(String(costEventId)) && drainedRequest?._audit_delivered_event_ids?.includes(String(requestEventId))
+        && await rawAudits.countDocuments({ _id: { $in: [costEventId, requestEventId] } }) === 2 && !await rawCosts.findOne({ _id: tombstoneId }));
+    ok("R7 restored scope: replay created no extra direct cost or queued request", await rawCosts.countDocuments({ note: `${TAG}-revoke-direct` }) === 1
+      && await rawApprovals.countDocuments({ idempotency_key: `${scopedPoster.id}:${queuedKey}` }) === 1
+      && await rawCosts.countDocuments({ note: `${TAG}-revoke-queued` }) === 0);
+
+    // Fail closed on stored malformed/missing/foreign dimensions and inconsistent owners, even
+    // though this caller and this retry body are legitimate. Restore exact owning raw rows first.
+    const originals = [await rawCosts.findOne({ _id: directId }), await rawApprovals.findOne({ _id: queuedId })];
+    for (const [kind, collection, id, key, original, changes, removes] of [
+      ["direct malformed", rawCosts, directId, directKey, originals[0], { location: "not-an-id" }, {}],
+      ["direct missing scope", rawCosts, directId, directKey, originals[0], {}, { location: "", batch: "", trainer: "" }],
+      ["direct actor", rawCosts, directId, directKey, originals[0], { entered_by: adminRow._id }, {}],
+      ["queued payload foreign", rawApprovals, queuedId, queuedKey, originals[1], { "payload.location": String(foreignLoc._id) }, {}],
+      ["queued metadata foreign", rawApprovals, queuedId, queuedKey, originals[1], { location: new ObjectId(String(foreignLoc._id)) }, {}],
+      ["queued malformed trainer", rawApprovals, queuedId, queuedKey, originals[1], { "payload.trainer": "not-an-id" }, {}],
+      ["queued actor", rawApprovals, queuedId, queuedKey, originals[1], { initiator: adminRow._id }, {}],
+    ]) {
+      try {
+        await collection.updateOne({ _id: id }, { ...(Object.keys(changes).length ? { $set: changes } : {}), ...(Object.keys(removes).length ? { $unset: removes } : {}) });
+        const state = await Promise.all(protectedCollections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+        const response = await req(scopedPoster.cookie, "POST", "/api/costs", entry("malformed-retry"), { "Idempotency-Key": key });
+        const after = await Promise.all(protectedCollections.map((collection) => collection.find({}).sort({ _id: 1 }).toArray()));
+        ok(`R7 stored authority: ${kind} refuses exactly 403 without effects`, response.status === 403 && JSON.stringify(after) === JSON.stringify(state), `got ${response.status}`);
+      } finally { await collection.replaceOne({ _id: id }, original); }
+    }
+    await rule(false);
+    for (const keyed of [true, false]) {
+      const ordinaryEventId = new ObjectId();
+      ownedAuditIds.push(ordinaryEventId);
+      await rawCosts.updateOne({ _id: directId }, { $push: { _audit_events: { ...costEvent, event_id: String(ordinaryEventId) } } });
+      await rawCosts.insertOne(tombstone);
+      const seededOwner = await rawCosts.findOne({ _id: directId });
+      ok(`R7 ordinary ${keyed ? "keyed" : "keyless"} drain [precondition]: pending audit and settled tombstone exist`,
+        seededOwner._audit_events.some((event) => event.event_id === String(ordinaryEventId))
+          && !seededOwner._audit_delivered_event_ids?.includes(String(ordinaryEventId)) && !!await rawCosts.findOne({ _id: tombstoneId })
+          && await rawAudits.countDocuments({ _id: ordinaryEventId }) === 0);
+      const posted = await req(scopedPoster.cookie, "POST", "/api/costs", entry(`ordinary-drain-${keyed}`), keyed ? { "Idempotency-Key": `k-ordinary-drain-${stamp}` } : {});
+      const owner = await rawCosts.findOne({ _id: directId });
+      ok(`R7 ordinary ${keyed ? "keyed" : "keyless"} success still drains pre-existing audit work and collects settled tombstones`, posted.status === 201
+        && owner._audit_delivered_event_ids?.includes(String(ordinaryEventId)) && await rawAudits.countDocuments({ _id: ordinaryEventId }) === 1
+        && !await rawCosts.findOne({ _id: tombstoneId }) && await rawCosts.countDocuments({ note: `${TAG}-ordinary-drain-${keyed}` }) === 1);
+    }
+  } finally {
+    await rawCosts.deleteOne({ _id: tombstoneId });
+    await rawAudits.deleteMany({ _id: { $in: ownedAuditIds } });
+  }
+
+  await rule(true);
+  const moneyKey = `k-replay-money-${stamp}`, decisionNote = "Partial sanction; unrelated vendor total 919191";
+  const moneyFirst = await req(scopedPoster.cookie, "POST", "/api/costs", entry("replay-money", { amount: 846 }), { "Idempotency-Key": moneyKey });
+  const moneyDecision = await req(approverB.cookie, "POST", `/api/approvals/${moneyFirst.data?.item?._id}`, { decision: "Approved", approved_amount: 423, note: decisionNote });
+  const moneyStored = await rawApprovals.findOne({ _id: new ObjectId(String(moneyFirst.data.item._id)) });
+  ok("R7 replay money [precondition]: a real partial approval stored both sanctioned amount and unrelated-money decision prose",
+    moneyFirst.status === 202 && moneyDecision.status === 200 && moneyStored?.approved_amount === 423 && moneyStored.decision_note === decisionNote,
+    `post=${moneyFirst.status} decision=${moneyDecision.status}`);
+  const moneyReplay = await req(scopedPoster.cookie, "POST", "/api/costs", entry("replay-money", { amount: 999 }), { "Idempotency-Key": moneyKey });
+  ok("R7 replay money: nonfinance creator sees only original requested amount, no sanctioned amount or decision note",
+    moneyReplay.status === 202 && String(moneyReplay.data?.item?._id) === String(moneyFirst.data.item._id)
+      && moneyReplay.headers.get("Idempotent-Replay") === "true" && moneyReplay.data.item.payload?.amount === 846
+      && !Object.hasOwn(moneyReplay.data.item, "approved_amount") && !Object.hasOwn(moneyReplay.data.item, "decision_note")
+      && !JSON.stringify(moneyReplay.data).includes("919191"));
+  const financeGrant = await req(admin, "PATCH", `/api/users/${scopedPoster.id}`, { extra_permissions: ["costs.manage", "finance.view"] });
+  const financeReplay = await req(scopedPoster.cookie, "POST", "/api/costs", entry("replay-money"), { "Idempotency-Key": moneyKey });
+  ok("R7 replay money positive: current finance grant reveals the original decision facts on the same request",
+    financeGrant.status === 200 && financeReplay.status === 202 && String(financeReplay.data?.item?._id) === String(moneyFirst.data.item._id)
+      && financeReplay.data.item.payload?.amount === 846 && financeReplay.data.item.approved_amount === 423 && financeReplay.data.item.decision_note === decisionNote);
+  ok("R7 replay money: both visibility modes leave exactly one approval and its one partially sanctioned liability",
+    await rawApprovals.countDocuments({ idempotency_key: `${scopedPoster.id}:${moneyKey}` }) === 1
+      && await rawCosts.countDocuments({ note: `${TAG}-replay-money`, amount: 423 }) === 1);
+  await req(admin, "PATCH", `/api/users/${scopedPoster.id}`, { active: false });
 }
 
 // ======================================================= R7 - formula reservation frees the key

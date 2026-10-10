@@ -153,7 +153,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     for (const [k, v] of Object.entries(proposal.expected)) capFilter[k] = k === "pre_approved" && !v ? { $ne: true } : v;
     const current = await CostCategory.collection.findOne({ _id: capFilter._id });
     const alreadyApplied = String(current?.pre_approval_applied_request ?? "") === String(id);
-    if (!alreadyApplied && !(await CostCategory.collection.findOne(capFilter))) {
+    if (!resuming && !alreadyApplied && !(await CostCategory.collection.findOne(capFilter))) {
       throw new HttpError(409, "The effective policy changed or this proposal lost ownership. Its old snapshot cannot replace the current policy; reject it and request it again.");
     }
   }
@@ -226,6 +226,10 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // head has been conditionally removed.
   let stagedCategory: { id: Types.ObjectId; name: string; costId: Types.ObjectId; published: boolean } | null = null;
   let appliedCostId: Types.ObjectId | null = null;
+  // Raw fixture markers are bounded and usable only by an isolated CI database on loopback.
+  // No request-body marker can enable them or select a different production behavior.
+  const capTest = capOnly && /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+    && ["localhost", "127.0.0.1", "[::1]"].includes(req.nextUrl.hostname);
   try {
     switch (request.action) {
     case "location.close":
@@ -289,6 +293,17 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
     case "costcategory.create": {
       if (capOnly) {
+        if (capTest && p._test_cap_pause_before_apply === true) {
+          await ApprovalRequest.collection.updateOne({ _id: request._id }, { $set: { "payload._test_cap_reached_before_apply": true } });
+          let released = false;
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const marker = await ApprovalRequest.collection.findOne({ _id: request._id }, { projection: { "payload._test_cap_release_before_apply": 1 } });
+            if (marker?.payload?._test_cap_release_before_apply === true) { released = true; break; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          if (!released) throw new HttpError(409, "CI cap before-apply barrier timed out.");
+        }
+        if (capTest && p._test_cap_fail_before_apply === true) throw new HttpError(409, "CI cap apply interrupted before policy write.");
         const current = await CostCategory.collection.findOne({ _id: capFilter._id });
         if (String(current?.pre_approval_applied_request ?? "") !== String(request._id)) {
           const changed = await CostCategory.collection.updateOne(capFilter, {
@@ -297,6 +312,16 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
           if (changed.modifiedCount !== 1) throw new HttpError(409, "The policy changed while this proposal was applying; no stale policy was written.");
         }
         effectApplied = true;
+        if (capTest && p._test_cap_pause_after_apply === true) {
+          await ApprovalRequest.collection.updateOne({ _id: request._id }, { $set: { "payload._test_cap_reached_after_apply": true } });
+          let released = false;
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const marker = await ApprovalRequest.collection.findOne({ _id: request._id }, { projection: { "payload._test_cap_release_after_apply": 1 } });
+            if (marker?.payload?._test_cap_release_after_apply === true) { released = true; break; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          if (!released) throw new HttpError(409, "CI cap after-apply barrier timed out.");
+        }
         break;
       }
       if (headOnly) {
@@ -524,6 +549,45 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       throw new HttpError(400, "Approved request has no replay handler: " + request.action);
     }
   } catch (error) {
+    if (capOnly) {
+      // The policy category is payload.category, never the request's deterministic cost/head id.
+      // Reading a receipt cannot stop another apply. Unsetting OUR proposal owner competes with
+      // the exact same category CAS as apply, and is required before this claim can reopen.
+      const categoryId = Types.ObjectId.isValid(String(p.category)) ? new Types.ObjectId(String(p.category)) : null;
+      if (!categoryId || effectApplied) throw error;
+      const beforeFence = await CostCategory.collection.findOne({ _id: categoryId });
+      if (!beforeFence || String(beforeFence.pre_approval_applied_request ?? "") === String(request._id)) throw error;
+      if (capTest && p._test_cap_pause_before_fence === true) {
+        await ApprovalRequest.collection.updateOne({ _id: request._id }, { $set: { "payload._test_cap_reached_before_fence": true } });
+        let released = false;
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const marker = await ApprovalRequest.collection.findOne({ _id: request._id }, { projection: { "payload._test_cap_release_before_fence": 1 } });
+          if (marker?.payload?._test_cap_release_before_fence === true) { released = true; break; }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        if (!released) throw error;
+      }
+      await CostCategory.collection.updateOne(
+        { _id: categoryId, pre_approval_proposal: request._id, pre_approval_applied_request: { $ne: request._id } },
+        { $unset: { pre_approval_proposal: 1 }, $set: { updatedAt: new Date() } },
+      );
+      const afterFence = await CostCategory.collection.findOne({ _id: categoryId });
+      if (!afterFence || afterFence.pre_approval_proposal
+          || String(afterFence.pre_approval_applied_request ?? "") === String(request._id)) throw error;
+      if (capTest && p._test_cap_pause_after_fence === true) {
+        await ApprovalRequest.collection.updateOne({ _id: request._id }, { $set: { "payload._test_cap_reached_after_fence": true } });
+        let released = false;
+        for (let attempt = 0; attempt < 200; attempt++) {
+          const marker = await ApprovalRequest.collection.findOne({ _id: request._id }, { projection: { "payload._test_cap_release_after_fence": 1 } });
+          if (marker?.payload?._test_cap_release_after_fence === true) { released = true; break; }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        if (!released) throw error;
+      }
+      if (capTest && p._test_cap_fail_after_fence === true) throw error;
+      await rollbackApprovalDecision(request);
+      throw error;
+    }
     // A batch cascade may have deleted this Applying request between its final cost fence and this
     // catch.  It is not a replay failure to reopen: the durable batch deletion won, so preserve the
     // 409 and make an exact best-effort cleanup rather than turning the correct no-orphan outcome

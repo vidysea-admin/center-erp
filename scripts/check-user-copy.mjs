@@ -3460,7 +3460,8 @@ for (const file of walk(root)) {
         // QA-1858 (checker, cycle 5): the pattern read `name = …` and so missed COMPOUND
         // assignment — `canSeeMoney ||= true` type-checks, leaves the wall green, and turns the
         // mask off. Any operator that writes to the name counts: `=`, `||=`, `&&=`, `??=`.
-        const assignments = [...raw.matchAll(new RegExp("(?:(?:const|let|var) )?\\b" + last + " ?(?:\\|\\||&&|\\?\\?)?= ?(?!=)([^;]+);", "g"))].map((m) => m[1]);
+        // A mutable declaration can be overwritten through destructuring; require an immutable binding.
+        const assignments = [...raw.matchAll(new RegExp("(?:(const|let|var) )?\\b" + last + " ?(?:\\|\\||&&|\\?\\?)?= ?(?!=)([^;]+);", "g"))].map((m) => ({ kind: m[1], rhs: m[2] }));
         if (!assignments.length) {
           bad.push(rel + " passes the money-mask flag `" + last + "`, which is never assigned in this file");
         // Senior review of cycles 2-4: this was a SUBSTRING test, so
@@ -3468,8 +3469,8 @@ for (const file of walk(root)) {
         // JS short-circuited and never called it. That is the same blacklist-shaped mistake one
         // level further in: "contains the right words" is not "is the right expression". The RHS
         // must BE the call, modulo `await` and wrapping parens — nothing else.
-        } else if (!assignments.every((a) => /^\(*\s*await\s+hasPermission\([^;]*FINANCE_VIEW[^;]*\)\s*\)*$/.test(a.trim()))) {
-          bad.push(rel + " assigns the money-mask flag `" + last + "` from something that is not exactly `await hasPermission(user, FINANCE_VIEW)`");
+        } else if (!assignments.every(({ kind, rhs }) => kind === "const" && /^\(*\s*await\s+hasPermission\([^;]*FINANCE_VIEW[^;]*\)\s*\)*$/.test(rhs.trim()))) {
+          bad.push(rel + " assigns the money-mask flag `" + last + "` without an immutable const binding to exactly `await hasPermission(user, FINANCE_VIEW)`");
         }
       }
       if (!/hasPermission\([^)]*FINANCE_VIEW/.test(raw)) {
