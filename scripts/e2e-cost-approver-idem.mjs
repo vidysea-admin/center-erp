@@ -388,6 +388,7 @@ let parkedA = null; // the request approved later, for the R5 join arm
   ok("R7 replay money: both visibility modes leave exactly one approval and its one partially sanctioned liability",
     await rawApprovals.countDocuments({ idempotency_key: `${scopedPoster.id}:${moneyKey}` }) === 1
       && await rawCosts.countDocuments({ note: `${TAG}-replay-money`, amount: 423 }) === 1);
+  parkedA.replayMoneyRequestId = moneyFirst.data.item._id;
   await req(admin, "PATCH", `/api/users/${scopedPoster.id}`, { active: false });
 }
 
@@ -437,6 +438,35 @@ const rows5 = {};
   ok("[precondition] a foreign-centre cost approved by the second approver exists", fPark.status === 202 && fApprove.status === 200, `${fPark.status}/${fApprove.status}`);
   await rule(false);
 
+  // Capture the oracle from the requests we actually created, before any reader and before the
+  // later deliberate park-date rewrite. Approval IDs join liabilities; they are not cost IDs.
+  const approvedFixtures = [];
+  for (const fixture of [
+    { requestId: parkedA.requestId, note: `${TAG}-park`, amount: 777 },
+    { requestId: parkedA.replayMoneyRequestId, note: `${TAG}-replay-money`, amount: 423 },
+    { requestId: fPark.data?.item?._id, note: `${TAG}-foreign`, amount: 321 },
+  ]) {
+    const requestId = new ObjectId(String(fixture.requestId));
+    const approval = await rawApprovals.findOne({ _id: requestId });
+    const liabilities = await rawCosts.find({ approval_request: requestId }).toArray();
+    ok(`R5 filter fixture ${fixture.note}: its exact created request is Approved by B and joins exactly one intended liability`,
+      approval?.status === "Approved" && String(approval.decided_by) === String(approverB.id)
+        && approval.payload?.note === fixture.note && !!approval.decided_at && liabilities.length === 1
+        && liabilities[0].note === fixture.note && liabilities[0].amount === fixture.amount,
+      JSON.stringify({ requestId: fixture.requestId, costs: liabilities.map((row) => String(row._id)), status: approval?.status, by: String(approval?.decided_by) }));
+    approvedFixtures.push({ ...fixture, costId: String(liabilities[0]?._id ?? ""), decided_at: approval?.decided_at });
+  }
+  ok("R5 filter fixture identities: all three created requests, joined costs and intended notes are distinct",
+    new Set(approvedFixtures.map((fixture) => String(fixture.requestId))).size === approvedFixtures.length
+      && new Set(approvedFixtures.map((fixture) => fixture.costId)).size === approvedFixtures.length
+      && approvedFixtures.every((fixture) => !!fixture.costId)
+      && new Set(approvedFixtures.map((fixture) => fixture.note)).size === approvedFixtures.length);
+  const expectedApprovedTuples = approvedFixtures.map((fixture) => [fixture.costId, fixture.note]).sort((a, b) => a[0].localeCompare(b[0]));
+  const day = istDay(rows5.approver.decided_at);
+  ok("R5 date fixture precondition: all original approval decisions share the selected IST day before the later date rewrite",
+    approvedFixtures.every((fixture) => fixture.decided_at && istDay(fixture.decided_at) === day),
+    JSON.stringify(approvedFixtures.map((fixture) => ({ note: fixture.note, decided_at: fixture.decided_at }))));
+
   const ledger = (await req(admin, "GET", "/api/costs")).data?.items ?? [];
   const reg = (await req(admin, "GET", "/api/reports/costs")).data?.register ?? [];
   const byNote = (list, n) => list.find((r) => r.note === n);
@@ -484,22 +514,26 @@ const rows5 = {};
   const fg = async (qs) => (await req(admin, "GET", `/api/reports/costs?${qs}`)).data;
   const byB = await fl(`approved_by=${approverB.id}`);
   ok("R5 filter: approved_by=<approver> keeps exactly that approver's rows (ledger)",
-    byB.length === 2 && byB.every((r) => r.approved_by === approverName) && byB.some((r) => r.note === rows5.approver.note), JSON.stringify(byB.map((r) => r.note)));
+    byB.length === approvedFixtures.length && byB.every((r) => r.approved_by === approverName)
+      && JSON.stringify(byB.map((r) => [String(r._id), r.note]).sort((a, b) => a[0].localeCompare(b[0]))) === JSON.stringify(expectedApprovedTuples), JSON.stringify(byB.map((r) => r.note)));
   const gB = await fg(`approved_by=${approverB.id}`);
   ok("R5 filter: ...and on the register, where the KPI total narrows with it (totals.entries == register rows)",
-    gB.register.every((r) => r.approved_by === approverName) && gB.totals.entries === gB.register.length && mine(gB.register).length === 2, JSON.stringify({ n: gB.register.length, t: gB.totals.entries }));
+    gB.register.every((r) => r.approved_by === approverName) && gB.totals.entries === gB.register.length
+      && mine(gB.register).length === approvedFixtures.length
+      && JSON.stringify(mine(gB.register).map((r) => [String(r.id), r.note]).sort((a, b) => a[0].localeCompare(b[0]))) === JSON.stringify(expectedApprovedTuples), JSON.stringify({ n: gB.register.length, t: gB.totals.entries }));
   const bPre = await fl("approved_by=pre-approved"), bDir = await fl("approved_by=direct");
   ok("R5 filter: approved_by=pre-approved keeps only pre-approved rows", bPre.length >= 1 && bPre.every((r) => r.approved_by_kind === "pre-approved") && bPre.some((r) => r.note === rows5.pre.note));
   ok("R5 filter: approved_by=direct keeps only direct rows, and not the approver's", bDir.length >= 4 && bDir.every((r) => r.approved_by_kind === "direct") && !bDir.some((r) => r.note === rows5.approver.note));
   const opts = (await req(admin, "GET", "/api/costs")).data?.approver_options ?? [];
   ok("R5 filter: the drop-down lists the real approver by name, plus Pre-approved and Direct",
     opts.some((o) => o.value === String(approverB.id) && o.label === approverName) && opts.some((o) => o.value === "pre-approved") && opts.some((o) => o.value === "direct"), JSON.stringify(opts.slice(0, 5)));
-  const day = istDay(rows5.approver.decided_at);
   const inDay = await fl(`approved_by=${approverB.id}&approved_from=${day}&approved_to=${day}`);
   const after = await fl(`approved_by=${approverB.id}&approved_from=${dayShift(day, 1)}`);
   const before = await fl(`approved_by=${approverB.id}&approved_to=${dayShift(day, -1)}`);
   ok("R5 filter: 'approved on' range includes the approval's own IST day and excludes the days either side",
-    inDay.length === 2 && after.length === 0 && before.length === 0, `in=${inDay.length} after=${after.length} before=${before.length}`);
+    inDay.length === approvedFixtures.length
+      && JSON.stringify(inDay.map((r) => [String(r._id), r.note]).sort((a, b) => a[0].localeCompare(b[0]))) === JSON.stringify(expectedApprovedTuples)
+      && after.length === 0 && before.length === 0, `in=${inDay.length} after=${after.length} before=${before.length}`);
   const bad = await req(admin, "GET", "/api/costs?approved_by=not-a-user");
   ok("R5 filter: a nonsense approver is refused (400), not silently ignored", bad.status === 400, `got ${bad.status}`);
   const xf = XLSX.read((await reqBuffer(admin, `/api/reports/costs/export?approved_by=${approverB.id}`)).data, { type: "buffer" });
