@@ -340,8 +340,8 @@ async function parkLegacyHeadRequest(body) {
 }
 
 // A CostEntry is the money fact; a temporary audit transport failure after that fact must not turn
-// a successful POST into a retriable 500. Both acknowledgement windows leave a durable marker,
-// and a normal ledger read drains it exactly once.
+// a successful POST into a retriable 500. POST's success drain can already recover either requested
+// failure window, so final row counts prove recovery, not that the injection hook executed.
 {
   const cat = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
     .find((c) => !c.pre_approved && c.active !== false);
@@ -354,16 +354,25 @@ async function parkLegacyHeadRequest(body) {
     const costId = made.data?.item?._id;
     const raw = costId ? await rawCosts.findOne({ _id: new ObjectId(String(costId)) }) : null;
     const eventId = raw?._audit_events?.[0]?.event_id;
+    const embeddedEvent = raw?._audit_events?.[0];
     const beforeCount = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
+    const postAudit = eventId ? await rawAudits.findOne({ _id: new ObjectId(String(eventId)) }) : null;
     ok(`durable audit ${window} [precondition]: business write returns 201 with one persisted audit marker`,
       made.status === 201 && !!raw && !!eventId,
       JSON.stringify({ status: made.status, cost: !!raw, eventId }));
-    ok(`durable audit ${window}: injected delivery failure does not create a duplicate liability`,
+    ok(`durable audit ${window}: successful POST recovery does not create a duplicate liability`,
       await rawCosts.countDocuments({ note }) === 1,
       `rows=${await rawCosts.countDocuments({ note })}`);
-    ok(`durable audit ${window} [precondition]: injection reached the intended acknowledgement window`,
-      window === "before" ? beforeCount === 0 : beforeCount === 1,
-      `audit rows before recovery=${beforeCount}`);
+    ok(`durable audit ${window}: successful POST recovery delivers the exact immutable creation event and acknowledges it`,
+      made.status === 201 && beforeCount === 1 && raw?._audit_events?.length === 1
+        && embeddedEvent?.entity === "CostEntry" && String(embeddedEvent?.entity_id) === String(costId)
+        && embeddedEvent?.new_value === "created" && embeddedEvent?.actor_type === "USER"
+        && postAudit?.created_at instanceof Date
+        && JSON.stringify(Object.keys(postAudit ?? {}).sort()) === JSON.stringify(["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"])
+        && ["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
+          .every((field) => JSON.stringify(postAudit?.[field]) === JSON.stringify(embeddedEvent?.[field] ?? null))
+        && (raw?._audit_delivered_event_ids ?? []).includes(String(eventId)),
+      JSON.stringify({ status: made.status, auditRows: beforeCount, delivered: raw?._audit_delivered_event_ids }));
 
     const concurrentReads = await Promise.all(Array.from({ length: 8 }, () => req(admin, "GET", "/api/costs")));
     const recovered = eventId ? await rawAudits.countDocuments({ _id: new ObjectId(String(eventId)) }) : -1;
@@ -376,7 +385,7 @@ async function parkLegacyHeadRequest(body) {
         && (ownerAfter?._audit_delivered_event_ids ?? []).includes(String(eventId)),
       JSON.stringify({ reads: concurrentReads.map((r) => r.status), recovered, delivered: ownerAfter?._audit_delivered_event_ids }));
     ok(`durable audit ${window}: repeated recovery remains exactly one AuditLog row`,
-      afterSecondRead === 1,
+      afterSecondRead === 1 && await rawCosts.countDocuments({ note }) === 1,
       `audit rows after second read=${afterSecondRead}`);
     const auditKeys = recoveredRow ? Object.keys(recoveredRow).sort() : [];
     ok(`durable audit ${window}: raw AuditLog uses the canonical contract exactly`,
@@ -403,6 +412,28 @@ async function parkLegacyHeadRequest(body) {
   const eventId = owner?._audit_events?.[0]?.event_id;
   if (costId && eventId) {
     const eventObjectId = new ObjectId(String(eventId));
+    const embeddedEvent = owner._audit_events[0];
+    const creationAudit = await rawAudits.findOne({ _id: eventObjectId });
+    const fixtureReady = made.status === 201 && owner.note === note && owner._audit_events.length === 1
+      && embeddedEvent.entity === "CostEntry" && String(embeddedEvent.entity_id) === String(costId)
+      && embeddedEvent.new_value === "created" && embeddedEvent.actor_type === "USER"
+      && creationAudit?.created_at instanceof Date
+      && JSON.stringify(Object.keys(creationAudit ?? {}).sort()) === JSON.stringify(["_id", "actor", "actor_type", "created_at", "entity", "entity_id", "field", "new_value", "old_value"])
+      && ["entity", "entity_id", "field", "old_value", "new_value", "actor", "actor_type"]
+        .every((field) => JSON.stringify(creationAudit?.[field]) === JSON.stringify(embeddedEvent[field] ?? null))
+      && (owner._audit_delivered_event_ids ?? []).includes(String(eventId))
+      && await rawCosts.countDocuments({ note }) === 1;
+    ok("audit-owner delete [precondition]: exact synthetic creation audit matches its immutable owner event", fixtureReady);
+    if (!fixtureReady) throw new Error("audit-owner delete fixture reset refused: immutable creation identity did not match");
+    const resetAudit = await rawAudits.deleteOne({ ...creationAudit });
+    ok("audit-owner delete [precondition]: fixture reset removes exactly its canonical synthetic creation audit", resetAudit.deletedCount === 1);
+    if (resetAudit.deletedCount !== 1) throw new Error("audit-owner delete fixture reset refused: exact creation audit was not removed");
+    const resetMarker = await rawCosts.updateOne(
+      { _id: new ObjectId(String(costId)), note, _audit_events: { $elemMatch: embeddedEvent }, _audit_delivered_event_ids: String(eventId) },
+      { $pull: { _audit_delivered_event_ids: String(eventId) } },
+    );
+    ok("audit-owner delete [precondition]: fixture reset removes exactly its synthetic creation acknowledgement", resetMarker.modifiedCount === 1);
+    if (resetMarker.modifiedCount !== 1) throw new Error("audit-owner delete fixture reset refused: exact owner acknowledgement was not removed");
     const foreign = {
       _id: eventObjectId,
       entity: "ForeignAuditOccupant", entity_id: new ObjectId(), field: null,
@@ -421,7 +452,9 @@ async function parkLegacyHeadRequest(body) {
         && !(preserved?._audit_delivered_event_ids ?? []).includes(String(eventId)),
       JSON.stringify({ status: refused.status, state: preserved?.deletion_state, deletionEvent: deletionEvent?.event_id, occupant: occupant?.entity, visible: hidden.some((c) => String(c._id) === String(costId)), delivered: preserved?._audit_delivered_event_ids }));
 
-    await rawAudits.deleteOne({ _id: eventObjectId, entity: foreign.entity });
+    const removedForeign = await rawAudits.deleteOne({ ...foreign });
+    ok("audit-owner delete [precondition]: recovery removes exactly the full synthetic foreign occupant", removedForeign.deletedCount === 1);
+    if (removedForeign.deletedCount !== 1) throw new Error("audit-owner delete recovery refused: full synthetic foreign identity did not match");
     const drain = await req(admin, "GET", "/api/costs");
     const deliveredCreation = await rawAudits.findOne({ _id: eventObjectId });
     const deliveredDeletion = deletionEvent?.event_id
