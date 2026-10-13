@@ -653,11 +653,14 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
   const rawBatches = db.collection("batches");
   const rawCategories = db.collection("costcategories");
   // Raw snapshots include internal receipts, proposal ownership and audit outboxes, not just amounts.
-  const snapshot = async (costIds, batchIds = []) => {
+  const snapshot = async (costIds, batchIds = [], fixedRequestIds = []) => {
     const costOids = costIds.map((id) => new ObjectId(String(id)));
     const batchOids = batchIds.map((id) => new ObjectId(String(id)));
     const costs = await rawCosts.find({ _id: { $in: costOids } }).sort({ _id: 1 }).toArray();
-    const refs = costs.flatMap((row) => [row.approval_request, row.cost_edit_request]).filter(Boolean);
+    // Audit membership must survive legitimate claim cleanup: use the fixture's original request
+    // identity in both snapshots as well as the cost's current references.
+    const refs = [...new Set([...fixedRequestIds, ...costs.flatMap((row) => [row.approval_request, row.cost_edit_request])]
+      .filter(Boolean).map(String))].map((id) => new ObjectId(id));
     const [batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
       rawBatches.find({ _id: { $in: batchOids } }).sort({ _id: 1 }).toArray(),
       rawApprovals.find({ $or: [{ _id: { $in: refs } }, { entity_id: { $in: costOids } },
@@ -706,11 +709,15 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
             && proposal.context.payload._edit_input_hash === proposal.input_hash
             && proposal.context.batch === String(destination) && proposal.context.payload.batch === String(destination));
         if (!requestId || !proposal) continue;
+        const creationAudit = await rawAudits.findOne({ entity: "ApprovalRequest", entity_id: requestId, field: "created" });
+        ok(`QA-2908 ${audience}/${missingState} audit [precondition]: original request creation audit exists with exact request, actor and proposal cost identity`,
+          !!creationAudit?._id && String(creationAudit.entity_id) === String(requestId) && String(creationAudit.actor) === String(actor.id)
+            && creationAudit.new_value?.payload?.cost_entry === costId);
         await rawApprovals.deleteOne({ _id: requestId });
         await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $pull: { own_mutations: { key: proposal.mutation_key } } });
         if (missingState === "missing") await rawBatches.deleteOne({ _id: destination });
         else await rawBatches.updateOne({ _id: destination }, { $set: { deletion_state: "Deleting" } });
-        const before = await snapshot([costId], [source, destination]);
+        const before = await snapshot([costId], [source, destination], [requestId]);
         const expected = JSON.parse(before);
         ok(`QA-2908 ${audience}/${missingState} crash boundary [precondition]: no exact request or matching receipt remains, while the same coherent proposal owns the unchanged source`,
           !await rawApprovals.findOne({ _id: requestId })
@@ -723,9 +730,13 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
         delete expected.costs[0].cost_edit_request;
         delete expected.costs[0].cost_edit_proposal;
         const retried = await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers);
+        const after = await snapshot([costId], [source, destination], [requestId]);
         ok(`QA-2908 ${audience}/${missingState}: retry refuses ${refusalStatus} and clears only the two exact owner claim fields; liability/revision/reservation/receipts/outbox and all effects stay unchanged`,
-          retried.status === refusalStatus && await snapshot([costId], [source, destination]) === JSON.stringify(expected),
+          retried.status === refusalStatus && after === JSON.stringify(expected),
           `${retried.status} ${retried.data?.error ?? ""}`);
+        const retainedAudit = JSON.parse(after).auditRows.find((row) => String(row._id) === String(creationAudit?._id));
+        ok(`QA-2908 ${audience}/${missingState}: cleanup retains the exact original request creation audit identity and full contents`,
+          !!creationAudit && !!retainedAudit && JSON.stringify(retainedAudit) === JSON.stringify(creationAudit));
       }
     }
 
@@ -746,10 +757,10 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $pull: { own_mutations: { key: proposal.mutation_key } } });
       await rawApprovals.deleteOne({ _id: requestId });
       await rawBatches.updateOne({ _id: negativeDestination }, { $set: { location: new ObjectId(foreignLoc._id) } });
-      const foreignBefore = await snapshot([negativeId], [negativeSource, negativeDestination]);
+      const foreignBefore = await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]);
       const foreign = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
       ok("QA-2908 foreign existing destination: exactly 403 and no claim, liability, request, audit, notification or receipt effects",
-        foreign.status === 403 && await snapshot([negativeId], [negativeSource, negativeDestination]) === foreignBefore, `${foreign.status}`);
+        foreign.status === 403 && await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]) === foreignBefore, `${foreign.status}`);
       await rawBatches.deleteOne({ _id: negativeDestination });
       for (const [link, fields] of [
         ["owner request", { cost_edit_request: new ObjectId() }],
@@ -761,18 +772,18 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       ]) {
         await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
         await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: fields });
-        const before = await snapshot([negativeId], [negativeSource, negativeDestination]);
+        const before = await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]);
         const denied = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
         ok(`QA-2908 mismatched ${link}: refuses without collecting an ambiguous claim or changing any side effect`,
-          [403, 404, 409].includes(denied.status) && await snapshot([negativeId], [negativeSource, negativeDestination]) === before, `${denied.status}`);
+          [403, 404, 409].includes(denied.status) && await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]) === before, `${denied.status}`);
       }
       // An exact ID existing under another actor is not a matching retry and must block cleanup.
       await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
       await rawApprovals.insertOne({ ...originalRequest, initiator: new ObjectId(other.id) });
-      const requestBefore = await snapshot([negativeId], [negativeSource, negativeDestination]);
+      const requestBefore = await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]);
       const existing = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
       ok("QA-2908 exact request exists for another actor: refuses and preserves ownership, request and all effects",
-        [403, 404, 409].includes(existing.status) && await snapshot([negativeId], [negativeSource, negativeDestination]) === requestBefore, `${existing.status}`);
+        [403, 404, 409].includes(existing.status) && await snapshot([negativeId], [negativeSource, negativeDestination], [requestId]) === requestBefore, `${existing.status}`);
       await rawApprovals.deleteOne({ _id: requestId });
       await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
     }
