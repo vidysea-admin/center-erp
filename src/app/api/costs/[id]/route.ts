@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson, assertLocationInScope } from "@/lib/authz";
-import { hasFinanceApprove, requirePerm } from "@/lib/permissions";
+import { FINANCE_VIEW, hasFinanceApprove, hasPermission, maskApprovalMoney, requirePerm } from "@/lib/permissions";
 import { ApprovalRequest, Batch, CostEntry, COST_PAYMENT_MODE } from "@/models";
 import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, COST_MATERIAL_FIELDS, COST_OWN_FIELDS, evaluateCostEditPreApproval, isCostCreator, pendingCostEditRequest, stampCostApprovals } from "@/lib/rules";
 import { auditDiff } from "@/lib/audit";
@@ -331,8 +331,22 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   const base = body.base_updated_at ? new Date(body.base_updated_at) : new Date(before.updatedAt);
   if (!Number.isFinite(base.getTime())) throw new HttpError(400, "The cost revision is invalid.");
   const mutationKey = `cost-edit:${user.id}:${id}:${clientKey || `${base.getTime()}:${inputHash}`}`;
-  const queuedResult = async (request: any) => {
-    const result = { queued: true, item: typeof request?.toObject === "function" ? request.toObject() : request };
+  const queuedResult = async (request: any, savedReceipt?: any): Promise<NextResponse> => {
+    const raw = typeof request?.toObject === "function" ? request.toObject() : request;
+    // QA-2909: every queued response, including a durable receipt, uses today's permission.
+    // Keep the original raw receipt internally so a later grant can expose that same result.
+    const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
+    const item: any = maskApprovalMoney(raw, canSeeMoney);
+    if (!canSeeMoney) {
+      delete item.decision_note;
+      if (raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
+          && raw.payload.amount !== undefined) {
+        item.payload = { ...(item.payload ?? {}), amount: raw.payload.amount };
+      }
+    }
+    const response = { ...(savedReceipt?.result ?? { queued: true }), item };
+    if (savedReceipt) return NextResponse.json(response, { status: savedReceipt.http_status ?? 202 });
+    const result = { queued: true, item: raw };
     const event = financeAuditEvent(`cost:${doc._id}:edit-request:${request._id}`, {
       entity: "CostEntry", entity_id: doc._id, field: "edit sent for approval",
       new_value: { request: String(request._id), by: "creator" }, actor: new Types.ObjectId(String(user.id)),
@@ -344,14 +358,15 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
     if (written.modifiedCount !== 1) {
       const owner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { own_mutations: 1 } });
       const first = (owner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
-      if (first?.input_hash === inputHash) return NextResponse.json(first.result, { status: 202 });
+      if (first?.input_hash === inputHash) return queuedResult(first.result.item, first);
       throw new HttpError(409, "The edit result could not be recorded. Refresh and retry.");
     }
-    return NextResponse.json(result, { status: 202 });
+    return NextResponse.json(response, { status: 202 });
   };
   const receipt = (internal?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
   if (receipt) {
     if (receipt.input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+    if (receipt.result?.queued === true) return queuedResult(receipt.result.item, receipt);
     return NextResponse.json(receipt.result, { status: receipt.http_status ?? 200 });
   }
   // An accepted queue result stays the first result even after approval/rejection or payment.
@@ -381,6 +396,7 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
     const first = (owner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
     if (first) {
       if (first.input_hash !== inputHash) throw new HttpError(409, "This retry key was already used for a different edit.");
+      if (first.result?.queued === true) return queuedResult(first.result.item, first);
       return NextResponse.json(first.result, { status: first.http_status ?? 200 });
     }
     const proposal = owner?.cost_edit_proposal;
@@ -422,8 +438,39 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   }
   // Scope: an edit may not move an entry onto a centre, batch or trainer the creator cannot reach.
   if (patch.location) assertLocationInScope(user, String(patch.location));
-  if (patch.batch) await assertBatchInScope(user, String(patch.batch));
   if (patch.trainer) await assertTrainerInScope(user, String(patch.trainer));
+  // QA-2908: a scoped missing-batch refusal must not strand the source's exact crash claim.
+  // Check the saved owner, not merely the retry's destination, and leave ambiguous claims intact.
+  if (recovering) {
+    const proposal = internal?.cost_edit_proposal;
+    const context = proposal?.context;
+    const payload = context?.payload;
+    const requestId = internal?.cost_edit_request;
+    const destination = context?.batch;
+    const coherent = proposal?.mutation_key === mutationKey && proposal?.input_hash === inputHash
+      && Types.ObjectId.isValid(String(requestId ?? ""))
+      && String(context?.requestId ?? "") === String(requestId)
+      && context?.entity === "CostEntry" && String(context?.entity_id ?? "") === String(doc._id)
+      && payload?.kind === "cost-edit" && String(payload?.cost_entry ?? "") === String(doc._id)
+      && payload?._edit_mutation_key === mutationKey && payload?._edit_input_hash === inputHash
+      && Types.ObjectId.isValid(String(destination ?? ""))
+      && String(payload?.batch ?? "") === String(destination)
+      && String(merged.batch ?? "") === String(destination);
+    if (coherent) {
+      const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)) }, { projection: { _id: 1 } });
+      if (!live && !(await ApprovalRequest.exists({ _id: requestId }))) {
+        await CostEntry.collection.updateOne({
+          _id: doc._id, entered_by: new Types.ObjectId(String(user.id)), updatedAt: before.updatedAt,
+          payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
+          cost_edit_request: requestId, "cost_edit_proposal.mutation_key": mutationKey,
+          "cost_edit_proposal.input_hash": inputHash, "cost_edit_proposal.context": context,
+        }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+        if (isScoped(user)) throw new HttpError(404, "Batch not found");
+        throw new HttpError(409, "This batch is being deleted or no longer exists, so this request cannot be queued.");
+      }
+    }
+  }
+  if (patch.batch) await assertBatchInScope(user, String(patch.batch));
   const target = await assertActiveCostCategory(merged.category);
   if (patch.category !== undefined) {
     if (isBareOtherHeadName(target.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);

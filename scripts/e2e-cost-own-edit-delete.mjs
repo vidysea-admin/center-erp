@@ -27,7 +27,7 @@
 //   scope      - an edit cannot move an entry onto a centre the creator cannot reach
 //   pending    - one edit at a time; a delete is refused while an edit waits
 //   finance    - finance's own PATCH / hard DELETE are unchanged
-import { requireLocalBase } from "./db-guard.mjs";
+import { requireLocalBase, requireSafeDb } from "./db-guard.mjs";
 import { MongoClient, ObjectId } from "mongodb";
 import * as XLSX from "xlsx";
 
@@ -59,9 +59,11 @@ async function reqBuffer(cookie, p) {
   return { status: res.status, data: Buffer.from(await res.arrayBuffer()) };
 }
 
+const DB_NAME = requireSafeDb("e2e-cost-own-edit-delete");
+if (!/^center_erp_ci(?:_|$)/.test(DB_NAME)) throw new Error("Own-cost raw fixtures require an isolated center_erp_ci database.");
 const client = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017", { serverSelectionTimeoutMS: 8000 });
 await client.connect();
-const db = client.db((process.env.MONGODB_DB || "center_erp_ci").trim());
+const db = client.db(DB_NAME);
 const rawCosts = db.collection("costentries");
 const rawApprovals = db.collection("approvalrequests");
 const rawAudits = db.collection("auditlogs");
@@ -656,14 +658,15 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     const batchOids = batchIds.map((id) => new ObjectId(String(id)));
     const costs = await rawCosts.find({ _id: { $in: costOids } }).sort({ _id: 1 }).toArray();
     const refs = costs.flatMap((row) => [row.approval_request, row.cost_edit_request]).filter(Boolean);
-    const [batches, requests, auditRows, costCount, requestCount, auditCount] = await Promise.all([
+    const [batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
       rawBatches.find({ _id: { $in: batchOids } }).sort({ _id: 1 }).toArray(),
       rawApprovals.find({ $or: [{ _id: { $in: refs } }, { entity_id: { $in: costOids } },
         { "payload.cost_entry": { $in: costIds.map(String) } }] }).sort({ _id: 1 }).toArray(),
       rawAudits.find({ entity_id: { $in: [...costOids, ...batchOids, ...refs] } }).sort({ _id: 1 }).toArray(),
       rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
+      db.collection("notifications").countDocuments({}), db.collection("maillogs").countDocuments({}),
     ]);
-    return JSON.stringify({ costs, batches, requests, auditRows, costCount, requestCount, auditCount });
+    return JSON.stringify({ costs, batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount });
   };
   const template = await rawBatches.findOne({ program: { $type: "objectId" } });
   ok("takeover [precondition]: a program exists for isolated empty batch fixtures", !!template?.program);
@@ -677,6 +680,160 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     return id;
   };
   if (template?.program) {
+    // QA-2908: remove only the exact fixture request and its receipt after a real queued edit.
+    // The remaining proposal is the authentic durable claim that a crash-before-request leaves;
+    // the destination is then removed using the raw isolated fixture database, never production.
+    const recoveryCreator = await mkUser(`Recovery scoped ${stamp}`, `zz.b3.recovery.${stamp}@vidysea-test.local`,
+      "Location", ["costs.manage"], [String(ownLoc._id)]);
+    ok("QA-2908 [precondition]: a scoped editable creator exists", !!recoveryCreator.id && !!recoveryCreator.cookie);
+    for (const [audience, actor, expectedStatus] of [["scoped", recoveryCreator, 404], ["global", creator, 409]]) {
+      for (const missingState of ["missing", "Deleting"]) {
+        const refusalStatus = missingState === "Deleting" ? 409 : expectedStatus;
+        const source = await makeBatch(`RECOVERY-SOURCE-${audience}-${missingState}`);
+        const destination = await makeBatch(`RECOVERY-DEST-${audience}-${missingState}`);
+        const costId = await mkApproved(actor, `recovery-${audience}-${missingState}`, { batch: String(source) });
+        const baseCost = costId ? await raw(costId) : null;
+        const body = { batch: String(destination), confirm_approved: true, base_updated_at: baseCost?.updatedAt.toISOString() };
+        const headers = { "Idempotency-Key": `${TAG}-recovery-${audience}-${missingState}` };
+        const queued = costId ? await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers) : { status: 0 };
+        const saved = costId ? await raw(costId) : null;
+        const requestId = saved?.cost_edit_request;
+        const proposal = saved?.cost_edit_proposal;
+        ok(`QA-2908 ${audience}/${missingState} [precondition]: real queue persisted a coherent matching actor/cost/key/hash/destination claim`,
+          queued.status === 202 && !!requestId && String(proposal?.context?.requestId) === String(requestId)
+            && String(proposal.context.entity_id) === costId && proposal.context.payload.cost_entry === costId
+            && proposal.context.payload._edit_mutation_key === proposal.mutation_key
+            && proposal.context.payload._edit_input_hash === proposal.input_hash
+            && proposal.context.batch === String(destination) && proposal.context.payload.batch === String(destination));
+        if (!requestId || !proposal) continue;
+        await rawApprovals.deleteOne({ _id: requestId });
+        await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $pull: { own_mutations: { key: proposal.mutation_key } } });
+        if (missingState === "missing") await rawBatches.deleteOne({ _id: destination });
+        else await rawBatches.updateOne({ _id: destination }, { $set: { deletion_state: "Deleting" } });
+        const before = await snapshot([costId], [source, destination]);
+        const expected = JSON.parse(before);
+        ok(`QA-2908 ${audience}/${missingState} crash boundary [precondition]: no exact request or matching receipt remains, while the same coherent proposal owns the unchanged source`,
+          !await rawApprovals.findOne({ _id: requestId })
+            && !(expected.costs[0].own_mutations ?? []).some((receipt) => receipt.key === proposal.mutation_key)
+            && String(expected.costs[0].cost_edit_request) === String(requestId)
+            && JSON.stringify(expected.costs[0].cost_edit_proposal) === JSON.stringify(proposal)
+            && expected.costs[0].amount === baseCost.amount && new Date(expected.costs[0].updatedAt).getTime() === baseCost.updatedAt.getTime()
+            && (missingState === "missing" ? expected.batches.every((batch) => String(batch._id) !== String(destination))
+              : expected.batches.some((batch) => String(batch._id) === String(destination) && batch.deletion_state === "Deleting")));
+        delete expected.costs[0].cost_edit_request;
+        delete expected.costs[0].cost_edit_proposal;
+        const retried = await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers);
+        ok(`QA-2908 ${audience}/${missingState}: retry refuses ${refusalStatus} and clears only the two exact owner claim fields; liability/revision/reservation/receipts/outbox and all effects stay unchanged`,
+          retried.status === refusalStatus && await snapshot([costId], [source, destination]) === JSON.stringify(expected),
+          `${retried.status} ${retried.data?.error ?? ""}`);
+      }
+    }
+
+    // Negative ownership oracles use the same saved authentic proposal, then corrupt ONE link.
+    // A foreign existing batch remains a 403; an ambiguous claim may never be silently collected.
+    const negativeSource = await makeBatch("RECOVERY-NEG-SOURCE");
+    const negativeDestination = await makeBatch("RECOVERY-NEG-DEST");
+    const negativeId = await mkApproved(recoveryCreator, "recovery-negative", { batch: String(negativeSource) });
+    const negativeBase = negativeId ? await raw(negativeId) : null;
+    const negativeBody = { batch: String(negativeDestination), confirm_approved: true, base_updated_at: negativeBase?.updatedAt.toISOString() };
+    const negativeHeaders = { "Idempotency-Key": `${TAG}-recovery-negative` };
+    const negativeQueued = negativeId ? await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders) : { status: 0 };
+    const negativeClaim = negativeId ? await raw(negativeId) : null;
+    ok("QA-2908 negative controls [precondition]: an actual proposal and exact queue identity exist", negativeQueued.status === 202 && !!negativeClaim?.cost_edit_request);
+    if (negativeClaim?.cost_edit_request) {
+      const requestId = negativeClaim.cost_edit_request, proposal = negativeClaim.cost_edit_proposal;
+      const originalRequest = await rawApprovals.findOne({ _id: requestId });
+      await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $pull: { own_mutations: { key: proposal.mutation_key } } });
+      await rawApprovals.deleteOne({ _id: requestId });
+      await rawBatches.updateOne({ _id: negativeDestination }, { $set: { location: new ObjectId(foreignLoc._id) } });
+      const foreignBefore = await snapshot([negativeId], [negativeSource, negativeDestination]);
+      const foreign = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
+      ok("QA-2908 foreign existing destination: exactly 403 and no claim, liability, request, audit, notification or receipt effects",
+        foreign.status === 403 && await snapshot([negativeId], [negativeSource, negativeDestination]) === foreignBefore, `${foreign.status}`);
+      await rawBatches.deleteOne({ _id: negativeDestination });
+      for (const [link, fields] of [
+        ["owner request", { cost_edit_request: new ObjectId() }],
+        ["mutation key", { "cost_edit_proposal.mutation_key": `${proposal.mutation_key}-other` }],
+        ["input hash", { "cost_edit_proposal.input_hash": "different-hash" }],
+        ["context request", { "cost_edit_proposal.context.requestId": new ObjectId() }],
+        ["context cost", { "cost_edit_proposal.context.payload.cost_entry": String(new ObjectId()) }],
+        ["context destination", { "cost_edit_proposal.context.batch": String(negativeSource) }],
+      ]) {
+        await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
+        await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: fields });
+        const before = await snapshot([negativeId], [negativeSource, negativeDestination]);
+        const denied = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
+        ok(`QA-2908 mismatched ${link}: refuses without collecting an ambiguous claim or changing any side effect`,
+          [403, 404, 409].includes(denied.status) && await snapshot([negativeId], [negativeSource, negativeDestination]) === before, `${denied.status}`);
+      }
+      // An exact ID existing under another actor is not a matching retry and must block cleanup.
+      await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
+      await rawApprovals.insertOne({ ...originalRequest, initiator: new ObjectId(other.id) });
+      const requestBefore = await snapshot([negativeId], [negativeSource, negativeDestination]);
+      const existing = await req(recoveryCreator.cookie, "PATCH", `/api/costs/${negativeId}`, negativeBody, negativeHeaders);
+      ok("QA-2908 exact request exists for another actor: refuses and preserves ownership, request and all effects",
+        [403, 404, 409].includes(existing.status) && await snapshot([negativeId], [negativeSource, negativeDestination]) === requestBefore, `${existing.status}`);
+      await rawApprovals.deleteOne({ _id: requestId });
+      await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+    }
+    await req(admin, "PATCH", `/api/users/${recoveryCreator.id}`, { active: false });
+
+    // QA-2909: the actual approver records a PARTIAL sanction. Removing only the queued receipt
+    // exposes the decided-prior path; two simultaneous retries then race for exactly one receipt.
+    const moneyId = await mkApproved(creator, "edit-replay-money");
+    const moneyBase = moneyId ? await raw(moneyId) : null;
+    const moneyBody = { amount: 846123, note: `${TAG}-requested with vendor advance 919191`, confirm_approved: true,
+      base_updated_at: moneyBase?.updatedAt.toISOString() };
+    const moneyHeaders = { "Idempotency-Key": `${TAG}-edit-replay-money` };
+    const first = moneyId ? await req(creator.cookie, "PATCH", `/api/costs/${moneyId}`, moneyBody, moneyHeaders) : { status: 0 };
+    const moneyRequest = moneyId ? await waitingEdit(moneyId) : null;
+    const moneyDecision = moneyRequest ? await decide(moneyRequest._id, "Approved", { approved_amount: 423061, note: "Sanction 423061; vendor budget 818181" }) : { status: 0 };
+    const decided = moneyRequest ? await rawApprovals.findOne({ _id: moneyRequest._id }) : null;
+    ok("QA-2909 [precondition]: actual partial decision retains requested 846123, sanctioned 423061 and money in decision/payload prose",
+      first.status === 202 && moneyDecision.status === 200 && decided?.payload?.amount === 846123 && decided.approved_amount === 423061
+        && decided.decision_note.includes("818181") && decided.payload.note.includes("919191") && (await raw(moneyId))?.amount === 423061);
+    if (decided) {
+      const mutationKey = decided.payload._edit_mutation_key;
+      await rawCosts.updateOne({ _id: new ObjectId(moneyId) }, { $pull: { own_mutations: { key: mutationKey } } });
+      const countBefore = await rawApprovals.countDocuments({ entity_id: new ObjectId(moneyId), "payload.kind": "cost-edit" });
+      const costBefore = await raw(moneyId);
+      const simultaneous = await Promise.all([1, 2].map(() => req(creator.cookie, "PATCH", `/api/costs/${moneyId}`, moneyBody, moneyHeaders)));
+      for (const [index, response] of simultaneous.entries()) {
+        ok(`QA-2909 decided prior/concurrent receipt ${index + 1}: 202 same request and original requested amount, without sanctioned amount, decision prose or nested payload money text`,
+          response.status === 202 && String(response.data?.item?._id) === String(decided._id) && response.data?.queued === true
+            && response.data.item.payload?.amount === 846123 && !Object.hasOwn(response.data.item, "approved_amount")
+            && !Object.hasOwn(response.data.item, "decision_note") && !/423061|818181|919191/.test(JSON.stringify(response.data)));
+      }
+      const after = await raw(moneyId);
+      ok("QA-2909 decided prior/concurrent receipts: one receipt, one edit request and one edit audit; sanctioned liability and revision are unchanged",
+        after?.own_mutations?.filter((receipt) => receipt.key === mutationKey).length === 1
+          && await rawApprovals.countDocuments({ entity_id: new ObjectId(moneyId), "payload.kind": "cost-edit" }) === countBefore
+          && (await audits(moneyId, "edit sent for approval")).length === 1 && after.amount === costBefore.amount
+          && String(after.updatedAt) === String(costBefore.updatedAt) && !after.cost_edit_request && !after.cost_edit_proposal);
+      const cachedBefore = await snapshot([moneyId]);
+      const cached = await req(creator.cookie, "PATCH", `/api/costs/${moneyId}`, moneyBody, moneyHeaders);
+      ok("QA-2909 cached receipt: current nonfinance replay remains masked and makes no writes",
+        cached.status === 202 && String(cached.data?.item?._id) === String(decided._id) && cached.data.item.payload?.amount === 846123
+          && !Object.hasOwn(cached.data.item, "approved_amount") && !Object.hasOwn(cached.data.item, "decision_note")
+          && !/423061|818181|919191/.test(JSON.stringify(cached.data)) && await snapshot([moneyId]) === cachedBefore);
+      const granted = await req(admin, "PATCH", `/api/users/${creator.id}`, { extra_permissions: ["costs.manage", "finance.view"] });
+      const financeBefore = await snapshot([moneyId]);
+      const finance = await req(creator.cookie, "PATCH", `/api/costs/${moneyId}`, moneyBody, moneyHeaders);
+      ok("QA-2909 cached receipt current finance control: grant reveals exact original decision facts on same 202 request without effects",
+        granted.status === 200 && finance.status === 202 && String(finance.data?.item?._id) === String(decided._id)
+          && finance.data.item.payload?.amount === 846123 && finance.data.item.approved_amount === 423061
+          && finance.data.item.decision_note === decided.decision_note && finance.data.item.payload.note === decided.payload.note
+          && await snapshot([moneyId]) === financeBefore);
+      const revoked = await req(admin, "PATCH", `/api/users/${creator.id}`, { extra_permissions: ["costs.manage"], revoked_permissions: ["finance.view"] });
+      const revokedBefore = await snapshot([moneyId]);
+      const revokedRetry = await req(creator.cookie, "PATCH", `/api/costs/${moneyId}`, moneyBody, moneyHeaders);
+      ok("QA-2909 cached receipt current finance revoked: original amount only, no sanctioned/decision/payload money disclosure and no effects",
+        revoked.status === 200 && revokedRetry.status === 202 && String(revokedRetry.data?.item?._id) === String(decided._id)
+          && revokedRetry.data.item.payload?.amount === 846123 && !Object.hasOwn(revokedRetry.data.item, "approved_amount")
+          && !Object.hasOwn(revokedRetry.data.item, "decision_note") && !/423061|818181|919191/.test(JSON.stringify(revokedRetry.data))
+          && await snapshot([moneyId]) === revokedBefore);
+      await req(admin, "PATCH", `/api/users/${creator.id}`, { extra_permissions: ["costs.manage"], revoked_permissions: [] });
+    }
     const fromBatch = await makeBatch("FROM");
     const toBatch = await makeBatch("TO");
     const id = await mkApproved(creator, "destination-owner", { batch: String(fromBatch) });
