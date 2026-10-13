@@ -787,6 +787,57 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       await rawApprovals.deleteOne({ _id: requestId });
       await rawCosts.updateOne({ _id: new ObjectId(negativeId) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
     }
+    // The original scoped/missing arm above cannot expose the unscoped or deleting-batch
+    // catch paths: those reach the queue after scope validation. Preserve ambiguous ownership
+    // across those three boundaries too, using exact 409 and the same fixed audit membership.
+    for (const [audience, actor, destinationState] of [
+      ["global", creator, "missing"], ["scoped", recoveryCreator, "Deleting"], ["global", creator, "Deleting"],
+    ]) {
+      const source = await makeBatch(`AMBIGUOUS-SOURCE-${audience}-${destinationState}`);
+      const destination = await makeBatch(`AMBIGUOUS-DEST-${audience}-${destinationState}`);
+      const costId = await mkApproved(actor, `ambiguous-${audience}-${destinationState}`, { batch: String(source) });
+      const baseCost = costId ? await raw(costId) : null;
+      const body = { batch: String(destination), confirm_approved: true, base_updated_at: baseCost?.updatedAt.toISOString() };
+      const headers = { "Idempotency-Key": `${TAG}-ambiguous-${audience}-${destinationState}` };
+      const queued = costId ? await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers) : { status: 0 };
+      const claim = costId ? await raw(costId) : null;
+      const requestId = claim?.cost_edit_request, proposal = claim?.cost_edit_proposal;
+      const originalRequest = requestId ? await rawApprovals.findOne({ _id: requestId }) : null;
+      const originalAudit = requestId ? await rawAudits.findOne({ entity: "ApprovalRequest", entity_id: requestId, field: "created" }) : null;
+      ok(`QA-2908 ${audience}/${destinationState} ambiguity [precondition]: real matching claim/request and original creation audit exist before corruption`,
+        queued.status === 202 && !!originalRequest && !!originalAudit && originalRequest.payload?._edit_mutation_key === proposal?.mutation_key
+          && originalRequest.payload?._edit_input_hash === proposal?.input_hash && String(proposal?.context?.requestId) === String(requestId)
+          && String(originalRequest.initiator) === String(actor.id) && proposal.context.batch === String(destination)
+          && claim.payment_status === "Payment Pending");
+      if (!originalRequest || !proposal || !originalAudit) continue;
+      await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $pull: { own_mutations: { key: proposal.mutation_key } } });
+      await rawApprovals.deleteOne({ _id: requestId });
+      if (destinationState === "missing") await rawBatches.deleteOne({ _id: destination });
+      else await rawBatches.updateOne({ _id: destination }, { $set: { deletion_state: "Deleting" } });
+      for (const [link, fields] of [
+        ["owner request", { cost_edit_request: new ObjectId() }],
+        ["mutation key", { "cost_edit_proposal.mutation_key": `${proposal.mutation_key}-other` }],
+        ["input hash", { "cost_edit_proposal.input_hash": "different-hash" }],
+        ["context request", { "cost_edit_proposal.context.requestId": new ObjectId() }],
+        ["context cost", { "cost_edit_proposal.context.payload.cost_entry": String(new ObjectId()) }],
+        ["context destination", { "cost_edit_proposal.context.batch": String(source) }],
+      ]) {
+        await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
+        await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $set: fields });
+        const before = await snapshot([costId], [source, destination], [requestId]);
+        const denied = await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers);
+        ok(`QA-2908 ${audience}/${destinationState} mismatched ${link}: exactly 409 preserves owner/proposal/payment/liability/revision/receipts/outbox, fixed audit and all effects`,
+          denied.status === 409 && await snapshot([costId], [source, destination], [requestId]) === before, `${denied.status} ${denied.data?.error ?? ""}`);
+      }
+      await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $set: { cost_edit_request: requestId, cost_edit_proposal: proposal } });
+      await rawApprovals.insertOne({ ...originalRequest, initiator: new ObjectId(other.id) });
+      const exactBefore = await snapshot([costId], [source, destination], [requestId]);
+      const exact = await req(actor.cookie, "PATCH", `/api/costs/${costId}`, body, headers);
+      ok(`QA-2908 ${audience}/${destinationState} exact request exists for another actor: exactly 409 preserves owner/proposal/payment and all effects`,
+        exact.status === 409 && await snapshot([costId], [source, destination], [requestId]) === exactBefore, `${exact.status} ${exact.data?.error ?? ""}`);
+      await rawApprovals.deleteOne({ _id: requestId });
+      await rawCosts.updateOne({ _id: new ObjectId(costId) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+    }
     await req(admin, "PATCH", `/api/users/${recoveryCreator.id}`, { active: false });
 
     // QA-2909: the actual approver records a PARTIAL sanction. Removing only the queued receipt

@@ -441,36 +441,37 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   if (patch.trainer) await assertTrainerInScope(user, String(patch.trainer));
   // QA-2908: a scoped missing-batch refusal must not strand the source's exact crash claim.
   // Check the saved owner, not merely the retry's destination, and leave ambiguous claims intact.
-  if (recovering) {
-    const proposal = internal?.cost_edit_proposal;
-    const context = proposal?.context;
-    const payload = context?.payload;
-    const requestId = internal?.cost_edit_request;
-    const destination = context?.batch;
-    const coherent = proposal?.mutation_key === mutationKey && proposal?.input_hash === inputHash
-      && Types.ObjectId.isValid(String(requestId ?? ""))
-      && String(context?.requestId ?? "") === String(requestId)
-      && context?.entity === "CostEntry" && String(context?.entity_id ?? "") === String(doc._id)
-      && payload?.kind === "cost-edit" && String(payload?.cost_entry ?? "") === String(doc._id)
-      && payload?._edit_mutation_key === mutationKey && payload?._edit_input_hash === inputHash
-      && Types.ObjectId.isValid(String(destination ?? ""))
-      && String(payload?.batch ?? "") === String(destination)
-      && String(merged.batch ?? "") === String(destination);
-    if (coherent) {
-      const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)) }, { projection: { _id: 1 } });
-      if (!live && !(await ApprovalRequest.exists({ _id: requestId }))) {
+  const proposal = internal?.cost_edit_proposal;
+  const savedContext = proposal?.context;
+  const savedPayload = savedContext?.payload;
+  const savedRequestId = internal?.cost_edit_request;
+  const savedDestination = savedContext?.batch;
+  const coherent = proposal?.mutation_key === mutationKey && proposal?.input_hash === inputHash
+    && Types.ObjectId.isValid(String(savedRequestId ?? ""))
+    && String(savedContext?.requestId ?? "") === String(savedRequestId)
+    && savedContext?.entity === "CostEntry" && String(savedContext?.entity_id ?? "") === String(doc._id)
+    && savedPayload?.kind === "cost-edit" && String(savedPayload?.cost_entry ?? "") === String(doc._id)
+    && savedPayload?._edit_mutation_key === mutationKey && savedPayload?._edit_input_hash === inputHash
+    && (!savedDestination || Types.ObjectId.isValid(String(savedDestination)))
+    && String(savedPayload?.batch ?? "") === String(savedDestination ?? "")
+    && String(merged.batch ?? "") === String(savedDestination ?? "");
+  if (recovering && coherent && savedDestination) {
+      const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(savedDestination)) }, { projection: { _id: 1 } });
+      if (!live && !(await ApprovalRequest.exists({ _id: savedRequestId }))) {
         await CostEntry.collection.updateOne({
           _id: doc._id, entered_by: new Types.ObjectId(String(user.id)), updatedAt: before.updatedAt,
           payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
-          cost_edit_request: requestId, "cost_edit_proposal.mutation_key": mutationKey,
-          "cost_edit_proposal.input_hash": inputHash, "cost_edit_proposal.context": context,
+          cost_edit_request: savedRequestId, "cost_edit_proposal.mutation_key": mutationKey,
+          "cost_edit_proposal.input_hash": inputHash, "cost_edit_proposal.context": savedContext,
         }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
         if (isScoped(user)) throw new HttpError(404, "Batch not found");
         throw new HttpError(409, "This batch is being deleted or no longer exists, so this request cannot be queued.");
       }
-    }
   }
   if (patch.batch) await assertBatchInScope(user, String(patch.batch));
+  if (recovering && !coherent) {
+    throw new HttpError(409, "This cost has an incomplete edit claim. Nothing changed; ask finance to reconcile it.");
+  }
   const target = await assertActiveCostCategory(merged.category);
   if (patch.category !== undefined) {
     if (isBareOtherHeadName(target.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
@@ -529,21 +530,37 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
         } } as any);
         if (claimed.modifiedCount !== 1) {
           const winner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { cost_edit_request: 1, cost_edit_proposal: 1 } });
-          if (winner?.cost_edit_proposal?.mutation_key === mutationKey
-              && winner.cost_edit_proposal.input_hash === inputHash) {
+          const winnerProposal = winner?.cost_edit_proposal;
+          const winnerContext = winnerProposal?.context;
+          const winnerPayload = winnerContext?.payload;
+          const winnerDestination = winnerContext?.batch;
+          const winnerCoherent = winnerProposal?.mutation_key === mutationKey && winnerProposal?.input_hash === inputHash
+            && Types.ObjectId.isValid(String(winner?.cost_edit_request ?? ""))
+            && String(winnerContext?.requestId ?? "") === String(winner.cost_edit_request)
+            && winnerContext?.entity === "CostEntry" && String(winnerContext?.entity_id ?? "") === String(doc._id)
+            && winnerPayload?.kind === "cost-edit" && String(winnerPayload?.cost_entry ?? "") === String(doc._id)
+            && winnerPayload?._edit_mutation_key === mutationKey && winnerPayload?._edit_input_hash === inputHash
+            && (!winnerDestination || Types.ObjectId.isValid(String(winnerDestination)))
+            && String(winnerPayload?.batch ?? "") === String(winnerDestination ?? "")
+            && String(merged.batch ?? "") === String(winnerDestination ?? "");
+          if (winnerCoherent) {
             let parked;
             try {
               parked = await requireApproval("cost.post", user, {
-                ...winner.cost_edit_proposal.context, requestId: new Types.ObjectId(String(winner.cost_edit_request)),
+                ...winnerContext, requestId: new Types.ObjectId(String(winner.cost_edit_request)),
               });
             } catch (error: any) {
               if (error?.code !== 11000) {
-                const destination = winner.cost_edit_proposal.context.batch;
+                const destination = winnerDestination;
                 if (destination) {
                   const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)), deletion_state: { $exists: false } });
                   if (!live && !(await ApprovalRequest.exists({ _id: winner.cost_edit_request }))) {
-                    await CostEntry.collection.updateOne({ _id: doc._id, cost_edit_request: winner.cost_edit_request,
-                      "cost_edit_proposal.mutation_key": mutationKey }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+                    await CostEntry.collection.updateOne({
+                      _id: doc._id, entered_by: new Types.ObjectId(String(user.id)), updatedAt: before.updatedAt,
+                      payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
+                      cost_edit_request: winner.cost_edit_request, "cost_edit_proposal.mutation_key": mutationKey,
+                      "cost_edit_proposal.input_hash": inputHash, "cost_edit_proposal.context": winnerContext,
+                    }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
                   }
                 }
                 throw error;
@@ -558,17 +575,21 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
         }
       }
       let parked;
+      const claimedContext = recovering ? savedContext : context;
       try {
-        parked = await requireApproval("cost.post", user,
-          recovering ? { ...internal.cost_edit_proposal.context, requestId } : context);
+        parked = await requireApproval("cost.post", user, { ...claimedContext, requestId });
       } catch (error: any) {
         if (error?.code !== 11000) {
-          const destination = recovering ? internal.cost_edit_proposal.context.batch : context.batch;
+          const destination = claimedContext.batch;
           if (destination) {
             const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(destination)), deletion_state: { $exists: false } });
             if (!live && !(await ApprovalRequest.exists({ _id: requestId }))) {
-              await CostEntry.collection.updateOne({ _id: doc._id, cost_edit_request: requestId,
-                "cost_edit_proposal.mutation_key": mutationKey }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
+              await CostEntry.collection.updateOne({
+                _id: doc._id, entered_by: new Types.ObjectId(String(user.id)), updatedAt: before.updatedAt,
+                payment_status: "Payment Pending", archived_at: null, deletion_state: { $exists: false },
+                cost_edit_request: requestId, "cost_edit_proposal.mutation_key": mutationKey,
+                "cost_edit_proposal.input_hash": inputHash, "cost_edit_proposal.context": claimedContext,
+              }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
             }
           }
           throw error;
@@ -634,7 +655,10 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   if (written.modifiedCount !== 1) {
     const winner: any = await CostEntry.collection.findOne({ _id: doc._id }, { projection: { own_mutations: 1 } });
     const first = (winner?.own_mutations ?? []).find((r: any) => r.key === mutationKey);
-    if (first?.input_hash === inputHash) return NextResponse.json(first.result);
+    if (first?.input_hash === inputHash) {
+      if (first.result?.queued === true) return queuedResult(first.result.item, first);
+      return NextResponse.json(first.result);
+    }
     throw new HttpError(409, "This cost changed while your edit was being saved (it may have been paid or deleted). Nothing was changed; refresh and try again.");
   }
   await settleFinanceAuditEvents({ costIds: [doc._id] }).catch(() => {});
