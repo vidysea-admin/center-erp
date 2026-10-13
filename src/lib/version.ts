@@ -286,15 +286,15 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "No other screen, figure or permission changes in this release.";
 
 export const RELEASE_NOTE_CURRENT =
-  "-324 repairs candidate links to their assigned batches and completes the cost-entry and daily-report workflows. " +
+  "-324 repairs candidate links to their assigned batches and adds cost-entry and daily-report controls. " +
   "Pending or rejected cost heads cannot authorize new ledger commitments, even with the ordinary cost approval rule off. " +
-  "Increasing or changing an approved pre-approval cap waits for another finance approver while the existing cap remains effective. " +
+  "For an approved cost head, disabling pre-approval or lowering its cap on the same terms takes effect without another proposal; enabling or increasing pre-approval, or otherwise changing its calculation terms, waits for another finance approver while the existing policy remains effective. " +
   "Finance and Costs show head approval markers, approver details and payment filters; costs can be filtered by head and subhead. " +
-  "A creator can change or remove their own unpaid entry, with confirmation for approved entries and renewed approval for material changes. " +
-  "Removed creator entries can be restored; paid entries remain locked. Repeated submissions use the original recorded result. " +
+  "Creators with current access can change or remove their own unpaid entries, with confirmation for approved entries; material changes to an approved entry go back for approval. " +
+  "Removed creator entries can be restored; paid entries remain locked to their creator. Eligible retries of the same submission and key reuse its recorded result, subject to current access and visibility. " +
   "The daily report includes daily enrolments and actual training starts, plus current enrolled and ongoing learner totals with their measurement time. " +
-  "An Admin can select ERP recipients or add external addresses. Manual publication and the 9 PM India-time schedule are separate sends, " +
-  "with recipient permissions and recorded sent, skipped or failed outcomes.";
+  "An Admin can select ERP recipients or add external addresses. ERP recipients retain their own centre scope and finance permissions; explicitly chosen external addresses without an ERP account receive the full report. " +
+  "Manual publication and the 9 PM India-time schedule are separate sends, with recorded sent, skipped or failed outcomes.";
 
 // Preserve the previous public note as literal history.
 const RELEASE_NOTE_ARCHIVE_323 =
