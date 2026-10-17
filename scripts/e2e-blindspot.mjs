@@ -675,6 +675,8 @@ ok("public registration rejects <10-digit phone", shortPhone.status === 400, `st
       // so the batch stayed empty and the operator had to navigate back and enrol by hand. The screen
       // now offers to enrol exactly the rows it just created, which needs their ids: guessing "the
       // newest N" is wrong the moment two people import at once.
+      // -325 (qa-import-into-batch): the drawer no longer asks afterwards - with "Add to batch" chosen the
+      // importer joins them itself and answers with batch_result. The ids are still returned, so this pin stands.
       ok("QA-896: a confirmed import returns the ids it created, so the batch it came from can be offered them",
         Array.isArray(done.data?.imported_ids) && done.data.imported_ids.length === done.data.imported,
         JSON.stringify({ imported: done.data?.imported, ids: (done.data?.imported_ids ?? []).length }));
