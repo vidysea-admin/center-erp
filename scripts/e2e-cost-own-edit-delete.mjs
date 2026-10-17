@@ -1039,6 +1039,97 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
   }
 }
 
+// ======================================================= QA-2910: malformed optional association ids refuse BEFORE any write
+// An authorised creator (not location-scoped, so every scope helper returns at once) who keeps a valid
+// batch and sends a malformed centre / batch / trainer id used to get an owner+proposal claim persisted
+// before ApprovalRequest's ObjectId cast failed. Every case here snapshots the raw cost, its requests and
+// the collection counts, sends the bad id, and asserts BOTH the 400 and that nothing at all moved - so the
+// arm goes red on the no-write check (not on a crash) when the up-front guard is removed.
+{
+  const bBatches = db.collection("batches");
+  const tpl = await bBatches.findOne({ program: { $type: "objectId" } });
+  ok("QA-2910 [precondition]: a program exists for the isolated batch fixture", !!tpl?.program);
+  const snap2910 = async (costId) => {
+    const oid = new ObjectId(String(costId));
+    const [cost, requests, nCosts, nReq, nAudit, nNote, nMail] = await Promise.all([
+      rawCosts.findOne({ _id: oid }),
+      rawApprovals.find({ $or: [{ entity_id: oid }, { "payload.cost_entry": String(costId) }] }).sort({ _id: 1 }).toArray(),
+      rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
+      db.collection("notifications").countDocuments({}), db.collection("maillogs").countDocuments({}),
+    ]);
+    return JSON.stringify({ cost, requests, nCosts, nReq, nAudit, nNote, nMail });
+  };
+  const mkBatch2910 = async (suffix) => {
+    const id = new ObjectId();
+    await bBatches.insertOne({ _id: id, code: `ZZ-2910-${suffix}-${stamp}`, status: "Planning",
+      location: new ObjectId(ownLoc._id), program: tpl.program, target_size: 1,
+      planned_start: new Date("2026-09-01"), planned_end: new Date("2026-09-30"),
+      createdAt: new Date(), updatedAt: new Date() });
+    return id;
+  };
+  let seq2910 = 0;
+  const send2910 = async (actor, id, patch) => {
+    const cur = await raw(id);
+    return req(actor.cookie, "PATCH", `/api/costs/${id}`,
+      { ...patch, confirm_approved: true, base_updated_at: cur.updatedAt.toISOString() },
+      { "Idempotency-Key": `${TAG}-2910-${++seq2910}` });
+  };
+  const refuse2910 = async (label, actor, id, patch) => {
+    const before = await snap2910(id);
+    const r = await send2910(actor, id, patch);
+    const after = await snap2910(id);
+    ok(`QA-2910 ${label}: refused 400`, r.status === 400, `${r.status} ${r.data?.error ?? ""}`);
+    ok(`QA-2910 ${label}: no cost field, owner claim, proposal, receipt, request, audit, notification or mail change`,
+      after === before, "state moved after a refused edit");
+  };
+  const BAD = ["not-an-object-id", "abcdefghijkl", "zzzzzzzzzzzzzzzzzzzzzzzz", 7, ["x"]];
+  if (tpl?.program) {
+    // creator path, approved entry: the exact half-write trigger (claim persisted, then the cast fails)
+    for (const field of ["location", "trainer", "batch"]) {
+      const batchId = await mkBatch2910(`CREATOR-${field}`);
+      const id = await mkApproved(creator, `2910-approved-${field}`, { batch: String(batchId) });
+      ok(`QA-2910 [precondition] ${field}: an approved entry with a live batch exists for the creator`, !!id && String((await raw(id))?.batch) === String(batchId));
+      if (!id) continue;
+      for (const bad of BAD) await refuse2910(`creator/approved: malformed ${field} ${JSON.stringify(bad)} next to a valid batch`, creator, id, { [field]: bad, amount: 322 });
+      ok(`QA-2910 ${field}: no edit is left waiting for approval after the refusals`, !(await waitingEdit(id)) && !(await raw(id))?.cost_edit_request);
+    }
+    // creator path, plain Payment Pending entry (direct-write branch)
+    const plainBatch = await mkBatch2910("CREATOR-PLAIN");
+    const direct = await mkDirect(creator, "2910-direct", { batch: String(plainBatch) });
+    ok("QA-2910 [precondition]: a Payment Pending entry with a live batch exists for the creator", !!direct);
+    if (direct) {
+      await refuse2910("creator/direct: malformed location", creator, direct, { location: "not-an-object-id", note: `${TAG}-2910-d2` });
+      // Types.ObjectId.isValid accepts ANY 12-char string, so these reach Mongoose's cast only when the guard is gone
+      // (the "not-an-object-id" arm above is refused by the cast either way and cannot tell the two apart).
+      for (const f of ["location", "batch", "trainer", "category"]) {
+        await refuse2910(`creator/direct: 12-char malformed ${f}`, creator, direct, { [f]: "abcdefghijkl", note: `${TAG}-2910-d12-${f}` });
+      }
+      // finance branch (finance.approve holder)
+      await refuse2910("finance: malformed location", approverB, direct, { location: "not-an-object-id" });
+      await refuse2910("finance: malformed trainer", approverB, direct, { trainer: "abcdefghijkl" });
+      await refuse2910("finance: malformed batch", approverB, direct, { batch: 7 });
+      await refuse2910("finance: malformed category", approverB, direct, { category: "not-an-object-id" });
+      await refuse2910("finance: 12-char malformed category", approverB, direct, { category: "abcdefghijkl" });
+
+      // the guard must not harden anything else: omitted / null / "" / valid ObjectId still behave as before
+      const okNull = await send2910(creator, direct, { trainer: null, amount: 411 });
+      ok("QA-2910 valid: trainer null is accepted (200) and the amount edit lands", okNull.status === 200 && (await raw(direct))?.amount === 411, `${okNull.status} ${okNull.data?.error ?? ""}`);
+      const okEmpty = await send2910(creator, direct, { trainer: "", amount: 412 });
+      ok("QA-2910 valid: trainer empty string is accepted (200)", okEmpty.status === 200 && (await raw(direct))?.amount === 412, `${okEmpty.status} ${okEmpty.data?.error ?? ""}`);
+      const okOmit = await send2910(creator, direct, { amount: 413 });
+      ok("QA-2910 valid: every association omitted is accepted (200)", okOmit.status === 200 && (await raw(direct))?.amount === 413, `${okOmit.status} ${okOmit.data?.error ?? ""}`);
+      const okOid = await send2910(creator, direct, { location: String(ownLoc._id), batch: String(plainBatch), amount: 414 });
+      ok("QA-2910 valid: well-formed ObjectId strings are accepted (200)", okOid.status === 200 && (await raw(direct))?.amount === 414, `${okOid.status} ${okOid.data?.error ?? ""}`);
+      const okFin = await send2910(approverB, direct, { trainer: null, amount: 415 });
+      ok("QA-2910 valid (finance): trainer null with an amount correction is accepted (200)", okFin.status === 200 && (await raw(direct))?.amount === 415, `${okFin.status} ${okFin.data?.error ?? ""}`);
+      const okClear = await send2910(creator, direct, { location: "", amount: 416 });
+      ok("QA-2910 valid: clearing the centre while a batch remains is not refused as malformed", okClear.status === 200, `${okClear.status} ${okClear.data?.error ?? ""}`);
+      const afterClear = await raw(direct);
+      ok("QA-2910 valid: the cleared centre is persisted as unset and the batch is retained", !afterClear?.location && String(afterClear?.batch) === String(plainBatch), `location=${afterClear?.location} batch=${afterClear?.batch}`);
+    }
+  }
+}
+
 // ======================================================= browser: the dialog is for approved entries only
 let browser;
 try {
