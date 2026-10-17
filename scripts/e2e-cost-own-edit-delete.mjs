@@ -117,6 +117,8 @@ const settled = async (read, { stable = 4, gapMs = 200, maxMs = 20000 } = {}) =>
     const next = await read();
     if (next === prev) run++; else { prev = next; run = 1; }
   }
+  // Fail closed: a state that never went quiet is not a valid "before" or "after" (review of 93e67d1).
+  if (run < stable) throw new Error(`settled(): state still moving after ${maxMs} ms (${run}/${stable} equal reads)`);
   return prev;
 };
 
