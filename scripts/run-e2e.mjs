@@ -147,6 +147,11 @@ const SUITES = [
   // mtg-b3 (QA-2898/2899, Umesh 2026-10-07): the person who entered a cost edits / deletes it themselves
   // (Pending: free; Approved: asks, amount/head change goes back through cost.post; Paid: locked; soft delete).
   "e2e-cost-own-edit-delete.mjs",
+  // qa-import-into-batch (release -325): the Candidates import drawer can add the sheet's people straight to a
+  // batch - preview "N will be added", per-row refusals, portal-ID holders ticked or skipped (never a duplicate
+  // candidate), truthful created / assigned / refused counts, import AND assign both required - and the join
+  // rule it uses is the ONE copy now shared with the bulk-assign and single-add doors. Own fixtures (ZZIMP-).
+  "e2e-import-into-batch.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen

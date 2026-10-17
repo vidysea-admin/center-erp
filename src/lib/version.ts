@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-324";
+export const RELEASE = "2026.08.14-325";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -286,6 +286,17 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "No other screen, figure or permission changes in this release.";
 
 export const RELEASE_NOTE_CURRENT =
+  "-325 lets the candidate import put the sheet's people straight onto a batch. " +
+  "In the Import Excel window, once a location and a job role are chosen, an optional Add to batch list offers the open batches (planning, ready or active) of that location and job role. It is offered only to someone who may assign candidates, and the server asks for both the import right and the assign right. " +
+  "The preview says how many will be added to the batch and warns before the roster would pass its target. " +
+  "If a row's APAAR ID or portal Candidate ID already belongs to a candidate in the system, no second candidate is made for it: the preview shows who holds it, with a link to that person and a tick box, and only the people you tick are added to the batch; unticked people are left as they were. " +
+  "A candidate who is already in another batch, or who belongs to another centre or job role, cannot be ticked, and the preview says why. A holder at a centre outside your access is not named. " +
+  "After the import the screen reports how many were created, how many were added and which were refused with the reason, counted from what was actually saved. " +
+  "Importing without choosing a batch works as before. " +
+  "The joining rules for adding from the batch screen, bulk assign and this import now live in one place; one visible difference is that bulk assign now also refuses a batch whose centre is not operational, as adding one candidate at a time already did.";
+
+// Preserve the previous public note as literal history.
+const RELEASE_NOTE_ARCHIVE_324 =
   "-324 repairs candidate links to their assigned batches and adds cost-entry and daily-report controls. " +
   "Pending or rejected cost heads cannot authorize new ledger commitments, even with the ordinary cost approval rule off. " +
   "For an approved cost head, disabling pre-approval or lowering its cap on the same terms takes effect without another proposal; enabling or increasing pre-approval, or otherwise changing its calculation terms, waits for another finance approver while the existing policy remains effective. " +
@@ -296,7 +307,6 @@ export const RELEASE_NOTE_CURRENT =
   "An Admin can select ERP recipients or add external addresses. ERP recipients retain their own centre scope and finance permissions; explicitly chosen external addresses without an ERP account receive the full report. " +
   "Manual publication and the 9 PM India-time schedule are separate sends, with recorded sent, skipped or failed outcomes.";
 
-// Preserve the previous public note as literal history.
 const RELEASE_NOTE_ARCHIVE_323 =
   "-323 changes the Candidates, Locations, Batches and Reports screens, and changes how a new "  +
   "cost head is approved. "  +
@@ -2058,6 +2068,7 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_324 + " " +
   RELEASE_NOTE_ARCHIVE_323 + " " +
   // -323: ARCHIVE_322 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_322 + " " +

@@ -142,12 +142,12 @@ function CandidatesInner() {
   // drawer already filled, and remembers the batch so the enrolment can be offered at the end.
   const [importState, setImportState] = useState<any>(
     sp.get("import") === "1"
-      ? { location: sp.get("location") ?? "", program: sp.get("program") ?? "" }
+      // qa-import-into-batch (-325): the batch the operator came from is now simply the drawer's own
+      // "Add to batch" choice (it replaces the old importForBatch state and its after-the-fact
+      // window.confirm). The importer adds the people to it in the same request.
+      ? { location: sp.get("location") ?? "", program: sp.get("program") ?? "", batch_id: sp.get("batch") ?? "" }
       : {},
   );
-  // Held separately from importState because importState is wiped on every drawer close, and this
-  // must survive the preview -> confirm round trip that sits between arriving and enrolling.
-  const [importForBatch, setImportForBatch] = useState<string>(sp.get("batch") ?? "");
 
   const load = () => {
     // Search moved into DataTable (all-column, client-side) — the fetch brings the full
@@ -448,35 +448,36 @@ function CandidatesInner() {
     // 15/08 (Umesh): unknown columns are accepted by default — the operator unticks to ignore.
     if (importState.accept_unknown !== false) fd.append("accept_unknown", "1");
     if (!preview) fd.append("confirm", "1");
+    // qa-import-into-batch (-325): the optional batch, and (on commit only) exactly the ticked holders.
+    if (canAssignCandidate && importState.batch_id) {
+      fd.append("batch", importState.batch_id);
+      if (!preview) fd.append("assign_holders", JSON.stringify(importState.assign_holders ?? []));
+    }
     try {
       const res = await api("/api/candidates/import", { method: "POST", body: fd });
-      if (preview) setImportState((s: any) => ({ ...s, preview: res, force_bad: false }));
+      if (preview) setImportState((s: any) => ({ ...s, preview: res, force_bad: false, assign_holders: [] }));
       else {
         // QA-146: never MEMORIZE a mapping whose preview showed majority-invalid phones —
         // the remembered CHI-ITI mapping would have re-applied itself to every next sheet.
         const bad = (res.phone_invalid_count ?? importState.preview?.phone_invalid_count ?? 0) >= Math.max(1, Math.ceil((importState.preview?.valid ?? 0) / 2));
         if (!bad) { try { localStorage.setItem("erp-import-map-candidates-v2", JSON.stringify({ sig: [...(importState.columns ?? [])].sort().join("|"), mapping: importState.mapping ?? {} })); } catch {} }
         setDrawer(""); setImportState({});
-        // QA-896: the last step the operator used to have to work out for themselves. They came here
-        // from a batch that said it had no students; importing fills the POOL, so without this the
-        // batch is still empty and they have to navigate back and enrol by hand. Offered, not done
-        // silently — enrolling is a decision, and some of an imported sheet may belong elsewhere.
-        const forBatch = importForBatch;
-        const ids: string[] = res.imported_ids ?? [];
-        if (forBatch && ids.length) {
-          const bt = batches.find((x: any) => String(x._id) === String(forBatch));
-          if (window.confirm(
-            `${ids.length} candidate(s) imported into the pool.\n\n` +
-            `Add them to ${bt?.code ?? "the batch you came from"} now?\n\n` +
-            `Importing only creates the records — until they are added, the batch still shows an empty roster.`,
-          )) {
-            try {
-              const asg = await api("/api/candidates/assign", { method: "POST", json: { batch: forBatch, candidate_ids: ids } });
-              const failed = (asg.results ?? []).filter((r: any) => !r.ok);
-              setError(`${asg.assigned} added to ${bt?.code ?? "the batch"}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ""}`);
-            } catch (e: any) { setError(`Imported, but adding to the batch failed: ${e.message}`); }
-          }
-          setImportForBatch("");
+        // qa-import-into-batch (-325): with a batch chosen the importer has already done the adding, in
+        // the same request, and its answer is the truth - so the summary below is built from batch_result
+        // and never from what the preview promised. (This replaced QA-896's after-the-fact confirm().)
+        const br = res.batch_result;
+        if (br) {
+          const refused: any[] = br.refused ?? [];
+          const skipped: any[] = br.holders_skipped ?? [];
+          const notAdded = (br.created_not_assigned ?? []).length;
+          setError(
+            `${br.created} new candidate${br.created === 1 ? "" : "s"} created. ` +
+            `${br.assigned_new + br.assigned_existing} added to ${br.batch?.code ?? "the batch"} (${br.assigned_new} new, ${br.assigned_existing} already in the system).` +
+            (notAdded ? ` ${notAdded} created but not added.` : "") +
+            (skipped.length ? ` ${skipped.length} existing candidate${skipped.length === 1 ? "" : "s"} left as they were.` : "") +
+            (refused.length ? ` ${refused.length} refused: ${refused.slice(0, 3).map((r: any) => `row ${r.row} - ${r.reason}`).join(" | ")}${refused.length > 3 ? " | ..." : ""}` : "") +
+            ((br.warnings ?? []).length ? ` Note: ${(br.warnings as string[]).slice(0, 2).join(" | ")}` : ""),
+          );
         }
         load();
       }
@@ -1028,17 +1029,31 @@ Archive anyway?`)) return;
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <Field label="Location" required>
-              <select className={inputCls} value={importState.location ?? ""} onChange={(e) => setImportState({ ...importState, location: e.target.value })}>
+              <select className={inputCls} value={importState.location ?? ""} onChange={(e) => setImportState({ ...importState, location: e.target.value, batch_id: "", preview: undefined, assign_holders: [] })}>
                 <option value="">Select…</option>
                 {offerable(locations, importState.location).map((l) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
               </select>
             </Field>
             <Field label="Program" required>
-              <select className={inputCls} value={importState.program ?? ""} onChange={(e) => setImportState({ ...importState, program: e.target.value })}>
+              <select className={inputCls} value={importState.program ?? ""} onChange={(e) => setImportState({ ...importState, program: e.target.value, batch_id: "", preview: undefined, assign_holders: [] })}>
                 <option value="">Select…</option>
                 {offerable(programs).map((p) => { const t = `${p.name}${p.scheme ? ` (${p.scheme})` : p.code ? ` (${p.code})` : ""}`; return <option key={p._id} value={p._id} title={t}>{t}</option>; })}
               </select>
             </Field>
+            {/* qa-import-into-batch (-325): optional. Only batches at THIS centre for THIS job role and still
+                open (Planning / Ready / Active - `batches` is already filtered to those), and only for someone
+                who may assign (the server enforces candidates.assign whatever this hides). */}
+            {canAssignCandidate && importState.location && importState.program && (
+              <Field label="Add to batch (optional)">
+                <select className={inputCls} data-testid="import-batch" value={importState.batch_id ?? ""}
+                  onChange={(e) => setImportState({ ...importState, batch_id: e.target.value, preview: undefined, assign_holders: [] })}>
+                  <option value="">Do not add to a batch</option>
+                  {batches
+                    .filter((b: any) => String(b.location?._id ?? b.location) === String(importState.location) && String(b.program?._id ?? b.program) === String(importState.program))
+                    .map((b: any) => <option key={b._id} value={b._id}>{b.code} ({b.status})</option>)}
+                </select>
+              </Field>
+            )}
           </div>
           <a href={`${BASE_PATH}/api/candidates/template`} className="inline-block text-sm font-medium text-blue-700 hover:underline">⬇ Download sample sheet format</a>
           {importState.location && importState.program && !importState.columns && (
@@ -1229,9 +1244,76 @@ Archive anyway?`)) return;
                         </label>
                       </div>
                     )}
+                    {/* qa-import-into-batch (-325): what the batch will receive, and the existing candidates the
+                        sheet's APAAR / portal IDs already belong to. Nothing here is created for a held ID: the
+                        operator ticks the people who should join the batch; the rest are left exactly as they are. */}
+                    {canAssignCandidate && importState.batch_id && importState.preview?.batch_plan && (() => {
+                      const bp = importState.preview.batch_plan;
+                      const ticks: string[] = importState.assign_holders ?? [];
+                      const assignable = (bp.holders ?? []).filter((h: any) => h.can_assign && h.holder_id);
+                      const toggle = (id: string, on: boolean) => setImportState((s: any) => ({ ...s, assign_holders: on ? [...new Set([...(s.assign_holders ?? []), id])] : (s.assign_holders ?? []).filter((x: string) => x !== id) }));
+                      return (
+                        <div className="space-y-2" data-testid="import-batch-plan">
+                          <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900" data-testid="import-batch-summary">
+                            <b>{bp.will_add_new} will be added to batch {bp.batch?.code}</b>
+                            {" "}(roster {bp.batch?.roster_count} now, {bp.roster_after + ticks.length} after your ticks{bp.batch?.target_size ? `, target ${bp.batch.target_size}` : ""}).
+                            {bp.will_create > bp.will_add_new && <> {bp.will_create - bp.will_add_new} new candidate(s) will be created but not added (see below).</>}
+                            {bp.target_warning && <div className="mt-1 text-amber-800">{bp.target_warning}</div>}
+                          </div>
+                          {(bp.new_refused ?? []).length > 0 && (
+                            <ul className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                              {bp.new_refused.map((r: any, i: number) => <li key={i}>Row {r.row}: {r.label} - will be created but NOT added. {r.reason}</li>)}
+                            </ul>
+                          )}
+                          {(bp.ambiguous ?? []).length > 0 && (
+                            <ul className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-900">
+                              {bp.ambiguous.map((r: any, i: number) => <li key={i}>Row {r.row}: {r.label} - {r.reason}</li>)}
+                            </ul>
+                          )}
+                          {(bp.holders ?? []).length > 0 && (
+                            <div className="rounded-lg border border-gray-200 text-xs" data-testid="import-holders">
+                              <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 font-medium text-gray-700">
+                                <span>{bp.holders.length} row{bp.holders.length === 1 ? "" : "s"} already belong to an existing candidate (no duplicate is created). Tick who should join {bp.batch?.code}:</span>
+                                {assignable.length > 0 && (
+                                  <button type="button" className="text-blue-700 hover:underline" onClick={() => setImportState((s: any) => ({ ...s, assign_holders: assignable.map((h: any) => h.holder_id) }))}>Tick all assignable</button>
+                                )}
+                              </div>
+                              <table className="w-full">
+                                <tbody>
+                                  {bp.holders.map((h: any, i: number) => (
+                                    <tr key={i} className="border-b border-gray-100 last:border-0">
+                                      <td className="px-3 py-1.5 w-8">
+                                        <input type="checkbox" aria-label={`Add ${h.candidate?.name ?? "this candidate"} to the batch`}
+                                          disabled={!h.can_assign || !h.holder_id}
+                                          checked={!!h.holder_id && ticks.includes(h.holder_id)}
+                                          onChange={(e) => h.holder_id && toggle(h.holder_id, e.target.checked)} />
+                                      </td>
+                                      <td className="px-3 py-1.5">
+                                        <div>Row {h.row}: sheet says <b>{h.label}</b> ({h.matched_on === "apaar" ? "APAAR" : "portal Candidate ID"} {h.value})</div>
+                                        {h.candidate
+                                          ? <div>Already in the system as <a className="font-medium text-blue-700 hover:underline" href={`${BASE_PATH}${h.link}`} target="_blank" rel="noreferrer">{h.candidate.name}</a></div>
+                                          : <div className="text-gray-500">Belongs to a candidate at a centre you cannot see.</div>}
+                                        {h.refusal && <div className="text-red-700">Cannot be added: {h.refusal}</div>}
+                                        {!h.refusal && h.warning && <div className="text-amber-800">{h.warning}</div>}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="flex gap-2">
                       <Btn kind="ghost" onClick={() => importConfirm(true)}>Preview</Btn>
-                      {importState.preview && <Btn disabled={badMapping && !importState.force_bad} onClick={() => importConfirm(false)}>Import {importState.preview.valid} candidates</Btn>}
+                      {importState.preview && (
+                        canAssignCandidate && importState.batch_id && importState.preview.batch_plan
+                          ? <Btn disabled={badMapping && !importState.force_bad} onClick={() => importConfirm(false)}>
+                              Import {importState.preview.batch_plan.will_create} and add {importState.preview.batch_plan.will_add_new + (importState.assign_holders ?? []).length} to {importState.preview.batch_plan.batch?.code}
+                            </Btn>
+                          : <Btn disabled={badMapping && !importState.force_bad} onClick={() => importConfirm(false)}>Import {importState.preview.valid} candidates</Btn>
+                      )}
                     </div>
                   </>
                 );

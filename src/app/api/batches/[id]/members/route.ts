@@ -17,10 +17,9 @@ export async function rosterCandidateFields(user: Parameters<typeof hasEditLevel
   return (await hasEditLevel(user, "candidates.manage")) ? null : ROSTER_CANDIDATE_FIELDS;
 }
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
-import { addMemberChecked, assertBatchInScope, assertLocationOperational, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { assertBatchInScope, assertBatchJoinable, assignCandidateToBatch, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
-import { audit } from "@/lib/audit";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
@@ -119,43 +118,21 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   requireEdit(user);
   await requirePerm(user, "candidates.assign"); // togglable (2026-08-11)
   const { id } = await ctx.params;
-  await assertBatchInScope(user, id); // Rule 38
-  const batch = await Batch.findById(id).select("status location program").lean<any>();
-  if (!batch) throw new HttpError(404, "Batch not found");
-  if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
-  await assertLocationOperational(batch.location, "Adding a candidate"); // Rule 1
+  // qa-import-into-batch (-325): load + 404 + Rule 38 + closed + Rule 1 is rules.ts assertBatchJoinable now,
+  // shared with the bulk-assign door and the importer (ARCHITECTURE.md section 3.1).
+  const batch = await assertBatchJoinable(user, id);
   const body = await readJson(req);
   if (!body.candidate) throw new HttpError(400, "candidate is required");
   const cand = await Candidate.findById(body.candidate).select("name location program").lean<any>();
   if (!cand) throw new HttpError(404, "Candidate not found");
   assertLocationInScope(user, String(cand.location)); // Rule 38 on the candidate too
-  // 2026-08-13 (Manish walkthrough — other centres' candidates on the pool): membership
-  // requires the batch's own centre and job role. assertLocationInScope is a no-op for
-  // Admin/Operations, so equality is checked explicitly for everyone.
-  // -124 (M4-04): a candidate with NO centre is not "at another centre" — they are unplaced, which is
-  // exactly what a walk-in is. Enrolling them here is the event that decides it (adopted below, the
-  // same way a programme-less candidate adopts the batch's programme). Someone who DOES belong to
-  // another centre is still refused: that rule is Manish's own, from the 13/08 walkthrough.
-  if (cand.location && String(cand.location) !== String(batch.location)) {
-    throw new HttpError(409, `${cand.name ?? "Candidate"} belongs to another centre — move them to this location first.`);
-  }
-  if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
-    throw new HttpError(409, `${cand.name ?? "Candidate"} is registered under a different job role/scheme than this batch.`);
-  }
-  // QA-892: `undefined`, not `new Date()`. The default belongs to addMemberChecked, which knows
-  // whether this batch already began — passing today's date here would override that silently.
-  const m = await addMemberChecked(id, body.candidate, body.joined_on ? new Date(body.joined_on) : undefined);
-  // Import convention: program-less candidates inherit the batch's programme on enrolment.
-  if (!cand.program && batch.program) {
-    await Candidate.updateOne({ _id: body.candidate }, { $set: { program: batch.program } });
-  }
-  // -124 (M4-04): and a candidate with no centre adopts this one. Audited by name, because it changes
-  // who can see the record from that moment on (Rule 38 scoping keys on exactly this field).
-  if (!cand.location && batch.location) {
-    await Candidate.updateOne({ _id: body.candidate }, { $set: { location: batch.location } });
-    await audit({ entity: "Candidate", entityId: body.candidate, field: "location",
-      oldValue: "(none — walk-in)", newValue: `set to this batch's centre on enrolment (${batch.code ?? id})`, actor: user.id });
-  }
-  await audit({ entity: "BatchMember", entityId: m._id, newValue: "assigned", actor: user.id });
+  // qa-import-into-batch (-325): the centre test, the job-role test, addMemberChecked, programme and
+  // centre adoption and their audit rows are assignCandidateToBatch (rules.ts) - one body for this door,
+  // the bulk-assign door and the importer. The 2026-08-13 centre/role rulings, the -124 walk-in
+  // exemption and QA-892's `undefined` join-date default all live there now, with their comments.
+  const joined = await assignCandidateToBatch({
+    batch, candidate: cand, joinedOn: body.joined_on ? new Date(body.joined_on) : undefined, actorId: user.id,
+  });
+  const m = joined.member;
   return NextResponse.json({ item: m, warning: (m as any).warning }, { status: 201 });
 });

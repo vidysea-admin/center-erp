@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readFormData } from "@/lib/authz";
+import { Types } from "mongoose";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, isScoped, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
-import { parseSheetDate } from "@/lib/rules";
+import { BatchMember, Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
+import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
+import { getDefaults } from "@/lib/defaults";
+import { plain } from "@/lib/user-copy";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { readUploadedWorkbook } from "@/lib/workbook";
 import { audit } from "@/lib/audit";
@@ -55,9 +58,24 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const program = String(form.get("program") || "");
   const confirm = form.get("confirm") === "1";
   const mappingRaw = form.get("mapping");
+  // qa-import-into-batch (-325): the OPTIONAL "Add to batch" field. Absent = no code path of the existing
+  // importer changes (D1). Present = importing AND assigning, so BOTH rights are required, enforced here
+  // on the server whatever the screen hides. Everything below that can refuse a batch-level problem runs
+  // BEFORE the workbook is read, so a refusal has written nothing.
+  const batchId = String(form.get("batch") || "");
+  if (batchId) await requirePerm(user, "candidates.assign");
   if (!file) throw new HttpError(400, "file is required");
   if (!location || !program) throw new HttpError(400, "location and program are required");
   assertLocationInScope(user, location);
+  let joinBatch: Awaited<ReturnType<typeof assertBatchJoinable>> | null = null;
+  if (batchId) {
+    joinBatch = await assertBatchJoinable(user, batchId); // 404 / Rule 38 scope / closed / Rule 1
+    // Admin and Operations pass the scope test trivially, so this equality is the real centre guard for
+    // them - the same reason batches/[id]/members states it explicitly.
+    if (String(joinBatch.location) !== location || String(joinBatch.program) !== program) {
+      throw new HttpError(409, "That batch is not at this location / job role.");
+    }
+  }
 
   const buf = Buffer.from(await file.arrayBuffer());
   // QA-1023: CSV date cells are coerced US-style at READ time; readUploadedWorkbook keeps them as
@@ -133,9 +151,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
     return ids;
   };
+  // qa-import-into-batch: sheet row number (header = row 1) for each candidate object, kept OUTSIDE the
+  // object so it can never ride into insertMany.
+  const rowNoOf = new WeakMap<object, number>();
   const mapped = rows
     .map((r, rowIdx) => {
       const c: Record<string, unknown> = { location, program, lifecycle_status: "Unassigned", created_by: user.id };
+      rowNoOf.set(c, rowIdx + 2);
       for (const [col, field] of Object.entries(mapping)) {
         // -154 (QA-415, S1 QA-414): sidh_candidate_id joins the plain-text fields. It is the field
         // the government attendance matcher AND the certificate matcher join on, and this door -
@@ -290,7 +312,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   //
   // NORMALIZE what we can first: "2341 2341 2346" and "2341-2341-2346" are how a person writes a
   // 12-digit number, and refusing those would report a fault the sheet does not have.
-  const aadhaarInvalid = [];
+  const aadhaarInvalid: string[] = [];
   for (const c of candidates) {
     if (typeof c.aadhaar_no !== "string") continue;
     const raw = c.aadhaar_no.trim();
@@ -370,13 +392,22 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // in this file that is DROPPED rather than stored-as-given - QA-141's "a row is never dropped
   // over format" still holds, because it is the FIELD that is dropped, not the row.
   const apaarTaken: string[] = [];
+  // qa-import-into-batch (-325): with a batch chosen, a row whose portal ID is already held is NOT inserted
+  // as a new candidate - that is the duplicate-creation path this feature closes. It is recorded here with
+  // the holder document and resolved further down. Without a batch nothing below changes (QA-991).
+  type HolderHit = { matched_on: "apaar" | "sidh"; value: string; holder: any };
+  const holderHits = new Map<object, HolderHit[]>();
+  const addHit = (c: object, h: HolderHit) => { const l = holderHits.get(c) ?? []; l.push(h); holderHits.set(c, l); };
+  const HOLDER_FIELDS = " phone location program archived_at batch_interest dob education last_training_date";
   if (apaarSeen.size) {
-    const holders = await Candidate.find({ apaar_id: { $in: [...apaarSeen.keys()] } }).select("name apaar_id").lean<any[]>();
-    const byKey = new Map(holders.map((h) => [String(h.apaar_id), h.name]));
+    const holders = await Candidate.find({ apaar_id: { $in: [...apaarSeen.keys()] } }).select("name apaar_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
+    const byKey = new Map(holders.map((h) => [String(h.apaar_id), h]));
     for (const c of candidates) {
       if (typeof c.apaar_id !== "string") continue;
-      const holder = byKey.get(c.apaar_id);
-      if (!holder) continue;
+      const holderDoc = byKey.get(c.apaar_id);
+      if (!holderDoc) continue;
+      if (joinBatch) { addHit(c, { matched_on: "apaar", value: c.apaar_id, holder: holderDoc }); continue; }
+      const holder = holderDoc.name;
       apaarTaken.push(`${personLabel(c)} — "${c.apaar_id}" is already the APAAR ID of ${holder}`);
       delete c.apaar_id;
     }
@@ -394,17 +425,19 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (canon) wanted.add(canon);
     }
     if (wanted.size) {
-      const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE }).select("name sidh_candidate_id").lean<any[]>();
-      const byCanon = new Map<string, string>();
+      const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE }).select("name sidh_candidate_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
+      const byCanon = new Map<string, any>();
       for (const h of holders) {
         const hc = normalizeCan(h.sidh_candidate_id);
-        if (hc && wanted.has(hc) && !byCanon.has(hc)) byCanon.set(hc, h.name);
+        if (hc && wanted.has(hc) && !byCanon.has(hc)) byCanon.set(hc, h);
       }
       for (const c of candidates) {
         if (typeof c.sidh_candidate_id !== "string") continue;
         const canon = normalizeCan(c.sidh_candidate_id);
-        const holder = canon ? byCanon.get(canon) : undefined;
-        if (!holder) continue;
+        const holderDoc = canon ? byCanon.get(canon) : undefined;
+        if (!holderDoc) continue;
+        if (joinBatch) { addHit(c, { matched_on: "sidh", value: c.sidh_candidate_id, holder: holderDoc }); continue; }
+        const holder = holderDoc.name;
         sidhTaken.push(`${personLabel(c)} — "${c.sidh_candidate_id}" is already recorded for ${holder} (the same government identity, written differently)`);
         delete c.sidh_candidate_id;
       }
@@ -422,15 +455,119 @@ export const POST = apiHandler(async (req: NextRequest) => {
     else seen.set(key, candidates.indexOf(c));
   }
   const existingHits: string[] = [];
+  const existingHitOf = new Map<object, string>();
   for (const c of candidates.slice(0, 300)) { // bounded: preview only, not a full-file scan
     const hits = await findDuplicateCandidates({ name: String(c.name), phone: String(c.phone), dob: c.dob as Date });
-    if (hits.length) existingHits.push(`${personLabel(c)} → already exists: ${hits[0].message}`);
+    if (hits.length) {
+      const msg = `${personLabel(c)} → already exists: ${hits[0].message}`;
+      existingHits.push(msg);
+      existingHitOf.set(c, msg);
+    }
   }
-  const duplicates = [...inFile, ...existingHits];
+  let duplicates = [...inFile, ...existingHits];
+
+  // ============ qa-import-into-batch (-325): batch mode - resolve every sheet row into ONE of ============
+  //   new (inserted, then offered to the batch) | holder row (an existing candidate already holds its APAAR /
+  //   portal ID: NEVER inserted, offered to the batch only if the operator ticks it) | ambiguous (two
+  //   different holders: neither). Runs for the preview AND the commit, so the commit re-derives every
+  //   fact from the database instead of trusting what the screen showed a minute ago (arm 12).
+  let toInsert: Record<string, unknown>[] = candidates;
+  type HolderRow = {
+    row: number; label: string; value: string; matched_on: "apaar" | "sidh"; holderId: string;
+    holder: any; inScope: boolean; refusal: string | null; warning?: string; dupOfRow?: number;
+  };
+  const holderRows: HolderRow[] = [];
+  const ambiguousRows: { row: number; label: string; reason: string }[] = [];
+  const newRefused: { row: number; label: string; reason: string }[] = [];
+  const newWarnings: { row: number; label: string; warning: string }[] = [];
+  let rosterCount = 0;
+  const joinDefaults = joinBatch ? await getDefaults() : null;
+  if (joinBatch && joinDefaults) {
+    const jb = joinBatch;
+    const held = new Set<object>();
+    const claimedBy = new Map<string, number>();
+    for (const c of candidates) {
+      const hits = holderHits.get(c);
+      if (!hits) continue;
+      held.add(c);
+      const rowNo = rowNoOf.get(c) ?? 0;
+      const label = personLabel(c);
+      const distinct = [...new Set(hits.map((h) => String(h.holder._id)))];
+      if (distinct.length > 1) {
+        ambiguousRows.push({ row: rowNo, label, reason: "This row matches two different existing candidates (one by APAAR ID, one by portal Candidate ID), so it was not created and nobody was added for it. Fix the sheet and import again." });
+        continue;
+      }
+      const hit = hits[0];
+      const holderId = String(hit.holder._id);
+      const inScope = !isScoped(user) || (user.location_scope ?? []).map(String).includes(String(hit.holder.location ?? ""));
+      const row: HolderRow = { row: rowNo, label, value: hit.value, matched_on: hit.matched_on, holderId, holder: hit.holder, inScope, refusal: null };
+      if (claimedBy.has(holderId)) {
+        row.dupOfRow = claimedBy.get(holderId);
+        row.refusal = `This is the same existing candidate as row ${row.dupOfRow}, already listed.`;
+      } else claimedBy.set(holderId, rowNo);
+      holderRows.push(row);
+    }
+    toInsert = candidates.filter((c) => !held.has(c));
+
+    // holder state: scope, join rules, Rule 20 (one query for all holders), eligibility
+    for (const h of holderRows) {
+      if (h.refusal) continue;
+      if (!h.inScope) { h.refusal = "This ID already belongs to a candidate at a centre you cannot see. Ask an Admin to add them."; continue; }
+      const r = joinRefusalFor(h.holder, jb);
+      if (r) h.refusal = r;
+    }
+    const probe = holderRows.filter((h) => !h.refusal).map((h) => h.holder._id);
+    if (probe.length) {
+      const active = await BatchMember.find({ candidate: { $in: probe }, left_on: null }).select("candidate batch").populate("batch", "code").lean<any[]>();
+      const byCand = new Map(active.map((m) => [String(m.candidate), m]));
+      for (const h of holderRows) {
+        if (h.refusal) continue;
+        const m = byCand.get(h.holderId);
+        if (m) h.refusal = rule20Sentence((m.batch as any)?.code ?? m.batch);
+        else {
+          const el = candidateEligibility(h.holder, joinDefaults);
+          if (!el.eligible) h.warning = `${h.holder.name ?? "Candidate"}: ${el.reasons.join("; ")}`;
+        }
+      }
+    }
+    // new rows: the join rules that can be known before they exist, and the eligibility notes
+    for (const c of toInsert) {
+      const rowNo = rowNoOf.get(c) ?? 0;
+      const r = joinRefusalFor(c as any, jb);
+      if (r) { newRefused.push({ row: rowNo, label: personLabel(c), reason: plain(r) }); continue; }
+      const el = candidateEligibility(c as any, joinDefaults);
+      if (!el.eligible) newWarnings.push({ row: rowNo, label: personLabel(c), warning: `${c.name ?? "Candidate"}: ${el.reasons.join("; ")}` });
+    }
+    rosterCount = await BatchMember.countDocuments({ batch: jb._id, left_on: null });
+    // a row that is a holder is not a "possible duplicate" to flag - the holder table says it better, and
+    // for an out-of-scope holder the message would name somebody the user may not see
+    const hiddenMsgs = new Set([...held].map((c) => existingHitOf.get(c)).filter(Boolean) as string[]);
+    if (hiddenMsgs.size) duplicates = duplicates.filter((m) => !hiddenMsgs.has(m));
+  }
+  const batchPlan = () => {
+    const jb = joinBatch!;
+    const willAddNew = toInsert.length - newRefused.length;
+    const rosterAfter = rosterCount + willAddNew;
+    return {
+      batch: { _id: String(jb._id), code: jb.code, roster_count: rosterCount, target_size: jb.target_size ?? null },
+      will_create: toInsert.length, will_add_new: willAddNew, roster_after: rosterAfter,
+      target_warning: jb.target_size && rosterAfter > jb.target_size
+        ? `Roster would be ${rosterAfter} of target ${jb.target_size} — enrolment will be capped at ${jb.target_size}.` : null,
+      holders: holderRows.map((h) => ({
+        row: h.row, label: h.label, matched_on: h.matched_on, value: h.value,
+        // out of scope: the holder is described by NOTHING that identifies them (no id, name, phone, link)
+        holder_id: h.inScope ? h.holderId : null,
+        candidate: h.inScope ? { _id: h.holderId, name: h.holder.name, phone: h.holder.phone ?? null } : null,
+        link: h.inScope ? `/candidates?q=${encodeURIComponent(String(h.holder.name ?? ""))}` : null,
+        can_assign: !h.refusal, refusal: h.refusal, warning: h.warning ?? null,
+      })),
+      ambiguous: ambiguousRows, new_refused: newRefused, new_warnings: newWarnings,
+    };
+  };
 
   if (!confirm) {
     return NextResponse.json({
-      preview: candidates.slice(0, 10), valid: candidates.length,
+      preview: toInsert.slice(0, 10), valid: toInsert.length,
       skipped: rows.length - candidates.length,
       template_rows_skipped: templateRows.slice(0, 10), template_rows_skipped_count: templateRows.length,
       duplicates: duplicates.slice(0, 25), duplicate_count: duplicates.length,
@@ -476,12 +613,91 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // QA-110: say the quiet part — which columns are about to be DROPPED vs stored.
       ignored_columns: acceptUnknown ? [] : unknownCols,
       extra_columns_stored: acceptUnknown ? unknownCols : [],
+      // qa-import-into-batch: present ONLY when a batch was chosen, so the no-batch response keeps exactly
+      // its old key set.
+      ...(joinBatch ? { batch_plan: batchPlan() } : {}),
     });
   }
-  const docs = await Candidate.insertMany(candidates);
-  await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: `${docs.length} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${aadhaarInvalid.length ? `, ${aadhaarInvalid.length} unreadable Aadhaar number(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`, actor: user.id });
+  const importNote = (n: number) => `${n} imported, ${duplicates.length} flagged as possible duplicates${dateUnparseable.length ? `, ${dateUnparseable.length} unreadable dates` : ""}${phoneInvalid.length ? `, ${phoneInvalid.length} un-normalizable phones` : ""}${candidateIdInvalid.length ? `, ${candidateIdInvalid.length} portal Candidate ID(s) the gate cannot read` : ""}${apaarInvalid.length ? `, ${apaarInvalid.length} unreadable APAAR ID(s)` : ""}${aadhaarInvalid.length ? `, ${aadhaarInvalid.length} unreadable Aadhaar number(s)` : ""}${!acceptUnknown && unknownCols.length ? `, ${unknownCols.length} column(s) ignored: ${unknownCols.join(", ")}` : ""}`;
   // QA-896: the ids, so the screen can offer to put exactly these students on the batch the
   // operator came from. Without them the offer would have to guess "the newest N", which is wrong
   // the moment two people import at once.
-  return NextResponse.json({ imported: docs.length, imported_ids: docs.map((d) => String(d._id)), skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, apaar_taken: apaarTaken.slice(0, 25), apaar_taken_count: apaarTaken.length, sidh_taken: sidhTaken.slice(0, 25), sidh_taken_count: sidhTaken.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25), blank_by_field: blankByField }, { status: 201 });
+  const commitBody = (imported: number, ids: string[]) => ({ imported, imported_ids: ids, skipped: rows.length - candidates.length, duplicate_count: duplicates.length, date_unparseable: dateUnparseable.slice(0, 25), date_unparseable_count: dateUnparseable.length, phone_invalid: phoneInvalid.slice(0, 25), phone_invalid_count: phoneInvalid.length, candidate_id_invalid: candidateIdInvalid.slice(0, 25), candidate_id_invalid_count: candidateIdInvalid.length, aadhaar_invalid: aadhaarInvalid.slice(0, 25), aadhaar_invalid_count: aadhaarInvalid.length, apaar_invalid: apaarInvalid.slice(0, 25), apaar_invalid_count: apaarInvalid.length, apaar_duplicate: apaarDuplicate.slice(0, 25), apaar_duplicate_count: apaarDuplicate.length, apaar_same_as_aadhaar: apaarSameAsAadhaar.slice(0, 25), apaar_same_as_aadhaar_count: apaarSameAsAadhaar.length, apaar_taken: apaarTaken.slice(0, 25), apaar_taken_count: apaarTaken.length, sidh_taken: sidhTaken.slice(0, 25), sidh_taken_count: sidhTaken.length, ignored_columns: acceptUnknown ? [] : unknownCols, unhandled_fields: [...new Set(unhandledFields)], sidh_status_unmatched: [...new Set(sidhStatusUnmatched)].slice(0, 25), batch_interest_unmatched: [...new Set(batchInterestUnmatched)].slice(0, 25), blank_by_field: blankByField });
+
+  if (!joinBatch || !joinDefaults) {
+    const docs = await Candidate.insertMany(candidates);
+    await audit({ entity: "Candidate", entityId: docs[0]?._id ?? location, field: "import", newValue: importNote(docs.length), actor: user.id });
+    return NextResponse.json(commitBody(docs.length, docs.map((d) => String(d._id))), { status: 201 });
+  }
+
+  // ---------------- batch mode: import, then add to the batch, and report what REALLY happened ----------------
+  const jb = joinBatch;
+  // the ticks are read BEFORE anything is written, so a malformed field refuses with zero writes
+  let ticksRaw: unknown = [];
+  const rawTicks = form.get("assign_holders");
+  if (rawTicks !== null && String(rawTicks) !== "") {
+    try { ticksRaw = JSON.parse(String(rawTicks)); } catch { throw new HttpError(400, "assign_holders must be a JSON list of candidate ids"); }
+  }
+  if (!Array.isArray(ticksRaw)) throw new HttpError(400, "assign_holders must be a JSON list of candidate ids");
+  // D3: a tick counts only if it names a holder THIS sheet resolved to - a forged or stale id is ignored
+  const ticked = new Set((ticksRaw as unknown[]).map(String).filter((id) => holderRows.some((h) => h.holderId === id)));
+
+  // ids are assigned here (not by the driver) so that after a failed insert the rows that DID land can be
+  // read back by id and counted truthfully
+  const newIds = toInsert.map((c) => { const id = new Types.ObjectId(); (c as any)._id = id; return id; });
+  let landed: Record<string, unknown>[] = toInsert;
+  let insertFailure: { status: number; message: string } | null = null;
+  try {
+    await Candidate.insertMany(toInsert);
+  } catch (e) {
+    insertFailure = translateError(e);
+    const got = await Candidate.find({ _id: { $in: newIds } }).select("_id").lean<any[]>();
+    const gotSet = new Set(got.map((g) => String(g._id)));
+    landed = toInsert.filter((c) => gotSet.has(String((c as any)._id)));
+  }
+
+  const result = {
+    batch: { _id: String(jb._id), code: jb.code },
+    created: landed.length, assigned_new: 0, assigned_existing: 0,
+    holders_skipped: [] as { row: number; label: string; value: string; matched_on: string; reason: string }[],
+    refused: [] as { row: number; label: string; stage: "new" | "holder" | "row"; reason: string }[],
+    created_not_assigned: [] as string[],
+    warnings: [] as string[],
+  };
+  const finish = async () => {
+    await audit({ entity: "Candidate", entityId: landed[0] ? (landed[0] as any)._id : location, field: "import", newValue: `${importNote(landed.length)}; added to batch ${jb.code}: ${result.assigned_new} new + ${result.assigned_existing} existing`, actor: user.id });
+    await audit({ entity: "Batch", entityId: jb._id, field: "import_assign", newValue: `${result.created} created, ${result.assigned_new} new + ${result.assigned_existing} existing added, ${result.holders_skipped.length} existing skipped, ${result.refused.length} refused`, actor: user.id });
+  };
+  if (insertFailure) {
+    // nothing is assigned after a failed insert: the operator fixes the sheet and runs it again
+    await finish();
+    return NextResponse.json({ error: `${insertFailure.message} ${result.created} of ${toInsert.length} new candidate(s) were created before the write stopped; none were added to the batch.`, batch_result: result }, { status: insertFailure.status });
+  }
+
+  for (const c of landed) {
+    const rowNo = rowNoOf.get(c) ?? 0;
+    try {
+      const joined = await assignCandidateToBatch({ batch: jb, candidate: c as any, actorId: user.id, defaults: joinDefaults });
+      result.assigned_new++;
+      for (const w of [joined.rosterWarning, joined.eligibilityWarning]) if (w) result.warnings.push(w);
+    } catch (e) {
+      result.refused.push({ row: rowNo, label: personLabel(c), stage: "new", reason: translateError(e).message });
+      result.created_not_assigned.push(String((c as any)._id));
+    }
+  }
+  for (const a of ambiguousRows) result.refused.push({ row: a.row, label: a.label, stage: "row", reason: a.reason });
+  for (const h of holderRows) {
+    const skip = (reason: string) => result.holders_skipped.push({ row: h.row, label: h.label, value: h.value, matched_on: h.matched_on, reason });
+    if (!ticked.has(h.holderId) || h.dupOfRow || !h.inScope) { skip(h.inScope ? (h.dupOfRow ? h.refusal! : "Not ticked - left as it is.") : "Belongs to a candidate outside your centres - left as it is."); continue; }
+    if (h.refusal) { result.refused.push({ row: h.row, label: h.label, stage: "holder", reason: h.refusal }); continue; }
+    try {
+      const joined = await assignCandidateToBatch({ batch: jb, candidate: h.holder, actorId: user.id, defaults: joinDefaults });
+      result.assigned_existing++;
+      for (const w of [joined.rosterWarning, joined.eligibilityWarning]) if (w) result.warnings.push(w);
+    } catch (e) {
+      result.refused.push({ row: h.row, label: h.label, stage: "holder", reason: translateError(e).message });
+    }
+  }
+  await finish();
+  return NextResponse.json({ ...commitBody(landed.length, landed.map((c) => String((c as any)._id))), batch_result: result }, { status: 201 });
 });

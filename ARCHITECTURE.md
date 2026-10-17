@@ -29,7 +29,7 @@ page.** It imports models, so client components can't import it — client-safe 
 | Dates | `addDays` · `dayStart` · `parseSheetDate` (166) · `istToday` · `dayKey` · `dayRange` | **Rule 53** · `istToday()` is THE definition of "today" · §3.4: a SECOND `parseSheetDate` lives in `field-catalog.ts`, wires pinned (QA-1103) |
 | Planning | `computePlannedEnd` · `capacitySummary` · `planBatchBackward` · `planArtifact` · `nextBatchCode` · `createBatchWithCode` | **Rule 15**; codes `CENTRE-PROGRAMCODE-NN`, the number **derived from the batches on record** (`counters` no longer governs them, -225). `createBatchWithCode` is the ONLY place a batch is written — the code is minted after validation |
 | Trainer booking | `assertSlotWithinGuidelines` · `assertTrainerAvailableForBatch` · `trainerBookingWarnings` · `deriveTrainerStatus` · `assertRoomFreeForBatch` | **Rules 10–14** · QA-144 `max_daily_hours` |
-| Roster | `rosterOnDate` · `activeRoster` · `addMemberChecked` (400) · `updateEnrollment` · `dropMemberChecked` | **Rules 20–26, 48, 54** |
+| Roster | `rosterOnDate` · `activeRoster` · `addMemberChecked` (400) · **`joinRefusalFor` · `assertBatchJoinable` · `assignCandidateToBatch`** (the shared join rule of all three staff doors, -325, §3.1) · `updateEnrollment` · `dropMemberChecked` | **Rules 20–26, 48, 54** |
 | Batch lifecycle | `batchReadiness` (543) · `activateFromEvidence` (605) · `transitionBatch` (639, edge `switch` at :650) | **Rules 16–19, 47, 52** |
 | Daily log | `validateDailyLog` · `createDailyLogChecked` · `canEditDailyLog` | **Rules 27–32, 51, 53** |
 | Health | `attendanceGap` · `missingLogStreak` · `batchHealth` · `settlementStage` · `missingLogQueue` | **Rules 31, 33** |
@@ -562,16 +562,34 @@ It was asserting closure — on this map, which is the first thing every session
 wrong row here would have told the next reader the concept was safe. Say what was measured, and
 name what was not.
 
-### 3.1 THREE roster-add paths — two that already disagree (**live defect, QA-273**) and one that cannot
-| Copy | Where | Walk-in (no centre) |
+### 3.1 The roster-add doors — the QA-273 drift is CLOSED (qa-import-into-batch, release -325)
+| Door | Where | How it joins |
 |---|---|---|
-| Single add | `api/batches/[id]/members/route.ts:87` | `if (cand.location && …)` — **exempt**, and it *sets* the centre + audits it (:99) |
-| Bulk assign | `api/candidates/assign/route.ts:43` | `if (String(c0.location) !== …)` — **refused**: `String(undefined)` = `"undefined"`. No adoption either |
-| **Public batch-registration link** | `api/public/register/[token]/route.ts` (A-03, `qa-247` / release `-247`) | **calls `addMemberChecked` and nothing else**, so it inherits Rule 20, the QA-945 future-interest gate and the joined-on rule instead of re-stating them |
+| Single add | `api/batches/[id]/members/route.ts` (POST) | `assertBatchJoinable` + `assignCandidateToBatch` |
+| Bulk assign | `api/candidates/assign/route.ts` | `assertBatchJoinable` + `assignCandidateToBatch` per candidate |
+| **Excel importer, "Add to batch"** | `api/candidates/import/route.ts` (optional `batch` field) | `assertBatchJoinable` + `assignCandidateToBatch` per row, after the insert |
+| Public batch-registration link | `api/public/register/[token]/route.ts` (A-03, `qa-247`) | calls `addMemberChecked` only, so it inherits Rule 20, the QA-945 future-interest gate and the joined-on rule |
 
-**SoT:** extract the join-eligibility + adoption block into `rules.ts` beside `addMemberChecked` (:400)
-and have both of the first two routes call it. The third already does — it was written that way
-*because* of this row, which is the only reason it is not a fourth disagreement.
+**SoT (done at -325):** the join-eligibility + adoption block is in `rules.ts` beside `addMemberChecked`:
+`joinRefusalFor` (other centre with the walk-in exemption, other job role, archived, Upcoming-batch
+interest), `assertBatchJoinable` (404, Rule 38 scope, closed, Rule 1), `assignCandidateToBatch`
+(`joinRefusalFor` -> `addMemberChecked` -> programme adoption -> centre adoption + its audit -> the
+BatchMember "assigned" audit) and the two sentence builders `rule20Sentence` / `upcomingInterestRefusal`.
+The members and assign routes used to be two verbatim copies (QA-273); they are callers now, and
+`scripts/e2e-import-into-batch.mjs` pins that one place spells each refusal sentence. Behaviour deltas of
+the move, said out loud: the bulk-assign door gained Rule 1 (a halted centre refuses joins - the single
+door already did), and the single door's audit text now names the batch code instead of its id.
+
+**The importer's batch mode (-325) is an *add*, never a second candidate.** With a batch chosen, a row
+whose APAAR / portal Candidate ID an existing candidate already holds is NOT inserted (that was the
+QA-991 duplicate-creation path); the preview lists the holder (name + link only inside the user's
+Rule 38 scope - outside it the holder is described by nothing identifying) with a checkbox, and only
+ticked holders are joined to the batch (a tick counts only if the id is one this sheet resolved to).
+Without a batch the importer is byte-for-byte what it was (QA-991 still drops the held ID and imports the
+row). Both `candidates.manage` AND `candidates.assign` are required when a batch is named, enforced on the
+server. There is no database transaction on the standalone mongod, so truthfulness comes from re-deriving
+every fact at commit, per-row try/catch, and reading back what landed after a failed insert:
+`batch_result.created = assigned_new + created_not_assigned.length`.
 
 **QA-1189 — why the heading changed.** This section said "Two" for a release after a third caller
 existed, and the unit that added it (`qa-247`) cited this very section three times as its

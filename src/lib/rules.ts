@@ -15,7 +15,7 @@ import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts'
 export { isCertificateSettled, SETTLED_CERTIFICATE_STATUSES } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
 import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
-import { HttpError, isScoped, locationFilter } from "@/lib/authz";
+import { HttpError, assertLocationInScope, isScoped, locationFilter } from "@/lib/authz";
 // QA-1575: trainerDocsAccess() needs the permission level, not just the role. permissions.ts
 // imports authz.ts and models only, so this direction adds no cycle.
 import { hasEditLevel, hasPermission, requirePerm, INVOICE_MONEY_FIELDS } from "@/lib/permissions";
@@ -751,6 +751,17 @@ export async function startWasRecordedAfterTheFact(batchId: unknown): Promise<bo
   }));
 }
 
+// qa-import-into-batch (-325): the two refusal TEXTS addMemberChecked owns, factored out so the importer's
+// PREVIEW can show a row the very same sentence the commit would throw - before the row has an _id. One
+// spelling each; addMemberChecked below is still the commit-time authority for both rules.
+export function rule20Sentence(batchCode: unknown): string {
+  return `Candidate already active in batch ${batchCode}.`;
+}
+export function upcomingInterestRefusal(cand: { name?: string | null; phone?: string | null; sidh_candidate_id?: string | null }): string {
+  return `${personLabel(cand) || "This candidate"} is marked as interested in the Upcoming batch, so they are not being enrolled yet. ` +
+    `Open their record and change "Interested in" to "The current batch" first — then add them.`;
+}
+
 export async function addMemberChecked(batchId: string, candidateId: string, joined_on?: Date | null) {
   // Both roster-add doors land here — `api/batches/[id]/members` (single) and
   // `api/candidates/assign` (bulk). ARCHITECTURE.md §3.1 records that those two have already drifted
@@ -764,7 +775,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // ---- 1. preconditions: everything that can REFUSE the join ----
   const existing = await BatchMember.findOne({ candidate: candidateId, left_on: null }).populate("batch", "code").lean<any>();
   if (existing) {
-    throw new HttpError(409, `Rule 20: Candidate already active in batch ${existing.batch?.code ?? existing.batch}.`);
+    throw new HttpError(409, `Rule 20: ${rule20Sentence(existing.batch?.code ?? existing.batch)}`);
   }
 
   // QA-2794 (S2, Umesh's 2026-09-20 recording): a candidate dropped from THIS batch keeps their
@@ -801,9 +812,7 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // remedy did not exist on screen.
   const cand = await Candidate.findById(candidateId).select("name phone sidh_candidate_id batch_interest").lean<any>(); // QA-1749: REQ-389a separator fields
   if (cand?.batch_interest === "Future") {
-    throw new HttpError(409,
-      `${personLabel(cand) || "This candidate"} is marked as interested in the Upcoming batch, so they are not being enrolled yet. ` +
-      `Open their record and change "Interested in" to "The current batch" first — then add them.`);
+    throw new HttpError(409, upcomingInterestRefusal(cand));
   }
 
   // ---- 2. context read once, for the checks above and the values below ----
@@ -978,6 +987,84 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   ].filter(Boolean);
   const warning = notes.length ? notes.join(" ") : undefined;
   return Object.assign(member, { warning });
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// qa-import-into-batch (-325): THE ROSTER-ADD DOOR, once. ARCHITECTURE.md section 3.1 prescribed this
+// extraction after QA-273 (the single-add and bulk-assign routes each carried their own copy of the
+// centre test, the job-role test and the two adoptions, and had already drifted apart once). The
+// importer is the THIRD caller; adding it as a third inline copy was the forbidden outcome, so all
+// three routes now call these. `addMemberChecked` above stays the join authority (Rule 20, QA-2794
+// revive, QA-945, joined-on rules, target warning) and is not changed.
+
+/** Pure and sync: the SAME sentences the two routes used before. null = joinable. */
+export function joinRefusalFor(
+  cand: { name?: string | null; phone?: string | null; sidh_candidate_id?: string | null; location?: unknown; program?: unknown; batch_interest?: unknown; archived_at?: unknown },
+  batch: { location?: unknown; program?: unknown },
+): string | null {
+  const who = (cand.name as string | undefined) ?? "Candidate";
+  // -124 / -130 (QA-273): the leading `cand.location &&` is the walk-in exemption - a candidate with no
+  // centre is unplaced, not "at another centre"; they ADOPT the batch's centre on joining.
+  if (cand.location && String(cand.location) !== String(batch.location)) {
+    return `${who} belongs to another centre — move them to this location first.`;
+  }
+  if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
+    return `${who} is registered under a different job role/scheme than this batch.`;
+  }
+  if (cand.archived_at) return `${who} is archived — restore them before adding them to a batch.`;
+  if (cand.batch_interest === "Future") return upcomingInterestRefusal(cand);
+  return null;
+}
+
+/** Load and gate a batch for joins: 404, Rule 38 scope, closed, Rule 1. Returns the lean batch. */
+export async function assertBatchJoinable(user: SessionUser, batchId: string) {
+  const batch = Types.ObjectId.isValid(String(batchId))
+    ? await Batch.findById(batchId).select("code status location program target_size").lean<any>()
+    : null;
+  if (!batch) throw new HttpError(404, "Batch not found");
+  assertLocationInScope(user, String(batch.location)); // Rule 38
+  if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
+  await assertLocationOperational(batch.location, "Adding a candidate"); // Rule 1
+  return batch as { _id: any; code?: string; status: string; location: any; program: any; target_size?: number };
+}
+
+/**
+ * The whole per-candidate join: joinRefusalFor -> addMemberChecked -> programme adoption -> centre
+ * adoption (+ audit) -> BatchMember audit. Throws HttpError exactly as the routes did. The eligibility
+ * text is returned SEPARATELY so each caller composes exactly what it returned before.
+ */
+export async function assignCandidateToBatch(a: {
+  batch: { _id: any; code?: string; location?: any; program?: any };
+  candidate: { _id: any; name?: string; dob?: any; education?: any; last_training_date?: any; location?: any; program?: any; batch_interest?: any; archived_at?: any };
+  joinedOn?: Date;
+  actorId: string;
+  defaults?: { min_age: number; max_age: number; training_cooldown_months: number };
+}) {
+  const { batch, candidate: c } = a;
+  const refusal = joinRefusalFor(c, batch);
+  if (refusal) throw new HttpError(409, refusal);
+  // QA-892: `undefined`, not `new Date()` - the default belongs to addMemberChecked, which knows whether
+  // this batch already began.
+  const m = await addMemberChecked(String(batch._id), String(c._id), a.joinedOn);
+  // Import convention: programme-less candidates inherit the batch's programme on enrolment.
+  if (!c.program && batch.program) {
+    await Candidate.updateOne({ _id: c._id }, { $set: { program: batch.program } });
+  }
+  // -124 (M4-04) / -130 (QA-273): a candidate with no centre ADOPTS this one. Audited by name, because it
+  // changes who can see the record from that moment on (Rule 38 scoping keys on exactly this field).
+  if (!c.location && batch.location) {
+    await Candidate.updateOne({ _id: c._id }, { $set: { location: batch.location } });
+    await audit({ entity: "Candidate", entityId: c._id, field: "location",
+      oldValue: "(none — walk-in)", newValue: `set to this batch's centre on enrolment (${batch.code ?? batch._id})`, actor: a.actorId });
+  }
+  await audit({ entity: "BatchMember", entityId: (m as any)._id, newValue: "assigned", actor: a.actorId });
+  const defaults = a.defaults ?? await getDefaults();
+  const elig = candidateEligibility(c, defaults);
+  return {
+    member: m,
+    rosterWarning: (m as any).warning as string | undefined,
+    eligibilityWarning: !elig.eligible ? `${c.name ?? "Candidate"}: ${elig.reasons.join("; ")}` : undefined,
+  };
 }
 
 // Rules 22–24: enrollment step update
