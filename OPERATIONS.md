@@ -91,6 +91,12 @@ with a local/CI value is expected, not a bug. The non-admin live passwords are a
 Umesh; the CI/e2e suites use their own throwaway password that has no relation to
 production.
 
+**Reseed after fb40e2b.** `seed.mjs` and the e2e scripts no longer carry a default admin password;
+`ADMIN_PASSWORD` must be set in the environment. A local or CI database seeded before `fb40e2b`
+keeps the old admin hash until it is reseeded. `seed.mjs` only creates the admin user when none
+exists (an existing admin is left untouched), so rerunning it on that database does not change the
+hash: set `ADMIN_PASSWORD` and reseed into a fresh database (or remove the local admin user first).
+
 ---
 
 ## LANDMINES — changes that have taken production down

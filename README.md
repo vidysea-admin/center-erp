@@ -11,11 +11,14 @@ Spec source of truth: `d:\erp\center-erp-data-model-rules.md` (18 entities, 40 n
 ```bash
 npm install
 # .env.local needs: MONGODB_URL, MONGODB_DB, AUTH_SECRET, AUTH_TRUST_HOST=true
+# ADMIN_PASSWORD must be set in the environment (shell or .env.local) BEFORE seed/e2e runs - there is no fallback
 node --env-file=.env.local scripts/seed.mjs          # defaults + master lists + admin user (idempotent)
 npm run build && npm start                           # production on :3000
 # or: npm run dev
 ```
 Login: `admin@vidysea.com` (see SECURITY.md — rotate the bootstrap password).
+`ADMIN_PASSWORD` is required by `scripts/seed.mjs` (when it creates the admin user) and the e2e scripts
+(`npm test`); there is no default. It is a local/CI test value you choose yourself - never the production admin password. Never commit it.
 
 ## Scripts
 | Script | What it does |
