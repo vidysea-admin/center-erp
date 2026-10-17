@@ -403,7 +403,7 @@ plain-email string reads as typed entries, nothing migrated. It is written canon
 separated) by `validateRecipientList` in `lib/daily-digest.ts` and judged by `resolveRecipients` there;
 `parseEntries` is the lenient reader, `validateRecipientList` the strict writer (invalid or duplicate entry, a
 separator-only list, more than 50 entries, any control character such as CR/LF/NUL/tab, or a `u:` id that does
-not exist is a 400). Only a holder of `defaults.manage` with `can_edit` writes it (Admin by default; the right is grantable, Rule 40, so a grantee could add a typed address that receives the cost report: stated, and put to Umesh), and `GET /api/defaults` returns it
+not exist is a 400). Only a holder of `defaults.manage` with `can_edit` writes it (Admin by default; the right is grantable, Rule 40). QA-2923 (Umesh 2026-10-17): ONLY an Admin may ADD a typed address, because it receives the cost report; a non-Admin grantee may pick ERP users and keep or remove what is stored, and a write by one that adds a typed entry is a 403 with nothing written (`newTypedAddresses` in `lib/daily-digest.ts`, tested in the `PUT /api/defaults` list branch; the Defaults screen hides the typed box unless the session role is Admin), and `GET /api/defaults` returns it
 as "" to everyone without `defaults.manage`. Format is judged only when the list CHANGES, so an old value
 re-sent by a whole-form save is not refused. The Defaults write is a compare-and-set on the two digest fields
 (`findOneAndUpdate` filtered on the values that were validated), so two concurrent saves cannot leave

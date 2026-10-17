@@ -1424,6 +1424,7 @@ function SchemeRow({ s, onSave }: { s: any; onSave: (id: string, patch: any) => 
 function DefaultsTab({ error, setError }: any) {
   const [form, setForm] = useState<any>(null);
   const [savedKey, setSavedKey] = useState("0");   // bumped after a save so the digest control re-reads who can receive it
+  const { data: _sess } = useSession();            // QA-2923: only an Admin may type an outside digest address
   useEffect(() => { api("/api/defaults").then((d) => setForm(d.item)).catch((e: any) => setError(e.message)); }, []);
   // QA-2761 / QA-2763 (5): Umesh's exact complaint. Six Save buttons, and this handler gave no busy
   // state, no reload and no message - a Save that worked and a Save that did nothing looked the same.
@@ -1610,7 +1611,7 @@ function DefaultsTab({ error, setError }: any) {
           </label>
           {/* mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"): the 21:00 IST daily digest. Recipients are ERP
               accounts; the finance section goes only to those who hold finance.view. */}
-          <DigestRecipients value={form.digest_recipients ?? ""} onChange={(v) => setForm({ ...form, digest_recipients: v })} toggleOn={form.digest_only_approval_mails === true} reloadKey={savedKey} />
+          <DigestRecipients value={form.digest_recipients ?? ""} onChange={(v) => setForm({ ...form, digest_recipients: v })} toggleOn={form.digest_only_approval_mails === true} reloadKey={savedKey} canType={(_sess?.user as any)?.role === "Admin"} />
           <label className="flex items-start gap-2 text-sm">
             <input data-testid="digest-only-toggle" type="checkbox" className="mt-0.5" checked={form.digest_only_approval_mails === true}
               onChange={(e) => setForm({ ...form, digest_only_approval_mails: e.target.checked })} />
@@ -1830,7 +1831,7 @@ function MailPanel({ error, setError }: any) {
 // re-emailed user keeps receiving it) and a plain address for a typed one. This control edits that string; the server
 // (PUT /api/defaults) is what judges it. A typed address that matches no ERP account is sent the FULL report, money
 // included, so each one carries the warning.
-function DigestRecipients({ value, onChange, toggleOn, reloadKey }: { value: string; onChange: (v: string) => void; toggleOn: boolean; reloadKey: string }) {
+function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { value: string; onChange: (v: string) => void; toggleOn: boolean; reloadKey: string; canType: boolean }) {
   const [users, setUsers] = useState<any[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [q, setQ] = useState("");
@@ -1859,7 +1860,7 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey }: { value: str
       <span className="font-medium">Daily digest recipients</span>
       <span className="block text-xs text-gray-500">
         One mail a day at 21:00 IST to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
-        and/or type any email address (a typed address gets the full report, cost section included). Empty: no digest mail is sent.
+        {canType ? " and/or type any email address (a typed address gets the full report, cost section included). " : ". Only an Admin can add an outside email address. "}Empty: no digest mail is sent.
       </span>
       {toggleOn && health?.digest_only_nobody && (
         <div className="mt-1 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="digest-only-nobody-warning">
@@ -1901,7 +1902,7 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey }: { value: str
             ))}
           </ul>
         </div>
-        <div>
+        {canType && (<div>
           <div className="flex gap-2">
             <input data-testid="digest-typed-input" className={inputCls} value={typed} onChange={(e) => { setTyped(e.target.value); setTypedErr(""); }}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTyped(); } }} placeholder="Or type any email address" />
@@ -1909,7 +1910,8 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey }: { value: str
           </div>
           {typedErr && <div className="mt-1 text-xs text-red-700" data-testid="digest-typed-error">{typedErr}</div>}
           <div className="mt-1 text-xs text-amber-800">A typed address is not an ERP account, so it gets the full report with the cost figures.</div>
-        </div>
+        </div>)}
+        {!canType && <div className="text-xs text-gray-600" data-testid="digest-typed-admin-only">Adding an outside email address is for Admins only, because it receives the cost figures. You can pick any ERP user, and keep or remove an address that is already listed.</div>}
       </div>
     </div>
   );

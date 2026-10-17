@@ -39,8 +39,8 @@ import type { SessionUser } from "@/auth";
 //     account's own view: its centre scope, and money only with finance.view. An ineligible account (Trainer,
 //     deactivated, dropped, awaiting approval) is refused, never "upgraded" to a full view by typing its email.
 //   * a typed address that matches NO account gets the FULL report including money (Umesh, AskUserQuestion
-//     2026-10-07): an Admin-shaped, unscoped viewer plus `dailyDigest(..., {fullView: true})`. Only a holder of
-//     defaults.manage with can_edit (Admin by default; the right is grantable, Rule 40) can add one, and the screen warns "This address will receive cost figures".
+//     2026-10-07): an Admin-shaped, unscoped viewer plus `dailyDigest(..., {fullView: true})`. Only an ADMIN
+//     can add one (QA-2923, Umesh 2026-10-17; a defaults.manage grantee may only pick users), and the screen warns "This address will receive cost figures".
 export const DIGEST_HOUR_IST = 21;
 export const DIGEST_MAX_ATTEMPTS = 3;
 export const DIGEST_RETRY_GAP_MS = 10 * 60_000;
@@ -85,6 +85,16 @@ export function parseEntries(raw: unknown): RecipientEntry[] {
   return out;
 }
 export const entryToken = (e: RecipientEntry) => (e.kind === "user" ? `u:${e.id}` : e.email);
+
+// QA-2923 (S2, Umesh 2026-10-17): only an ADMIN may type an outside (non-user) address into the list, because a typed
+// address with no account receives the full report, money included. This answers "which typed addresses does this write
+// ADD?": the typed entries of the incoming list that are not already typed entries of the stored list (compared as the
+// lenient reader sees them: lowercased). Anything that is not a well-formed `u:<id>` tag reads as a typed address here,
+// so a malformed tag cannot be used to smuggle one in. Removing or keeping a stored typed address adds nothing.
+export function newTypedAddresses(currentRaw: unknown, nextRaw: unknown): string[] {
+  const had = new Set(parseEntries(currentRaw).flatMap((e) => (e.kind === "address" ? [e.email] : [])));
+  return parseEntries(nextRaw).flatMap((e) => (e.kind === "address" && !had.has(e.email) ? [e.email] : []));
+}
 
 // STRICT check of a list being WRITTEN (the Defaults route). A blank string is a valid "clear the list". Anything
 // else must hold at least one entry, every entry must be a tag or a syntactically valid address, no duplicates,

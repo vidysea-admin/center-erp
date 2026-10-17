@@ -32,6 +32,7 @@
 //       U1 the picker endpoint . U2 tagged entries, a re-emailed user, the typed address's full report with money
 //       U3 the same person twice = one mail . U4 the account wins over a typed address . U5 write validation
 //       U6 the deliverable guard . U7 only Admin edits, and GET redacts the list . U8 concurrent PUTs (A1)
+//       U13 (QA-2923) only an ADMIN types an outside address; a defaults.manage grantee may pick existing users only
 //       U9 "digest-only ON, nobody can receive it" is said out loud (A2) . U10 a crashed claim is re-taken (A3)
 //       U11 Publish now names a reason per category (A5) . U12 fullView is reachable from one place only
 //   G1  the "digest only" toggle: ON suppresses (on the record), OFF keeps the per-approval mail
@@ -236,6 +237,9 @@ const uTr = await mkUser("Trainer", [locA._id], "tr");
 const uOff = await mkUser("Operations", [], "off");        // an active ERP account whose OWN mail switch is off (QA-2461)
 await db.collection("users").updateOne({ _id: oid(uOff.id) }, { $set: { mail_enabled: false } });
 const uAdv = await mkUser("Location", [locA._id], "adv", { can_edit: false, extra_permissions: ["defaults.manage"] }); // holds defaults.manage but may only VIEW (can_edit false): must not edit the list (requireEdit exempts Admin AND Operations, so only a Location-type grantee can be refused by it)
+// QA-2923: non-Admin holders of defaults.manage who ARE allowed to edit (can_edit true): the only personas that get past requirePerm/requireEdit to the list write
+const uGL = await mkUser("Location", [locA._id], "gl", { extra_permissions: ["defaults.manage"] });
+const uGO = await mkUser("Operations", [], "go", { extra_permissions: ["defaults.manage"] });
 const uD = await mkUser("Operations", [], "d");                           // an eligible recipient that the arms deactivate and reactivate
 const uDead = await mkUser("Operations", [], "dead");                     // a deactivated account (cannot receive; cannot log in)
 await db.collection("users").updateOne({ _id: oid(uDead.id) }, { $set: { active: false } });
@@ -638,6 +642,7 @@ ok("U1: a Location user and an Operations user are refused the picker (403): it 
 
 // ---- U2 tagged entries + the money split between an ERP account and a typed address
 const UD2 = "2031-03-14";                      // the day with the exact fixtures, so the figures are known
+const parseListSet = (raw) => String(raw ?? "").split(/[,;\s]+/).map((x) => x.trim().toLowerCase()).filter(Boolean).sort().join("|");
 const typedFull = `zz.typed.${s.toLowerCase()}@vidysea-test.local`;
 const newEmail = `zzcheck.mc1afnew.${s.toLowerCase()}@vidysea-test.local`;
 const putTag = await setDefaults({ digest_recipients: `u:${uAF.id}, ${typedFull.toUpperCase()}` });
@@ -756,6 +761,50 @@ ok("U7: ...and they cannot switch digest-only on either", toggleDenied.status ==
 const seenLoc = await getDef(uA.cookie), seenOps = await getDef(uOps.cookie), seenAdm = await getDef(admin);
 ok("U7: GET /api/defaults does not serve the list to a caller without defaults.manage (Location, Operations: empty) while the Admin sees it", seenLoc?.digest_recipients === "" && seenOps?.digest_recipients === "" && seenAdm?.digest_recipients === typedFull, JSON.stringify([seenLoc?.digest_recipients, seenOps?.digest_recipients, seenAdm?.digest_recipients]));
 ok("U7: ...and every OTHER default is still there for them (batch_size, duration_days, email_enabled: nothing a screen reads is gone)", [seenLoc, seenOps].every((d) => typeof d?.batch_size === "number" && typeof d?.duration_days === "number" && typeof d?.email_enabled === "boolean"), JSON.stringify([typeof seenLoc?.batch_size, typeof seenOps?.duration_days]));
+
+// ---- U13 (QA-2923, S2, Umesh 2026-10-17): ONLY an Admin may type an outside address. A defaults.manage grantee who is
+// not an Admin may pick existing ERP users (who keep their own centre scope and finance permissions) and may keep or
+// remove what is already stored; a NEW typed address would receive the money-bearing full report.
+ok("[precondition] U13 personas: both non-Admin grantees can log in and hold defaults.manage with can_edit (the picker endpoint, gated by defaults.manage, answers them), so only the new rule can refuse them",
+  !!(uGL.cookie && uGO.cookie) && Array.isArray((await req(uGL.cookie, "GET", "/api/reports/daily/recipients")).data?.users) && (await req(uGO.cookie, "GET", "/api/reports/daily/recipients")).status === 200, `${uGL.status} ${uGO.status}`);
+await setDefaults({ digest_recipients: "", digest_only_approval_mails: false });
+const extA = `zz.ext.a.${s.toLowerCase()}@vidysea-test.local`, extB = `zz.ext.b.${s.toLowerCase()}@vidysea-test.local`;
+const admExt = await setDefaults({ digest_recipients: extA });
+ok("U13: an Admin adds an outside (typed) address: 200, and it is stored", admExt.status === 200 && (await getDef())?.digest_recipients === extA, `${admExt.status} ${(await getDef())?.digest_recipients}`);
+await setDefaults({ digest_recipients: "" });
+for (const [who, g] of [["a Location grantee", uGL], ["an Operations grantee", uGO]]) {
+  const before = (await getDef())?.digest_recipients;
+  const r = await req(g.cookie, "PUT", "/api/defaults", { digest_recipients: extA });
+  const rt = await req(g.cookie, "PUT", "/api/defaults", { digest_recipients: `u:${uD.id}, ${extA.toUpperCase()}` });
+  const rs = await req(g.cookie, "PUT", "/api/defaults", { digest_recipients: "u:zzzzzzzzzzzzzzzzzzzzzzzz" });
+  const rtog = await req(g.cookie, "PUT", "/api/defaults", { digest_recipients: extA, digest_only_approval_mails: true });
+  const row = await db.collection("defaults").findOne({ _singleton: "defaults" });
+  ok(`U13: ${who} (defaults.manage, can_edit) adding an outside address is refused 403 (plain, mixed with a picked user in capitals, a malformed tag, and together with the digest-only toggle) and NOTHING is written`,
+    r.status === 403 && rt.status === 403 && rs.status === 403 && rtog.status === 403 && (row?.digest_recipients ?? "") === (before ?? "") && (row?.digest_only_approval_mails ?? false) === false,
+    `${r.status} ${rt.status} ${rs.status} ${rtog.status} list=${JSON.stringify(row?.digest_recipients)} on=${row?.digest_only_approval_mails}`);
+  ok(`U13: ...and the 403 names the reason (Admin only, outside address)`, /admin/i.test(JSON.stringify(r.data)) && /address/i.test(JSON.stringify(r.data)), JSON.stringify(r.data).slice(0, 160));
+  const pick = await req(g.cookie, "PUT", "/api/defaults", { digest_recipients: `u:${uD.id}` });
+  ok(`U13: ${who} picking an existing ERP user is allowed (200) and stored`, pick.status === 200 && (await getDef())?.digest_recipients === `u:${uD.id}`, `${pick.status} ${(await getDef())?.digest_recipients}`);
+  await setDefaults({ digest_recipients: "" });
+}
+// what an earlier Admin put there stays: a grantee may carry it through a whole-form save, or remove it, but not re-add it or add another
+await setDefaults({ digest_recipients: `${extA}, u:${uD.id}` });
+const keep = await req(uGL.cookie, "PUT", "/api/defaults", { digest_recipients: `u:${uD.id}, ${extA.toUpperCase()}` });
+ok("U13: a stored outside address is KEPT through a grantee's save of the same list (reordered, other case): 200, still stored", keep.status === 200 && parseListSet((await getDef())?.digest_recipients) === parseListSet(`${extA}, u:${uD.id}`), `${keep.status} ${(await getDef())?.digest_recipients}`);
+const addAnother = await req(uGL.cookie, "PUT", "/api/defaults", { digest_recipients: `${extA}, u:${uD.id}, ${extB}` });
+ok("U13: ...but adding a SECOND outside address next to the kept one is refused 403 and the stored list is unchanged", addAnother.status === 403 && parseListSet((await getDef())?.digest_recipients) === parseListSet(`${extA}, u:${uD.id}`), `${addAnother.status}`);
+const dropIt = await req(uGO.cookie, "PUT", "/api/defaults", { digest_recipients: `u:${uD.id}` });
+ok("U13: ...and a grantee may REMOVE the stored outside address (200)", dropIt.status === 200 && (await getDef())?.digest_recipients === `u:${uD.id}`, `${dropIt.status} ${(await getDef())?.digest_recipients}`);
+const wasRemoved = await req(uGL.cookie, "PUT", "/api/defaults", { digest_recipients: `u:${uD.id}, ${extA}` });
+ok("U13: ...after which putting it back is a NEW outside address and is refused 403", wasRemoved.status === 403 && (await getDef())?.digest_recipients === `u:${uD.id}`, `${wasRemoved.status}`);
+const admBack = await setDefaults({ digest_recipients: `u:${uD.id}, ${extA}` });
+ok("U13: ...while the Admin can put it back (200)", admBack.status === 200, `${admBack.status}`);
+await setDefaults({ digest_recipients: "" });
+ok("U13: `digest_recipients` is written by exactly one route, api/defaults/route.ts, so there is no second door around the rule (source shape; the model, the defaults reader, the Admin screen and the digest reader do not write it)",
+  eq(walkSrc(srcRoot).filter((f) => /digest_recipients/.test(readFileSync(f, "utf8")) && !/(models[\\/]index|lib[\\/]defaults|admin[\\/]page|daily-digest)\.tsx?$/.test(f)).map((f) => path.relative(srcRoot, f).split(path.sep).join("/")), ["app/api/defaults/route.ts"]), "");
+const routeSrc = readFileSync(path.join(srcRoot, "app", "api", "defaults", "route.ts"), "utf8");
+ok("U13: the Admin-only check is on the SERVER, in the Defaults write: it tests the writer's role and calls newTypedAddresses on the incoming list (source shape)",
+  /user\.role !== "Admin"/.test(routeSrc) && /newTypedAddresses\(/.test(routeSrc), "");
 
 // ---- U8 (A1) two concurrent writes, one switching ON and one emptying the list, never leave ON with nobody
 const racedBad = [];
@@ -1057,6 +1106,24 @@ await arm("S5 Defaults: the recipient picker (Admin)", async () => {
   ok("S5: Remove takes the typed address off the list", (await page.locator('[data-testid="digest-chip"]').count()) === 1 && (await page.locator('[data-testid="digest-typed-warning"]').count()) === 0, "");
   await ctx.close();
   await setListDirect("");
+});
+await arm("S7 Defaults: the outside-address box is an Admin's (QA-2923)", async () => {
+  await setListDirect("");
+  const { ctx: ctxA, page: pa } = await newPage(uAdm.email, PW);
+  await pa.goto(`${BASE}/admin?tab=Defaults`, { waitUntil: "domcontentloaded" });
+  await pa.locator('[data-testid="digest-recipients"]').waitFor();
+  ok("S7: an Admin sees the outside-address box and its Add button, and the picker", (await pa.locator('[data-testid="digest-typed-input"]').count()) === 1 && (await pa.locator('[data-testid="digest-typed-add"]').count()) === 1 && (await pa.locator('[data-testid="digest-picker-search"]').count()) === 1, "");
+  await ctxA.close();
+  for (const [who, g] of [["a Location grantee", uGL], ["an Operations grantee", uGO]]) {
+    const { ctx, page } = await newPage(g.email, PW);
+    await page.goto(`${BASE}/admin?tab=Defaults`, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(2500);
+    ok(`S7: ${who} gets no outside-address box on Defaults (the /admin screen is itself Admin-only, so the box is not reachable at all)`, (await page.locator('[data-testid="digest-typed-input"]').count()) === 0 && (await page.locator('[data-testid="digest-typed-add"]').count()) === 0, page.url());
+    await ctx.close();
+  }
+  const adminSrc = readFileSync(path.join(srcRoot, "app", "(app)", "admin", "page.tsx"), "utf8");
+  ok("S7: the component renders the typed box only when the signed-in role is Admin, and says why otherwise (source shape; a non-Admin cannot render this screen in a browser, so the component guard is pinned in source)",
+    /canType=\{[^}]*role[^}]*Admin/.test(adminSrc) && /canType &&[\s\S]{0,200}digest-typed-input/.test(adminSrc) && /data-testid="digest-typed-admin-only"/.test(adminSrc), "");
 });
 await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the digest screen)", async () => {
   await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: false } });
