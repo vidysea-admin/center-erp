@@ -669,7 +669,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     await audit({ entity: "Batch", entityId: jb._id, field: "import_assign", newValue: `${result.created} created, ${result.assigned_new} new + ${result.assigned_existing} existing added, ${result.holders_skipped.length} existing skipped, ${result.refused.length} refused`, actor: user.id });
   };
   if (insertFailure) {
-    // nothing is assigned after a failed insert: the operator fixes the sheet and runs it again
+    // nothing is assigned after a failed insert: the operator fixes the sheet and runs it again.
+    // The rows that DID land are listed as created-but-not-added, so created = assigned_new + created_not_assigned.length
+    // holds on this path too (review fold-in 2026-10-17).
+    for (const c of landed) result.created_not_assigned.push(String((c as any)._id));
     await finish();
     return NextResponse.json({ error: `${insertFailure.message} ${result.created} of ${toInsert.length} new candidate(s) were created before the write stopped; none were added to the batch.`, batch_result: result }, { status: insertFailure.status });
   }

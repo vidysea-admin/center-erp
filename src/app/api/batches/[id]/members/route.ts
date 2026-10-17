@@ -123,7 +123,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const batch = await assertBatchJoinable(user, id);
   const body = await readJson(req);
   if (!body.candidate) throw new HttpError(400, "candidate is required");
-  const cand = await Candidate.findById(body.candidate).select("name location program").lean<any>();
+  const cand = await Candidate.findById(body.candidate).select("name phone sidh_candidate_id location program archived_at batch_interest").lean<any>();
   if (!cand) throw new HttpError(404, "Candidate not found");
   assertLocationInScope(user, String(cand.location)); // Rule 38 on the candidate too
   // qa-import-into-batch (-325): the centre test, the job-role test, addMemberChecked, programme and

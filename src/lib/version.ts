@@ -293,7 +293,7 @@ export const RELEASE_NOTE_CURRENT =
   "A candidate who is already in another batch, or who belongs to another centre or job role, cannot be ticked, and the preview says why. A holder at a centre outside your access is not named. " +
   "After the import the screen reports how many were created, how many were added and which were refused with the reason, counted from what was actually saved. " +
   "Importing without choosing a batch works as before. " +
-  "The joining rules for adding from the batch screen, bulk assign and this import now live in one place; one visible difference is that bulk assign now also refuses a batch whose centre is not operational, as adding one candidate at a time already did.";
+  "The centre and job-role joining checks for adding from the batch screen, bulk assign and this import are now written once and shared. Two visible differences: bulk assign now also refuses a batch whose centre is not operational, as adding one candidate at a time already did, and adding one candidate from the batch screen now refuses an archived candidate, as bulk assign and this import already did.";
 
 // Preserve the previous public note as literal history.
 const RELEASE_NOTE_ARCHIVE_324 =

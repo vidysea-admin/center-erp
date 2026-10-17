@@ -331,6 +331,13 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX;
     done.status === 409 && !/E11000|index|dup key/i.test(done.data.error ?? "") && !!done.data.error, JSON.stringify(done.data).slice(0, 300));
   ok("IIB-13b: it reports the TRUE created count (read back from the database) and attempts no assignment",
     done.data.batch_result?.created === landed.length && landed.length === 2 && done.data.batch_result?.assigned_new === 0 && (await activeIn(B._id)).length === 0, JSON.stringify([done.data.batch_result, landed.length]));
+  // review fold-in 2026-10-17 (finding 1): created = assigned_new + created_not_assigned.length must hold on
+  // THIS path too - the rows that landed but were not added are listed by id, and the ids are the real ones.
+  const R13 = done.data.batch_result ?? {};
+  ok("IIB-13c: invariant created = assigned_new + created_not_assigned holds after a failed insert, and the ids are the rows that landed",
+    R13.created === (R13.assigned_new ?? -99) + (R13.created_not_assigned?.length ?? -99) &&
+    (R13.created_not_assigned ?? []).length === 2 &&
+    (R13.created_not_assigned ?? []).every((id) => landed.some((c) => String(c._id) === String(id))), JSON.stringify([R13, landed.map((c) => c._id)]));
 }
 
 // ============================================================ 14. over target
@@ -395,6 +402,19 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX;
   const c1 = await req(admin, "POST", `/api/batches/${Bclosed._id}/members`, { candidate: (await mkCand())._id });
   const c2 = await req(admin, "POST", "/api/candidates/assign", { batch: Bclosed._id, candidate_ids: [(await mkCand())._id] });
   ok("IIB-P5: a closed batch is refused 409 by BOTH doors", c1.status === 409 && c2.status === 409, JSON.stringify([c1.status, c2.status]));
+}
+
+// ============================================================ 16. members POST: an archived candidate (review fold-in, finding 2)
+{
+  const Barc = await mkBatch(locX, progR);
+  const arc = await mkCand();
+  await req(admin, "DELETE", `/api/candidates/${arc._id}`, { reason: "ZZIMP archived-fixture" }, 200);
+  const chk = (await req(admin, "GET", `/api/candidates/${arc._id}`)).data.item;
+  ok("IIB-16[precondition]: the fixture really is archived", !!chk?.archived_at, JSON.stringify(chk?.archived_at));
+  const single = await req(admin, "POST", `/api/batches/${Barc._id}/members`, { candidate: arc._id });
+  ok("IIB-16a: members POST refuses an archived candidate with the archived sentence (409), same as the importer's rule",
+    single.status === 409 && /is archived — restore them before adding them to a batch/.test(single.data.error ?? ""), JSON.stringify([single.status, single.data]));
+  ok("IIB-16b: and nothing was written - the roster is still empty", (await activeIn(Barc._id)).length === 0);
 }
 
 // ============================================================ S. static pin
