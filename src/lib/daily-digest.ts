@@ -86,6 +86,16 @@ export function parseEntries(raw: unknown): RecipientEntry[] {
 }
 export const entryToken = (e: RecipientEntry) => (e.kind === "user" ? `u:${e.id}` : e.email);
 
+// QA-2923 (S2, Umesh 2026-10-17): only an ADMIN may type an outside (non-user) address into the list, because a typed
+// address with no account receives the full report, money included. This answers "which typed addresses does this write
+// ADD?": the typed entries of the incoming list that are not already typed entries of the stored list (compared as the
+// lenient reader sees them: lowercased). Anything that is not a well-formed `u:<id>` tag reads as a typed address here,
+// so a malformed tag cannot be used to smuggle one in. Removing or keeping a stored typed address adds nothing.
+export function newTypedAddresses(currentRaw: unknown, nextRaw: unknown): string[] {
+  const had = new Set(parseEntries(currentRaw).flatMap((e) => (e.kind === "address" ? [e.email] : [])));
+  return parseEntries(nextRaw).flatMap((e) => (e.kind === "address" && !had.has(e.email) ? [e.email] : []));
+}
+
 // STRICT check of a list being WRITTEN (the Defaults route). A blank string is a valid "clear the list". Anything
 // else must hold at least one entry, every entry must be a tag or a syntactically valid address, no duplicates,
 // at most DIGEST_MAX_RECIPIENTS, and no control character anywhere: CR/LF or NUL in an address is how a header

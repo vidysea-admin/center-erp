@@ -6,7 +6,7 @@ import { Defaults } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { audit } from "@/lib/audit";
 import { FEE_CAPTURE_UI_EXISTS } from "@/lib/fee-capture";
-import { parseEntries, resolveRecipients, isDeliverable, validateRecipientList, PROBLEM_USER_GONE } from "@/lib/daily-digest";
+import { parseEntries, resolveRecipients, isDeliverable, validateRecipientList, newTypedAddresses, PROBLEM_USER_GONE } from "@/lib/daily-digest";
 
 export const GET = apiHandler(async () => {
   await dbConnect();
@@ -69,6 +69,13 @@ export const PUT = apiHandler(async (req: NextRequest) => {
     const toggleChanges = body.digest_only_approval_mails !== undefined && body.digest_only_approval_mails !== curOn;
     let willList = curList;
     if (listChanges) {
+      // QA-2923 (S2, Umesh 2026-10-17): ONLY an Admin may add an outside (typed) address. A defaults.manage grantee who is
+      // not an Admin may pick existing ERP users (each keeps its own centre scope and finance permission) and may keep or
+      // remove what is already stored, but a NEW typed address would receive the money-bearing full report. Refused before
+      // anything is judged or written (role is the freshly loaded one, requireUser re-reads it).
+      if (user.role !== "Admin" && newTypedAddresses(curList, body.digest_recipients).length) {
+        throw new HttpError(403, "Only an Admin can add an outside email address to the daily digest list (a typed address receives the full report, cost figures included). Pick an existing ERP user instead; an address already on the list can be kept or removed.");
+      }
       const v = validateRecipientList(String(body.digest_recipients));
       if (!v.ok) throw new HttpError(400, v.error);
       willList = v.canonical;
