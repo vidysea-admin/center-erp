@@ -76,8 +76,53 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const admin = await login("admin@vidysea.com", ADMIN_PASSWORD);
 ok("[precondition] the default admin signs in", !!admin);
 
+// QA-2911: every "nothing else moved" oracle below counts ONLY documents this run created or addressed.
+// The old oracles counted whole collections (costentries, approvalrequests, auditlogs, notifications,
+// maillogs), so rows written by an earlier suite on the shared wall database - or its fire-and-forget outbox
+// work landing mid-window - changed the totals and turned a green no-write check red (green alone, red in the
+// wall). A document belongs to this run if it carries this run's TAG / stamp or is addressed through one of
+// the ids passed in, or was written by / sent to one of the throwaway users created below (all stamp-named).
+// Narrowing is the point; the guarantee is not weakened: a write the code under test makes for THIS cost,
+// request, batch or actor is still counted, and the full documents of the entities in play are still compared.
+const suiteUserOids = [];
+const oidsOf = (list) => list.filter(Boolean).map((v) => new ObjectId(String(v)));
+const scopedCounts = async ({ costs = [], batches = [], requests = [] } = {}) => {
+  const costOids = oidsOf(costs), batchOids = oidsOf(batches), reqOids = oidsOf(requests);
+  const entityIds = [...costOids, ...batchOids, ...reqOids];
+  const stampRe = new RegExp(`\\.${stamp}@`);
+  const [costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
+    rawCosts.countDocuments({ $or: [{ note: { $regex: `^${TAG}` } }, { created_by: { $in: suiteUserOids } }, { batch: { $in: batchOids } }] }),
+    rawApprovals.countDocuments({ $or: [{ initiator: { $in: suiteUserOids } }, { entity_id: { $in: entityIds } }, { batch: { $in: batchOids } },
+      { "payload.cost_entry": { $in: costs.map(String) } }] }),
+    rawAudits.countDocuments({ $or: [{ actor: { $in: suiteUserOids } }, { entity_id: { $in: entityIds } }] }),
+    db.collection("notifications").countDocuments({ $or: [{ entity_id: { $in: entityIds } }, { user_target: { $in: suiteUserOids } }, { message: { $regex: stamp } }] }),
+    db.collection("maillogs").countDocuments({ $or: [{ entity_id: { $in: entityIds } }, { to: { $regex: stampRe } }] }),
+  ]);
+  return { costCount, requestCount, auditCount, notificationCount, mailCount };
+};
+
+// QA-2911 (second half): fire-and-forget outbox work (audit delivery, notification and mail fan-out to EVERY
+// Admin) from the PREVIOUS request is still landing when the next "before" snapshot is taken. Alone on a fresh
+// database it has finished by then; after other suites there are many more Admins to mail, so it is still
+// draining mid-window and a refused retry looks as if it wrote (mail rows 144 -> 152 with the retry refused).
+// Both the "before" and the "after" reading therefore wait until the state in play has stopped moving: the
+// same read must come back `stable` times in a row. This does not hide a real write - the refused call's own
+// effect is still present in the settled "after" and still differs from the settled "before"; it only stops
+// older background work from being billed to the call under test.
+const settled = async (read, { stable = 4, gapMs = 200, maxMs = 20000 } = {}) => {
+  const t0 = Date.now();
+  let prev = await read(), run = 1;
+  while (run < stable && Date.now() - t0 < maxMs) {
+    await new Promise((resolve) => setTimeout(resolve, gapMs));
+    const next = await read();
+    if (next === prev) run++; else { prev = next; run = 1; }
+  }
+  return prev;
+};
+
 const mkUser = async (name, email, role, grants, scope = []) => {
   const made = await req(admin, "POST", "/api/users", { name, email, password: PW, role, can_edit: true, location_scope: scope });
+  if (made.data?.item?._id) suiteUserOids.push(new ObjectId(String(made.data.item._id)));
   if (made.data?.item?._id && grants.length) await req(admin, "PATCH", `/api/users/${made.data.item._id}`, { extra_permissions: grants });
   return { made, id: made.data?.item?._id, email, cookie: await login(email, PW), name };
 };
@@ -97,8 +142,14 @@ ok("[precondition] the approver, a creator, another user, a finance-view creator
   JSON.stringify([approverB, creator, other, viewer, ungranted].map((u) => u.made.status)));
 
 const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
-const plain = cats.find((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && !c.parent);
-const plain2 = cats.filter((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && c._id !== plain?._id)[0];
+// QA-2911: pick only heads that are SIGNED OFF (approval_status absent or Approved) and active. This list is
+// shared with every earlier suite on the wall database; e2e-cost-entry / e2e-cost-head-dropdown / e2e-roles
+// leave Pending and Rejected heads behind, and a Pending head as `plain2` made the head-change approval below
+// refuse 409 (the QA-1977 rule), reddening the material/confirm arms and leaving a cost waiting for approval.
+// On a fresh database the first approved head is the same row as before, so nothing changes there.
+const signedOffHead = (c) => c.active !== false && (!c.approval_status || c.approval_status === "Approved");
+const plain = cats.find((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && !c.parent && signedOffHead(c));
+const plain2 = cats.filter((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && c._id !== plain?._id && signedOffHead(c))[0];
 const capRes = await req(admin, "POST", "/api/master-lists/cost-categories", {
   name: `ZZ B3 Capped ${stamp}`, pre_approved: true, pre_approved_amount: 5000, pre_approved_basis: "Rs 5000 a time, agreed in the meeting",
 });
@@ -653,7 +704,8 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
   const rawBatches = db.collection("batches");
   const rawCategories = db.collection("costcategories");
   // Raw snapshots include internal receipts, proposal ownership and audit outboxes, not just amounts.
-  const snapshot = async (costIds, batchIds = [], fixedRequestIds = []) => {
+  const snapshot = (costIds, batchIds = [], fixedRequestIds = []) => settled(() => readSnapshot(costIds, batchIds, fixedRequestIds));
+  const readSnapshot = async (costIds, batchIds = [], fixedRequestIds = []) => {
     const costOids = costIds.map((id) => new ObjectId(String(id)));
     const batchOids = batchIds.map((id) => new ObjectId(String(id)));
     const costs = await rawCosts.find({ _id: { $in: costOids } }).sort({ _id: 1 }).toArray();
@@ -661,14 +713,14 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     // identity in both snapshots as well as the cost's current references.
     const refs = [...new Set([...fixedRequestIds, ...costs.flatMap((row) => [row.approval_request, row.cost_edit_request])]
       .filter(Boolean).map(String))].map((id) => new ObjectId(id));
-    const [batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
+    const [batches, requests, auditRows, counts] = await Promise.all([
       rawBatches.find({ _id: { $in: batchOids } }).sort({ _id: 1 }).toArray(),
       rawApprovals.find({ $or: [{ _id: { $in: refs } }, { entity_id: { $in: costOids } },
         { "payload.cost_entry": { $in: costIds.map(String) } }] }).sort({ _id: 1 }).toArray(),
       rawAudits.find({ entity_id: { $in: [...costOids, ...batchOids, ...refs] } }).sort({ _id: 1 }).toArray(),
-      rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
-      db.collection("notifications").countDocuments({}), db.collection("maillogs").countDocuments({}),
+      scopedCounts({ costs: costIds, batches: batchIds, requests: refs }),
     ]);
+    const { costCount, requestCount, auditCount, notificationCount, mailCount } = counts;
     return JSON.stringify({ costs, batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount });
   };
   const template = await rawBatches.findOne({ program: { $type: "objectId" } });
@@ -946,7 +998,8 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       const localCost = await mkDirect(creator, "destination-history", { batch: String(fencedDestination) });
       const batchBefore = JSON.stringify(await rawBatches.findOne({ _id: fencedDestination }));
       const localBefore = JSON.stringify(await raw(localCost));
-      const auditBefore = await rawAudits.countDocuments({});
+      const scopeLate = () => scopedCounts({ costs: [id, localCost], batches: [fencedDestination], requests: [claimId] });
+      const auditBefore = (await scopeLate()).auditCount;
       const deletePromise = req(admin, "DELETE", `/api/batches/${fencedDestination}?_test_pause_after_deletion_fence_ms=5000`,
         { reason: `${TAG}-late-claim` });
       let fenceSeen = null;
@@ -970,7 +1023,7 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
         !!fenceSeen && lateDelete.status === 409
           && JSON.stringify(await rawBatches.findOne({ _id: fencedDestination })) === batchBefore
           && JSON.stringify(await raw(localCost)) === localBefore && JSON.stringify(await raw(id)) === lateCostBefore
-          && !(await rawApprovals.findOne({ _id: claimId })) && await rawAudits.countDocuments({}) === auditBefore,
+          && !(await rawApprovals.findOne({ _id: claimId })) && (await scopeLate()).auditCount === auditBefore,
         `${lateDelete.status} ${lateDelete.data?.error ?? ""}`);
       await rawCosts.updateOne({ _id: new ObjectId(id) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
     }
@@ -1025,15 +1078,16 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     // Explicit legacy/corrupt stored request fixture: API submission remains strictly typed.
     await rawApprovals.updateOne({ _id: proposed._id }, { $set: { [`payload.${field}`]: value } });
     const costBefore = JSON.stringify(await raw(id));
-    const costCountBefore = await rawCosts.countDocuments({});
-    const auditBefore = await rawAudits.countDocuments({});
+    const scopeText = () => scopedCounts({ costs: [id], requests: [proposed._id] });
+    const costCountBefore = (await scopeText()).costCount;
+    const auditBefore = (await scopeText()).auditCount;
     const approved = await decide(proposed._id, "Approved");
     const requestAfter = await rawApprovals.findOne({ _id: proposed._id });
     ok(`text: stored malformed ${field} approval is refused (400), rolls request back to Pending, and leaves liability, ownership, receipts, outbox and audit unchanged`,
       approved.status === 400 && requestAfter?.status === "Pending"
         && JSON.stringify(requestAfter?.payload?.[field]) === JSON.stringify(value)
-        && JSON.stringify(await raw(id)) === costBefore && await rawCosts.countDocuments({}) === costCountBefore
-        && await rawAudits.countDocuments({}) === auditBefore, `${approved.status} ${approved.data?.error ?? ""}`);
+        && JSON.stringify(await raw(id)) === costBefore && (await scopeText()).costCount === costCountBefore
+        && (await scopeText()).auditCount === auditBefore, `${approved.status} ${approved.data?.error ?? ""}`);
     const rejected = await decide(proposed._id, "Rejected");
     ok(`text: malformed ${field} request remains rejectable and releases its ownership`, rejected.status === 200 && !(await raw(id))?.cost_edit_request);
   }
@@ -1049,14 +1103,15 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
   const bBatches = db.collection("batches");
   const tpl = await bBatches.findOne({ program: { $type: "objectId" } });
   ok("QA-2910 [precondition]: a program exists for the isolated batch fixture", !!tpl?.program);
-  const snap2910 = async (costId) => {
+  const snap2910 = (costId) => settled(() => readSnap2910(costId), { stable: 3, gapMs: 150 });
+  const readSnap2910 = async (costId) => {
     const oid = new ObjectId(String(costId));
-    const [cost, requests, nCosts, nReq, nAudit, nNote, nMail] = await Promise.all([
+    const [cost, requests, counts] = await Promise.all([
       rawCosts.findOne({ _id: oid }),
       rawApprovals.find({ $or: [{ entity_id: oid }, { "payload.cost_entry": String(costId) }] }).sort({ _id: 1 }).toArray(),
-      rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
-      db.collection("notifications").countDocuments({}), db.collection("maillogs").countDocuments({}),
+      scopedCounts({ costs: [costId] }),
     ]);
+    const { costCount: nCosts, requestCount: nReq, auditCount: nAudit, notificationCount: nNote, mailCount: nMail } = counts;
     return JSON.stringify({ cost, requests, nCosts, nReq, nAudit, nNote, nMail });
   };
   const mkBatch2910 = async (suffix) => {
