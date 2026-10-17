@@ -4776,8 +4776,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       for (const kind of ["rated", "unknown"]) {
         const suffix = `${pnlStamp}${kind === "rated" ? "R" : "U"}`;
         const loc = await req(admin, "POST", "/api/locations", { code: `PL${suffix}`, name: `P&L ${kind} ${suffix}`, approval_status: "Approved" });
+        // trainer_skill is required by the Program model (src/models/index.ts, required: true since v1);
+        // 7a64fda omitted it, so this POST returned 400 and every P&L oracle below ran vacuous or red.
         const prog = await req(admin, "POST", "/api/programs", { code: `PP${suffix}`, name: `P&L ${kind} role ${suffix}`,
-          duration_days: 1, buffer_days: 0, default_batch_size: 1, completion_deadline_days: 90,
+          trainer_skill: `pnl ${suffix}`, duration_days: 1, buffer_days: 0, default_batch_size: 1, completion_deadline_days: 90,
           ...(kind === "rated" ? { scheme: schemeName } : {}) });
         const batch = loc.data.item && prog.data.item ? await req(admin, "POST", "/api/batches", {
           location: loc.data.item._id, program: prog.data.item._id, planned_start: TODAY_PNL, target_size: 1,
@@ -4954,7 +4956,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
           try {
             const rawNoRate = await rateClient.db(pnlDbName).collection("schemes").findOne({ _id: new ObjectId(String(schemeRow._id)) });
             ok("QA-1950 fixture: the exact raw Scheme master really has its rate cleared",
-              clearRate.status === 200 && rawNoRate?.name === seededBatch.scheme && rawNoRate.amount_received === null);
+              clearRate.status === 200 && rawNoRate?.name === seededBatch.scheme
+                // Clearing a numeric master field UNSETS it (master-lists/[list]/[id]/route.ts: NUMERIC null ->
+                // undefined -> $unset), so the raw document has no amount_received at all. `== null` accepts
+                // absent or null and still rejects 0, the value the (rate ?? 0) mutant would have to read.
+                && rawNoRate.amount_received == null);
           } finally { await rateClient.close(); }
           const pnl2 = (await req(admin, "GET", "/api/reports/pnl")).data ?? {};
           const row2 = (pnl2.register ?? []).find((r) => String(r.key) === seededBatch.id);

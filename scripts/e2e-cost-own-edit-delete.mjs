@@ -76,8 +76,55 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
 const admin = await login("admin@vidysea.com", ADMIN_PASSWORD);
 ok("[precondition] the default admin signs in", !!admin);
 
+// QA-2911: every "nothing else moved" oracle below counts ONLY documents this run created or addressed.
+// The old oracles counted whole collections (costentries, approvalrequests, auditlogs, notifications,
+// maillogs), so rows written by an earlier suite on the shared wall database - or its fire-and-forget outbox
+// work landing mid-window - changed the totals and turned a green no-write check red (green alone, red in the
+// wall). A document belongs to this run if it carries this run's TAG / stamp or is addressed through one of
+// the ids passed in, or was written by / sent to one of the throwaway users created below (all stamp-named).
+// Narrowing is the point; the guarantee is not weakened: a write the code under test makes for THIS cost,
+// request, batch or actor is still counted, and the full documents of the entities in play are still compared.
+const suiteUserOids = [];
+const oidsOf = (list) => list.filter(Boolean).map((v) => new ObjectId(String(v)));
+const scopedCounts = async ({ costs = [], batches = [], requests = [] } = {}) => {
+  const costOids = oidsOf(costs), batchOids = oidsOf(batches), reqOids = oidsOf(requests);
+  const entityIds = [...costOids, ...batchOids, ...reqOids];
+  const stampRe = new RegExp(`\\.${stamp}@`);
+  const [costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
+    rawCosts.countDocuments({ $or: [{ note: { $regex: `^${TAG}` } }, { created_by: { $in: suiteUserOids } }, { batch: { $in: batchOids } }] }),
+    rawApprovals.countDocuments({ $or: [{ initiator: { $in: suiteUserOids } }, { entity_id: { $in: entityIds } }, { batch: { $in: batchOids } },
+      { "payload.cost_entry": { $in: costs.map(String) } }] }),
+    rawAudits.countDocuments({ $or: [{ actor: { $in: suiteUserOids } }, { entity_id: { $in: entityIds } }] }),
+    db.collection("notifications").countDocuments({ $or: [{ entity_id: { $in: entityIds } }, { user_target: { $in: suiteUserOids } }, { message: { $regex: stamp } }] }),
+    db.collection("maillogs").countDocuments({ $or: [{ entity_id: { $in: entityIds } }, { to: { $regex: stampRe } }] }),
+  ]);
+  return { costCount, requestCount, auditCount, notificationCount, mailCount };
+};
+
+// QA-2911 (second half): fire-and-forget outbox work (audit delivery, notification and mail fan-out to EVERY
+// Admin) from the PREVIOUS request is still landing when the next "before" snapshot is taken. Alone on a fresh
+// database it has finished by then; after other suites there are many more Admins to mail, so it is still
+// draining mid-window and a refused retry looks as if it wrote (mail rows 144 -> 152 with the retry refused).
+// Both the "before" and the "after" reading therefore wait until the state in play has stopped moving: the
+// same read must come back `stable` times in a row. This does not hide a real write - the refused call's own
+// effect is still present in the settled "after" and still differs from the settled "before"; it only stops
+// older background work from being billed to the call under test.
+const settled = async (read, { stable = 4, gapMs = 200, maxMs = 20000 } = {}) => {
+  const t0 = Date.now();
+  let prev = await read(), run = 1;
+  while (run < stable && Date.now() - t0 < maxMs) {
+    await new Promise((resolve) => setTimeout(resolve, gapMs));
+    const next = await read();
+    if (next === prev) run++; else { prev = next; run = 1; }
+  }
+  // Fail closed: a state that never went quiet is not a valid "before" or "after" (review of 93e67d1).
+  if (run < stable) throw new Error(`settled(): state still moving after ${maxMs} ms (${run}/${stable} equal reads)`);
+  return prev;
+};
+
 const mkUser = async (name, email, role, grants, scope = []) => {
   const made = await req(admin, "POST", "/api/users", { name, email, password: PW, role, can_edit: true, location_scope: scope });
+  if (made.data?.item?._id) suiteUserOids.push(new ObjectId(String(made.data.item._id)));
   if (made.data?.item?._id && grants.length) await req(admin, "PATCH", `/api/users/${made.data.item._id}`, { extra_permissions: grants });
   return { made, id: made.data?.item?._id, email, cookie: await login(email, PW), name };
 };
@@ -97,8 +144,14 @@ ok("[precondition] the approver, a creator, another user, a finance-view creator
   JSON.stringify([approverB, creator, other, viewer, ungranted].map((u) => u.made.status)));
 
 const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [];
-const plain = cats.find((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && !c.parent);
-const plain2 = cats.filter((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && c._id !== plain?._id)[0];
+// QA-2911: pick only heads that are SIGNED OFF (approval_status absent or Approved) and active. This list is
+// shared with every earlier suite on the wall database; e2e-cost-entry / e2e-cost-head-dropdown / e2e-roles
+// leave Pending and Rejected heads behind, and a Pending head as `plain2` made the head-change approval below
+// refuse 409 (the QA-1977 rule), reddening the material/confirm arms and leaving a cost waiting for approval.
+// On a fresh database the first approved head is the same row as before, so nothing changes there.
+const signedOffHead = (c) => c.active !== false && (!c.approval_status || c.approval_status === "Approved");
+const plain = cats.find((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && !c.parent && signedOffHead(c));
+const plain2 = cats.filter((c) => !c.pre_approved && !/^(other|misc)/i.test(String(c.name)) && c._id !== plain?._id && signedOffHead(c))[0];
 const capRes = await req(admin, "POST", "/api/master-lists/cost-categories", {
   name: `ZZ B3 Capped ${stamp}`, pre_approved: true, pre_approved_amount: 5000, pre_approved_basis: "Rs 5000 a time, agreed in the meeting",
 });
@@ -653,7 +706,8 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
   const rawBatches = db.collection("batches");
   const rawCategories = db.collection("costcategories");
   // Raw snapshots include internal receipts, proposal ownership and audit outboxes, not just amounts.
-  const snapshot = async (costIds, batchIds = [], fixedRequestIds = []) => {
+  const snapshot = (costIds, batchIds = [], fixedRequestIds = []) => settled(() => readSnapshot(costIds, batchIds, fixedRequestIds));
+  const readSnapshot = async (costIds, batchIds = [], fixedRequestIds = []) => {
     const costOids = costIds.map((id) => new ObjectId(String(id)));
     const batchOids = batchIds.map((id) => new ObjectId(String(id)));
     const costs = await rawCosts.find({ _id: { $in: costOids } }).sort({ _id: 1 }).toArray();
@@ -661,14 +715,14 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     // identity in both snapshots as well as the cost's current references.
     const refs = [...new Set([...fixedRequestIds, ...costs.flatMap((row) => [row.approval_request, row.cost_edit_request])]
       .filter(Boolean).map(String))].map((id) => new ObjectId(id));
-    const [batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount] = await Promise.all([
+    const [batches, requests, auditRows, counts] = await Promise.all([
       rawBatches.find({ _id: { $in: batchOids } }).sort({ _id: 1 }).toArray(),
       rawApprovals.find({ $or: [{ _id: { $in: refs } }, { entity_id: { $in: costOids } },
         { "payload.cost_entry": { $in: costIds.map(String) } }] }).sort({ _id: 1 }).toArray(),
       rawAudits.find({ entity_id: { $in: [...costOids, ...batchOids, ...refs] } }).sort({ _id: 1 }).toArray(),
-      rawCosts.countDocuments({}), rawApprovals.countDocuments({}), rawAudits.countDocuments({}),
-      db.collection("notifications").countDocuments({}), db.collection("maillogs").countDocuments({}),
+      scopedCounts({ costs: costIds, batches: batchIds, requests: refs }),
     ]);
+    const { costCount, requestCount, auditCount, notificationCount, mailCount } = counts;
     return JSON.stringify({ costs, batches, requests, auditRows, costCount, requestCount, auditCount, notificationCount, mailCount });
   };
   const template = await rawBatches.findOne({ program: { $type: "objectId" } });
@@ -946,7 +1000,8 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
       const localCost = await mkDirect(creator, "destination-history", { batch: String(fencedDestination) });
       const batchBefore = JSON.stringify(await rawBatches.findOne({ _id: fencedDestination }));
       const localBefore = JSON.stringify(await raw(localCost));
-      const auditBefore = await rawAudits.countDocuments({});
+      const scopeLate = () => scopedCounts({ costs: [id, localCost], batches: [fencedDestination], requests: [claimId] });
+      const auditBefore = (await scopeLate()).auditCount;
       const deletePromise = req(admin, "DELETE", `/api/batches/${fencedDestination}?_test_pause_after_deletion_fence_ms=5000`,
         { reason: `${TAG}-late-claim` });
       let fenceSeen = null;
@@ -970,7 +1025,7 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
         !!fenceSeen && lateDelete.status === 409
           && JSON.stringify(await rawBatches.findOne({ _id: fencedDestination })) === batchBefore
           && JSON.stringify(await raw(localCost)) === localBefore && JSON.stringify(await raw(id)) === lateCostBefore
-          && !(await rawApprovals.findOne({ _id: claimId })) && await rawAudits.countDocuments({}) === auditBefore,
+          && !(await rawApprovals.findOne({ _id: claimId })) && (await scopeLate()).auditCount === auditBefore,
         `${lateDelete.status} ${lateDelete.data?.error ?? ""}`);
       await rawCosts.updateOne({ _id: new ObjectId(id) }, { $unset: { cost_edit_request: "", cost_edit_proposal: "" } });
     }
@@ -1025,17 +1080,110 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     // Explicit legacy/corrupt stored request fixture: API submission remains strictly typed.
     await rawApprovals.updateOne({ _id: proposed._id }, { $set: { [`payload.${field}`]: value } });
     const costBefore = JSON.stringify(await raw(id));
-    const costCountBefore = await rawCosts.countDocuments({});
-    const auditBefore = await rawAudits.countDocuments({});
+    const scopeText = () => scopedCounts({ costs: [id], requests: [proposed._id] });
+    const costCountBefore = (await scopeText()).costCount;
+    const auditBefore = (await scopeText()).auditCount;
     const approved = await decide(proposed._id, "Approved");
     const requestAfter = await rawApprovals.findOne({ _id: proposed._id });
     ok(`text: stored malformed ${field} approval is refused (400), rolls request back to Pending, and leaves liability, ownership, receipts, outbox and audit unchanged`,
       approved.status === 400 && requestAfter?.status === "Pending"
         && JSON.stringify(requestAfter?.payload?.[field]) === JSON.stringify(value)
-        && JSON.stringify(await raw(id)) === costBefore && await rawCosts.countDocuments({}) === costCountBefore
-        && await rawAudits.countDocuments({}) === auditBefore, `${approved.status} ${approved.data?.error ?? ""}`);
+        && JSON.stringify(await raw(id)) === costBefore && (await scopeText()).costCount === costCountBefore
+        && (await scopeText()).auditCount === auditBefore, `${approved.status} ${approved.data?.error ?? ""}`);
     const rejected = await decide(proposed._id, "Rejected");
     ok(`text: malformed ${field} request remains rejectable and releases its ownership`, rejected.status === 200 && !(await raw(id))?.cost_edit_request);
+  }
+}
+
+// ======================================================= QA-2910: malformed optional association ids refuse BEFORE any write
+// An authorised creator (not location-scoped, so every scope helper returns at once) who keeps a valid
+// batch and sends a malformed centre / batch / trainer id used to get an owner+proposal claim persisted
+// before ApprovalRequest's ObjectId cast failed. Every case here snapshots the raw cost, its requests and
+// the collection counts, sends the bad id, and asserts BOTH the 400 and that nothing at all moved - so the
+// arm goes red on the no-write check (not on a crash) when the up-front guard is removed.
+{
+  const bBatches = db.collection("batches");
+  const tpl = await bBatches.findOne({ program: { $type: "objectId" } });
+  ok("QA-2910 [precondition]: a program exists for the isolated batch fixture", !!tpl?.program);
+  const snap2910 = (costId) => settled(() => readSnap2910(costId), { stable: 3, gapMs: 150 });
+  const readSnap2910 = async (costId) => {
+    const oid = new ObjectId(String(costId));
+    const [cost, requests, counts] = await Promise.all([
+      rawCosts.findOne({ _id: oid }),
+      rawApprovals.find({ $or: [{ entity_id: oid }, { "payload.cost_entry": String(costId) }] }).sort({ _id: 1 }).toArray(),
+      scopedCounts({ costs: [costId] }),
+    ]);
+    const { costCount: nCosts, requestCount: nReq, auditCount: nAudit, notificationCount: nNote, mailCount: nMail } = counts;
+    return JSON.stringify({ cost, requests, nCosts, nReq, nAudit, nNote, nMail });
+  };
+  const mkBatch2910 = async (suffix) => {
+    const id = new ObjectId();
+    await bBatches.insertOne({ _id: id, code: `ZZ-2910-${suffix}-${stamp}`, status: "Planning",
+      location: new ObjectId(ownLoc._id), program: tpl.program, target_size: 1,
+      planned_start: new Date("2026-09-01"), planned_end: new Date("2026-09-30"),
+      createdAt: new Date(), updatedAt: new Date() });
+    return id;
+  };
+  let seq2910 = 0;
+  const send2910 = async (actor, id, patch) => {
+    const cur = await raw(id);
+    return req(actor.cookie, "PATCH", `/api/costs/${id}`,
+      { ...patch, confirm_approved: true, base_updated_at: cur.updatedAt.toISOString() },
+      { "Idempotency-Key": `${TAG}-2910-${++seq2910}` });
+  };
+  const refuse2910 = async (label, actor, id, patch) => {
+    const before = await snap2910(id);
+    const r = await send2910(actor, id, patch);
+    const after = await snap2910(id);
+    ok(`QA-2910 ${label}: refused 400`, r.status === 400, `${r.status} ${r.data?.error ?? ""}`);
+    ok(`QA-2910 ${label}: no cost field, owner claim, proposal, receipt, request, audit, notification or mail change`,
+      after === before, "state moved after a refused edit");
+  };
+  const BAD = ["not-an-object-id", "abcdefghijkl", "zzzzzzzzzzzzzzzzzzzzzzzz", 7, ["x"]];
+  if (tpl?.program) {
+    // creator path, approved entry: the exact half-write trigger (claim persisted, then the cast fails)
+    for (const field of ["location", "trainer", "batch"]) {
+      const batchId = await mkBatch2910(`CREATOR-${field}`);
+      const id = await mkApproved(creator, `2910-approved-${field}`, { batch: String(batchId) });
+      ok(`QA-2910 [precondition] ${field}: an approved entry with a live batch exists for the creator`, !!id && String((await raw(id))?.batch) === String(batchId));
+      if (!id) continue;
+      for (const bad of BAD) await refuse2910(`creator/approved: malformed ${field} ${JSON.stringify(bad)} next to a valid batch`, creator, id, { [field]: bad, amount: 322 });
+      ok(`QA-2910 ${field}: no edit is left waiting for approval after the refusals`, !(await waitingEdit(id)) && !(await raw(id))?.cost_edit_request);
+    }
+    // creator path, plain Payment Pending entry (direct-write branch)
+    const plainBatch = await mkBatch2910("CREATOR-PLAIN");
+    const direct = await mkDirect(creator, "2910-direct", { batch: String(plainBatch) });
+    ok("QA-2910 [precondition]: a Payment Pending entry with a live batch exists for the creator", !!direct);
+    if (direct) {
+      await refuse2910("creator/direct: malformed location", creator, direct, { location: "not-an-object-id", note: `${TAG}-2910-d2` });
+      // Types.ObjectId.isValid accepts ANY 12-char string, so these reach Mongoose's cast only when the guard is gone
+      // (the "not-an-object-id" arm above is refused by the cast either way and cannot tell the two apart).
+      for (const f of ["location", "batch", "trainer", "category"]) {
+        await refuse2910(`creator/direct: 12-char malformed ${f}`, creator, direct, { [f]: "abcdefghijkl", note: `${TAG}-2910-d12-${f}` });
+      }
+      // finance branch (finance.approve holder)
+      await refuse2910("finance: malformed location", approverB, direct, { location: "not-an-object-id" });
+      await refuse2910("finance: malformed trainer", approverB, direct, { trainer: "abcdefghijkl" });
+      await refuse2910("finance: malformed batch", approverB, direct, { batch: 7 });
+      await refuse2910("finance: malformed category", approverB, direct, { category: "not-an-object-id" });
+      await refuse2910("finance: 12-char malformed category", approverB, direct, { category: "abcdefghijkl" });
+
+      // the guard must not harden anything else: omitted / null / "" / valid ObjectId still behave as before
+      const okNull = await send2910(creator, direct, { trainer: null, amount: 411 });
+      ok("QA-2910 valid: trainer null is accepted (200) and the amount edit lands", okNull.status === 200 && (await raw(direct))?.amount === 411, `${okNull.status} ${okNull.data?.error ?? ""}`);
+      const okEmpty = await send2910(creator, direct, { trainer: "", amount: 412 });
+      ok("QA-2910 valid: trainer empty string is accepted (200)", okEmpty.status === 200 && (await raw(direct))?.amount === 412, `${okEmpty.status} ${okEmpty.data?.error ?? ""}`);
+      const okOmit = await send2910(creator, direct, { amount: 413 });
+      ok("QA-2910 valid: every association omitted is accepted (200)", okOmit.status === 200 && (await raw(direct))?.amount === 413, `${okOmit.status} ${okOmit.data?.error ?? ""}`);
+      const okOid = await send2910(creator, direct, { location: String(ownLoc._id), batch: String(plainBatch), amount: 414 });
+      ok("QA-2910 valid: well-formed ObjectId strings are accepted (200)", okOid.status === 200 && (await raw(direct))?.amount === 414, `${okOid.status} ${okOid.data?.error ?? ""}`);
+      const okFin = await send2910(approverB, direct, { trainer: null, amount: 415 });
+      ok("QA-2910 valid (finance): trainer null with an amount correction is accepted (200)", okFin.status === 200 && (await raw(direct))?.amount === 415, `${okFin.status} ${okFin.data?.error ?? ""}`);
+      const okClear = await send2910(creator, direct, { location: "", amount: 416 });
+      ok("QA-2910 valid: clearing the centre while a batch remains is not refused as malformed", okClear.status === 200, `${okClear.status} ${okClear.data?.error ?? ""}`);
+      const afterClear = await raw(direct);
+      ok("QA-2910 valid: the cleared centre is persisted as unset and the batch is retained", !afterClear?.location && String(afterClear?.batch) === String(plainBatch), `location=${afterClear?.location} batch=${afterClear?.batch}`);
+    }
   }
 }
 

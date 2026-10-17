@@ -1060,6 +1060,11 @@ const preFreshCount = await page.evaluate(() => {
   return m ? Number(m[1]) : null;
 });
 const archiveBtn = page.locator(`table tbody tr:has-text("${fresh[0].name}") button:has-text("Archive")`).first();
+// The row-action verbs are gated on usePerms().loaded (candidates/page.tsx: canDeleteCandidate = rightsLoaded && ...),
+// and the rights arrive from a SEPARATE fetch in shell.tsx after the rows render, so settled() can return with the
+// row present and the Archive button not yet drawn. Wait for the button itself (bounded); if it never appears the count
+// below is still 0 and the assertion still fails - this removes the race, not the check.
+await archiveBtn.waitFor({ state: "attached", timeout: 20000 }).catch(() => {});
 const archiveBtnVisible = (await archiveBtn.count()) > 0;
 ok("[QA-1817] the row action now reads Archive, not the stale Delete label", archiveBtnVisible, `found=${archiveBtnVisible}`);
 if (archiveBtnVisible) {
@@ -1099,6 +1104,11 @@ ok("[QA-1817] the archived row shows the reason typed into the confirm dialog, n
 // -- Restore (single row) --
 if (archivedRowVisible > 0) {
   const restoreBtn = page.locator(`table tbody tr:has-text("${fresh[0].name}") button:has-text("Restore")`).first();
+  // The row-action verbs are gated on usePerms().loaded (candidates/page.tsx: canDeleteCandidate = rightsLoaded && ...),
+  // and the rights arrive from a SEPARATE fetch in shell.tsx after the rows render, so settled() can return with the
+  // row present and the Restore button not yet drawn. Wait for the button itself (bounded); if it never appears the count
+  // below is still 0 and the assertion still fails - this removes the race, not the check.
+  await restoreBtn.waitFor({ state: "attached", timeout: 20000 }).catch(() => {});
   const restoreBtnVisible = (await restoreBtn.count()) > 0;
   ok("[bulk-archive-restore-ux] the archived row offers Restore, not a dead end",
     restoreBtnVisible, `found=${restoreBtnVisible}`);

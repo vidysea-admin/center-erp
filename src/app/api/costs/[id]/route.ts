@@ -41,6 +41,23 @@ async function loadDeletionTombstoneInScope(user: Awaited<ReturnType<typeof requ
   return doc;
 }
 
+// QA-2910 (S2): the optional association ids of a cost edit (centre, batch, trainer, head) must be
+// well-formed BEFORE any write, claim or approval request. An unscoped creator who kept a valid batch
+// and sent a malformed centre passed every scope helper (they return at once for unscoped users) and
+// Rule 37 (any association will do), and the creator path then persisted its owner/proposal claim
+// before ApprovalRequest's ObjectId cast failed - a half-write. Omitted, null and "" mean "no value"
+// (clearing stays legal where Rule 37 allows); anything else must be a 24-hex string or an ObjectId.
+const COST_ASSOCIATION_FIELDS = ["location", "batch", "trainer", "category"] as const;
+function assertCostAssociationIds(body: Record<string, unknown>) {
+  for (const f of COST_ASSOCIATION_FIELDS) {
+    const v = body[f];
+    if (v === undefined || v === null || v === "") continue;
+    if (v instanceof Types.ObjectId) continue;
+    if (typeof v === "string" && /^[0-9a-fA-F]{24}$/.test(v)) continue;
+    throw new HttpError(400, `The ${f} is invalid.`);
+  }
+}
+
 export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -99,6 +116,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     await auditDiff("CostEntry", updated._id, before, paymentPatch, user.id);
     return NextResponse.json({ item: updated });
   }
+  assertCostAssociationIds(body);
   const patch: Record<string, unknown> = {};
   // QA-1828b: the new entry-side fields are editable by the same finance.approve holder who can
   // already edit the amount. NOT the pre-approved snapshot - that is a record of what was decided at
@@ -321,6 +339,7 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
   if (body.mark_paid === true) {
     throw new HttpError(403, "Recording a payment is for finance. You can change or delete your own entry until it is paid.");
   }
+  assertCostAssociationIds(body); // QA-2910: before any receipt, claim, request or audit effect
   const before: any = doc.toObject();
   const clientKey = String(req.headers.get("Idempotency-Key") ?? "").trim();
   if (clientKey.length > 160) throw new HttpError(400, "The edit retry key is too long.");

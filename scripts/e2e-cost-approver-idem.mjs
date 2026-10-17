@@ -574,8 +574,22 @@ const rows5 = {};
       && gPend.register.every((r) => r.payment_status === "Payment Pending") && gPend.totals.entries === gPend.register.length,
     JSON.stringify({ paid: gPaid.register.length, pend: gPend.register.length }));
   const all = await fg("");
+  // QA-2911: the old form compared the two filtered lengths with the WHOLE unfiltered register. On a shared
+  // database (the wall) any earlier suite's rows that carry no payment_status at all (it is optional on the
+  // schema, so they belong to NEITHER filter) made the totals differ, red in the wall and green alone. The
+  // partition is asserted over THIS suite's own rows (note starts with TAG), by id: every one of our rows that
+  // is Paid or Payment Pending must come back from exactly one of the two filters, and no id may come back
+  // from both. A filter that drops one of our rows, or returns it twice, still fails (the set is compared,
+  // not a count). The non-vacuity guard demands both partitions carry at least one of our rows.
+  const ownReg = (rows) => rows.filter((r) => String(r.note ?? "").startsWith(TAG));
+  const ownAll = ownReg(all.register).filter((r) => r.payment_status === "Paid" || r.payment_status === "Payment Pending");
+  const ownPaidIds = ownReg(gPaid.register).map((r) => r.id), ownPendIds = ownReg(gPend.register).map((r) => r.id);
+  const expectIds = ownAll.map((r) => r.id).sort().join(",");
   ok("R9 filter: Paid + Pending partition the unfiltered register (nothing lost, nothing double-counted)",
-    gPaid.register.length + gPend.register.length === all.register.length, `${gPaid.register.length}+${gPend.register.length} vs ${all.register.length}`);
+    ownPaidIds.length >= 1 && ownPendIds.length >= 1 && expectIds.length > 0
+      && [...ownPaidIds, ...ownPendIds].sort().join(",") === expectIds
+      && ownPaidIds.every((id) => !ownPendIds.includes(id)),
+    `own paid=${ownPaidIds.length} pend=${ownPendIds.length} own paid-or-pending in the unfiltered register=${ownAll.length}`);
   const bp = await req(admin, "GET", "/api/costs?payment_status=Settled");
   ok("R9 filter: an unknown payment status is refused (400), not silently ignored", bp.status === 400, `got ${bp.status}`);
   const xp = XLSX.read((await reqBuffer(admin, "/api/reports/costs/export?payment_status=Paid")).data, { type: "buffer" });
