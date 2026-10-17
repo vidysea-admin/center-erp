@@ -47,7 +47,7 @@ async function upload(cookie, fields) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 if (!admin) { console.log("FAIL  admin login"); process.exit(1); }
 
 const S = Date.now().toString().slice(-6);

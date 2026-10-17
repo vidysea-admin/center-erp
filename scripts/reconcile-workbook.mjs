@@ -9,7 +9,7 @@
 // contains his 18 rows and nothing else, which would destroy every other suite's fixtures. Run it
 // on its own, against a throwaway database:
 //
-//   MONGODB_URL=... MONGODB_DB=... BASE_URL=http://localhost:PORT/erp //     ADMIN_PASSWORD=admin123 node scripts/reconcile-workbook.mjs
+//   MONGODB_URL=... MONGODB_DB=... BASE_URL=http://localhost:PORT/erp //     ADMIN_PASSWORD=<your-admin-password> node scripts/reconcile-workbook.mjs
 //
 // Result on 2026-09-06 at `adf9195`: 32 passed, 0 failed.
 //
@@ -152,7 +152,7 @@ const login = async () => {
   const res = await fetch(`${BASE}/api/auth/callback/credentials`, {
     method: "POST", redirect: "manual",
     headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: cookie1 },
-    body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: process.env.ADMIN_PASSWORD || "admin123" }),
+    body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()) }),
   });
   return [cookie1, ...res.headers.getSetCookie().map((c) => c.split(";")[0])].join("; ");
 };

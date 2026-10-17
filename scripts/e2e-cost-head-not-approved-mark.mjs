@@ -68,7 +68,7 @@ const tag = (k) => `zzmark ${stamp} ${k}`;
 const NOT_APPROVED = " (not approved)";
 const REJECTED = " (rejected)";
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", PW);
 ok("[precondition] personas sign in", !!admin && !!ops, `admin=${!!admin} ops=${!!ops}`);
 
@@ -247,7 +247,7 @@ try {
     };
     const has = (text, needle) => text.includes(needle);
 
-    const adm = await asPage("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+    const adm = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
     // filter
     await adm.page.goto(`${BASE}/finance`, { waitUntil: "networkidle" });
     await adm.page.locator("select", { has: adm.page.locator("option", { hasText: "All heads" }) }).first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
@@ -325,7 +325,7 @@ try {
 
     const approveP = await req(admin, "POST", `/api/approvals/${P.headReq._id}`, { decision: "Approved", note: "fixture: now approved" });
     const queue2 = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
-    const adm2 = await asPage("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+    const adm2 = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
     await adm2.page.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
     const ap2 = await (async () => { const s = `#approval-request-${pk.pend.id}`; await adm2.page.locator(s).waitFor({ state: "visible", timeout: 30000 }).catch(() => {}); return (await adm2.page.locator(s).count()) ? (await adm2.page.locator(s).first().innerText()).replace(/\s+/g, " ") : ""; })();
     ok("live: once the head is approved the mark is gone from the parked cost - API and screen",

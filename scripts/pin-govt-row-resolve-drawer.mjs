@@ -27,7 +27,7 @@ async function req(cookie, method, path, body, expect) {
   return { status: res.status, data };
 }
 
-const admin = await login("admin@vidysea.com", "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 if (!admin) { console.error("FATAL: admin login failed"); process.exit(1); }
 
 const STAMP = String(Date.now()).slice(-8);

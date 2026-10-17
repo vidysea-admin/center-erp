@@ -41,7 +41,7 @@ const csrfCookie = csrfRes.headers.get("set-cookie").split(";")[0];
 const loginRes = await fetch(BASE + "/api/auth/callback/credentials", {
   method: "POST",
   headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: csrfCookie },
-  body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: process.env.ADMIN_PASSWORD || "admin123" }),
+  body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()) }),
   redirect: "manual",
 });
 const setCookies = loginRes.headers.getSetCookie ? loginRes.headers.getSetCookie() : [loginRes.headers.get("set-cookie")];

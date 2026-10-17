@@ -28,7 +28,7 @@ async function req(cookie, method, path, body) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", "CiOnly@123");
 const stamp = "BS" + Date.now().toString().slice(-6);
 

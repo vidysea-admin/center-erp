@@ -44,7 +44,7 @@ async function req(cookie, method, path, body, expect) {
   return { status: res.status, data };
 }
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 ok("admin login", !!admin);
 
 const stamp = "BD" + Date.now().toString().slice(-6);

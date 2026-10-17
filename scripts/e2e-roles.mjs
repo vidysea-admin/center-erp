@@ -39,7 +39,7 @@ async function req(cookie, method, path, body) {
 }
 
 const PW = "CiOnly@123";
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);
 // 2026-08-13 (Umesh role matrix): the principal is a WRITER now (admin-like within their

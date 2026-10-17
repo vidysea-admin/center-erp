@@ -157,7 +157,7 @@ const PW = "CiOnly@123";
 // ones that expect to be refused, so each arm reaches the mechanism it names.
 const DEL_REASON = "e2e-cost-entry: removing a fixture cost entry (-305 requires a reason)";
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);
 const trainerUser = await login("trainer.jpr03@vidysea.com", PW);
@@ -2417,7 +2417,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         const email = page.locator('input[type="email"], input[name="email"]').first();
         if (await email.count()) {
           await email.fill("admin@vidysea.com");
-          await page.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+          await page.locator('input[type="password"]').first().fill((process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
           await page.locator('button[type="submit"]').first().click();
           await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
         }
@@ -3195,7 +3195,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
           const ab = ap.locator('input[type="email"], input[name="email"]').first();
           if (await ab.count()) {
             await ab.fill("admin@vidysea.com");
-            await ap.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+            await ap.locator('input[type="password"]').first().fill((process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
             await ap.locator('button[type="submit"]').first().click();
             await ap.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
           }
@@ -3343,7 +3343,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         }
         const mctx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
         try {
-          const mp = await login(mctx, "admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+          const mp = await login(mctx, "admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
           await mp.goto(`${BASE}/admin?tab=${encodeURIComponent("Master Lists")}`, { waitUntil: "networkidle" });
           const rowText = (id) => mp.waitForFunction(
             (v) => document.querySelector(`[data-cost-head-id="${v}"]`)?.textContent ?? null,
@@ -3550,7 +3550,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
         const admName = `ZZ Admin Walk Head ${stamp}`;
         const actx = await browser2.newContext({ viewport: { width: 1400, height: 1000 } });
         try {
-          const ap = await signIn(actx, "admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+          const ap = await signIn(actx, "admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
           const cat = await openForm(ap);
           const nameBox = ap.getByLabel("Name of the new cost head");
           const hiddenAtStart = (await nameBox.count()) === 0;
@@ -3604,7 +3604,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
           const qb = qp.locator('input[type="email"], input[name="email"]').first();
           if (await qb.count()) {
             await qb.fill("admin@vidysea.com");
-            await qp.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+            await qp.locator('input[type="password"]').first().fill((process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
             await qp.locator('button[type="submit"]').first().click();
             await qp.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
           }

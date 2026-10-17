@@ -44,14 +44,19 @@ const FINANCE_GRANTS = ["finance.view", "finance.approve"];
 const email = "admin@vidysea.com";
 const existing = await db.collection("users").findOne({ email });
 if (!existing) {
-  const password_hash = await bcrypt.hash("admin123", 10);
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminPassword) {
+    console.error("ADMIN_PASSWORD env var is required to create the admin user (no default is baked in). Set it and re-run.");
+    process.exit(1);
+  }
+  const password_hash = await bcrypt.hash(adminPassword, 10);
   await db.collection("users").insertOne({
     name: "Admin", email, password_hash, role: "Admin",
     location_scope: [], can_edit: true, active: true,
     extra_permissions: FINANCE_GRANTS,
     createdAt: new Date(), updatedAt: new Date(),
   });
-  console.log("Admin user created: admin@vidysea.com / admin123  (CHANGE THIS PASSWORD)");
+  console.log("Admin user created: admin@vidysea.com (password taken from ADMIN_PASSWORD)");
 } else {
   // Idempotent top-up: an existing seed database predates the finance keys, and re-seeding is how
   // every isolation copy is built. $addToSet so a hand-edited grant list is never trampled.

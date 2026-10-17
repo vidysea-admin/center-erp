@@ -85,9 +85,9 @@ Verify what is deployed at any time, no login needed:
 | principal.jpr03@vidysea.com | Location, view-only |
 | enroll@vidysea.com | Enrollment |
 
-`admin123` is only the fresh-seed default and is **wrong on production** — the prod admin
+The seed/CI admin password is **random per run in CI** (generated in the workflow, masked, never stored) and is set by you via `ADMIN_PASSWORD` for local runs - it is **not** the production password — the prod admin
 password was rotated (current one is with Umesh, not in this repo). A failed admin login
-with `admin123` is expected, not a bug. The non-admin live passwords are also held by
+with a local/CI value is expected, not a bug. The non-admin live passwords are also held by
 Umesh; the CI/e2e suites use their own throwaway password that has no relation to
 production.
 

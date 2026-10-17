@@ -27,7 +27,7 @@ async function login(email, password) {
   const set = (r.headers.getSetCookie?.() ?? []).map((c) => c.split(";")[0]);
   return [jar, ...set].join("; ");
 }
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const enroll = await login("enroll@vidysea.com", "CiOnly@123");
 
 async function req(cookie, method, path, json, expect) {

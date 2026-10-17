@@ -71,7 +71,7 @@ const rawAudits = db.collection("auditlogs");
 const PW = "CiOnly@123";
 const stamp = Date.now().toString(36);
 const TAG = `b3-${stamp}`;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })());
 
 const admin = await login("admin@vidysea.com", ADMIN_PASSWORD);
 ok("[precondition] the default admin signs in", !!admin);

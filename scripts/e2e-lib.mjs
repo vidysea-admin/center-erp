@@ -8,7 +8,13 @@
 // e2e-govt-batch-id.mjs and e2e-rendered-candidates.mjs) without it. One guard here covers all nine.
 import { requireLocalBase } from "./db-guard.mjs";
 export const BASE = requireLocalBase("e2e-lib", process.env.BASE_URL || "http://localhost:3000/erp");
-export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+// No literal fallback: the admin password must come from the environment (CI generates a random one per run).
+export function requireEnv(name) {
+  const v = process.env[name];
+  if (!v) throw new Error(name + " env var is required (no default)");
+  return v;
+}
+export const ADMIN_PASSWORD = requireEnv("ADMIN_PASSWORD");
 
 let pass = 0, fail = 0;
 export const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + (x ?? "")); } };

@@ -20,6 +20,8 @@ const SUITES = [
   // wall green, because the shapes they catch are reachable from no HTTP door. This one loads the
   // real src/lib/permissions.ts through jiti and CALLS it with a synthetic row per shape.
   "check-money-mask.mjs",
+  // 2026-10-17 (secret-leak-audit-repo): no-server VALUE+SHAPE scan - the seed/test admin password must never be a literal in a tracked file.
+  "check-no-seed-literal.mjs",
   // The original eight (audit era)
   "e2e.mjs",
   // QA-814(a) (maker on qa-219 cycle 3, pre-push — release number TBD at ship time): e2e-roles.mjs's

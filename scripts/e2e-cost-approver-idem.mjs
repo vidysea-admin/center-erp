@@ -60,7 +60,7 @@ const PW = "CiOnly@123";
 const stamp = Date.now().toString(36);
 const TAG = `a3-${stamp}`;
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", PW);
 const spoc = await login("spoc.jpr03@vidysea.com", PW);
 ok("[precondition] personas sign in", !!admin && !!ops && !!spoc, `admin=${!!admin} ops=${!!ops} spoc=${!!spoc}`);

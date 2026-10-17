@@ -36,7 +36,7 @@ async function req(cookie, method, path, body, expect) {
   return { status: res.status, data };
 }
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 ok("admin login", !!admin);
 
 const stamp = "CE" + Date.now().toString().slice(-6);
@@ -196,7 +196,7 @@ ok("QA-1459: the five fields the roster actually renders are UNCHANGED for that 
     page.on("dialog", (d) => d.dismiss().catch(() => {}));
     await page.goto(BASE, { waitUntil: "domcontentloaded" });
     await page.locator('input[type="email"]').first().fill("admin@vidysea.com");
-    await page.locator('input[type="password"]').first().fill(process.env.ADMIN_PASSWORD || "admin123");
+    await page.locator('input[type="password"]').first().fill((process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
     await page.locator('button[type="submit"]').first().click();
     await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
     ok(`${T} [precondition]: the browser is signed in as Admin`, !/login/i.test(page.url()), page.url());

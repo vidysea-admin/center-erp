@@ -33,7 +33,7 @@ MONGODB_URL=mongodb://center_erp_app:<STRONG-PASSWORD-2>@<YOUR-MONGO-SERVER-IP>:
 (both `.env` in d:\erp and `center-erp/.env.local`, and the deploy host's env)
 
 ## 🔴 P0 — Rotate the default admin password
-`admin@vidysea.com / admin123` was seeded for bootstrap. Change it: Admin → Users & Access →
+`admin@vidysea.com` is seeded for bootstrap with the password you supply in `ADMIN_PASSWORD` (the seed refuses to run without it; CI uses a random per-run value). Set a strong password on every real deployment and change it if one was ever shared: Admin → Users & Access →
 Admin → set a strong password. Sample users (`ops@`, `spoc.jpr03@`, `principal.jpr03@`,
 `enroll@`) share a seed password (see `scripts/seed-sample.mjs` — CI-only, no relation to
 production): rotate or deactivate before real use. Real credentials are never written into

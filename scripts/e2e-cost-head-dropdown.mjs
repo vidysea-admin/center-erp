@@ -72,7 +72,7 @@ const N = {
 };
 const TAG = (k) => `zzb2 ${stamp} ${k}`;
 
-const admin = await login("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+const admin = await login("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
 const ops = await login("ops@vidysea.com", PW);
 ok("[precondition] personas sign in", !!admin && !!ops, `admin=${!!admin} ops=${!!ops}`);
 
@@ -271,7 +271,7 @@ try {
     };
     const newBox = 'input[aria-label="Name of the new cost head"]';
 
-    const a = await asPage("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+    const a = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
     await a.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
     const g0 = await waitForHead(a.page, N.h1);
     const grp1 = g0.find((x) => x.group.startsWith(N.h1));
@@ -349,7 +349,7 @@ try {
     const batch = prog ? (await req(admin, "POST", "/api/batches", { location: ownLoc._id, program: prog._id, planned_start: ymd, target_size: 3 })).data?.item : null;
     ok("[precondition] a batch exists to open the Costs tab on", !!batch?._id, JSON.stringify(prog ?? {}).slice(0, 100));
     if (batch?._id) {
-      const b = await asPage("admin@vidysea.com", process.env.ADMIN_PASSWORD || "admin123");
+      const b = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
       await b.page.goto(BASE + `/batches/${batch._id}?tab=Costs`, { waitUntil: "networkidle" });
       const gb = await waitForHead(b.page, N.h1);
       const gbp = gb.find((x) => x.group.startsWith(N.h1));

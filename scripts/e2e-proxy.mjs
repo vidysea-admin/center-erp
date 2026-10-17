@@ -76,7 +76,7 @@ const csrfCookie = csrfSet.map((c) => c.split(";")[0]).find((c) => c.includes("c
 ok("CSRF cookie issued through the proxy", !!csrfCookie, JSON.stringify(csrfSet).slice(0, 120));
 const login = await fetch(`${BASE}/api/auth/callback/credentials`, {
   method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", cookie: csrfCookie },
-  body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: process.env.ADMIN_PASSWORD || "admin123" }),
+  body: new URLSearchParams({ csrfToken, email: "admin@vidysea.com", password: (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()) }),
   redirect: "manual",
 });
 const setCookies = (login.headers.getSetCookie?.() ?? [login.headers.get("set-cookie")]).flat().filter(Boolean);

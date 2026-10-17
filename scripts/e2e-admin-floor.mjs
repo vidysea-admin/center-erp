@@ -47,7 +47,7 @@ async function req(cookie, method, p, body) {
 
 const PW = "FloorPin@123";
 const ROOT_EMAIL = "admin@vidysea.com";
-const ROOT_PW = process.env.ADMIN_PASSWORD || "admin123";
+const ROOT_PW = (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })());
 const stamp = Date.now().toString(36);
 let root = await login(ROOT_EMAIL, ROOT_PW);
 ok("[precondition] the seed Admin can sign in", !!root, "no session");

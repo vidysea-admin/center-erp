@@ -43,7 +43,7 @@ async function req(cookie, method, p, body, extraHeaders = {}) {
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
-const ADMIN_PW = process.env.ADMIN_PASSWORD || "admin123";
+const ADMIN_PW = (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })());
 const admin = await login("admin@vidysea.com", ADMIN_PW);
 ok("[precondition] an Admin session exists to create the subject with", !!admin, "login failed");
 

@@ -47,10 +47,9 @@ jobs:
       TZ: Asia/Kolkata
       MONGODB_URL: mongodb://localhost:27017
       MONGODB_DB: center_erp_ci
-      AUTH_SECRET: ci-only-not-a-real-secret
+      # AUTH_SECRET and ADMIN_PASSWORD are generated per run in the first step (masked, via GITHUB_ENV).
       AUTH_TRUST_HOST: "true"
       BASE_URL: http://localhost:3000/erp
-      ADMIN_PASSWORD: admin123
       # -95: the bucket is named in code; the wall must never touch the real bucket (its AWS
       # identity is not one the pool trusts anyway). Off-switch for CI/test ONLY — never on prod.
       STORAGE_DISABLE: "1"
@@ -68,6 +67,16 @@ jobs:
       # and contact their workbook URLs independently of the assertion that created them.
       SCHEDULER_DISABLED: "1"
     steps:
+      # No credential literal lives in this repo. The admin password the seed and every suite use,
+      # and the session-signing secret, are random per run: masked in the log, shared with every
+      # later step (and the server) through GITHUB_ENV, and gone when the run ends.
+      - name: Generate per-run test credentials
+        run: |
+          for name in ADMIN_PASSWORD AUTH_SECRET; do
+            value="$(openssl rand -hex 16)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
