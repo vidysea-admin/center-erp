@@ -456,10 +456,21 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const existingHits: string[] = [];
   const existingHitOf = new Map<object, string>();
+  // QA-2930 (Rule 38): a Location-scoped importer is told about look-alikes at THEIR centres in full, exactly
+  // as before. A look-alike at a centre they cannot see is still flagged - so they ask an Admin - but with
+  // no name, phone or centre. The scope goes into the query (findDuplicateCandidates' locationScope, the
+  // same argument check-duplicate passes), never a post-filter: the hit carries a centre NAME.
+  const dupScope = isScoped(user) ? (user.location_scope ?? []).map(String) : undefined;
   for (const c of candidates.slice(0, 300)) { // bounded: preview only, not a full-file scan
-    const hits = await findDuplicateCandidates({ name: String(c.name), phone: String(c.phone), dob: c.dob as Date });
+    const probe = { name: String(c.name), phone: String(c.phone), dob: c.dob as Date };
+    // an empty scope means "sees nothing": findDuplicateCandidates treats [] as unscoped, so never pass it
+    const hits = dupScope && !dupScope.length ? [] : await findDuplicateCandidates(probe, undefined, dupScope);
     if (hits.length) {
       const msg = `${personLabel(c)} → already exists: ${hits[0].message}`;
+      existingHits.push(msg);
+      existingHitOf.set(c, msg);
+    } else if (dupScope && (await findDuplicateCandidates(probe)).length) {
+      const msg = `${personLabel(c)} → a possible duplicate exists at a centre you cannot see. Ask an Admin to check before you import.`;
       existingHits.push(msg);
       existingHitOf.set(c, msg);
     }
