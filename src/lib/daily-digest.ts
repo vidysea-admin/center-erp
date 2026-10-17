@@ -39,8 +39,8 @@ import type { SessionUser } from "@/auth";
 //     account's own view: its centre scope, and money only with finance.view. An ineligible account (Trainer,
 //     deactivated, dropped, awaiting approval) is refused, never "upgraded" to a full view by typing its email.
 //   * a typed address that matches NO account gets the FULL report including money (Umesh, AskUserQuestion
-//     2026-10-07): an Admin-shaped, unscoped viewer plus `dailyDigest(..., {fullView: true})`. Only a holder of
-//     defaults.manage with can_edit (Admin by default; the right is grantable, Rule 40) can add one, and the screen warns "This address will receive cost figures".
+//     2026-10-07): an Admin-shaped, unscoped viewer plus `dailyDigest(..., {fullView: true})`. Only an ADMIN
+//     can add one (QA-2923, Umesh 2026-10-17; a defaults.manage grantee may only pick users), and the screen warns "This address will receive cost figures".
 export const DIGEST_HOUR_IST = 21;
 export const DIGEST_MAX_ATTEMPTS = 3;
 export const DIGEST_RETRY_GAP_MS = 10 * 60_000;

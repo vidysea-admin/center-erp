@@ -1860,7 +1860,7 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
       <span className="font-medium">Daily digest recipients</span>
       <span className="block text-xs text-gray-500">
         One mail a day at 21:00 IST to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
-        {canType ? "and/or type any email address (a typed address gets the full report, cost section included). " : "Only an Admin can add an outside email address. "}Empty: no digest mail is sent.
+        {canType ? " and/or type any email address (a typed address gets the full report, cost section included). " : ". Only an Admin can add an outside email address. "}Empty: no digest mail is sent.
       </span>
       {toggleOn && health?.digest_only_nobody && (
         <div className="mt-1 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900" data-testid="digest-only-nobody-warning">
