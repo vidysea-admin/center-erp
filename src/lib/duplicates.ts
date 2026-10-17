@@ -41,7 +41,8 @@ export async function findDuplicateCandidates(input: { name?: string; phone?: st
   const found = await Candidate.find({
     $or: or,
     ...(excludeId ? { _id: { $ne: excludeId } } : {}),
-    ...(locationScope?.length ? { location: { $in: locationScope } } : {}),
+    // QA-2930: an EMPTY scope is a scoped user who may see no centre at all - it matches nothing. Only `undefined` is unscoped.
+    ...(locationScope ? { location: { $in: locationScope } } : {}),
   })
     .select("name phone alt_phone dob location lifecycle_status")
     .populate("location", "name code")

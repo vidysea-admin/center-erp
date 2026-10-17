@@ -302,8 +302,8 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
   ok("IIB-LK3b: ...and the same in a batch import", (pv3b.data.duplicates ?? [])[0] === d3 && d3.includes("already exists:") && d3.includes(holderX.name), JSON.stringify(pv3b.data.duplicates));
   // look-alikes at both centres: the in-scope one is shown, the other is not
   const pv4 = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-LK4 ${S}`, { Phone: both })] });
-  const d4 = (pv4.data.duplicates ?? [])[0] ?? "";
-  ok("IIB-LK4: a phone held at both X and Y shows the X candidate only; nothing of the Y one",
+  const d4 = (pv4.data.duplicates ?? []).join(" | ");
+  ok("IIB-LK4: a phone held at both X and Y shows the X candidate only; nothing of the Y one (all lines joined: not Mongo-order dependent)",
     pv4.data.duplicate_count === 1 && d4.includes(bothX.name) && !JSON.stringify(pv4.data).includes(bothY.name) && !JSON.stringify(pv4.data).includes(locY.name), d4);
   // a row with no look-alike anywhere is not flagged
   const pv5 = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-LK5 ${S}`)] });
@@ -324,6 +324,93 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
     pa.data.duplicate_count >= 1 && da.includes("already exists:") && da.includes(holderYa.name) && da.includes(locY.name) && !SENT.test(da), da);
   const pab = await importSheet(admin, { rows: [row(`ZZIMP-LK6 ${S}`, { Phone: holderYa.phone })], batch: BXscope });
   ok("IIB-LK6b: ...and in a batch import", (pab.data.duplicates ?? [])[0] === da && da.includes("already exists:") && da.includes(holderYa.name) && da.includes(locY.name), JSON.stringify(pab.data.duplicates));
+}
+
+// ============================================================ 8c. QA-2930 (review round): the NON-batch APAAR / portal-ID "already taken" lines
+// Without a batch, a sheet row whose APAAR / portal Candidate ID already belongs to somebody gets a line saying WHO
+// ("... is already the APAAR ID of <name>"). For a Location importer at X and a holder at Y that was the same leak
+// as the look-alike line. The ID is still dropped from the row (QA-991) - only the name is withheld.
+{
+  const yAp = await mkCand({ apaar_id: mkApaar(), location: locY._id });
+  const yCan = await mkCand({ sidh_candidate_id: mkCan(), location: locY._id });
+  const xAp = await mkCand({ apaar_id: mkApaar(), location: locX._id });
+  const xCan = await mkCand({ sidh_candidate_id: mkCan(), location: locX._id });
+  const GEN = /centre you cannot see/i;
+  const nm = (c) => String(c.name);
+  // Location importer at X, APAAR held at Y
+  const pvA = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-NB1 ${S}`, { APAAR: yAp.apaar_id })] });
+  ok("IIB-NB1a: Location importer at X puts an APAAR ID held by a Y candidate in the sheet (no batch): the ID is still reported taken, and the Y candidate's name is not in the preview",
+    pvA.status === 200 && pvA.data.apaar_taken_count === 1 && GEN.test((pvA.data.apaar_taken ?? [])[0] ?? "") && !JSON.stringify(pvA.data).includes(nm(yAp)), JSON.stringify(pvA.data.apaar_taken));
+  const cmA = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-NB1 ${S}`, { APAAR: yAp.apaar_id })], confirm: true });
+  const landedA = (await byName(`ZZIMP-NB1 ${S}`))[0];
+  ok("IIB-NB1b: ...the commit body has no Y name either, the row still lands, and its APAAR ID is dropped (QA-991 unchanged)",
+    cmA.status === 201 && cmA.data.imported === 1 && cmA.data.apaar_taken_count === 1 && !JSON.stringify(cmA.data).includes(nm(yAp)) && !!landedA && !landedA.apaar_id, JSON.stringify(cmA.data).slice(0, 250));
+  // portal Candidate ID held at Y
+  const pvC = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-NB2 ${S}`, { CAN: yCan.sidh_candidate_id })] });
+  ok("IIB-NB2a: Location importer at X puts a portal Candidate ID held by a Y candidate in the sheet (no batch): reported taken, no Y name in the preview",
+    pvC.status === 200 && pvC.data.sidh_taken_count === 1 && GEN.test((pvC.data.sidh_taken ?? [])[0] ?? "") && !JSON.stringify(pvC.data).includes(nm(yCan)), JSON.stringify(pvC.data.sidh_taken));
+  const cmC = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-NB2 ${S}`, { CAN: yCan.sidh_candidate_id })], confirm: true });
+  const landedC = (await byName(`ZZIMP-NB2 ${S}`))[0];
+  ok("IIB-NB2b: ...the commit body has no Y name, the row lands, and its portal ID is dropped",
+    cmC.status === 201 && cmC.data.imported === 1 && !JSON.stringify(cmC.data).includes(nm(yCan)) && !!landedC && !landedC.sidh_candidate_id, JSON.stringify(cmC.data).slice(0, 250));
+  // in scope: unchanged
+  const pvX = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-NB3 ${S}`, { APAAR: xAp.apaar_id }), row(`ZZIMP-NB3b ${S}`, { CAN: xCan.sidh_candidate_id })] });
+  ok("IIB-NB3: Location importer at X with APAAR / portal IDs held by X candidates still gets the holder's name",
+    (pvX.data.apaar_taken ?? [])[0]?.includes(`APAAR ID of ${nm(xAp)}`) && (pvX.data.sidh_taken ?? [])[0]?.includes(`recorded for ${nm(xCan)}`), JSON.stringify([pvX.data.apaar_taken, pvX.data.sidh_taken]));
+  // Admin: unchanged
+  const pvAd = await importSheet(admin, { rows: [row(`ZZIMP-NB4 ${S}`, { APAAR: yAp.apaar_id }), row(`ZZIMP-NB4b ${S}`, { CAN: yCan.sidh_candidate_id })] });
+  ok("IIB-NB4: Admin putting the Y candidates' APAAR / portal IDs in a sheet still gets their names",
+    (pvAd.data.apaar_taken ?? [])[0]?.includes(`APAAR ID of ${nm(yAp)}`) && (pvAd.data.sidh_taken ?? [])[0]?.includes(`recorded for ${nm(yCan)}`), JSON.stringify([pvAd.data.apaar_taken, pvAd.data.sidh_taken]));
+}
+
+// ============================================================ 8d. QA-2930 (review round): other scoped roles, and a scoped user with an EMPTY scope
+// Trainer and scoped Enrollment are scoped by isScoped() exactly like Location. A Location / Trainer user whose
+// location_scope is [] sees NOTHING, so the check-duplicate lookup must answer nothing, not the whole country.
+const mkPersona = async (label, role, scope, extra = {}) => {
+  const em = `zzimp.${label}.${Date.now()}@vidysea-test.local`;
+  const pw = "Iib8dpass!xyz";
+  const r = await req(admin, "POST", "/api/users", { name: `ZZIMP ${label} ${S}`, email: em, password: pw, role, location_scope: scope, can_edit: true, ...extra });
+  const cookie = r.status === 201 ? await login(em, pw) : null;
+  return { user: r.data.item, status: r.status, err: r.data.error, cookie };
+};
+const checkDup = (cookie, body) => req(cookie, "POST", "/api/candidates/check-duplicate", body);
+const personas = [];
+{
+  const yC = await mkCand({ location: locY._id });
+  const xC = await mkCand({ location: locX._id });
+  for (const [label, role] of [["trainer", "Trainer"], ["enrol", "Enrollment"]]) {
+    const P = await mkPersona(label + "x", role, [locX._id], { extra_permissions: ["candidates.manage"] });
+    if (P.user) personas.push(P.user);
+    ok(`IIB-SC[precondition]: a ${role} scoped to X can be created and log in`, P.status === 201 && !!P.cookie, JSON.stringify([P.status, P.err]));
+    if (!P.cookie) continue;
+    const pvY = await importSheet(P.cookie, { rows: [row(`ZZIMP-SC-${label}-Y ${S}`, { Phone: yC.phone })] });
+    ok(`IIB-SC1-${label}: a ${role} importer scoped to X sees a look-alike from another centre: flagged, no name or centre`,
+      pvY.status === 200 && pvY.data.duplicate_count === 1 && /centre you cannot see/i.test((pvY.data.duplicates ?? [])[0] ?? "") && !JSON.stringify(pvY.data).includes(yC.name) && !JSON.stringify(pvY.data).includes(locY.name), JSON.stringify([pvY.status, pvY.data.duplicates, pvY.data.error]));
+    const pvX2 = await importSheet(P.cookie, { rows: [row(`ZZIMP-SC-${label}-X ${S}`, { Phone: xC.phone })] });
+    const dx = (pvX2.data.duplicates ?? [])[0] ?? "";
+    ok(`IIB-SC2-${label}: ...and a look-alike at their own centre keeps the full message`, dx.includes("already exists:") && dx.includes(xC.name) && dx.includes(locX.name), dx);
+  }
+  // EMPTY scope
+  for (const [label, role] of [["trainer0", "Trainer"], ["loc0", "Location"]]) {
+    const P = await mkPersona(label, role, [], { extra_permissions: ["candidates.manage"] });
+    if (P.user) personas.push(P.user);
+    ok(`IIB-EM[precondition]: a ${role} with an EMPTY location_scope can be created and log in (otherwise the empty-scope arms verify nothing)`, P.status === 201 && !!P.cookie, JSON.stringify([P.status, P.err]));
+    if (!P.cookie) continue;
+    const cd = await checkDup(P.cookie, { phone: yC.phone });
+    ok(`IIB-EM1-${label}: a ${role} with an empty scope asks check-duplicate about a Y candidate's phone: 200 and nothing comes back`,
+      cd.status === 200 && (cd.data.duplicates ?? []).length === 0 && !JSON.stringify(cd.data).includes(yC.name) && !JSON.stringify(cd.data).includes(locY.name), JSON.stringify(cd.data).slice(0, 200));
+    const imp = await importSheet(P.cookie, { rows: [row(`ZZIMP-EM-${label} ${S}`, { Phone: yC.phone })], location: locX });
+    ok(`IIB-EM2-${label}: ...and its import (X is outside an empty scope) is refused 403 with no name or centre in the body`,
+      imp.status === 403 && !JSON.stringify(imp.data).includes(yC.name) && !JSON.stringify(imp.data).includes(locY.name), JSON.stringify([imp.status, imp.data]).slice(0, 200));
+  }
+  // a scoped user asking check-duplicate about their own centre still gets the answer; Admin gets all
+  const Px = await mkPersona("chkx", "Location", [locX._id], { extra_permissions: ["candidates.manage"] });
+  if (Px.user) personas.push(Px.user);
+  const own = await checkDup(Px.cookie, { phone: xC.phone });
+  const other = await checkDup(Px.cookie, { phone: yC.phone });
+  const adm = await checkDup(admin, { phone: yC.phone });
+  ok("IIB-EM3: check-duplicate unchanged for a user scoped to X (own centre answered, other centre silent) and for an Admin (any centre answered)",
+    (own.data.duplicates ?? []).some((d) => d.name === xC.name) && (other.data.duplicates ?? []).length === 0 && (adm.data.duplicates ?? []).some((d) => d.name === yC.name), JSON.stringify([own.data, other.data, adm.data]).slice(0, 300));
 }
 
 // ============================================================ 9. forged tick
@@ -625,7 +712,7 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
 }
 
 // ============================================================ cleanup of the personas created above
-for (const u of [userNoAssign, userScopeY, userScopeX].filter(Boolean)) {
+for (const u of [userNoAssign, userScopeY, userScopeX, ...personas].filter(Boolean)) {
   await req(admin, "PATCH", `/api/users/${u._id}`, { active: false }, 200);
 }
 finish();
