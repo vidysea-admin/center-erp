@@ -15,6 +15,12 @@ import { fileURLToPath } from "node:url";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const runner = path.join(dir, "run-e2e.mjs");
+// The selector reads `git ls-files` for the import graph; an isolated copy without .git (qa isolation recipe) cannot run it.
+if (!fs.existsSync(path.join(dir, "..", ".git"))) {
+  console.log("check-run-e2e-select: SKIPPED - no .git next to scripts/, so the selector's import graph cannot be built here.");
+  console.log("check-run-e2e-select: 0 passed, 0 failed, 1 SKIPPED (did not run: no .git in this copy)");
+  process.exit(0);
+}
 let passed = 0, failed = 0;
 const ok = (name, cond, extra) => {
   if (cond) { passed++; console.log("PASS  " + name); }
@@ -61,6 +67,14 @@ ok("a route change does not select unrelated suites", route.mode === "scoped" &&
 
 const lib = list(files("src/lib/daily-digest.ts"));
 ok("a lib change selects the suite that loads it", lib.mode === "scoped" && lib.suites.includes("e2e-daily-digest.mjs"), lib.mode + " " + lib.suites.join(","));
+
+// Whole-src scanners (QA-1190 stale-phrase scan, digest_recipients scan, "exactly one place" pins) read EVERY src file,
+// so any src change can turn them red even though no import or URL links the file to them.
+const SCANNERS = ["e2e-blindspot.mjs", "e2e-daily-digest.mjs", "e2e-import-into-batch.mjs"];
+const leaf = list(files("src/components/sheet-sources.tsx"));
+ok("a src file nothing links to still selects the whole-src scanner suites", leaf.mode === "scoped" && SCANNERS.every((x) => leaf.suites.includes(x)), leaf.suites.join(","));
+const noSrc = list(files("README.md"));
+ok("a docs-only change does not pull in the whole-src scanners", SCANNERS.every((x) => !noSrc.suites.includes(x)), noSrc.suites.join(","));
 
 const named = list(["--suites", "e2e-dropout,e2e-proxy.mjs"]);
 ok("--suites picks exactly the named suites (name with or without .mjs)", named.mode === "scoped" && named.suites.join(",") === "e2e-dropout.mjs,e2e-proxy.mjs", named.suites.join(","));

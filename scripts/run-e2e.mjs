@@ -352,6 +352,18 @@ function selectAffected(changed) {
     for (const p of prefixes) addMentions(p, "route/page " + p);
     for (const m of modules) addMentions(m, "module " + m);
     notes.push(srcChanged.length + " src file(s) -> closure of " + closure.size + " file(s)");
+    // WHOLE-SRC SCANNERS: some suites read EVERY file under src (QA-1190 stale-phrase scan in e2e-blindspot, the
+    // digest_recipients scan in e2e-daily-digest, the "exactly one place" pins in e2e-import-into-batch). No import
+    // and no URL links a changed file to them, so reachability misses them - and they are exactly the pins that fail
+    // on an unrelated file. Detected from the suite text (it walks a "src" directory with readdirSync), so a new
+    // scanner is picked up without editing this list; any src change selects them all.
+    let scanners = 0;
+    for (const s of ALL_SUITES) {
+      if (sel.has(s)) continue;
+      const t = textOf(s);
+      if (/readdirSync/.test(t) && /["'`]src["'`/]/.test(t)) { sel.add(s); scanners++; }
+    }
+    if (scanners) notes.push("whole-src scanner suites -> +" + scanners);
   }
   return { full: false, reason: notes.join("; ") || "no suite-reaching change; static checks only", suites: sel };
 }
