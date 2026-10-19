@@ -627,11 +627,12 @@ try {
     // ---- W4 the effect -------------------------------------------------------------------------
     const pendBefore = await pendingN();
     const narBefore = (await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post")).data?.total;
-    // reservations belonging to the request: a Formula fence is cancelled with a reason; an ApprovalHead fence is removed
-    const resBase = { approval_request: new ObjectId(Wt.w9.id), category: plain._id, location: locA._id, amount: 1, entry_date: new Date("2031-05-04"), createdAt: new Date(), updatedAt: new Date() };
+    // reservations belonging to a request (one ledger row per request - the index is unique): a Formula fence is cancelled
+    // with a reason; an ApprovalHead fence is removed
+    const resBase = { category: plain._id, location: locA._id, amount: 1, entry_date: new Date("2031-05-04"), createdAt: new Date(), updatedAt: new Date() };
     await rawCosts.insertMany([
-      { ...resBase, _id: new ObjectId(), note: tag("wres-formula"), reservation_kind: "Formula", reservation_state: "Pending" },
-      { ...resBase, _id: new ObjectId(), note: tag("wres-head"), reservation_kind: "ApprovalHead", reservation_state: "Pending" },
+      { ...resBase, _id: new ObjectId(), approval_request: new ObjectId(Wt.w9.id), note: tag("wres-formula"), reservation_kind: "Formula", reservation_state: "Pending" },
+      { ...resBase, _id: new ObjectId(), approval_request: new ObjectId(Wt.w8.id), note: tag("wres-head"), reservation_kind: "ApprovalHead", reservation_state: "Pending" },
     ]);
     const IK = `zzbox-${stamp}-idem`;
     const idemBody = { entry_date: "2031-05-04", location: locB._id, category: plain._id, amount: AMT.w8, note: tag("w8") };
@@ -644,9 +645,10 @@ try {
       w9.status === 200 && w9.data?.withdrawn === true && w9d?.status === "Cancelled" && String(w9d.decided_by) === String(opsRow._id)
         && Math.abs(Date.now() - +new Date(w9d.decided_at)) < 120000 && w9d.decision_note === "posted to the wrong centre", JSON.stringify(w9d).slice(0, 300));
     ok("W4 effect: nothing is applied - no ledger row for it", (await ledgerN("w9")) === 0);
+    const w8w = await wd(ops, Wt.w8.id);
     const fenceF = await rawCosts.findOne({ note: tag("wres-formula") });
     ok("W4 effect: a Pending reservation row is released - the Formula fence is Cancelled with its reason, the ApprovalHead fence is gone",
-      fenceF?.reservation_state === "Cancelled" && fenceF?.reservation_cancel_reason === "request withdrawn" && (await rawCosts.countDocuments({ note: tag("wres-head") })) === 0, JSON.stringify(fenceF));
+      w8w.status === 200 && fenceF?.reservation_state === "Cancelled" && fenceF?.reservation_cancel_reason === "request withdrawn" && (await rawCosts.countDocuments({ note: tag("wres-head") })) === 0, JSON.stringify({ w8w: w8w.status, fenceF }));
     const w9a = await until(async () => { const a = await wAudit(Wt.w9.id); return a.length === 1 ? a[0] : null; });
     ok("W4 effect: an audit-log entry records Pending -> Withdrawn by the raiser", !!w9a && w9a.old_value === "Pending" && String(w9a.actor) === String(opsRow._id) && w9a.field === "status", JSON.stringify(w9a));
     const narAfter = (await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post")).data;
