@@ -103,9 +103,11 @@ ok("[precondition] a plain head, a capped head and a formula head exist", !!plai
 // evaluatePreApproval auto-posts nothing under a Pending head. So the two fixture heads are signed off
 // through the real approvals door by the SECOND approver (finance.approve, not the head's creator),
 // exactly as production would - otherwise every pre-approved arm below parks (202) for the wrong reason.
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
+const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
 const signOff = async (headId) => {
   const hr = await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(headId)), status: "Pending" });
-  return hr ? (await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off" })).status : 0;
+  return hr ? (await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off", seen_cap: await seenCap(hr) })).status : 0;
 };
 const [capSign, formulaSign] = [await signOff(capId), await signOff(formulaId)];
 ok("[precondition] the capped and the formula head were signed off by the second approver (not the creator)", capSign === 200 && formulaSign === 200, `cap=${capSign} formula=${formulaSign}`);
@@ -874,6 +876,89 @@ const rows5 = {};
     lateReplay.status === 200 && await costCount(pendingHead, "b-pending") === 1, `got ${lateReplay.status} rows=${await costCount(pendingHead, "b-pending")}`);
 }
 
+
+// ======================================================= pending-head-cap-bind (Umesh, 2026-10-19 ~16:00 IST: "go with best way")
+// The approver of a Pending cost head must SEE its cap, the creator may still edit the cap while the head is
+// Pending (no lock), and Approve carries the cap the approver saw: if the cap changed since, the server refuses
+// (409), writes nothing, and says so. Each arm reads the raw collections, not only the HTTP reply; the arms that
+// stand on the GUARANTEE (request still Pending, head still Pending, no new audit row) are the ones that go red
+// when the compare is removed.
+//   C1 - the approvals list carries the head's cap for a finance.view reader and not for one without it
+//   C2 - the creator edits the cap of a Pending head (no lock, no proposal)
+//   C3 - Approve with a stale / missing seen_cap is refused (409), nothing written; the current one goes through
+//   C4 - Reject needs no seen_cap; a cap-raise proposal (cap-approval) and a cost entry approve as before (Q-1007a above)
+{
+  const rawCats = db.collection("costcategories");
+  const rawAudits = db.collection("auditlogs");
+  const oid = (id) => new ObjectId(String(id));
+  const mk = async (name, body) => {
+    const r = await req(admin, "POST", "/api/master-lists/cost-categories", { name: `ZZ PHCB ${name} ${stamp}`, ...body });
+    const id = r.data?.item?._id;
+    const hr = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: oid(id), status: "Pending" }) : null;
+    return { id, hr, status: r.status };
+  };
+  const auditCount = (a) => rawAudits.countDocuments({ $or: [{ entity_id: { $in: [oid(a.id), a.hr._id] } }, { entityId: { $in: [oid(a.id), a.hr._id] } }] });
+  const listFor = async (cookie, a) => ((await req(cookie, "GET", "/api/approvals?status=Pending&kind=head-approval")).data?.items ?? []).find((x) => String(x._id) === String(a.hr?._id));
+  const A = await mk("Capped", { pre_approved: true, pre_approved_amount: 5000, pre_approved_basis: "phcb" });
+  const N0 = await mk("NoCap", {});
+  ok("PHCB [precondition]: a capped head and a head with no cap exist, both Pending with their own sign-off request",
+    !!A.id && !!A.hr && !!N0.id && !!N0.hr && (await rawCats.findOne({ _id: oid(A.id) }))?.approval_status === "Pending",
+    JSON.stringify({ a: A.status, aReq: !!A.hr, n: N0.status, nReq: !!N0.hr }));
+
+  // C1 - the approver sees the cap
+  const seenByB = await listFor(approverB.cookie, A);
+  ok("PHCB C1: the approvals list shows the head's cap (5000) to a finance.view approver", seenByB?.head_cap?.amount === 5000, JSON.stringify(seenByB?.head_cap));
+  const seenNone = await listFor(approverB.cookie, N0);
+  ok("PHCB C1: a head with no cap says so (amount null), it does not invent one", !!seenNone && seenNone.head_cap?.amount === null, JSON.stringify(seenNone?.head_cap));
+  const seenUngranted = await listFor(ungranted.cookie, A);
+  ok("PHCB C1: a reader WITHOUT finance.view gets no cap figure (REQ-235a masking holds)",
+    !!seenUngranted && !JSON.stringify(seenUngranted).includes("5000") && seenUngranted.head_cap === undefined, JSON.stringify(seenUngranted?.head_cap));
+
+  // C2 - the creator can still change the cap while Pending
+  const edit = await req(admin, "PATCH", `/api/master-lists/cost-categories/${A.id}`, { pre_approved_amount: 6000 });
+  const afterEdit = await rawCats.findOne({ _id: oid(A.id) });
+  ok("PHCB C2: the creator edits the cap of a Pending head - 200, stored cap is 6000, no proposal raised, head still Pending",
+    edit.status === 200 && afterEdit?.pre_approved_amount === 6000 && !edit.data?.pending_cap_approval && afterEdit?.approval_status === "Pending",
+    JSON.stringify({ http: edit.status, cap: afterEdit?.pre_approved_amount, st: afterEdit?.approval_status }));
+  ok("PHCB C2: the list now shows the edited cap to the approver", (await listFor(approverB.cookie, A))?.head_cap?.amount === 6000);
+
+  // C3 - Approve carries the cap that was seen
+  const aBefore = await auditCount(A);
+  const stale = await req(approverB.cookie, "POST", `/api/approvals/${A.hr._id}`, { decision: "Approved", note: "phcb stale", seen_cap: 5000 });
+  const afterStale = await rawApprovals.findOne({ _id: A.hr._id });
+  const headStale = await rawCats.findOne({ _id: oid(A.id) });
+  ok("PHCB C3: Approve with the OLD cap (5000, now 6000) is refused 409 with the stated message",
+    stale.status === 409 && /Limit changed from .*5,?000 to .*6,?000, please review again\./.test(String(stale.data?.error ?? "")),
+    `got ${stale.status} ${JSON.stringify(stale.data?.error)}`);
+  ok("PHCB C3 [guarantee]: ...and NOTHING was written - request still Pending with no decider, head still Pending, cap 6000, no new audit row",
+    afterStale?.status === "Pending" && !afterStale?.decided_by && headStale?.approval_status === "Pending" && headStale?.pre_approved_amount === 6000 && (await auditCount(A)) === aBefore,
+    JSON.stringify({ req: afterStale?.status, decider: afterStale?.decided_by, head: headStale?.approval_status, audits: [aBefore, await auditCount(A)] }));
+  const missing = await req(approverB.cookie, "POST", `/api/approvals/${A.hr._id}`, { decision: "Approved", note: "phcb no seen" });
+  const afterMissing = await rawApprovals.findOne({ _id: A.hr._id });
+  ok("PHCB C3: Approve with NO seen_cap is refused too (409, fail closed) and the request is still Pending",
+    missing.status === 409 && afterMissing?.status === "Pending" && (await rawCats.findOne({ _id: oid(A.id) }))?.approval_status === "Pending", `got ${missing.status}`);
+  const nonNumeric = await req(approverB.cookie, "POST", `/api/approvals/${A.hr._id}`, { decision: "Approved", note: "phcb junk", seen_cap: "6000" });
+  ok("PHCB C3: a seen_cap that is not a number (or null) is refused as well (409), still Pending",
+    nonNumeric.status === 409 && (await rawApprovals.findOne({ _id: A.hr._id }))?.status === "Pending", `got ${nonNumeric.status}`);
+  const selfNoCap = await req(admin, "POST", `/api/approvals/${A.hr._id}`, { decision: "Approved", note: "phcb own" });
+  ok("PHCB C3: the creator approving their own head is still the 403 (not turned into a cap 409)", selfNoCap.status === 403, `got ${selfNoCap.status}`);
+  const good = await req(approverB.cookie, "POST", `/api/approvals/${A.hr._id}`, { decision: "Approved", note: "phcb current", seen_cap: 6000 });
+  const goodHead = await rawCats.findOne({ _id: oid(A.id) });
+  ok("PHCB C3: Approve with the CURRENT cap (6000) goes through - 200, head Approved, cap unchanged",
+    good.status === 200 && goodHead?.approval_status === "Approved" && goodHead?.pre_approved_amount === 6000, `got ${good.status} ${goodHead?.approval_status}`);
+  const noneStaleNum = await req(approverB.cookie, "POST", `/api/approvals/${N0.hr._id}`, { decision: "Approved", note: "phcb nocap stale", seen_cap: 100 });
+  ok("PHCB C3: a head with NO cap: a seen_cap of 100 is stale -> 409, still Pending", noneStaleNum.status === 409 && (await rawApprovals.findOne({ _id: N0.hr._id }))?.status === "Pending", `got ${noneStaleNum.status}`);
+  const noneOk = await req(approverB.cookie, "POST", `/api/approvals/${N0.hr._id}`, { decision: "Approved", note: "phcb nocap", seen_cap: null });
+  ok("PHCB C3: a head with NO cap approves when the approver saw none (seen_cap null) - 200, Approved",
+    noneOk.status === 200 && (await rawCats.findOne({ _id: oid(N0.id) }))?.approval_status === "Approved", `got ${noneOk.status}`);
+
+  // C4 - Reject is unaffected
+  const R = await mk("RejectMe", { pre_approved: true, pre_approved_amount: 700, pre_approved_basis: "phcb" });
+  await req(admin, "PATCH", `/api/master-lists/cost-categories/${R.id}`, { pre_approved_amount: 800 });
+  const rej = R.hr ? await req(approverB.cookie, "POST", `/api/approvals/${R.hr._id}`, { decision: "Rejected", note: "phcb reject" }) : { status: 0 };
+  ok("PHCB C4: Reject needs no seen_cap, even after the cap changed - 200, head Rejected",
+    rej.status === 200 && (await rawCats.findOne({ _id: oid(R.id) }))?.approval_status === "Rejected", `got ${rej.status}`);
+}
 await rule(false);
 await client.close();
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -1407,7 +1407,7 @@ if (bulkRowVisible) {
     const pending = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(id)),
       "payload.kind": "head-approval", status: "Pending" }, { maxTimeMS: 5000 }) : null;
     const signed = pending && signerCookie ? await req(signerCookie, "POST", `/api/approvals/${pending._id}`,
-      { decision: "Approved", note: "QA1971 second-person fixture sign-off" }) : { status: 0 };
+      { decision: "Approved", note: "QA1971 second-person fixture sign-off", seen_cap: await (async () => { const h = await rawCategories.findOne({ _id: new ObjectId(String(pending.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; })() }) : { status: 0 };
     signoffs.push({ id: id ?? null, pending: !!pending, status: signed.status });
   }
   const parentCat = parentId ? await rawCategories.findOne({ _id: new ObjectId(String(parentId)) }, { maxTimeMS: 5000 }) : null;

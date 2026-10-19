@@ -133,6 +133,9 @@ const rawCosts = rawDb.collection("costentries");
 const rawCategories = rawDb.collection("costcategories");
 const rawApprovals = rawDb.collection("approvalrequests");
 const rawAudits = rawDb.collection("auditlogs");
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
+const seenCap = async (hr) => { const h = await rawDb.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
+
 const rawUsers = rawDb.collection("users");
 const rawBatches = rawDb.collection("batches");
 
@@ -189,7 +192,7 @@ async function signOffHead(headId) {
   }
   const hr = await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(headId)), status: "Pending" });
   if (!hr) return 0;
-  return (await req(capSigner, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off a capped head" })).status;
+  return (await req(capSigner, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off a capped head", seen_cap: await seenCap(hr) })).status;
 }
 async function mkSignedHead(body) {
   const r = await req(admin, "POST", "/api/master-lists/cost-categories", body);
@@ -1728,7 +1731,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const afterRemap = await rawApprovals.findOne({ _id: headReq._id });
     ok("QA-1977: a head-approval cannot be remapped (entries already point at the head) - 400, still Pending",
       remap.status === 400 && afterRemap?.status === "Pending", `got ${remap.status}, request ${afterRemap?.status}`);
-    const approvedHead = await req(admin, "POST", `/api/approvals/${headReq._id}`, { decision: "Approved", note: "pin" });
+    const approvedHead = await req(admin, "POST", `/api/approvals/${headReq._id}`, { decision: "Approved", note: "pin", seen_cap: await seenCap(headReq) });
     const headAfter = await rawCategories.findOne({ _id: rawHead._id });
     ok("QA-1977: an Admin approving the head flips it to Approved",
       approvedHead.status === 200 && headAfter?.approval_status === "Approved",
@@ -2724,7 +2727,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     `ops sees the approval alert for ${h2.request?._id}`);
 
   if (h1.request) {
-    const decA = await req(finA.cookie, "POST", `/api/approvals/${h1.request._id}`, { decision: "Approved", note: "5B pin" });
+    const decA = await req(finA.cookie, "POST", `/api/approvals/${h1.request._id}`, { decision: "Approved", note: "5B pin", seen_cap: await seenCap(h1.request) });
     const h1After = await rawCategories.findOne({ _id: h1.head._id });
     ok("QA-1977 5B (a): a NON-Admin finance.approve holder approves a head somebody else raised - 200, flag Approved",
       decA.status === 200 && h1After?.approval_status === "Approved",
@@ -2761,7 +2764,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     ok("QA-1977 5B (b): ...and they are not sent the 'approval needed' alert for their own head",
       !finABell.some((n) => n.type === "approval_pending" && String(n.entity_id) === String(h3.request._id)),
       `initiator was alerted about ${h3.request._id}`);
-    const other = await req(finB.cookie, "POST", `/api/approvals/${h3.request._id}`, { decision: "Approved", note: "second person" });
+    const other = await req(finB.cookie, "POST", `/api/approvals/${h3.request._id}`, { decision: "Approved", note: "second person", seen_cap: await seenCap(h3.request) });
     const h3After = await rawCategories.findOne({ _id: h3.head._id });
     ok("QA-1977 5B (b): ...while another holder approves it - 200, flag Approved",
       other.status === 200 && h3After?.approval_status === "Approved",
@@ -2787,7 +2790,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     ok("QA-1977 owner 22:00 (e): ...the Admin who created it cannot approve it - 403 by the self-approval rule, still Pending",
       selfAdm.status === 403 && /cannot approve your own request/i.test(String(selfAdm.data?.error ?? "")) && h5Mid?.approval_status === "Pending",
       `got ${selfAdm.status} ${JSON.stringify(selfAdm.data?.error ?? "").slice(0, 140)} flag=${h5Mid?.approval_status}`);
-    const byA = await req(finA.cookie, "POST", `/api/approvals/${h5.request._id}`, { decision: "Approved", note: "second person" });
+    const byA = await req(finA.cookie, "POST", `/api/approvals/${h5.request._id}`, { decision: "Approved", note: "second person", seen_cap: await seenCap(h5.request) });
     const h5After = await rawCategories.findOne({ _id: h5.head._id });
     ok("QA-1977 owner 22:00 (e): ...while a different finance.approve holder approves it - 200, flag Approved",
       byA.status === 200 && h5After?.approval_status === "Approved",
@@ -2803,7 +2806,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     `got ${ml.status} ${JSON.stringify(ml.data?.error ?? "").slice(0, 120)} flag=${mlHead?.approval_status} reqs=${mlReqs.length} linked=${String(mlHead?.approval_request ?? "")}`);
   if (mlReqs[0]) {
     const selfMl = await req(admin, "POST", `/api/approvals/${mlReqs[0]._id}`, { decision: "Approved", note: "my own head" });
-    const byB = await req(finB.cookie, "POST", `/api/approvals/${mlReqs[0]._id}`, { decision: "Approved", note: "second person" });
+    const byB = await req(finB.cookie, "POST", `/api/approvals/${mlReqs[0]._id}`, { decision: "Approved", note: "second person", seen_cap: await seenCap(mlReqs[0]) });
     const mlAfter = await rawCategories.findOne({ _id: mlHead._id });
     ok("QA-1977 owner 22:00 (f): ...the Admin creator gets 403 on approve, and another finance holder's approval flips it to Approved",
       selfMl.status === 403 && /cannot approve your own request/i.test(String(selfMl.data?.error ?? "")) && byB.status === 200 && mlAfter?.approval_status === "Approved",
@@ -2828,7 +2831,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const cA = await mkCap("Approved");
     const cL = await mkCap("Legacy");
     const rej = cR.hr ? await req(finB.cookie, "POST", `/api/approvals/${cR.hr._id}`, { decision: "Rejected", note: "owner 2026-10-07 pin" }) : { status: -1 };
-    const appr = cA.hr ? await req(finA.cookie, "POST", `/api/approvals/${cA.hr._id}`, { decision: "Approved", note: "owner 2026-10-07 pin" }) : { status: -1 };
+    const appr = cA.hr ? await req(finA.cookie, "POST", `/api/approvals/${cA.hr._id}`, { decision: "Approved", note: "owner 2026-10-07 pin", seen_cap: await seenCap(cA.hr) }) : { status: -1 };
     // A head written before 2026-10-06 has no flag and no head request at all - make one look exactly like that.
     if (cL.head) {
       await rawCategories.updateOne({ _id: cL.head._id }, { $unset: { approval_status: "", approval_request: "" } });

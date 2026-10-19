@@ -167,9 +167,11 @@ const formulaRes = await req(admin, "POST", "/api/master-lists/cost-categories",
 const formulaId = formulaRes.data?.item?._id;
 ok("[precondition] two plain heads, a capped head, a never-signed-off capped head and a formula head exist",
   !!plain && !!plain2 && !!capId && !!pendId && !!formulaId, JSON.stringify({ cap: capRes.status, pend: pendRes.status, formula: formulaRes.status }));
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
+const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
 const signOff = async (headId) => {
   const hr = await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(headId)), status: "Pending" });
-  return hr ? (await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off" })).status : 0;
+  return hr ? (await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off", seen_cap: await seenCap(hr) })).status : 0;
 };
 ok("[precondition] the capped head was signed off by the second approver; the other one was NOT", (await signOff(capId)) === 200);
 

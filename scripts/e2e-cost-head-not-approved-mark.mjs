@@ -65,6 +65,8 @@ const N = {
   pend: `ZZ Mark Pend ${stamp}`, rej: `ZZ Mark Rej ${stamp}`, appr: `ZZ Mark Appr ${stamp}`, sub: `ZZ Mark Sub ${stamp}`,
 };
 const tag = (k) => `zzmark ${stamp} ${k}`;
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
+const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
 const NOT_APPROVED = " (not approved)";
 const REJECTED = " (rejected)";
 
@@ -116,7 +118,7 @@ try {
     JSON.stringify([P, R, A].map((x) => [x.r.status, x.head?.approval_status, x.headReq?.status])));
   const S = await mkHead(N.sub, { new_head_parent: String(A.head?._id) });
   // The Approved head is signed off, the Rejected one is rejected, both through the real approvals door.
-  const apprDecision = await req(admin, "POST", `/api/approvals/${A.headReq?._id}`, { decision: "Approved", note: "fixture" });
+  const apprDecision = await req(admin, "POST", `/api/approvals/${A.headReq?._id}`, { decision: "Approved", note: "fixture", seen_cap: await seenCap(A.headReq) });
   const rejDecision = await req(admin, "POST", `/api/approvals/${R.headReq?._id}`, { decision: "Rejected", note: "fixture: not a real head" });
   const [pDoc, rDoc, aDoc, sDoc] = await Promise.all([P, R, A, S].map((x) => rawCats.findOne({ _id: x.head?._id })));
   ok("[precondition] states: Pending head, Rejected head, Approved head, and a PENDING subhead under the approved head",
@@ -323,7 +325,29 @@ try {
       !(await rawApprovals.find({ _id: { $in: created.requests.map((i) => new ObjectId(i)) } }).toArray())
         .some((r) => /not approved|rejected/i.test(String(r.summary)) || JSON.stringify(r.payload ?? {}).includes("not approved")));
 
-    const approveP = await req(admin, "POST", `/api/approvals/${P.headReq._id}`, { decision: "Approved", note: "fixture: now approved" });
+    // ---- pending-head-cap-bind, on screen (C1 the approver sees the cap, C3 a stale cap is refused with the message and the row reloads) ----
+    await rawCats.updateOne({ _id: P.head._id }, { $set: { pre_approved: true, pre_approved_amount: 7000 } });
+    const adm3 = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
+    await adm3.page.goto(`${BASE}/finance`, { waitUntil: "networkidle" });
+    const capRow = adm3.page.locator(`[data-head-approval="${P.headReq._id}"]`);
+    await capRow.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const capRowText = async () => ((await capRow.count()) ? (await capRow.innerText()).replace(/\s+/g, " ") : "");
+    const capText1 = await capRowText();
+    ok("cap-bind C1 (screen): the head sign-off row on /finance shows the head's cap to the approver", capText1.includes("7,000"), capText1.slice(0, 220));
+    await rawCats.updateOne({ _id: P.head._id }, { $set: { pre_approved_amount: 8000 } }); // the creator edits it while the approver is looking
+    await capRow.getByRole("button", { name: "Approve" }).click();
+    const banner = adm3.page.getByText("Limit changed from", { exact: false }).first();
+    await banner.waitFor({ state: "visible", timeout: 20000 }).catch(() => {});
+    const bannerText = (await banner.count()) ? (await banner.innerText()).replace(/\s+/g, " ") : "";
+    await adm3.page.waitForFunction((id) => (document.querySelector(`[data-head-approval="${id}"]`)?.textContent ?? "").includes("8,000"), String(P.headReq._id), { timeout: 15000 }).catch(() => {});
+    const capText2 = await capRowText();
+    const pStill = await rawCats.findOne({ _id: P.head._id });
+    ok("cap-bind C3 (screen): approving against the old cap shows 'Limit changed from 7,000 to 8,000, please review again.', reloads the row to the new cap, and approves nothing",
+      /Limit changed from .*7,?000 to .*8,?000, please review again\./.test(bannerText) && capText2.includes("8,000") && pStill?.approval_status === "Pending",
+      JSON.stringify([bannerText.slice(0, 160), capText2.slice(0, 200), pStill?.approval_status]));
+    await adm3.context.close();
+
+    const approveP = await req(admin, "POST", `/api/approvals/${P.headReq._id}`, { decision: "Approved", note: "fixture: now approved", seen_cap: await seenCap(P.headReq) });
     const queue2 = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
     const adm2 = await asPage("admin@vidysea.com", (process.env.ADMIN_PASSWORD || (() => { throw new Error("ADMIN_PASSWORD env var is required (no default)"); })()));
     await adm2.page.goto(`${BASE}/admin?tab=Approvals`, { waitUntil: "networkidle" });
