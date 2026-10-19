@@ -860,19 +860,49 @@ export async function attachCostHeads<T extends Record<string, any>>(masked: T[]
 
 // pending-head-cap-bind (Umesh, 2026-10-19 ~16:00 IST, "go with best way"): the approver of a Pending
 // cost head sees the head's pre-approved limit, the creator may still edit it meanwhile, and Approve
-// carries the limit that was seen. The effective limit is the ONE definition below: the amount, but
-// only while the head's pre-approval is switched on (a stored amount on a head with pre_approved off
-// is not a limit anyone is bound by). `null` means "no limit".
-export function headCapOf(cat: { pre_approved?: unknown; pre_approved_amount?: unknown } | null | undefined): number | null {
-  return cat?.pre_approved === true && typeof cat.pre_approved_amount === "number" && Number.isFinite(cat.pre_approved_amount)
-    ? cat.pre_approved_amount : null;
+// carries the limit that was seen. The limit is the WHOLE rule `src/lib/rules.ts` (~:3319-3331) checks a
+// cost against - amount, unit, minimum billable and basis - not the amount alone: "Per billable passed"
+// turns the same 5000 into a formula. It is the ONE definition below, and only while the head's
+// pre-approval is switched on (a stored amount on a head with pre_approved off binds nobody).
+export type HeadLimit = { amount: number | null; unit: string; min_billable: number; basis: string | null };
+type HeadLimitSource = { pre_approved?: unknown; pre_approved_amount?: unknown; pre_approved_unit?: unknown; pre_approved_min_billable?: unknown; pre_approved_basis?: unknown };
+export const HEAD_LIMIT_FIELDS = ["pre_approved", "pre_approved_amount", "pre_approved_unit", "pre_approved_min_billable", "pre_approved_basis"] as const;
+export function headLimitOf(cat: HeadLimitSource | null | undefined): HeadLimit {
+  if (cat?.pre_approved !== true) return { amount: null, unit: "Fixed amount", min_billable: 0, basis: null };
+  const basis = typeof cat.pre_approved_basis === "string" && cat.pre_approved_basis.trim() ? cat.pre_approved_basis : null;
+  return {
+    amount: typeof cat.pre_approved_amount === "number" && Number.isFinite(cat.pre_approved_amount) ? cat.pre_approved_amount : null,
+    unit: typeof cat.pre_approved_unit === "string" && cat.pre_approved_unit ? cat.pre_approved_unit : "Fixed amount",
+    min_billable: typeof cat.pre_approved_min_billable === "number" && Number.isFinite(cat.pre_approved_min_billable) ? cat.pre_approved_min_billable : 0,
+    basis,
+  };
 }
-const fmtHeadCap = (n: number | null) => (n === null ? "none" : `₹${n.toLocaleString("en-IN")}`);
+// One readable description of a limit, used by the screens and by the 409 message.
+export function describeHeadLimit(l: HeadLimit): string {
+  const extras: string[] = [];
+  if (l.unit !== "Fixed amount") extras.push(l.unit.toLowerCase());
+  if (l.min_billable > 0) extras.push(`minimum ${l.min_billable} billable`);
+  if (l.basis) extras.push(`basis: ${l.basis}`);
+  const head = l.amount === null ? "none" : `₹${l.amount.toLocaleString("en-IN")}`;
+  return extras.length ? `${head} (${extras.join(", ")})` : head;
+}
+const sameHeadLimit = (a: HeadLimit, b: HeadLimit) =>
+  a.amount === b.amount && a.unit === b.unit && a.min_billable === b.min_billable && a.basis === b.basis;
+// The wire form of `seen_cap`: all four parts, correctly typed, or it is not a limit at all.
+function parseSeenLimit(seen: unknown): HeadLimit | null {
+  if (!seen || typeof seen !== "object" || Array.isArray(seen)) return null;
+  const o = seen as Record<string, unknown>;
+  const amountOk = o.amount === null || (typeof o.amount === "number" && Number.isFinite(o.amount));
+  const basisOk = o.basis === null || typeof o.basis === "string";
+  if (!amountOk || !basisOk || typeof o.unit !== "string" || !o.unit
+      || typeof o.min_billable !== "number" || !Number.isFinite(o.min_billable)) return null;
+  return { amount: o.amount as number | null, unit: o.unit, min_billable: o.min_billable, basis: o.basis as string | null };
+}
 
-// Adds `head_cap: { amount, unit? }` to each head sign-off row. Read NOW from the head, never stored in
-// the request (the creator may edit it while the head is Pending, so a stored copy would go stale), and
-// only for a reader who may see money (`canSeeMoney` = finance.view; REQ-235a). `raw` is the same rows
-// before masking, in the same order.
+// Adds `head_cap: { amount, unit, min_billable, basis, label }` to each head sign-off row. Read NOW from
+// the head, never stored in the request (the creator may edit it while the head is Pending, so a stored
+// copy would go stale), and only for a reader who may see money (`canSeeMoney` = finance.view; REQ-235a).
+// `raw` is the same rows before masking, in the same order. The screen sends `head_cap` back as `seen_cap`.
 export async function attachHeadCaps<T extends Record<string, any>>(masked: T[], raw: any[], canSeeMoney: boolean): Promise<T[]> {
   if (!canSeeMoney) return masked;
   const isHead = (r: any) => r?.action === "costcategory.create" && r?.payload?.kind === "head-approval"
@@ -880,36 +910,42 @@ export async function attachHeadCaps<T extends Record<string, any>>(masked: T[],
   const ids = [...new Set(raw.filter(isHead).map((r) => String(r.payload.category)))];
   if (ids.length === 0) return masked;
   const cats = await CostCategory.collection
-    .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } }, { projection: { pre_approved: 1, pre_approved_amount: 1, pre_approved_unit: 1 } })
+    .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } }, { projection: Object.fromEntries(HEAD_LIMIT_FIELDS.map((f) => [f, 1])) })
     .toArray();
   const byId = new Map(cats.map((c: any) => [String(c._id), c]));
   return masked.map((m, i) => {
     if (!isHead(raw[i])) return m;
     const c: any = byId.get(String(raw[i].payload.category));
     if (!c) return m;
-    const amount = headCapOf(c);
-    const unit = amount !== null && c.pre_approved_unit && c.pre_approved_unit !== "Fixed amount" ? String(c.pre_approved_unit) : undefined;
-    return { ...m, head_cap: { amount, ...(unit ? { unit } : {}) } };
+    const limit = headLimitOf(c);
+    return { ...m, head_cap: { ...limit, label: describeHeadLimit(limit) } };
   });
 }
 
-// The compare behind Approve on a Pending head. `seen` is the body's `seen_cap`: a number, or null for
-// "the head showed no limit". Anything else - absent, a string, NaN - is refused too (fail closed), so
-// a client that never learned the limit cannot approve past it. Called BEFORE decideApproval, so a
-// refusal writes nothing at all. Returns silently when the head cannot be found: the replay's own
-// "no longer exists" refusal owns that case.
-export async function assertSeenHeadCap(categoryId: unknown, seen: unknown): Promise<void> {
-  if (!Types.ObjectId.isValid(String(categoryId ?? ""))) return;
+// The compare behind Approve on a Pending head. `seen` is the body's `seen_cap`: the whole limit the
+// approver was looking at. Anything that is not all four parts - absent, null, a bare number, a string -
+// is refused too (fail closed), so a client that never learned the limit cannot approve past it. Called
+// BEFORE decideApproval, so a refusal writes nothing at all. Returns silently when the head cannot be
+// found: the replay's own "no longer exists" refusal owns that case.
+//
+// It also returns `guard`: the head's limit fields exactly as stored when the compare passed. The caller
+// adds them to the filter of the write that flips the head to Approved, so an edit that lands between this
+// compare and that flip makes the flip match nothing (409, claim rolled back) instead of approving a limit
+// the approver never saw.
+export async function assertSeenHeadCap(categoryId: unknown, seen: unknown): Promise<{ guard: Record<string, unknown>; seen: HeadLimit } | null> {
+  if (!Types.ObjectId.isValid(String(categoryId ?? ""))) return null;
   const cat = await CostCategory.collection.findOne({ _id: new Types.ObjectId(String(categoryId)) },
-    { projection: { pre_approved: 1, pre_approved_amount: 1 } });
-  if (!cat) return;
-  const current = headCapOf(cat as any);
-  const seenOk = seen === null || (typeof seen === "number" && Number.isFinite(seen));
-  if (!seenOk) throw new HttpError(409, "Reload this approval to see the head's current limit, then approve again.");
-  if ((seen as number | null) !== current) {
-    throw new HttpError(409, `Limit changed from ${fmtHeadCap(seen as number | null)} to ${fmtHeadCap(current)}, please review again.`);
-  }
+    { projection: Object.fromEntries(HEAD_LIMIT_FIELDS.map((f) => [f, 1])) });
+  if (!cat) return null;
+  const seenLimit = parseSeenLimit(seen);
+  if (!seenLimit) throw new HttpError(409, "Reload this approval to see the head's current limit, then approve again.");
+  if (!sameHeadLimit(seenLimit, headLimitOf(cat as any))) throw headLimitChanged(seenLimit, headLimitOf(cat as any));
+  const guard: Record<string, unknown> = {};
+  for (const f of HEAD_LIMIT_FIELDS) guard[f] = (cat as any)[f] === undefined ? { $exists: false } : (cat as any)[f];
+  return { guard, seen: seenLimit };
 }
+export const headLimitChanged = (seen: HeadLimit, current: HeadLimit) =>
+  new HttpError(409, `Limit changed from ${describeHeadLimit(seen)} to ${describeHeadLimit(current)}, please review again.`);
 
 // Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
 // changes the row and receives a request to replay. Reading Pending and then saving a document is

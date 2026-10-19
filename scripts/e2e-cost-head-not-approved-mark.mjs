@@ -65,8 +65,8 @@ const N = {
   pend: `ZZ Mark Pend ${stamp}`, rej: `ZZ Mark Rej ${stamp}`, appr: `ZZ Mark Appr ${stamp}`, sub: `ZZ Mark Sub ${stamp}`,
 };
 const tag = (k) => `zzmark ${stamp} ${k}`;
-// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
-const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (the whole limit: amount, unit, min_billable, basis).
+const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true ? { amount: typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null, unit: h.pre_approved_unit || "Fixed amount", min_billable: typeof h.pre_approved_min_billable === "number" ? h.pre_approved_min_billable : 0, basis: typeof h.pre_approved_basis === "string" && h.pre_approved_basis.trim() ? h.pre_approved_basis : null } : { amount: null, unit: "Fixed amount", min_billable: 0, basis: null }; };
 const NOT_APPROVED = " (not approved)";
 const REJECTED = " (rejected)";
 

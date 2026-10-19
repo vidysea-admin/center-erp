@@ -80,8 +80,8 @@ rawClient = new MongoClient(rawMongoUrl, { serverSelectionTimeoutMS: 8000 });
 await rawClient.connect();
 const rawDb = rawClient.db(rawDbName);
 const rawCategories = rawDb.collection("costcategories");
-// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
-const seenCapOf = async (headId) => { const h = await rawCategories.findOne({ _id: new ObjectId(String(headId)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (the whole limit: amount, unit, min_billable, basis).
+const seenCapOf = async (headId) => { const h = await rawCategories.findOne({ _id: new ObjectId(String(headId)) }); return h?.pre_approved === true ? { amount: typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null, unit: h.pre_approved_unit || "Fixed amount", min_billable: typeof h.pre_approved_min_billable === "number" ? h.pre_approved_min_billable : 0, basis: typeof h.pre_approved_basis === "string" && h.pre_approved_basis.trim() ? h.pre_approved_basis : null } : { amount: null, unit: "Fixed amount", min_billable: 0, basis: null }; };
 const rawResults = rawDb.collection("candidateresults");
 const rawCosts = rawDb.collection("costentries");
 const rawApprovals = rawDb.collection("approvalrequests");

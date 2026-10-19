@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
+import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, headLimitChanged, headLimitOf, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -183,8 +183,11 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // head's limit is different now (its creator may edit it while the head is Pending) the decision is
   // refused here, BEFORE decideApproval writes anything. Reject is not gated. The raiser's own attempt
   // and an already-decided request skip this and meet decideApproval's own, more specific refusal.
+  // `seenGate.guard` is the head's stored limit at the moment of the compare; the flip below requires it
+  // unchanged, so the compare and the Approved write cannot be separated by a creator's edit.
+  let seenGate: Awaited<ReturnType<typeof assertSeenHeadCap>> = null;
   if (decision === "Approved" && headOnly && pending.status === "Pending" && String(pending.initiator) !== String(user.id)) {
-    await assertSeenHeadCap((pending.payload as any)?.category, seen_cap);
+    seenGate = await assertSeenHeadCap((pending.payload as any)?.category, seen_cap);
   }
   const request = await decideApproval(id, user, decision, note, {
     approvedAmount: sanctionedAmount,
@@ -334,11 +337,30 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
       if (headOnly) {
         // QA-1977: sign-off of a head that already exists. Only the head THIS request owns is flipped.
         const cat = p.category && Types.ObjectId.isValid(String(p.category)) ? new Types.ObjectId(String(p.category)) : null;
+        // pending-head-cap-bind test hook (CI database on loopback only, same gate as the cap barriers
+        // above): hold the replay between the compare and the flip so a test can edit the limit there.
+        const headTest = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "")
+          && ["localhost", "127.0.0.1", "[::1]"].includes(req.nextUrl.hostname);
+        if (headTest && p._test_head_pause_before_flip === true) {
+          await ApprovalRequest.collection.updateOne({ _id: request._id }, { $set: { "payload._test_head_reached_before_flip": true } });
+          let released = false;
+          for (let attempt = 0; attempt < 200; attempt++) {
+            const marker = await ApprovalRequest.collection.findOne({ _id: request._id }, { projection: { "payload._test_head_release_before_flip": 1 } });
+            if (marker?.payload?._test_head_release_before_flip === true) { released = true; break; }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          if (!released) throw new HttpError(409, "CI head before-flip barrier timed out.");
+        }
         const flipped = cat ? await CostCategory.collection.updateOne(
-          ownedHeadFilter(cat, request._id),
+          { ...ownedHeadFilter(cat, request._id), ...(seenGate?.guard ?? {}) },
           { $set: { approval_status: "Approved", approval_request: new Types.ObjectId(String(request._id)) } },
         ) : { matchedCount: 0 };
-        if (!flipped.matchedCount) throw new HttpError(409, "The cost head this request was about no longer exists, so there is nothing to approve.");
+        if (!flipped.matchedCount) {
+          // Nothing matched: either the head is gone, or its limit moved after the compare passed.
+          const now = cat && seenGate ? await CostCategory.collection.findOne(ownedHeadFilter(cat, request._id)) : null;
+          if (now && seenGate) throw headLimitChanged(seenGate.seen, headLimitOf(now as any));
+          throw new HttpError(409, "The cost head this request was about no longer exists, so there is nothing to approve.");
+        }
         await audit({ entity: "CostCategory", entityId: cat, field: "approval_status", oldValue: "Pending", newValue: "Approved", actor: user.id });
         effectApplied = true;
         break;

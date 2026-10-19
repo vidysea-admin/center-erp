@@ -133,8 +133,8 @@ const rawCosts = rawDb.collection("costentries");
 const rawCategories = rawDb.collection("costcategories");
 const rawApprovals = rawDb.collection("approvalrequests");
 const rawAudits = rawDb.collection("auditlogs");
-// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
-const seenCap = async (hr) => { const h = await rawDb.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (the whole limit: amount, unit, min_billable, basis).
+const seenCap = async (hr) => { const h = await rawDb.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true ? { amount: typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null, unit: h.pre_approved_unit || "Fixed amount", min_billable: typeof h.pre_approved_min_billable === "number" ? h.pre_approved_min_billable : 0, basis: typeof h.pre_approved_basis === "string" && h.pre_approved_basis.trim() ? h.pre_approved_basis : null } : { amount: null, unit: "Fixed amount", min_billable: 0, basis: null }; };
 
 const rawUsers = rawDb.collection("users");
 const rawBatches = rawDb.collection("batches");
@@ -1995,7 +1995,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const amt = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "x", approved_amount: 5 });
     ok("QA-1977: a head-only request carries no amount, so a partial amount is refused (400)", amt.status === 400, `got ${amt.status}`);
     await rawApprovals.updateOne({ _id: selfReqId }, { $set: { initiator: opsUserRow?._id } });
-    const ok2 = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "pin", seen_cap: null });
+    const ok2 = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "pin", seen_cap: { amount: null, unit: "Fixed amount", min_billable: 0, basis: null } });
     const selfAfter = await rawCategories.findOne({ _id: selfHeadId });
     ok("QA-1977: a head the request never got linked to can still be approved by it (and is linked on the way)",
       ok2.status === 200 && selfAfter?.approval_status === "Approved" && String(selfAfter?.approval_request) === String(selfReqId),

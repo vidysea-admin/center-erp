@@ -599,7 +599,7 @@ function HeadApprovals() {
     try {
       // A head sign-off carries the limit the approver is looking at; the server refuses (and the list
       // reloads to the current limit) if its creator changed it meanwhile.
-      const seen = decision === "Approved" && r.payload?.kind === "head-approval" ? { seen_cap: r.head_cap?.amount ?? null } : {};
+      const seen = decision === "Approved" && r.payload?.kind === "head-approval" ? { seen_cap: r.head_cap ? { amount: r.head_cap.amount, unit: r.head_cap.unit, min_billable: r.head_cap.min_billable, basis: r.head_cap.basis } : null } : {};
       await api(`/api/approvals/${r._id}`, { method: "POST", json: { decision, ...(note ? { note } : {}), ...seen } });
       await load();
     } catch (e: any) { setErr(e.message); await load(); }
@@ -622,7 +622,7 @@ function HeadApprovals() {
                 <span className="font-semibold text-gray-900">{r.payload?.name ?? "(unnamed head)"}</span>
                 {r.payload?.kind === "head-approval" && r.head_cap && (
                   <span className="block text-xs text-gray-700" data-head-cap>
-                    {r.head_cap.amount === null ? "No pre-approved limit" : `Pre-approved limit: ₹${Number(r.head_cap.amount).toLocaleString("en-IN")}${r.head_cap.unit ? ` (${String(r.head_cap.unit).toLowerCase()})` : ""}`}
+                    {r.head_cap.amount === null && !r.head_cap.basis ? "No pre-approved limit" : `Pre-approved limit: ${r.head_cap.label}`}
                   </span>
                 )}
                 {r.payload?.kind === "cap-approval" && <span className="ml-2 text-xs text-amber-800">Policy change — existing cap remains effective until approval</span>}
