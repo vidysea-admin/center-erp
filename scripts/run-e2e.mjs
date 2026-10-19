@@ -2,12 +2,14 @@
 // Replaces the fail-fast `&&` chain in package.json — one broken suite used to hide whether
 // the other seven passed, and the suite list was hand-duplicated between package.json and
 // ci.yml. This file is now the single place the list lives.
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
+const wallStart = Date.now();
 
 const SUITES = [
   // -111: static source scan — no user-facing string may carry a Rule/DEC/QA code. No server needed.
@@ -22,6 +24,8 @@ const SUITES = [
   "check-money-mask.mjs",
   // 2026-10-17 (secret-leak-audit-repo): no-server VALUE+SHAPE scan - the seed/test admin password must never be a literal in a tracked file.
   "check-no-seed-literal.mjs",
+  // ISS-39 (2026-10-19): no-server pin of the pre-push suite SELECTOR below (--affected / --files / --suites).
+  "check-run-e2e-select.mjs",
   // The original eight (audit era)
   "e2e.mjs",
   // QA-814(a) (maker on qa-219 cycle 3, pre-push — release number TBD at ship time): e2e-roles.mjs's
@@ -174,39 +178,249 @@ const SUITES = [
 // suite comes through this file: `package.json` now spells them `run-e2e.mjs <suite>.mjs`. One
 // predicate, one place - the same reasoning db-guard.mjs states in its own header, and the failure
 // ARCHITECTURE section 3 exists to name.
+
+// ISS-39 (2026-10-19, Umesh: "system wide krna hai"): THE PRE-PUSH SELECTOR.
+// The 6c pre-push wall always ran node scripts/run-e2e.mjs over every suite (~39 suites, ~8k tests):
+// 175, 44 and 233 minutes on 2026-10-17. A push does not need every suite; it needs the suites the
+// change can REACH, and a loud fallback to the full wall whenever that cannot be said.
+//
+//   node scripts/run-e2e.mjs a.mjs b.mjs        positional suite names (unchanged)
+//   node scripts/run-e2e.mjs --suites a,b       the same, comma list; the .mjs is optional
+//   node scripts/run-e2e.mjs --files @list.txt  changed paths (one per line or comma list) -> reachable suites
+//   node scripts/run-e2e.mjs --affected B..H    changed paths = `git diff --name-only B..H` -> reachable suites
+//   --list | --dry-run     print the selection (MODE, REASON, SUITE lines, SHARDS) and exit 0 BEFORE any guard
+//   --concurrency N        pool size for the no-server static checks (default min(4, cpus)); see PARALLEL below
+//   --no-rerun | --rerun-once   a failed suite is rerun ONCE alone (default ON with --suites/--files/--affected)
+//
+// HOW A CHANGED FILE MAPS TO SUITES (textual reachability - the repo has no suite<->module table, so it is derived):
+//   docs / qa / *.md                       -> only the cheap no-server static checks (always included)
+//   scripts/<suite>.mjs                    -> that suite
+//   scripts/{e2e-lib,db-guard,seed,seed-sample,run-e2e}.mjs, package.json, lockfile, next/ts/eslint config,
+//   .github/**, Dockerfile, .env*, src/{proxy,auth,instrumentation}.ts, src/models/index.ts, src/lib/db.ts,
+//   a root-level layout, any non-code file under src/, any unmapped path   -> the FULL wall, with the reason printed
+//   other src/** files                     -> the file plus everything that imports it (transitively, `@/` and
+//                                             relative imports). Every route/page among them contributes its URL
+//                                             prefix (route groups dropped, stop at the first [dynamic] segment);
+//                                             every other file contributes its module path (lib/foo). A suite is
+//                                             selected when its source text mentions any of those strings.
+// Under-selection is the failure that ships a regression behind a green, so every doubtful case widens.
+//
+// PARALLEL: the suites share ONE server (BASE_URL), ONE database (MONGODB_DB) and mutate global state
+// (e2e-admin-floor deactivates Admins; e2e-sync leaves SheetChange rows e2e-roles reads), so server/DB suites
+// ALWAYS run serially. Only the no-server static checks (PARALLEL_SAFE) run in the pool; shards=<n> reports it.
+const ALL_SUITES = [...SUITES];
+const STATIC_SUITES = ["check-user-copy.mjs", "check-home-structure.mjs", "check-money-mask.mjs", "check-no-seed-literal.mjs"];
+const PARALLEL_SAFE = new Set([...STATIC_SUITES, "check-run-e2e-select.mjs"]);
+const repoRoot = path.resolve(dir, "..");
+
+const opts = { positional: [], suites: null, files: null, affected: null, concurrency: null, list: false, rerun: null };
 {
-  const args = process.argv.slice(2);
-  const asked = args.filter((a) => !a.startsWith("-"));
-  // QA-1272 (checker, Mode A on qa-1096 — the maker asked for exactly this to be hunted): arguments
-  // were given and NONE of them survived the flag filter, so the block below is skipped and the FULL
-  // wall runs while the operator believes they asked for one suite. The line that would have said so
-  // ("running N of the full wall") is inside that block, so nothing prints. A typo'd leading dash is
-  // all it takes. Loud, in the same shape as the unknown-suite refusal below, so there is no second
-  // predicate to drift from this one.
-  if (args.length && !asked.length) {
+  const VALUE_FLAGS = new Set(["--suites", "--files", "--affected", "--concurrency"]);
+  const argv = process.argv.slice(2);
+  const badFlags = [];
+  for (let i = 0; i < argv.length; i++) {
+    let a = argv[i], val = null;
+    if (a.startsWith("--") && a.includes("=")) { val = a.slice(a.indexOf("=") + 1); a = a.slice(0, a.indexOf("=")); }
+    if (VALUE_FLAGS.has(a)) {
+      if (val === null) val = argv[++i];
+      if (val === undefined || val === "") badFlags.push(a + " (needs a value)");
+      else opts[a.slice(2)] = val;
+    } else if (a === "--list" || a === "--dry-run") opts.list = true;
+    else if (a === "--no-rerun") opts.rerun = false;
+    else if (a === "--rerun-once") opts.rerun = true;
+    else if (a.startsWith("-")) badFlags.push(a);
+    else opts.positional.push(a);
+  }
+  // QA-1272: an argument that is not understood must never degrade into "run the whole wall" while the
+  // operator believes they asked for a subset. Same refusal, now for every unknown flag.
+  if (badFlags.length) {
     console.error("");
-    console.error("run-e2e: every argument was read as a flag, so no suite was selected: " + args.join(", "));
-    console.error("Running the whole wall here would look like the subset you asked for. Refusing instead.");
+    console.error("run-e2e: unrecognised argument(s): " + badFlags.join(", "));
+    console.error("Running the wall anyway would look like the selection you asked for. Refusing instead.");
+    console.error("Flags: --suites a,b | --files @list|a,b | --affected BASE..HEAD | --list | --concurrency N | --no-rerun | --rerun-once");
     console.error("To run the full wall, pass no arguments at all (`npm test`).");
     console.error("");
     process.exit(2);
   }
-  if (asked.length) {
-    const unknown = asked.filter((a) => !SUITES.includes(a));
-    if (unknown.length) {
-      console.error("");
-      console.error("run-e2e: unknown suite(s): " + unknown.join(", "));
-      console.error("Known suites (the list lives here, so this is the whole set):");
-      for (const s of SUITES) console.error("    " + s);
-      console.error("");
+}
+
+const FULL_EXACT = new Set(["package.json", "package-lock.json", "next.config.ts", "tsconfig.json", "Dockerfile",
+  "docker-compose.yml", "eslint.config.mjs", "postcss.config.mjs", "src/proxy.ts", "src/auth.ts", "src/instrumentation.ts",
+  "src/models/index.ts", "src/lib/db.ts"]);
+const SHARED_SCRIPTS = new Set(["e2e-lib.mjs", "db-guard.mjs", "seed.mjs", "seed-sample.mjs", "run-e2e.mjs"]);
+const CODE_EXT = [".ts", ".tsx", ".js", ".mjs"];
+
+function suiteName(n) {
+  const t = n.trim();
+  return t.endsWith(".mjs") ? t : t + ".mjs";
+}
+
+// src/app/<...>/{route,page,layout,...}.tsx -> the URL prefix it serves ("" is never returned; "/" = root-level shared).
+function urlPrefixOf(f) {
+  const m = f.match(/^src\/app\/(.*)$/);
+  if (!m) return null;
+  const segs = m[1].split("/");
+  const file = segs.pop();
+  if (!/^(route|page|layout|loading|error|not-found|template|default|global-error)\.(tsx?|jsx?)$/.test(file)) return null;
+  const out = [];
+  for (const s of segs) {
+    if (/^\(.*\)$/.test(s)) continue;
+    if (s.startsWith("[") || s.startsWith("@")) break;
+    out.push(s);
+  }
+  return "/" + out.join("/");
+}
+
+function buildImporters() {
+  const tracked = execFileSync("git", ["-C", repoRoot, "ls-files", "-z", "src"], { maxBuffer: 1 << 28 })
+    .toString().split("\0").filter((f) => CODE_EXT.some((e) => f.endsWith(e)));
+  const known = new Set(tracked);
+  const importers = new Map();
+  const resolve = (from, spec) => {
+    let base;
+    if (spec.startsWith("@/")) base = "src/" + spec.slice(2);
+    else if (spec.startsWith(".")) base = path.posix.normalize(path.posix.join(path.posix.dirname(from), spec));
+    else return null;
+    for (const c of [base, ...CODE_EXT.map((e) => base + e), ...CODE_EXT.map((e) => base + "/index" + e)]) if (known.has(c)) return c;
+    return null;
+  };
+  const re = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["']([^"'\n]+)["']/g;
+  for (const f of tracked) {
+    let text;
+    try { text = fs.readFileSync(path.join(repoRoot, f), "utf-8"); } catch { continue; }
+    for (const m of text.matchAll(re)) {
+      const t = resolve(f, m[1]);
+      if (!t) continue;
+      if (!importers.has(t)) importers.set(t, new Set());
+      importers.get(t).add(f);
+    }
+  }
+  return importers;
+}
+
+// changed paths -> { full, reason, suites }.
+function selectAffected(changed) {
+  const sel = new Set(STATIC_SUITES);
+  const notes = [];
+  const full = (why) => ({ full: true, reason: why, suites: new Set(ALL_SUITES) });
+  const suiteText = new Map();
+  const textOf = (s) => {
+    if (!suiteText.has(s)) { try { suiteText.set(s, fs.readFileSync(path.join(dir, s), "utf-8")); } catch { suiteText.set(s, ""); } }
+    return suiteText.get(s);
+  };
+  const addMentions = (needle, why) => {
+    let n = 0;
+    for (const s of ALL_SUITES) if (!sel.has(s) && textOf(s).includes(needle)) { sel.add(s); n++; }
+    if (n) notes.push(why + " -> +" + n);
+  };
+  const srcChanged = [];
+  for (const raw of changed) {
+    const f = raw.replace(/\\/g, "/").replace(/^\.\//, "").trim();
+    if (!f) continue;
+    if (/\.md$/i.test(f) || /^(docs|qa|backups|uploads)[^/]*\//.test(f) || /^scripts\/proofs\//.test(f) || f === ".gitignore" || f === ".dockerignore") continue;
+    const sm = f.match(/^scripts\/([^/]+\.mjs)$/);
+    if (sm) {
+      const n = sm[1];
+      if (SHARED_SCRIPTS.has(n)) return full("shared test infrastructure changed: " + f);
+      if (ALL_SUITES.includes(n)) { sel.add(n); notes.push(f + " is a suite"); }
+      else addMentions(n.replace(/\.mjs$/, ""), f + " helper referenced by suites");
+      continue;
+    }
+    if (FULL_EXACT.has(f)) return full("shared config/global module changed: " + f);
+    if (f.startsWith(".github/") || f.startsWith("config/") || f.startsWith("scripts/fixtures/") || /^\.env/.test(f)) return full("shared config/fixtures changed: " + f);
+    if (f.startsWith("src/")) {
+      if (!CODE_EXT.some((e) => f.endsWith(e))) return full("non-code asset under src changed (not import-traceable): " + f);
+      srcChanged.push(f);
+      continue;
+    }
+    return full("unmapped path (cannot say which suites it reaches): " + f);
+  }
+  if (srcChanged.length) {
+    const importers = buildImporters();
+    const closure = new Set(srcChanged);
+    const stack = [...srcChanged];
+    while (stack.length) for (const imp of importers.get(stack.pop()) ?? []) if (!closure.has(imp)) { closure.add(imp); stack.push(imp); }
+    const prefixes = new Set();
+    const modules = new Set();
+    for (const f of closure) {
+      const p = urlPrefixOf(f);
+      if (p === "/") return full("a root-level layout/page is reached by " + f);
+      if (p) { prefixes.add(p); continue; }
+      if (f.startsWith("src/app/")) continue; // an app helper: its importing route/page is already in the closure
+      modules.add(f.replace(/^src\//, "").replace(/\/index\.[a-z]+$/, "").replace(/\.[a-z]+$/, ""));
+    }
+    for (const p of prefixes) addMentions(p, "route/page " + p);
+    for (const m of modules) addMentions(m, "module " + m);
+    notes.push(srcChanged.length + " src file(s) -> closure of " + closure.size + " file(s)");
+  }
+  return { full: false, reason: notes.join("; ") || "no suite-reaching change; static checks only", suites: sel };
+}
+
+let runMode = "full";            // "full" | "scoped" - what the summary line reports
+let selectionReason = "no filter: the whole wall";
+const scopedRequested = !!(opts.suites || opts.files || opts.affected);
+if (opts.positional.length || scopedRequested) {
+  const explicit = [...opts.positional, ...(opts.suites ? opts.suites.split(",").filter(Boolean) : [])].map(suiteName);
+  const unknown = explicit.filter((a) => !ALL_SUITES.includes(a));
+  if (unknown.length) {
+    console.error("");
+    console.error("run-e2e: unknown suite(s): " + unknown.join(", "));
+    console.error("Known suites (the list lives here, so this is the whole set):");
+    for (const s of ALL_SUITES) console.error("    " + s);
+    console.error("");
+    process.exit(2);
+  }
+  let changed = null;
+  if (opts.files) {
+    const spec = opts.files;
+    const raw = spec.startsWith("@") ? fs.readFileSync(spec.slice(1), "utf-8") : spec;
+    changed = raw.split(/[\r\n,]+/).filter(Boolean);
+  }
+  if (opts.affected) {
+    if (!/^[A-Za-z0-9_][\w./@^~-]*\.\.[A-Za-z0-9_][\w./@^~-]*$/.test(opts.affected)) {
+      console.error("run-e2e: --affected wants BASE..HEAD (two refs joined by two dots), got: " + opts.affected);
       process.exit(2);
     }
-    SUITES.length = 0;
-    SUITES.push(...asked);
-    console.log("run-e2e: running " + asked.length + " of the full wall - " + asked.join(", "));
+    let diff;
+    try { diff = execFileSync("git", ["-C", repoRoot, "diff", "--name-only", opts.affected], { maxBuffer: 1 << 28 }).toString(); }
+    catch (e) { console.error("run-e2e: git diff --name-only " + opts.affected + " failed: " + String(e?.message ?? e).slice(0, 160)); process.exit(2); }
+    changed = [...(changed ?? []), ...diff.split(/\r?\n/).filter(Boolean)];
+  }
+  const chosen = new Set(explicit);
+  selectionReason = explicit.length ? "explicit suites: " + explicit.join(", ") : "";
+  if (changed) {
+    const r = selectAffected(changed);
+    for (const s of r.suites) chosen.add(s);
+    selectionReason = (selectionReason ? selectionReason + "; " : "") + (r.full ? "FALLBACK TO FULL WALL - " : changed.length + " changed path(s): ") + r.reason;
+    runMode = r.full ? "full" : "scoped";
+    if (r.full) console.log("run-e2e: selection falls back to the FULL wall - " + r.reason);
+  } else {
+    runMode = "scoped";
+  }
+  SUITES.length = 0;
+  SUITES.push(...ALL_SUITES.filter((s) => chosen.has(s)));
+  if (runMode === "scoped") {
+    console.log("run-e2e: running " + SUITES.length + " of " + ALL_SUITES.length + " suites - " + SUITES.join(", "));
     console.log("  (a subset is not a wall. Its green is evidence about these suites only.)");
   }
 }
+
+const cpuCap = Math.max(1, Math.min(4, os.cpus().length));
+const poolWant = opts.concurrency === null ? cpuCap : Number.parseInt(opts.concurrency, 10);
+if (!Number.isInteger(poolWant) || poolWant < 1) { console.error("run-e2e: --concurrency wants an integer >= 1, got: " + opts.concurrency); process.exit(2); }
+const shards = Math.max(1, Math.min(poolWant, SUITES.filter((s) => PARALLEL_SAFE.has(s)).length));
+const rerunOnce = opts.rerun ?? scopedRequested;
+
+if (opts.list) {
+  console.log("MODE=" + runMode);
+  console.log("REASON=" + selectionReason);
+  for (const s of SUITES) console.log("SUITE " + s);
+  console.log("SELECTED " + SUITES.length + " of " + ALL_SUITES.length);
+  console.log("SHARDS=" + shards);
+  console.log("RERUN_ONCE=" + rerunOnce);
+  process.exit(0);
+}
+
 
 // QA-851 (2026-08-24): the database HOST, which nothing guarded. CLAUDE.md pins the database NAME
 // ("MONGODB_DB=center_erp_ci, never center_erp") and says nothing about WHICH MACHINE that name
@@ -536,70 +750,89 @@ const SUITES = [
 
 const results = [];
 const parserDrift = [];
-for (const suite of SUITES) {
-  console.log(`\n━━━ ${suite} ━━━`);
-  const r = spawnSync(process.execPath, [path.join(dir, suite)], { encoding: "utf-8", env: process.env, maxBuffer: 32 * 1024 * 1024 });
-  process.stdout.write(r.stdout ?? "");
-  if (r.stderr) process.stderr.write(r.stderr);
-  // QA-2540: the `\s*$` anchor used to end this pattern, so ANY trailing text on the summary line
-  // made the match fail and the suite was recorded `crashed, 0 passed, 0 failed` - its real passes
-  // erased from TOTAL. check-user-copy gained a ", N SKIPPED (...)" suffix in QA-2537 and became
-  // exactly that: entry #1 of this runner reporting CRASHED with 363 real passes gone. It is live in
-  // CI, not latent, because nothing in .github/ sets CHANGELOG_PATH and `qa/` is not even in the repo
-  // Actions checks out - so the skip fires on every CI run.
-  //
-  // I wrote "latent - the wall exports CHANGELOG_PATH" while auditing a release about unchecked
-  // coverage claims. That sentence was true of ONE caller and I left it standing for all of them.
-  //
-  // So the anchor goes and the suffix is CAPTURED instead. A suite that reports skips now keeps its
-  // real numbers AND says how many assertions did not run - "did not run" must never again be
-  // reachable only by reading prose the summary line contradicts.
-  // QA-2544: the end anchor is BACK. Dropping it in QA-2540 fixed the SKIPPED suffix by widening
-  // the pattern to match anywhere on a line - which also made it match lines it had always been
-  // right to reject, such as a nested runner's own "TOTAL: N passed, M failed across K suites"
-  // echoed into a suite's stdout. `.match` without /g returns the FIRST hit, so that is not a
-  // cosmetic widening: it is how a suite comes to report somebody else's numbers as its own, which
-  // is QA-1551, already paid for once (e2e.mjs:4685 rewords a probe's total on the way out for
-  // exactly this reason, and its comment cites the anchor I had just deleted).
-  //
-  // So: keep the anchor, and admit the one suffix that is legitimate. Anything else trailing the
-  // summary still fails to match and still reports CRASHED - the strictness is unchanged; only
-  // QA-2549: and the suffix must be OUR suffix, not "anything after the word SKIPPED". My first
-  // restore ended the group in an unbounded `.*`, so `TOTAL: 5 passed, 2 failed, 3 SKIPPED across 9
-  // suites` still matched and was still read as a suite's own numbers - and QA-2543, in the SAME
-  // commit, is what makes lines of that shape exist in the first place. Measured: shipped pattern
-  // 5/2/3skip, this one 99/0. So "the strictness is unchanged" in that commit message was the
-  // untrue part, and it was untrue in the direction that mattered.
-  // SKIPPED is now known vocabulary - in exactly one spelling.
+
+// ISS-39: async so the no-server static checks can share a pool; everything else still runs one at a time.
+function runSuite(suite) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(dir, suite)], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const out = [], err = [];
+    child.stdout.on("data", (c) => out.push(c));
+    child.stderr.on("data", (c) => err.push(c));
+    child.on("error", (e) => resolve({ stdout: "", stderr: String(e?.message ?? e), status: null }));
+    child.on("close", (code) => resolve({ stdout: Buffer.concat(out).toString("utf-8"), stderr: Buffer.concat(err).toString("utf-8"), status: code }));
+  });
+}
+
+function scoreSuite(suite, r) {
+  // QA-2540 / QA-2544 / QA-2549 / QA-2551: the summary-line parser and its SKIPPED vocabulary - see the history
+  // kept in git; the pattern is unchanged by ISS-39 (it only moved here from the serial loop).
   const m = (r.stdout ?? "").match(/(\d+) passed, (\d+) failed(?:, (\d+) SKIPPED \(did not run[^)]*\))?\s*$/m);
-  // QA-2551: the parser matches ONE exact spelling of the skip suffix, and nothing binds the suite
-  // that EMITS it to this reader - grep for "run-e2e" in check-user-copy.mjs finds only prose. A
-  // one-word reword there would send its real passes to CRASHED on a push gate: QA-2540 re-armed
-  // with a narrower trigger. Rather than couple the two files, DETECT the disagreement - if a suite
-  // said SKIPPED and the parse did not capture it, this reader has stopped understanding that
-  // suite, and it must say so rather than quietly read zero.
   if (/SKIPPED/.test(r.stdout ?? "") && !(m && m[3])) parserDrift.push(suite);
-  results.push({
+  return {
     suite,
     passed: m ? Number(m[1]) : 0,
     failed: m ? Number(m[2]) : 0,
     skipped: m && m[3] ? Number(m[3]) : 0,
     crashed: !m || r.status === null, // no final count = the suite died before finishing
     exit: r.status,
-  });
+  };
 }
+const isBad = (row) => row.crashed || row.failed > 0 || row.exit !== 0;
+
+// One suite: run it, and (ISS-39, scoped selection) if it is red rerun THAT suite once, alone - never the set.
+// A suite that recovers is reported as FLAKY with its first-run numbers, so a rerun can never hide a red.
+async function execute(suite) {
+  const lines = [`\n━━━ ${suite} ━━━`];
+  const r = await runSuite(suite);
+  lines.push(r.stdout ?? "");
+  const errLines = r.stderr ? [r.stderr] : [];
+  let row = scoreSuite(suite, r);
+  if (isBad(row) && rerunOnce) {
+    const first = row;
+    lines.push(`\n━━━ ${suite} - RED on first run (${first.crashed ? "crashed" : first.failed + " failed"}, exit ${first.exit}); rerun 1 of 1, alone ━━━`);
+    const r2 = await runSuite(suite);
+    lines.push(r2.stdout ?? "");
+    if (r2.stderr) errLines.push(r2.stderr);
+    const second = scoreSuite(suite, r2);
+    row = second;
+    if (!isBad(second)) row = { ...second, flaky: { failed: first.failed, crashed: first.crashed, exit: first.exit } };
+    else row = { ...second, rerunFailed: true };
+  }
+  return { row, lines, errLines };
+}
+function emit(res) {
+  process.stdout.write(res.lines.join("\n") + "\n");
+  for (const e of res.errLines) process.stderr.write(e);
+  results.push(res.row);
+}
+
+if (shards > 1) {
+  const par = SUITES.filter((s) => PARALLEL_SAFE.has(s));
+  const rest = SUITES.filter((s) => !PARALLEL_SAFE.has(s));
+  console.log(`run-e2e: ${par.length} no-server static check(s) in a pool of ${shards}; ${rest.length} server/database suite(s) run serially after (they share one server and one database).`);
+  const done = new Array(par.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: shards }, async () => {
+    while (next < par.length) { const k = next++; done[k] = await execute(par[k]); }
+  }));
+  for (const res of done) emit(res);
+  for (const suite of rest) emit(await execute(suite));
+} else {
+  for (const suite of SUITES) emit(await execute(suite));
+}
+
 
 console.log("\n━━━ Summary ━━━");
 let totalPass = 0, totalFail = 0, bad = 0;
 for (const r of results) {
   totalPass += r.passed; totalFail += r.failed;
-  const state = r.crashed ? "CRASHED" : r.failed > 0 ? "FAILED" : "ok";
+  const state = r.crashed ? "CRASHED" : r.failed > 0 ? "FAILED" : r.flaky ? "FLAKY" : "ok";
   if (r.crashed || r.failed > 0 || r.exit !== 0) bad++;
   // QA-2543: the per-suite row carries the skip as well. "TOTAL is the line that gets quoted" was
   // true and incomplete - THIS unit's own manifest quoted the per-suite row as evidence the wall was
   // healthy, which is precisely how the dead CHANGELOG gate survived. A skip honest in TOTAL and
   // absent from the row a reader copies is the same defect one line up.
-  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${(r.skipped ?? 0) > 0 ? `, ${r.skipped} SKIPPED` : ""}${r.crashed ? " (no final count — crashed?)" : ""}`);
+  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${(r.skipped ?? 0) > 0 ? `, ${r.skipped} SKIPPED` : ""}${r.crashed ? " (no final count — crashed?)" : ""}${r.flaky ? ` (RED on first run: ${r.flaky.crashed ? "crashed" : r.flaky.failed + " failed"}, exit ${r.flaky.exit}; green on the single rerun)` : ""}${r.rerunFailed ? " (still RED on the single rerun)" : ""}`);
 }
 // -153 (QA-354): a CRASHED suite reports `passed: 0, failed: 0`, so it adds nothing to either
 // total and the TOTAL line read "0 failed" while suites were dying. The per-suite rows do say
@@ -607,6 +840,7 @@ for (const r of results) {
 // release notes, and it is the line that has to refuse to look clean. Measured today: a run in
 // which 15 of 17 suites crashed still printed a totals line reading 0 failed.
 const crashedSuites = results.filter((r) => r.crashed);
+const flakySuites = results.filter((r) => r.flaky);
 const quietFailures = results.filter((r) => !r.crashed && r.failed === 0 && r.exit !== 0);
 let totalLine = `\nTOTAL: ${totalPass} passed, ${totalFail} failed across ${results.length} suites`;
 if (crashedSuites.length) {
@@ -624,6 +858,11 @@ if (skippedSuites.length) {
   totalLine += String.fromCharCode(10) + "!! " + n + " assertion(s) SKIPPED - they did not run, and a skip is not a pass: " +
     skippedSuites.map((r) => r.suite + " (" + r.skipped + ")").join(", ");
 }
+if (flakySuites.length) {
+  totalLine += String.fromCharCode(10) + "!! " + flakySuites.length +
+    " suite(s) were RED on the first run and green on the single rerun (flaky, not clean) - quote this, do not hide it: " +
+    flakySuites.map((r) => r.suite).join(", ");
+}
 if (parserDrift.length) {
   totalLine += String.fromCharCode(10) + "!! " + parserDrift.length +
     " suite(s) printed SKIPPED in a form this runner no longer parses - their skips are NOT in the numbers above: " +
@@ -634,6 +873,8 @@ if (quietFailures.length) {
     quietFailures.map((r) => `${r.suite} (exit ${r.exit})`).join(", ");
 }
 console.log(totalLine);
+// ISS-39: the one machine-readable line the pre-push gate quotes (mode=full also when a scoped selection fell back to full).
+console.log(`prepush_wall_min=${((Date.now() - wallStart) / 60000).toFixed(1)} tests=${totalPass + totalFail} mode=${runMode} shards=${shards}`);
 // QA-2548 / QA-2550: SKIPS ARE DELIBERATELY EXCLUDED FROM THIS EXIT CODE - `bad` counts failures
 // and crashes, never skips. The app repo contains no `qa/` at all, so the release-row gate skips on
 // every CI run; exiting non-zero on a skip would make CI permanently red for being in the wrong

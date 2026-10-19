@@ -179,6 +179,11 @@ Siblings: `shell.tsx` (`AppShell`, `usePerms`, `NAV` :67), `icons.tsx`, `provide
 
 `npm test` → **`scripts/run-e2e.mjs`** (suite list at :11–33 — the ONLY place it lives), ~1,100
 assertions across 17 suites, no fail-fast, per-suite table, exit 1 on any failure.
+Pre-push scoping (ISS-39): the same file takes `--suites a,b`, `--files @list`, `--affected BASE..HEAD` (changed paths ->
+reachable suites by textual/import reachability; shared infra, config or an unmapped path falls back to the FULL wall and
+prints why), `--list` (dry run), `--concurrency N` (only the no-server static checks pool; server/DB suites stay serial), and
+reruns a red suite once alone. Last line: `prepush_wall_min=<n> tests=<n> mode=scoped|full shards=<n>`. Pinned by
+`check-run-e2e-select.mjs`.
 
 Structural pins that exist because a fix regressed while the wall stayed green:
 `check-user-copy.mjs` (no ledger code may reach a user-facing string) and
