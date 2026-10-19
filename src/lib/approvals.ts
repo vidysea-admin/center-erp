@@ -718,6 +718,7 @@ export async function requireApproval(
     mailUsers({
       perEvent: true, // mtg-c1 (R4): folded into the digest when "digest only" is ON
       userIds: grantHolders.map((h) => h.id),
+      excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
       subject: `Approval needed: ${safeSummary}`,
       title: "A new cost head is waiting for your approval",
       lines: [`${safeSummary}`, `Requested by ${user.name}.`],
@@ -745,6 +746,7 @@ export async function requireApproval(
     ? mailUsers({
         perEvent: action === "cost.post", // mtg-c1: only cost approvals are folded - the digest's pending block is the cost one
         userIds: approverUsers,
+        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",
         lines: [`${safeSummary}`, `Requested by ${user.name}.`],
@@ -753,6 +755,7 @@ export async function requireApproval(
     : mailUsersByRole({
         perEvent: action === "cost.post",
         roles: [rule.approver_role], location: ctx.location,
+        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
         subject: `Approval needed: ${safeSummary}`,
         title: "An action is waiting for your approval",
         // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
@@ -905,6 +908,46 @@ export async function decideApproval(
   return claimed;
 }
 
+// approval-decision-mail (Umesh, 2026-10-19: "approve ya reject ka bhi mail jana chahiye, tabhi to
+// daalne wale ko pata chalega"). What the requester is told, built apart from the send so the words
+// can be asserted on directly: the MailLog stores a subject and never a body.
+//
+// The summary is the SAME line the approval-needed mail carried and goes through the SAME redaction
+// (declared money values, then every figure) - a mail leaves the building, and the recipient opens
+// the entry in the ERP to see figures where the permission check lives. The reason typed by the
+// decider is free text, so it gets the figure pass too. The sanctioned amount is never included.
+export function buildDecisionMail(
+  request: { action?: unknown; summary?: unknown; payload?: unknown; decision_note?: unknown },
+  decider: { name: string },
+  decision: "Approved" | "Rejected",
+): { subject: string; title: string; lines: string[]; link: string } {
+  const verb = decision === "Approved" ? "approved" : "rejected";
+  const summary = redactFiguresInText(redactMoneyInText(String(request.summary ?? ""), request.payload));
+  const note = String(request.decision_note ?? "").trim();
+  const lines = [summary, `${decision === "Approved" ? "Approved" : "Rejected"} by ${decider.name}.`];
+  if (note) lines.push(`${decision === "Approved" ? "Comment" : "Reason"}: ${redactFiguresInText(note)}`);
+  const link = request.action === "cost.post" ? "/costs" : request.action === "costcategory.create" ? "/finance" : "/";
+  return { subject: `Your request was ${verb}: ${summary}`, title: `Your request was ${verb}`, lines, link };
+}
+
+// Only the requester (the request's initiator) is mailed - never the other approvers, never an
+// address typed anywhere. It goes through mailUsers, so the global email_enabled switch, the
+// per-account switch, digest-only mode and the MailLog row apply unchanged (MailLog entity
+// "ApprovalDecision"). Fire-and-forget at the call site: a mail problem must never fail or undo a
+// decision that has already been made.
+async function notifyRequesterOfDecision(
+  request: any, decider: SessionUser, decision: "Approved" | "Rejected",
+) {
+  if (!request?.initiator) return;
+  const m = buildDecisionMail(request, decider, decision);
+  await mailUsers({
+    perEvent: true, // mtg-c1 (R4): honoured like every per-approval mail when "digest only" is ON
+    userIds: [request.initiator],
+    subject: m.subject, title: m.title, lines: m.lines, link: m.link,
+    entity: "ApprovalDecision", entity_id: request._id,
+  });
+}
+
 // Side effects that say a decision is final run only after an Approved replay has succeeded (or
 // immediately for Rejected, which has no replay). This keeps a failed apply out of the audit trail
 // as a completed decision and leaves its notification actionable after rollback.
@@ -936,6 +979,8 @@ export async function finalizeApprovalDecision(
     { entity: "ApprovalRequest", entity_id: request._id, status: { $in: ["New", "Acknowledged"] } },
     { $set: { status: "Resolved" } },
   ).catch(() => {});
+  // approval-decision-mail (Umesh, 2026-10-19): the person who raised it hears the outcome.
+  notifyRequesterOfDecision(finalized ?? request, user, decision).catch(() => {});
   if (request.action === "cost.post" || request.action === "costcategory.create") {
     await settleFinanceAuditEvents({ approvalIds: [request._id] }).catch(() => {});
     return finalized;

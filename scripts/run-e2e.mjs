@@ -154,6 +154,10 @@ const SUITES = [
   // candidate), truthful created / assigned / refused counts, import AND assign both required - and the join
   // rule it uses is the ONE copy now shared with the bulk-assign and single-add doors. Own fixtures (ZZIMP-).
   "e2e-import-into-batch.mjs",
+  // approval-decision-mail (Umesh, 2026-10-19): the requester is mailed when their request is approved or rejected
+  // (reason included), the "approval needed" mail skips the requester, and nobody decides their own request. A
+  // function-level check against the real lib and the test database - no server; MailLog rows are the captured mail.
+  "check-approval-decision-mail.mjs",
 ];
 
 // QA-1096 (2026-08-25): this file's guards protected `npm test` and NOTHING ELSE. All fifteen
