@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { api, fmtDT, fmtDate } from "@/lib/client";
+import { api, fmtDT, fmtDate, canDecideCostApprovals } from "@/lib/client";
 import { uploadWithRetry } from "@/lib/upload"; // QA-1577: the trainer files their own certificates from Home
 import { Chip, KPI, Section, Btn, ErrorBanner } from "@/components/ui";
 import { IconPin, IconCap, IconUsers, IconUser, IconAlert } from "@/components/icons";
@@ -27,6 +27,17 @@ export default function HomePage() {
 
   const load = () => api("/api/home").then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
+  // costs-approval-box (Umesh, 2026-10-19): the same people who get the Costs-page box get a pointer
+  // to it here - the number of parked cost entries waiting. It asks the same list the box reads and
+  // is never fetched for anyone who may not decide one (so a non-decider's Home is unchanged).
+  const canDecideCosts = permsLoaded && canDecideCostApprovals(can);
+  const [costWaiting, setCostWaiting] = useState(0);
+  useEffect(() => {
+    if (!canDecideCosts) return;
+    api("/api/approvals?status=Pending")
+      .then((d) => setCostWaiting((d.items ?? []).filter((r: any) => r.action === "cost.post").length))
+      .catch((e: any) => console.error("[home] the cost-approval count failed to load; the card is hidden, not zero:", e));
+  }, [canDecideCosts]);
   useEffect(() => { api("/api/mapping/readiness").then(setMapping).catch(() => setMapping(null)); }, []);
 
   if (error) return <ErrorBanner msg={error} />;
@@ -84,6 +95,14 @@ export default function HomePage() {
           this email on your trainer record). Until then everything below is empty because there is
           nothing assigned to you — not because anything has gone wrong.
         </div>
+      )}
+
+      {canDecideCosts && costWaiting > 0 && (
+        <Link href="/costs#approvals" data-cost-approvals-card
+          className="flex items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:bg-amber-100/70">
+          <span><b>{costWaiting}</b> cost {costWaiting === 1 ? "approval" : "approvals"} waiting for you</span>
+          <span className="text-xs underline">Review on Costs</span>
+        </Link>
       )}
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">

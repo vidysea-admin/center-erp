@@ -1,7 +1,8 @@
 "use client";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, fmtDate, postCost, toInputDate, offerable } from "@/lib/client";
+import { useSession } from "next-auth/react";
+import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
@@ -50,6 +51,10 @@ function CostsInner() {
   const { can, role, loaded: permsLoaded } = usePerms();
   const postOnly = !permsLoaded || !can("finance.view");
   const canApproveCosts = permsLoaded && can("finance.approve", "edit");
+  // costs-approval-box: the top box shows only to someone who may decide a parked cost.
+  const { data: session } = useSession();
+  const me = String((session?.user as any)?.id ?? "");
+  const showApprovalBox = permsLoaded && !!me && canDecideCostApprovals(can);
   // mtg-b3 R10 (Umesh, 2026-10-07): whoever entered a cost can edit or delete their OWN entry until it
   // is paid. These three are the screen's half of it; /api/costs/[id] is the rule.
   const canManageCosts = permsLoaded && can("costs.manage", "edit");
@@ -210,6 +215,7 @@ function CostsInner() {
           <button className="text-xs underline" onClick={() => setNotice("")}>dismiss</button>
         </div>
       )}
+      {showApprovalBox && <CostApprovalBox me={me} role={role} setError={setError} onDecided={() => load(postOnly)} />}
       {!postOnly && <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />}
       {tab === "Costs" ? (
         <>
@@ -540,6 +546,134 @@ function CostsInner() {
           <p className="mt-2 text-xs text-gray-500">Raise/mark paid from the batch's Closure tab.</p>
         </Section>
       )}
+    </div>
+  );
+}
+
+// costs-approval-box (Umesh, 2026-10-19: "yes top box with filters, and also with tabs we can show
+// along with home page too"). An approver could not find a parked cost: it is NOT in the register
+// below (the ledger row is written only when the request is approved, api/approvals/[id]) - it
+// lives as an approval request that was decided only under Admin -> Approvals. This box is a
+// SHORTCUT to that same queue, for cost.post requests only. It adds no rule: it reads the same
+// GET /api/approvals (same scoping, same money masking) and decides through the same
+// POST /api/approvals/[id] with the same body the Admin tab sends, so the server is the only
+// judge of who may decide what. The checks drawn here (own request, role, named approvers) only
+// decide whether a row offers buttons; they mirror decideApproval and never replace it.
+// Cost-head requests (costcategory.create) are deliberately NOT here: they carry the seen_cap rule.
+const COST_BOX_TABS = ["Pending", "Approved", "Rejected"];
+function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: string; setError: (m: string) => void; onDecided: () => void }) {
+  const [tab, setTab] = useState("Pending");
+  const [pending, setPending] = useState<any[]>([]);
+  const [decided, setDecided] = useState<any[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [fLoc, setFLoc] = useState("");
+  const [fBy, setFBy] = useState("");
+  const [q, setQ] = useState("");
+  const [note, setNote] = useState<Record<string, string>>({});
+  const [approvedAmount, setApprovedAmount] = useState<Record<string, string>>({});
+  const anchor = useRef<HTMLDivElement>(null);
+  const isCost = (r: any) => r.action === "cost.post";
+
+  // The Pending list is always fetched: its length is the number in the title whichever tab is open.
+  const load = () => Promise.all([
+    api("/api/approvals?status=Pending").then((d) => setPending((d.items ?? []).filter(isCost))),
+    tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${tab}`).then((d) => setDecided((d.items ?? []).filter(isCost))),
+  ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
+  useEffect(() => { load(); }, [tab]);
+  // /costs#approvals lands here from the Home card; the box renders after its data, so the browser's
+  // own anchor jump has already missed it by then.
+  useEffect(() => {
+    if (loaded && typeof window !== "undefined" && window.location.hash === "#approvals") anchor.current?.scrollIntoView();
+  }, [loaded]);
+
+  async function decide(id: string, decision: string) {
+    const amount = approvedAmount[id];
+    try {
+      await api(`/api/approvals/${id}`, {
+        method: "POST",
+        json: { decision, note: note[id], ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}) },
+      });
+      await load();
+      onDecided(); // the register below: an approved cost has just become a ledger row
+    } catch (e: any) { setError(e.message); }
+  }
+
+  const rows = tab === "Pending" ? pending : decided;
+  const locs = [...new Set(rows.map((r) => r.location?.name).filter(Boolean))].sort() as string[];
+  const bys = [...new Set(rows.map((r) => r.initiator?.name).filter(Boolean))].sort() as string[];
+  const needle = q.trim().toLowerCase();
+  const shown = rows.filter((r) => (!fLoc || r.location?.name === fLoc) && (!fBy || r.initiator?.name === fBy)
+    && (!needle || [r.summary, r.location?.name, r.initiator?.name, r.decision_note, r.decided_by?.name].filter(Boolean).join(" ").toLowerCase().includes(needle)));
+
+  return (
+    <div id="approvals" ref={anchor} data-cost-approval-box>
+      <Section title={`Waiting for your approval (${pending.length})`}>
+        <Tabs tabs={COST_BOX_TABS} active={tab} onChange={setTab} />
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select aria-label="Filter by centre" className={inputCls + " min-w-0 max-w-[13rem]"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
+            <option value="">All centres</option>
+            {locs.map((l) => <option key={l} value={l}>{l}</option>)}
+          </select>
+          <select aria-label="Filter by requested by" className={inputCls + " min-w-0 max-w-[13rem]"} value={fBy} onChange={(e) => setFBy(e.target.value)}>
+            <option value="">Requested by anyone</option>
+            {bys.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+          <input aria-label="Search requests" className={inputCls + " max-w-72"} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <div className="mt-3">
+          {!loaded ? <p className="text-sm text-gray-400">Loading…</p>
+            : rows.length === 0 ? <p className="text-sm text-gray-400">{tab === "Pending" ? "Nothing waiting." : `Nothing ${tab.toLowerCase()} yet.`}</p>
+            : shown.length === 0 ? <p className="text-sm text-gray-400">No requests match these filters.</p> : (
+            <ul className="space-y-2">
+              {shown.map((r) => {
+                const own = String(r.initiator?._id ?? r.initiator ?? "") === me;
+                const named = (r.approver_users ?? []).map(String).filter(Boolean);
+                return (
+                  <li key={r._id} data-cost-approval-id={r._id} className="rounded-lg border px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-medium">{r.summary}{parkedCostHeadNote(r)}</div>
+                        <div className="text-xs text-gray-500">
+                          {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
+                          {r.decided_by?.name ? ` · decided by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
+                        </div>
+                        {r.status !== "Pending" && r.decision_note ? (
+                          <div className="mt-1 text-xs text-gray-700">
+                            <span className="text-gray-500">{r.status === "Rejected" ? "Reason: " : "Note: "}</span>{r.decision_note}
+                          </div>
+                        ) : null}
+                        {["Applying", "Approved"].includes(r.status) && r.approved_amount !== undefined ? (
+                          <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
+                        ) : null}
+                      </div>
+                      <Chip value={r.status} />
+                    </div>
+                    {["Pending", "Applying"].includes(r.status) && (
+                      own ? <p className="mt-2 text-xs text-gray-500">Your own request - another approver decides.</p>
+                      : !(role === "Admin" || role === r.approver_role) ? <p className="mt-2 text-xs text-gray-500">Only {r.approver_role} may decide this request.</p>
+                      : named.length && !named.includes(me) ? <p className="mt-2 text-xs text-gray-500">This request is assigned to named approvers; you are not one of them.</p>
+                      : (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {r.status === "Pending" && r.payload?.amount !== undefined && (
+                            <input type="number" min="0.01" max={Number(r.payload.amount)} step="0.01"
+                              className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
+                              value={approvedAmount[r._id] ?? ""}
+                              onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
+                          )}
+                          {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
+                            value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />}
+                          <Btn small onClick={() => decide(r._id, "Approved")}>{r.status === "Applying" ? "Resume apply" : <>Approve &amp; apply</>}</Btn>
+                          {r.status === "Pending" && <Btn small kind="danger" onClick={() => decide(r._id, "Rejected")}>Reject</Btn>}
+                        </div>
+                      )
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </Section>
     </div>
   );
 }
