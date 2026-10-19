@@ -45,8 +45,8 @@ async function login(email, password) {
     .map((c) => c.split(";")[0]).find((c) => c.includes("session-token"));
   return session ? [csrfCookie, session].join("; ") : null;
 }
-async function req(cookie, method, p, body) {
-  const res = await fetch(BASE + p, { method, headers: { "Content-Type": "application/json", cookie }, body: body ? JSON.stringify(body) : undefined });
+async function req(cookie, method, p, body, headers = {}) {
+  const res = await fetch(BASE + p, { method, headers: { "Content-Type": "application/json", cookie, ...headers }, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 
@@ -209,10 +209,15 @@ try {
     await waitBox(b.page);
     const own = (await row(b.page, T.t3.id).count()) ? (await row(b.page, T.t3.id).innerText()).replace(/\s+/g, " ") : "";
     ok("K2 own request: the raiser sees their own request in the box", own.includes(tag("t3")), own.slice(0, 200));
-    ok("K2 own request: with NO Approve / Reject and the reason in words",
-      (await row(b.page, T.t3.id).locator("button").count()) === 0 && own.includes("Your own request - another approver decides."), own.slice(0, 300));
+    // approval-withdraw: the own row now carries ONE button - Withdraw - and still no Approve / Reject.
+    ok("K2 own request: with NO Approve / Reject (only Withdraw) and the reason in words",
+      (await row(b.page, T.t3.id).getByRole("button", { name: /Approve|Reject/ }).count()) === 0
+        && (await row(b.page, T.t3.id).locator("button").count()) === 1
+        && (await row(b.page, T.t3.id).getByRole("button", { name: "Withdraw", exact: true }).count()) === 1
+        && own.includes("Your own request - another approver decides."), own.slice(0, 300));
     ok("K2 own request: another person's request in the same box does offer the buttons",
-      (await row(b.page, T.t1.id).getByRole("button", { name: /Approve & apply/ }).count()) === 1 && (await row(b.page, T.t1.id).getByRole("button", { name: "Reject" }).count()) === 1);
+      (await row(b.page, T.t1.id).getByRole("button", { name: /Approve & apply/ }).count()) === 1 && (await row(b.page, T.t1.id).getByRole("button", { name: "Reject" }).count()) === 1
+        && (await row(b.page, T.t1.id).getByRole("button", { name: "Withdraw", exact: true }).count()) === 0);
     await b.context.close();
     const selfTry = await req(approverB.cookie, "POST", `/api/approvals/${T.t3.id}`, { decision: "Approved" });
     ok("K2 own request: the server still refuses the raiser deciding it (403) and wrote nothing",
@@ -496,6 +501,271 @@ try {
       unk.status === 200 && same(idsOf(unk), idsOf(unkPlain)) && unk.data?.total === undefined, `status ${unk.status} total=${unk.data?.total}`);
     const inj = await req(admin, "GET", "/api/approvals?status=Pending&action[$ne]=cost.post&action=%24ne");
     ok("K6 unknown action: an operator-shaped value is ignored too (same rows, no total)", inj.status === 200 && same(idsOf(inj), idsOf(unkPlain)) && inj.data?.total === undefined, `status ${inj.status}`);
+
+    // =====================================================================================================
+    // approval-withdraw (Umesh, 2026-10-20 05:00 IST, defaults 1-5 of qa/gates/approval-withdraw.md):
+    //   W1  only the person who raised a request can withdraw it (an approver, an Admin, a stranger cannot)
+    //   W2  only while it is Pending (Approved / Rejected / already withdrawn refuse; approve-vs-withdraw cannot both win)
+    //   W3  every approval type, not only cost.post (and a head sign-off / cap proposal is left closed, not dangling)
+    //   W4  the effect: Cancelled shown as Withdrawn with who/when/reason; no ledger row; Pending reservations released;
+    //       leaves the Pending list and the Home count; an audit-log entry; the same POST can be raised again
+    //   W5  the screens: a Withdraw button with a confirm step on the requester's own Pending rows only
+    // Every refusal asserts its own status AND its own message AND that nothing was written.
+    // =====================================================================================================
+    const opsRow = await rawUsers.findOne({ email: "ops@vidysea.com" });
+    const wd = (who, id, body = { action: "withdraw" }) => req(who, "PATCH", `/api/approvals/${id}`, body);
+    const reqDoc = (id) => rawApprovals.findOne({ _id: new ObjectId(id) });
+    const ledgerN = (k) => rawCosts.countDocuments({ note: tag(k) });
+    const auditAll = db.collection("auditlogs");
+    const wAudit = (id) => auditAll.find({ entity: "ApprovalRequest", entity_id: new ObjectId(id), new_value: "Withdrawn" }).toArray();
+    const until = async (fn, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await fn(); if (v || Date.now() - t0 > ms) return v; await new Promise((r) => setTimeout(r, 300)); } };
+    const M_OWNER = "Only the person who raised a request can withdraw it.";
+    const M_TWICE = "This request was already withdrawn.";
+    const M_LATE = (s) => `This request is already ${s}, so it can no longer be withdrawn. Only a request that is still waiting can be taken back.`;
+    const untouched = (d) => d?.status === "Pending" && !d?.decided_by && !d?.decided_at && !d?.decision_note;
+    const wSeed = (action, k, extra = {}) => ({
+      _id: new ObjectId(), action, summary: `zzbox ${stamp} wseed ${action} ${k}`, payload: {}, status: "Pending", approver_role: "Admin",
+      initiator: opsRow._id, approver_users: [], createdAt: new Date(), updatedAt: new Date(), ...extra,
+    });
+    Object.assign(AMT, { w1: 8101, w2: 8102, w3: 8103, w4: 8104, w5: 8105, w6: 8106, w7: 8107, w8: 8108, w9: 8109 });
+    const Wt = {};
+    for (const [k, who, loc] of [["w1", ops, locA], ["w2", ops, locA], ["w3", ops, locB], ["w4", ops, locB], ["w6", ops, locA], ["w8", ops, locB], ["w9", ops, locA]]) Wt[k] = await park(who, k, loc);
+    Wt.w7 = await park(approverB.cookie, "w7", locA);
+    ok("[precondition] the withdraw fixtures are parked (202) and none reached the ledger",
+      Object.values(Wt).every((t) => t.status === 202 && t.id) && (await Promise.all(Object.keys(Wt).map(ledgerN))).every((n) => n === 0), JSON.stringify(Wt));
+
+    // ---- W1 only the person who raised it ------------------------------------------------------
+    for (const [who, label] of [[approverB.cookie, "another approver"], [admin, "an Admin"], [headOnly.cookie, "a finance reader without the queue right"]]) {
+      const r = await wd(who, Wt.w1.id);
+      ok(`W1 owner only: ${label} withdrawing someone else's request is 403 with its own message, and the request is untouched`,
+        r.status === 403 && r.data?.error === M_OWNER && untouched(await reqDoc(Wt.w1.id)) && (await wAudit(Wt.w1.id)).length === 0, JSON.stringify(r));
+    }
+    const noSuch = await wd(ops, new ObjectId().toString());
+    ok("W1 owner only: an id that does not exist is 404 'Approval request not found'", noSuch.status === 404 && noSuch.data?.error === "Approval request not found", JSON.stringify(noSuch));
+    const notId = await wd(ops, "not-an-id");
+    ok("W1 owner only: an id that is not an id is 404 too, not a crash", notId.status === 404 && notId.data?.error === "Approval request not found", JSON.stringify(notId));
+    const badAct = await wd(ops, Wt.w1.id, { action: "approve" });
+    const noAct = await wd(ops, Wt.w1.id, {});
+    const longR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: "x".repeat(501) });
+    const numR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: 5 });
+    ok("W1 body: a wrong / missing action, a non-text reason and a 501-character reason are each 400 with their own message, and nothing is written",
+      badAct.status === 400 && badAct.data?.error === 'action must be "withdraw"' && noAct.status === 400 && noAct.data?.error === 'action must be "withdraw"'
+        && numR.status === 400 && numR.data?.error === "reason must be text"
+        && longR.status === 400 && /too long/.test(longR.data?.error ?? "") && untouched(await reqDoc(Wt.w1.id)),
+      JSON.stringify({ badAct, noAct, numR, longR }));
+    const anon = await fetch(BASE + `/api/approvals/${Wt.w1.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "withdraw" }) });
+    ok("W1 owner only: no session at all is refused (401) and the request is untouched", anon.status === 401 && untouched(await reqDoc(Wt.w1.id)), String(anon.status));
+
+    // ---- W2 only while Pending -----------------------------------------------------------------
+    const ap = await req(admin, "POST", `/api/approvals/${Wt.w2.id}`, { decision: "Approved" });
+    const w2before = await reqDoc(Wt.w2.id);
+    const lateA = await wd(ops, Wt.w2.id, { action: "withdraw", reason: "too late" });
+    const w2after = await reqDoc(Wt.w2.id);
+    ok("W2 pending only: an APPROVED request cannot be withdrawn - 409 with its own message; still Approved, decision and ledger row untouched",
+      ap.status === 200 && lateA.status === 409 && lateA.data?.error === M_LATE("approved") && w2after?.status === "Approved"
+        && String(w2after.decided_by) === String(adminRow._id) && +new Date(w2after.decided_at) === +new Date(w2before.decided_at) && w2after.decision_note === w2before.decision_note
+        && (await ledgerN("w2")) === 1 && (await wAudit(Wt.w2.id)).length === 0, JSON.stringify(lateA));
+    const rj = await req(admin, "POST", `/api/approvals/${Wt.w3.id}`, { decision: "Rejected", note: "not needed" });
+    const lateR = await wd(ops, Wt.w3.id, { action: "withdraw", reason: "too late" });
+    const w3d = await reqDoc(Wt.w3.id);
+    ok("W2 pending only: a REJECTED request cannot be withdrawn - 409 with its own message; still Rejected with the approver's note, no ledger row",
+      rj.status === 200 && lateR.status === 409 && lateR.data?.error === M_LATE("rejected") && w3d?.status === "Rejected" && w3d?.decision_note === "not needed"
+        && String(w3d.decided_by) === String(adminRow._id) && (await ledgerN("w3")) === 0 && (await wAudit(Wt.w3.id)).length === 0, JSON.stringify(lateR));
+    const first = await wd(ops, Wt.w4.id, { action: "withdraw", reason: "entered twice" });
+    const w4a = await reqDoc(Wt.w4.id);
+    const second = await wd(ops, Wt.w4.id, { action: "withdraw", reason: "again" });
+    const w4b = await reqDoc(Wt.w4.id);
+    ok("W2 pending only: withdrawing twice - the second is 409 'This request was already withdrawn.' and changes neither the time nor the reason",
+      first.status === 200 && second.status === 409 && second.data?.error === M_TWICE && +new Date(w4b.decided_at) === +new Date(w4a.decided_at) && w4b.decision_note === "entered twice"
+        && (await wAudit(Wt.w4.id)).length === 1, JSON.stringify({ first: first.status, second }));
+    const decW = await req(admin, "POST", `/api/approvals/${Wt.w4.id}`, { decision: "Approved" });
+    const decR = await req(admin, "POST", `/api/approvals/${Wt.w4.id}`, { decision: "Rejected", note: "x" });
+    ok("W2 pending only: an approver cannot Approve or Reject a withdrawn request - 409 'Already withdrawn by the person who raised it.', no ledger row, still Cancelled",
+      decW.status === 409 && decW.data?.error === "Already withdrawn by the person who raised it." && decR.status === 409 && decR.data?.error === "Already withdrawn by the person who raised it."
+        && (await reqDoc(Wt.w4.id))?.status === "Cancelled" && (await ledgerN("w4")) === 0, JSON.stringify({ decW, decR }));
+    // approve and withdraw fired together on a fresh request: the same Pending claim decides - exactly one wins, never both
+    const race = await park(ops, "w5", locA);
+    const [raceA, raceW] = await Promise.all([req(admin, "POST", `/api/approvals/${race.id}`, { decision: "Approved" }), wd(ops, race.id)]);
+    const raceDoc = await reqDoc(race.id);
+    const raceLed = await ledgerN("w5");
+    const oneWon = (raceA.status === 200 ? 1 : 0) + (raceW.status === 200 ? 1 : 0) === 1;
+    ok("W2 race: approve and withdraw sent together - exactly ONE wins, the loser is 409, and the ledger agrees with the winner",
+      oneWon && ((raceDoc.status === "Approved" && raceLed === 1 && raceW.status === 409) || (raceDoc.status === "Cancelled" && raceLed === 0 && raceA.status === 409)),
+      JSON.stringify({ a: raceA.status, w: raceW.status, status: raceDoc?.status, ledger: raceLed }));
+
+    // ---- W3 every approval type ----------------------------------------------------------------
+    const others = ["batch.cancel", "invoice.raise", "location.close"].map((a, i) => wSeed(a, i));
+    // a head sign-off and a cap proposal: the rows they are about must not be left waiting on a request nobody can decide
+    const headId = new ObjectId(), capId = new ObjectId();
+    const headReq = wSeed("costcategory.create", "head", { payload: { kind: "head-approval", category: headId, amount: 1 } });
+    const capReq = wSeed("costcategory.create", "cap", { payload: { kind: "cap-approval", category: capId, amount: 1 } });
+    await db.collection("costcategories").insertMany([
+      { _id: headId, name: `zzbox ${stamp} whead`, active: true, approval_status: "Pending", approval_request: headReq._id, createdAt: new Date(), updatedAt: new Date() },
+      { _id: capId, name: `zzbox ${stamp} wcap`, active: true, pre_approval_proposal: capReq._id, createdAt: new Date(), updatedAt: new Date() },
+    ]);
+    await rawApprovals.insertMany([...others, headReq, capReq]);
+    created.seeded.push(...others.map((o) => o._id), headReq._id, capReq._id);
+    for (const o of others) {
+      const r = await wd(ops, o._id);
+      const d = await reqDoc(String(o._id));
+      ok(`W3 every type: ${o.action} is withdrawable by its raiser - Cancelled, by them, with an audit-log entry`,
+        r.status === 200 && d?.status === "Cancelled" && String(d.decided_by) === String(opsRow._id) && !!d.decided_at && (await until(async () => (await wAudit(String(o._id))).length === 1)), JSON.stringify(r).slice(0, 200));
+    }
+    const strangerAct = await wd(admin, String(headReq._id));
+    ok("W3 every type: a head sign-off cannot be withdrawn by an approver who did not raise it (403, head still Pending)",
+      strangerAct.status === 403 && strangerAct.data?.error === M_OWNER && (await db.collection("costcategories").findOne({ _id: headId }))?.approval_status === "Pending");
+    const hr = await wd(ops, String(headReq._id));
+    const cr = await wd(ops, String(capReq._id), { action: "withdraw", reason: "wrong limit" });
+    const headDoc = await db.collection("costcategories").findOne({ _id: headId });
+    const capDoc = await db.collection("costcategories").findOne({ _id: capId });
+    ok("W3 every type: a withdrawn head sign-off flags its head Rejected (nothing left waiting); a withdrawn cap proposal clears its link on the head",
+      hr.status === 200 && cr.status === 200 && headDoc?.approval_status === "Rejected" && capDoc?.pre_approval_proposal === undefined && (await reqDoc(String(capReq._id)))?.status === "Cancelled",
+      JSON.stringify({ hr: hr.status, cr: cr.status, head: headDoc?.approval_status, cap: capDoc?.pre_approval_proposal }));
+    ok("W3 every type: the finance-type withdrawals (head sign-off, cap proposal) reach the audit trail through the outbox",
+      await until(async () => (await wAudit(String(headReq._id))).length === 1 && (await wAudit(String(capReq._id))).length === 1));
+
+    // ---- W4 the effect -------------------------------------------------------------------------
+    const pendBefore = await pendingN();
+    const narBefore = (await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post")).data?.total;
+    // reservations belonging to the request: a Formula fence is cancelled with a reason; an ApprovalHead fence is removed
+    const resBase = { approval_request: new ObjectId(Wt.w9.id), category: plain._id, location: locA._id, amount: 1, entry_date: new Date("2031-05-04"), createdAt: new Date(), updatedAt: new Date() };
+    await rawCosts.insertMany([
+      { ...resBase, _id: new ObjectId(), note: tag("wres-formula"), reservation_kind: "Formula", reservation_state: "Pending" },
+      { ...resBase, _id: new ObjectId(), note: tag("wres-head"), reservation_kind: "ApprovalHead", reservation_state: "Pending" },
+    ]);
+    const IK = `zzbox-${stamp}-idem`;
+    const idemBody = { entry_date: "2031-05-04", location: locB._id, category: plain._id, amount: AMT.w8, note: tag("w8") };
+    const pre = await req(ops, "POST", "/api/costs", idemBody, { "Idempotency-Key": IK });
+    const preId = pre.data?.item?._id ? String(pre.data.item._id) : "";
+    if (preId) created.requests.push(preId);
+    const w9 = await wd(ops, Wt.w9.id, { action: "withdraw", reason: "posted to the wrong centre" });
+    const w9d = await reqDoc(Wt.w9.id);
+    ok("W4 effect: status becomes Cancelled (never Rejected), by the raiser, with the time and the reason they typed",
+      w9.status === 200 && w9.data?.withdrawn === true && w9d?.status === "Cancelled" && String(w9d.decided_by) === String(opsRow._id)
+        && Math.abs(Date.now() - +new Date(w9d.decided_at)) < 120000 && w9d.decision_note === "posted to the wrong centre", JSON.stringify(w9d).slice(0, 300));
+    ok("W4 effect: nothing is applied - no ledger row for it", (await ledgerN("w9")) === 0);
+    const fenceF = await rawCosts.findOne({ note: tag("wres-formula") });
+    ok("W4 effect: a Pending reservation row is released - the Formula fence is Cancelled with its reason, the ApprovalHead fence is gone",
+      fenceF?.reservation_state === "Cancelled" && fenceF?.reservation_cancel_reason === "request withdrawn" && (await rawCosts.countDocuments({ note: tag("wres-head") })) === 0, JSON.stringify(fenceF));
+    const w9a = await until(async () => { const a = await wAudit(Wt.w9.id); return a.length === 1 ? a[0] : null; });
+    ok("W4 effect: an audit-log entry records Pending -> Withdrawn by the raiser", !!w9a && w9a.old_value === "Pending" && String(w9a.actor) === String(opsRow._id) && w9a.field === "status", JSON.stringify(w9a));
+    const narAfter = (await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post")).data;
+    ok("W4 effect: it leaves the approvers' Pending list and the count the Home card reads goes down by exactly one",
+      (await pendingN()) === pendBefore - 1 && narAfter?.total === narBefore - 1 && !(narAfter?.items ?? []).some((r) => String(r._id) === Wt.w9.id), `before ${pendBefore}/${narBefore} after total ${narAfter?.total}`);
+    const wl = await req(admin, "GET", "/api/approvals?status=Cancelled&action=cost.post");
+    const wRow = (wl.data?.items ?? []).find((r) => String(r._id) === Wt.w9.id);
+    ok("W4 effect: an approver can still read it under status=Cancelled, with who withdrew it and the reason",
+      !!wRow && wRow.decided_by?.name === opsRow.name && wRow.decision_note === "posted to the wrong centre", JSON.stringify(wRow ?? {}).slice(0, 200));
+    const mineL = (await req(ops, "GET", "/api/approvals?mine=1")).data?.items ?? [];
+    const mineRow = mineL.find((r) => String(r._id) === Wt.w9.id);
+    ok("W4 effect: the raiser's own list shows it Cancelled and keeps THEIR reason (an approver's note stays hidden from a raiser without finance.view; their own does not)",
+      mineRow?.status === "Cancelled" && mineRow?.decision_note === "posted to the wrong centre", JSON.stringify(mineRow ?? {}).slice(0, 200));
+    // raise it again: the POST that was parked under this key must not hand the withdrawn request back
+    const preW = await wd(ops, preId);
+    const again = await req(ops, "POST", "/api/costs", idemBody, { "Idempotency-Key": IK });
+    const againId = again.data?.item?._id ? String(again.data.item._id) : "";
+    if (againId) created.requests.push(againId);
+    ok("W4 effect: raising the same entry again (same Idempotency-Key) makes a NEW Pending request, not the withdrawn one back",
+      pre.status === 202 && preW.status === 200 && again.status === 202 && !!againId && againId !== preId && (await reqDoc(againId))?.status === "Pending" && (await reqDoc(preId))?.status === "Cancelled",
+      JSON.stringify({ pre: pre.status, preW: preW.status, again: again.status, preId, againId }));
+
+    // ---- W5 the screens ------------------------------------------------------------------------
+    const patchSeen = [];
+    const watchPatch = (page) => page.on("request", (r) => { if (r.method() === "PATCH" && /\/api\/approvals\//.test(r.url())) patchSeen.push(r.url()); });
+    const dlg = (page) => page.locator("[data-withdraw-dialog]");
+    // (a) the Costs box, as a decider who raised a request of their own
+    const wb = await asPage(browser, approverB.email, PW);
+    watchPatch(wb.page);
+    await wb.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    await box(wb.page).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    await row(wb.page, Wt.w7.id).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    ok("W5 box: another person's request carries Approve / Reject and NO Withdraw; the raiser's own carries Withdraw only",
+      (await row(wb.page, Wt.w6.id).getByRole("button", { name: "Withdraw", exact: true }).count()) === 0
+        && (await row(wb.page, Wt.w6.id).getByRole("button", { name: /Approve & apply/ }).count()) === 1
+        && (await row(wb.page, Wt.w7.id).getByRole("button", { name: "Withdraw", exact: true }).count()) === 1
+        && (await row(wb.page, Wt.w7.id).getByRole("button", { name: /Approve|Reject/ }).count()) === 0);
+    await row(wb.page, Wt.w7.id).getByRole("button", { name: "Withdraw", exact: true }).click();
+    await dlg(wb.page).waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    const dtext = (await dlg(wb.page).count()) ? (await dlg(wb.page).innerText()).replace(/\s+/g, " ") : "";
+    ok("W5 box: Withdraw opens a confirm step that names the request, says nothing will be applied and offers an optional reason",
+      /Withdraw this request\?/.test(dtext) && dtext.includes(tag("w7")) && /Nothing will be applied/.test(dtext) && (await dlg(wb.page).locator("textarea[data-withdraw-reason]").count()) === 1, dtext.slice(0, 300));
+    await dlg(wb.page).getByRole("button", { name: "Keep request", exact: true }).click();
+    ok("W5 box: 'Keep request' closes the confirm step and sends nothing - the request is still Pending",
+      (await dlg(wb.page).count()) === 0 && patchSeen.length === 0 && untouched(await reqDoc(Wt.w7.id)), JSON.stringify(patchSeen));
+    await row(wb.page, Wt.w7.id).getByRole("button", { name: "Withdraw", exact: true }).click();
+    await dlg(wb.page).locator("textarea[data-withdraw-reason]").fill("wrong centre chosen");
+    await dlg(wb.page).getByRole("button", { name: "Withdraw request", exact: true }).click();
+    const w7gone = await row(wb.page, Wt.w7.id).waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
+    const w7d = await reqDoc(Wt.w7.id);
+    ok("W5 box: confirming withdraws it - the row leaves the Pending tab, the server holds Cancelled by the raiser with the typed reason, and no ledger row",
+      w7gone && patchSeen.length === 1 && w7d?.status === "Cancelled" && String(w7d.decided_by) === String(approverB.id) && w7d.decision_note === "wrong centre chosen" && (await ledgerN("w7")) === 0, JSON.stringify({ w7gone, patchSeen, status: w7d?.status }));
+    await settle(wb.page);
+    ok("W5 box: the title still reads the true Pending number", (await title(wb.page)) === `Waiting for your approval (${await pendingN()})`, `want ${await pendingN()} got "${await title(wb.page)}"`);
+    await box(wb.page).getByRole("button", { name: "Withdrawn", exact: true }).click();
+    await row(wb.page, Wt.w7.id).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const w7text = (await row(wb.page, Wt.w7.id).count()) ? (await row(wb.page, Wt.w7.id).innerText()).replace(/\s+/g, " ") : "";
+    ok("W5 box: the Withdrawn tab lists it, read-only, as Withdrawn with who withdrew it, when, and the reason",
+      /Withdrawn/.test(w7text) && !/Cancelled/.test(w7text) && w7text.includes(`withdrawn by ${approverB.name}`) && /Reason: wrong centre chosen/.test(w7text) && (await row(wb.page, Wt.w7.id).locator("button").count()) === 0, w7text.slice(0, 300));
+    ok("W5 box: the Withdrawn tab holds the withdrawn request and not a Rejected one", !mine(await idsShown(wb.page)).includes(Wt.w3.id) && mine(await idsShown(wb.page)).includes(Wt.w7.id));
+    await wb.context.close();
+
+    // (b) My submissions, as Operations (no finance rights): Withdraw only on a Pending row; a stale click shows the server's message inside the dialog
+    const ob = await asPage(browser, "ops@vidysea.com", PW);
+    await ob.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    const mrow = (k) => ob.page.locator("table tbody tr").filter({ hasText: tag(k) });
+    await mrow("w6").first().waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const mtext = async (k) => ((await mrow(k).count()) ? (await mrow(k).first().innerText()).replace(/\s+/g, " ") : "");
+    const wbtn = (k) => mrow(k).first().getByRole("button", { name: "Withdraw", exact: true });
+    ok("W5 My submissions: a Pending row has a Withdraw button; Approved, Rejected and Withdrawn rows have none",
+      (await wbtn("w6").count()) === 1 && (await wbtn("w2").count()) === 0 && (await wbtn("w3").count()) === 0 && (await wbtn("w4").count()) === 0,
+      JSON.stringify({ w6: await wbtn("w6").count(), w2: await wbtn("w2").count(), w3: await wbtn("w3").count(), w4: await wbtn("w4").count() }));
+    const w4t = await mtext("w4");
+    ok("W5 My submissions: a withdrawn row says Withdrawn (not Cancelled), with who and the raiser's own reason",
+      /Withdrawn/.test(w4t) && !/Cancelled/.test(w4t) && w4t.includes(`Withdrawn by ${opsRow.name}`) && w4t.includes("Your reason: entered twice"), w4t.slice(0, 300));
+    // this page is now stale: the request is withdrawn behind its back (no reason typed, so none is stored)
+    const staleOk = await wd(ops, Wt.w6.id);
+    await wbtn("w6").click();
+    await dlg(ob.page).waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    await dlg(ob.page).getByRole("button", { name: "Withdraw request", exact: true }).click();
+    await ob.page.locator("[data-withdraw-error]").waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    const errText = (await ob.page.locator("[data-withdraw-error]").count()) ? (await ob.page.locator("[data-withdraw-error]").innerText()).replace(/\s+/g, " ") : "";
+    ok("W5 My submissions: a withdraw that loses to a change made elsewhere keeps the confirm step open and shows the server's message",
+      staleOk.status === 200 && errText.includes(M_TWICE) && (await dlg(ob.page).count()) === 1 && (await reqDoc(Wt.w6.id))?.decision_note === undefined, errText);
+    await ob.context.close();
+
+    // (c) Home: the card's number follows the withdrawal
+    const hm = await asPage(browser, "admin@vidysea.com", ADMIN_PW);
+    await hm.page.goto(BASE + "/", { waitUntil: "networkidle" });
+    const hmc = hm.page.locator("[data-cost-approvals-card]");
+    await hmc.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const nNow = await pendingN();
+    const hmText = (await hmc.count()) ? (await hmc.first().innerText()).replace(/\s+/g, " ") : "";
+    ok("W5 Home: the card counts only what is still waiting - withdrawn requests are not in it", new RegExp(`^${nNow} cost approvals? waiting for you`).test(hmText), `want ${nNow} got "${hmText}"`);
+
+    // (d) Admin -> Approvals: only the raiser's own Pending row offers Withdraw
+    const aw = wSeed("batch.cancel", "adminown", { initiator: adminRow._id });
+    const ow = wSeed("batch.cancel", "opsown");
+    await rawApprovals.insertMany([aw, ow]);
+    created.seeded.push(aw._id, ow._id);
+    await hm.page.goto(BASE + "/admin?tab=Approvals", { waitUntil: "networkidle" });
+    const AWr = hm.page.locator(`#approval-request-${aw._id}`), OWr = hm.page.locator(`#approval-request-${ow._id}`);
+    await AWr.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    ok("W5 Admin tab: the Admin's own Pending row offers Withdraw; a row somebody else raised does not (Approve / Reject only)",
+      (await AWr.locator("[data-own-request]").getByRole("button", { name: "Withdraw", exact: true }).count()) === 1
+        && (await OWr.getByRole("button", { name: "Withdraw", exact: true }).count()) === 0 && (await OWr.getByRole("button", { name: "Reject" }).count()) === 1);
+    await AWr.locator("[data-own-request]").getByRole("button", { name: "Withdraw", exact: true }).click();
+    await dlg(hm.page).locator("textarea[data-withdraw-reason]").fill("raised by mistake");
+    await dlg(hm.page).getByRole("button", { name: "Withdraw request", exact: true }).click();
+    const awGone = await AWr.waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
+    const awd = await reqDoc(String(aw._id));
+    ok("W5 Admin tab: confirming withdraws it - the row leaves the Pending list and the server holds Cancelled with the reason; the other row is untouched",
+      awGone && awd?.status === "Cancelled" && awd.decision_note === "raised by mistake" && String(awd.decided_by) === String(adminRow._id) && untouched(await reqDoc(String(ow._id))));
+    await hm.page.locator("select").filter({ has: hm.page.locator('option[value="Cancelled"]') }).first().selectOption("Cancelled").catch(() => {});
+    await AWr.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const awt = (await AWr.count()) ? (await AWr.innerText()).replace(/\s+/g, " ") : "";
+    ok("W5 Admin tab: the status filter offers Withdrawn and lists it with who withdrew it and the reason, and no buttons",
+      /Withdrawn/.test(awt) && !/Cancelled/.test(awt) && /withdrawn by/.test(awt) && /Reason: raised by mistake/.test(awt) && (await AWr.locator("button").count()) === 0, awt.slice(0, 300));
+    await hm.context.close();
   });
 } catch (e) {
   ok("the suite ran without a crash", false, String(e?.stack ?? e).slice(0, 500));
@@ -505,9 +775,11 @@ try {
     if (ruleBefore) await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: !!ruleBefore.enabled, approver_role: ruleBefore.approver_role ?? "Admin" });
     await rawCosts.deleteMany({ note: { $regex: `^zzbox ${stamp} ` } });
     await rawApprovals.deleteMany({ _id: { $in: [...created.requests.map((i) => new ObjectId(i)), ...created.seeded] } });
+    await db.collection("costcategories").deleteMany({ name: { $regex: `^zzbox ${stamp} ` } });
     await rawUsers.deleteMany({ _id: { $in: created.users.map((i) => new ObjectId(i)) } });
     const left = (await rawCosts.countDocuments({ note: { $regex: `^zzbox ${stamp} ` } })) + (await rawApprovals.countDocuments({ _id: { $in: [...created.requests.map((i) => new ObjectId(i)), ...created.seeded] } }))
-      + (await rawApprovals.countDocuments({ summary: { $regex: `^zzbox ${stamp} seed` } }))
+      + (await rawApprovals.countDocuments({ summary: { $regex: `^zzbox ${stamp} (seed|wseed)` } }))
+      + (await db.collection("costcategories").countDocuments({ name: { $regex: `^zzbox ${stamp} ` } }))
       + (await rawUsers.countDocuments({ _id: { $in: created.users.map((i) => new ObjectId(i)) } }));
     ok("cleanup read back: every fixture this suite made is gone", left === 0, `left=${left}`);
   } catch (e) { console.log("cleanup note: " + String(e?.message ?? e).slice(0, 200)); }
