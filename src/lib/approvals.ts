@@ -5,7 +5,7 @@ import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostCategory, CostEntry
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit, changedFields } from "@/lib/audit";
-import { mailUsers, mailUsersByRole } from "@/lib/mailer";
+import { mailUsers, mailUsersByRole, type MailRecipient, type PerRecipientMail } from "@/lib/mailer";
 import { redactMoneyInText, redactFiguresInText, financeApprovers, hasPermission, FINANCE_VIEW } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
@@ -560,6 +560,28 @@ export async function notifyCostCorrection(input: {
   return { notified: named.length || 1 };
 }
 
+// subject-amount (Umesh, 2026-10-19, REQ-235a): "Amount in mail subjects: show it only to the 4 people with
+// finance access". ONE statement of "may this recipient be shown the figures in a mail" - the same
+// finance.view check the in-app list and the daily digest use, never a role test (an Admin does not carry
+// it, NO_ADMIN_BYPASS). A lookup that fails, or a recipient with no id, is treated as WITHOUT it.
+export async function canSeeMailFigures(u: MailRecipient): Promise<boolean> {
+  if (!u?._id) return false;
+  return hasPermission(
+    { id: String(u._id), role: String(u.role ?? ""), email: String(u.email ?? ""), name: String(u.name ?? "") } as SessionUser,
+    FINANCE_VIEW,
+  ).catch(() => false);
+}
+
+// The "approval needed" mail for ONE recipient. `canSeeFigures` defaults to false: a caller that forgets the
+// flag sends the masked text (declared money values first, then every figure - QA-2447), never the raw one.
+// The bell notification does NOT use this: a Notification row has no reader, so it stays masked for everyone.
+export function approvalNeededMail(
+  summary: string, payload: unknown, requesterName: string, canSeeFigures = false,
+): { subject: string; lines: string[] } {
+  const shown = canSeeFigures ? String(summary ?? "") : redactFiguresInText(redactMoneyInText(String(summary ?? ""), payload));
+  return { subject: `Approval needed: ${shown}`, lines: [shown, `Requested by ${requesterName}.`] };
+}
+
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
@@ -700,6 +722,10 @@ export async function requireApproval(
   // own INVOICE_MONEY_FIELDS rule. So the collateral is a room capacity of 100+ and a 3-digit run
   // inside a batch code, on the bell only, for a reader who can open the request and see both.
   const safeSummary = redactFiguresInText(redactMoneyInText(ctx.summary, ctx.payload));
+  // subject-amount: the MAIL (not the bell) is decided per recipient. The base subject/lines passed to the
+  // mailer below stay the masked text; a recipient holding finance.view is handed the raw summary instead.
+  const perRecipient: PerRecipientMail = async (u) =>
+    (await canSeeMailFigures(u)) ? approvalNeededMail(ctx.summary, ctx.payload, user.name, true) : undefined;
   if (grantHolders.length) {
     // QA-1977 5B: addressed person by person. `role_target` carries every role among them because
     // the inbox query matches on role first and user second; `user_target` is what narrows it to
@@ -720,6 +746,7 @@ export async function requireApproval(
       userIds: grantHolders.map((h) => h.id),
       excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
       subject: `Approval needed: ${safeSummary}`,
+      perRecipient,
       title: "A new cost head is waiting for your approval",
       lines: [`${safeSummary}`, `Requested by ${user.name}.`],
       link: "/finance", entity: "ApprovalRequest", entity_id: request._id,
@@ -748,6 +775,7 @@ export async function requireApproval(
         userIds: approverUsers,
         excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
         subject: `Approval needed: ${safeSummary}`,
+        perRecipient,
         title: "An action is waiting for your approval",
         lines: [`${safeSummary}`, `Requested by ${user.name}.`],
         link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
@@ -757,6 +785,7 @@ export async function requireApproval(
         roles: [rule.approver_role], location: ctx.location,
         excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
         subject: `Approval needed: ${safeSummary}`,
+        perRecipient,
         title: "An action is waiting for your approval",
         // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
         // lock-screen and in a forward, long after any permission check could reach it.
@@ -921,12 +950,16 @@ export function buildDecisionMail(
   decider: { name: string },
   decision: "Approved" | "Rejected",
   // approval-decision-mail-r2 (C6): false = the requester lacks finance.view, so the typed note stays out
-  // (the in-app list does the same: api/approvals ?mine=1 deletes decision_note for them). The default is
-  // true only so the pure wording check can call this bare; the one send path always passes it explicitly.
-  canSeeNote = true,
+  // (the in-app list does the same: api/approvals ?mine=1 deletes decision_note for them).
+  // subject-amount (C2): the same flag now also decides whether the SUMMARY carries the raw figures - a
+  // requester with finance.view sees the amount in the subject and first line, everyone else the masked
+  // text. The default is false (FAIL CLOSED, it was true): a bare call can no longer leak; the one send
+  // path (decisionMailFor) always passes the real answer.
+  canSeeNote = false,
 ): { subject: string; title: string; lines: string[]; link: string } {
   const verb = decision === "Approved" ? "approved" : "rejected";
-  const summary = redactFiguresInText(redactMoneyInText(String(request.summary ?? ""), request.payload));
+  const rawSummary = String(request.summary ?? "");
+  const summary = canSeeNote ? rawSummary : redactFiguresInText(redactMoneyInText(rawSummary, request.payload));
   const note = String(request.decision_note ?? "").trim();
   const lines = [summary, `${decision === "Approved" ? "Approved" : "Rejected"} by ${decider.name}.`];
   if (note && canSeeNote) lines.push(`${decision === "Approved" ? "Comment" : "Reason"}: ${redactFiguresInText(note)}`);
@@ -944,9 +977,7 @@ export async function decisionMailFor(
   const row: any = request?.initiator
     ? await User.findById(request.initiator).select("role email name").lean().catch(() => null)
     : null;
-  const canSeeNote = row
-    ? await hasPermission({ id: String(row._id), role: row.role, email: row.email, name: row.name } as SessionUser, FINANCE_VIEW).catch(() => false)
-    : false;
+  const canSeeNote = row ? await canSeeMailFigures(row) : false;
   return buildDecisionMail(request, decider, decision, canSeeNote);
 }
 

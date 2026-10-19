@@ -171,54 +171,69 @@ async function perEventSuppress(perEvent: boolean | undefined): Promise<string |
 // fallback, so a requester whose id is not the one on the audience row is still left out. Honoured at
 // this one door, like the per-account switch, so both mail exits behave the same.
 type MailExclusion = { excludeUserIds?: unknown[]; excludeEmails?: unknown[] };
+
+// subject-amount (Umesh, 2026-10-19: "amount in mail subjects: show it only to the 4 people with finance
+// access"): one call used to carry ONE subject and ONE body for every recipient, so a figure was either in
+// everybody's mail or in nobody's. `perRecipient` lets the caller decide per person - it is handed the
+// recipient and may return a replacement subject + body lines. The base `subject`/`lines` stay the
+// FAIL-CLOSED text: a callback that throws, or returns nothing, leaves that person on the base text, so the
+// base is always the masked one. Eligibility, exclusion, switches and MailLog stay at this one door.
+export type MailRecipient = { _id?: unknown; email?: unknown; role?: unknown; name?: unknown };
+export type PerRecipientMail = (u: MailRecipient) => Promise<{ subject: string; lines: string[] } | undefined>;
+async function mailFor(
+  opts: { title: string; subject: string; lines: string[]; perRecipient?: PerRecipientMail },
+  u: MailRecipient, base: { html: string; text: string }, cta: { label: string; url: string } | undefined,
+): Promise<{ subject: string; html: string; text: string }> {
+  const v = opts.perRecipient ? await opts.perRecipient(u).catch(() => undefined) : undefined;
+  if (!v) return { subject: opts.subject, ...base };
+  return { subject: v.subject, ...renderMail({ title: opts.title, lines: v.lines, cta }) };
+}
 export const isExcludedRecipient = (u: { _id?: unknown; email?: unknown }, ex: MailExclusion) =>
   (ex.excludeUserIds ?? []).some((id) => id && u._id && String(id) === String(u._id))
   || (ex.excludeEmails ?? []).some((e) => e && u.email && String(e).trim().toLowerCase() === String(u.email).trim().toLowerCase());
 
-export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean } & MailExclusion) {
+export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail } & MailExclusion) {
   const ids = (opts.userIds ?? []).filter(Boolean);
   if (!ids.length) return 0;
   const foldedIntoDigest = await perEventSuppress(opts.perEvent);
   const users = await User.find({
     _id: { $in: ids }, active: true, dropped: { $ne: true }, approval_status: { $ne: "Pending" },
-  }).select("email mail_enabled").lean<any[]>();
-  const { html, text } = renderMail({
-    title: opts.title, lines: opts.lines,
-    cta: opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined,
-  });
+  }).select("email mail_enabled role name").lean<any[]>();
+  const cta = opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined;
+  const base = renderMail({ title: opts.title, lines: opts.lines, cta });
   const seen = new Set<string>();
   for (const u of users) {
     if (isExcludedRecipient(u, opts)) continue;
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
+    const m = await mailFor(opts, u, base, cta);
+    await sendMail({ to, subject: m.subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }
 
-export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean } & MailExclusion) {
+export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail } & MailExclusion) {
   const foldedIntoDigest = await perEventSuppress(opts.perEvent);
   const users = await User.find({
     role: { $in: opts.roles }, active: true, dropped: { $ne: true },
     approval_status: { $ne: "Pending" },
-  }).select("email role location_scope mail_enabled").lean<any[]>();
+  }).select("email role name location_scope mail_enabled").lean<any[]>();
   const eligible = users.filter((u) => {
     if (!opts.location) return true;
     const scope = (u.location_scope ?? []).map(String);
     return scope.length === 0 || scope.includes(String(opts.location));
   });
   const seen = new Set<string>();
-  const { html, text } = renderMail({
-    title: opts.title, lines: opts.lines,
-    cta: opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined,
-  });
+  const cta = opts.link ? { label: "Open in the ERP", url: `https://www.vidysea.com/erp${opts.link}` } : undefined;
+  const base = renderMail({ title: opts.title, lines: opts.lines, cta });
   for (const u of eligible) {
     if (isExcludedRecipient(u, opts)) continue;
     const to = String(u.email ?? "").toLowerCase();
     if (!to || seen.has(to)) continue;
     seen.add(to);
-    await sendMail({ to, subject: opts.subject, html, text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
+    const m = await mailFor(opts, u, base, cta);
+    await sendMail({ to, subject: m.subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }

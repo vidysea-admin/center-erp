@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-328";
+export const RELEASE = "2026.08.14-329";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,12 +285,25 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -329 note: each clause is one checked criterion. subject-amount (Umesh 2026-10-19, "Amount in mail
+// subjects: show it only to the 4 people with finance access"): C1 the approval-needed email, C2 the
+// decision email, C3 the "not changed" clauses (bell, everyone without the right). "finance pages" is
+// the finance.view right, the same one the in-app lists use. Nothing here says "every" or "always"
+// beyond what the pins in check-approval-decision-mail.mjs (S1-S3) exercise: three audiences
+// (everyone holding the role, a named list, finance approvers) and both decisions.
+export const RELEASE_NOTE_CURRENT =
+  "-329 changes who sees the amount in approval emails. " +
+  "In the 'approval needed' email, the amount, and any other figure in the request's description, now appears in the subject and in the message only for people who can see the finance pages; everyone else who receives that email gets the same text as before, with the amount hidden. " +
+  "The email that tells someone their request was approved or rejected follows the same rule: it shows the amount only if that person can see the finance pages. " +
+  "The in-app notification bell is not changed by this release. " +
+  "No other screen, figure or permission changes in this release.";
+
 // -328 note: each clause is one checked criterion. approval-decision-mail (PASS,
 // qa/verdicts/approval-decision-mail.md): C1-C3 decision mail, C4 requester excluded from the
 // approval-needed mail, C5 self-approval refusal (already enforced, now pinned - so the note says
 // "still", not "now"). approval-decision-mail-r2 (PASS, -r2.md): C6 reason only with finance.view,
 // C7 not folded into digest-only. Not live-exercised on production: no decision is taken there.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_328 =
   "-328 changes who is emailed about approval requests. " +
   "When a request is approved or rejected, the person who raised it now gets an email saying which way it went and who decided it. " +
   "When the approver typed a reason or comment, it is included only for someone who can see the finance pages; anyone else is told to open the app or ask the approver instead. " +
@@ -2094,6 +2107,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -329: ARCHIVE_328 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_328 + " " +
   // -328: ARCHIVE_327 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_327 + " " +
   // -327: ARCHIVE_325 wired in here in the SAME bump that declared it (-326 had no note of its own).
