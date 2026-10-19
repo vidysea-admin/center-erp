@@ -995,7 +995,6 @@ const rows5 = {};
   // that is not the one seen.
   const Rc = await mk("Race", { pre_approved: true, pre_approved_amount: 3000, pre_approved_basis: "phcb-r" });
   await rawApprovals.updateOne({ _id: Rc.hr._id }, { $set: { "payload._test_head_pause_before_flip": true } });
-  const rBefore = await auditCount(Rc);
   const racing = req(approverB.cookie, "POST", `/api/approvals/${Rc.hr._id}`, { decision: "Approved", note: "phcb race", seen_cap: lim(3000, { basis: "phcb-r" }) });
   let reached = false;
   for (let i = 0; i < 300 && !reached; i++) {
@@ -1003,6 +1002,7 @@ const rows5 = {};
     if (!reached) await new Promise((r) => setTimeout(r, 100));
   }
   const raceEdit = reached ? await req(admin, "PATCH", `/api/master-lists/cost-categories/${Rc.id}`, { pre_approved_amount: 3500 }) : { status: 0 };
+  const rBefore = await auditCount(Rc); // after the creator's own edit (it writes its own audit row); the refused Approve must add none
   await rawApprovals.updateOne({ _id: Rc.hr._id }, { $set: { "payload._test_head_release_before_flip": true } });
   const raced = await racing;
   const rReq = await rawApprovals.findOne({ _id: Rc.hr._id });
