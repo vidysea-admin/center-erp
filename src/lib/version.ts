@@ -295,6 +295,7 @@ export const RELEASE_NOTE_CURRENT =
   "The person approving a cost head that is still waiting for approval now sees its pre-approved limit on the approval screen. " +
   "If the person who created the head changes that limit (the amount, the unit, the minimum billable or the basis) after the approver opened it and before the approver presses Approve, the approval is refused with a message that reads \"Limit changed from ... to ..., please review again.\" and nothing is saved, so the head stays waiting and the approver can look at the new limit and decide again. " +
   "The Help manual has a new Approvals section, shown to Admins, with screenshots of where the Approvals tab is and how to approve in full, approve less or reject a request. " +
+  "People who can decide cost requests now see a \"Waiting for your approval\" box at the top of the Costs page, with filters and Pending, Approved and Rejected tabs, and a card on the Home page that links to it; Admin -> Approvals is unchanged. " +
   "No other screen, figure or permission changes in this release.";
 
 // -329 note: each clause is one checked criterion. subject-amount (Umesh 2026-10-19, "Amount in mail
