@@ -1,12 +1,12 @@
 // Approval matrix (RPL M24). Ships as an engine with every action switched OFF: with no
 // enabled rule, `requireApproval` returns null and the caller proceeds exactly as before —
 // zero behaviour change until an Admin turns an action on.
-import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostCategory, CostEntry, Notification } from "@/models";
+import { ApprovalRequest, ApprovalRule, AuditLog, Batch, CostCategory, CostEntry, Notification, User } from "@/models";
 import { HttpError } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
 import { audit, changedFields } from "@/lib/audit";
 import { mailUsers, mailUsersByRole } from "@/lib/mailer";
-import { redactMoneyInText, redactFiguresInText, financeApprovers } from "@/lib/permissions";
+import { redactMoneyInText, redactFiguresInText, financeApprovers, hasPermission, FINANCE_VIEW } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
 import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
@@ -920,28 +920,49 @@ export function buildDecisionMail(
   request: { action?: unknown; summary?: unknown; payload?: unknown; decision_note?: unknown },
   decider: { name: string },
   decision: "Approved" | "Rejected",
+  // approval-decision-mail-r2 (C6): false = the requester lacks finance.view, so the typed note stays out
+  // (the in-app list does the same: api/approvals ?mine=1 deletes decision_note for them). The default is
+  // true only so the pure wording check can call this bare; the one send path always passes it explicitly.
+  canSeeNote = true,
 ): { subject: string; title: string; lines: string[]; link: string } {
   const verb = decision === "Approved" ? "approved" : "rejected";
   const summary = redactFiguresInText(redactMoneyInText(String(request.summary ?? ""), request.payload));
   const note = String(request.decision_note ?? "").trim();
   const lines = [summary, `${decision === "Approved" ? "Approved" : "Rejected"} by ${decider.name}.`];
-  if (note) lines.push(`${decision === "Approved" ? "Comment" : "Reason"}: ${redactFiguresInText(note)}`);
+  if (note && canSeeNote) lines.push(`${decision === "Approved" ? "Comment" : "Reason"}: ${redactFiguresInText(note)}`);
+  else if (note) lines.push("Open the app or ask the approver for the reason.");
   const link = request.action === "cost.post" ? "/costs" : request.action === "costcategory.create" ? "/finance" : "/";
   return { subject: `Your request was ${verb}: ${summary}`, title: `Your request was ${verb}`, lines, link };
 }
 
+// The mail for one request, for ITS requester: whether the note travels is decided by the same
+// finance.view check the in-app list uses (hasPermission(user, FINANCE_VIEW) - no second copy of the
+// rule). A requester that cannot be found is treated as without it.
+export async function decisionMailFor(
+  request: any, decider: { name: string }, decision: "Approved" | "Rejected",
+) {
+  const row: any = request?.initiator
+    ? await User.findById(request.initiator).select("role email name").lean().catch(() => null)
+    : null;
+  const canSeeNote = row
+    ? await hasPermission({ id: String(row._id), role: row.role, email: row.email, name: row.name } as SessionUser, FINANCE_VIEW).catch(() => false)
+    : false;
+  return buildDecisionMail(request, decider, decision, canSeeNote);
+}
+
 // Only the requester (the request's initiator) is mailed - never the other approvers, never an
 // address typed anywhere. It goes through mailUsers, so the global email_enabled switch, the
-// per-account switch, digest-only mode and the MailLog row apply unchanged (MailLog entity
-// "ApprovalDecision"). Fire-and-forget at the call site: a mail problem must never fail or undo a
-// decision that has already been made.
+// per-account switch and the MailLog row apply unchanged (MailLog entity "ApprovalDecision"). It is
+// NOT marked perEvent: digest-only mode folds the per-approval "needed" mails into the 21:00 digest,
+// and that digest never lists decisions, so folding this one would mean the requester is never told.
+// Fire-and-forget at the call site: a mail problem must never fail or undo a decision that has
+// already been made.
 async function notifyRequesterOfDecision(
   request: any, decider: SessionUser, decision: "Approved" | "Rejected",
 ) {
   if (!request?.initiator) return;
-  const m = buildDecisionMail(request, decider, decision);
+  const m = await decisionMailFor(request, decider, decision);
   await mailUsers({
-    perEvent: true, // mtg-c1 (R4): honoured like every per-approval mail when "digest only" is ON
     userIds: [request.initiator],
     subject: m.subject, title: m.title, lines: m.lines, link: m.link,
     entity: "ApprovalDecision", entity_id: request._id,

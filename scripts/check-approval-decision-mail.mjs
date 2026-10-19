@@ -7,6 +7,9 @@
 //   C4  the "approval needed" mail goes to every approver EXCEPT whoever raised the request
 //       (by user id, falling back to email, case-insensitive)
 //   C5  nobody decides their own request (already enforced in decideApproval - pinned here)
+//   C6  (r2) the decision note is mailed only to a requester who holds finance.view - the same rule the
+//       in-app list applies (api/approvals ?mine=1 deletes decision_note for everyone else)
+//   C7  (r2) digest-only mode does NOT hold back the decision mail (the daily digest never lists decisions)
 //
 // WHY THIS IS A FUNCTION-LEVEL CHECK AND NOT AN HTTP SUITE. Both routes that decide an approval end in
 // the same two lib functions, and the mail door records every attempt in MailLog (in a test environment
@@ -45,15 +48,16 @@ const jiti = createJiti(path.join(root, "scripts/check-approval-decision-mail.mj
 const { dbConnect } = jiti(path.join(root, "src/lib/db.ts"));
 const M = jiti(path.join(root, "src/models/index.ts"));
 const A = jiti(path.join(root, "src/lib/approvals.ts"));
-const { User, ApprovalRule, ApprovalRequest, MailLog, Notification } = M;
-const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail } = A;
+const { User, ApprovalRule, ApprovalRequest, MailLog, Notification, Defaults } = M;
+const { mailUsers } = jiti(path.join(root, "src/lib/mailer.ts"));
+const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor } = A;
 const mongoose = require_(path.join(root, "node_modules/mongoose"));
 const oid = () => new mongoose.Types.ObjectId();
 
 ok("[instrument] the real lib loaded and exports the functions under test",
-  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail].every((f) => typeof f === "function"),
-  { buildDecisionMail: typeof buildDecisionMail });
-if (typeof buildDecisionMail !== "function") {
+  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor].every((f) => typeof f === "function"),
+  { buildDecisionMail: typeof buildDecisionMail, decisionMailFor: typeof decisionMailFor });
+if (typeof buildDecisionMail !== "function" || typeof decisionMailFor !== "function") {
   console.log(`\ncheck-approval-decision-mail: ${passed} passed, ${failed} failed`);
   process.exit(1);
 }
@@ -69,7 +73,10 @@ const R = await mk("req");            // the requester
 const A1 = await mk("appr1");         // approver one
 const A2 = await mk("appr2");         // approver two
 const Rquiet = await mk("quiet", { mail_enabled: false }); // a requester whose account mail switch is off
+// C6: Admin does NOT carry finance.view (NO_ADMIN_BYPASS), so R above is a requester without it; Rfin holds it by grant.
+const Rfin = await mk("fin", { extra_permissions: ["finance.view"] });
 
+const priorDefaults = await Defaults.findOne({ _singleton: "defaults" }).lean();
 const prior = await ApprovalRule.findOne({ action: "location.edit" }).lean();
 const setRule = (users) => ApprovalRule.updateOne({ action: "location.edit" },
   { $set: { enabled: true, approver_role: "Admin", approver_users: users } }, { upsert: true });
@@ -176,11 +183,60 @@ try {
   const after = await ApprovalRequest.findById(reqSelf._id).lean();
   ok("C5 ...and nothing was written: still Pending, no decider recorded, no decision mail", after?.status === "Pending" && !after?.decided_by
     && (await settle("ApprovalDecision", reqSelf._id, 0, 1200)).length === 0, { status: after?.status, decided_by: after?.decided_by });
+
+  // ---------------------------------------------------------------- C6
+  const NOTE_LINE = /Wrong centre chosen|Reason:|Comment:/;
+  const reqNF = await ApprovalRequest.findById(reqB._id).lean(); // raised by R (no finance.view), rejected with a typed reason
+  ok("C6 [precondition] the stored request carries the typed reason", reqNF?.decision_note === "Wrong centre chosen", reqNF?.decision_note);
+  const mailNF = await decisionMailFor(reqNF, A1.session, "Rejected");
+  ok("C6 a requester WITHOUT finance.view gets no decision-note text in the mail", !mailNF.lines.some((l) => NOTE_LINE.test(l)), mailNF.lines);
+  ok("C6 ...still hears who rejected it and is pointed to the approver for the reason",
+    mailNF.lines.some((l) => l.includes(A1.session.name) && /rejected/i.test(l)) && mailNF.lines.some((l) => l.includes("Open the app or ask the approver for the reason")), mailNF.lines);
+  ok("C6 ...and the subject (which names the summary only) carries no note either", !/Wrong centre chosen/.test(mailNF.subject), mailNF.subject);
+  const reqNFa = await ApprovalRequest.findById(reqA._id).lean(); // raised by R, approved with "looks fine"
+  const mailNFa = await decisionMailFor(reqNFa, A1.session, "Approved");
+  ok("C6 the same holds for an approval comment", reqNFa?.decision_note === "looks fine" && !mailNFa.lines.some((l) => /looks fine|Comment:/.test(l)), mailNFa.lines);
+
+  await setRule([A1.session.id]);
+  const reqF = await raise(Rfin.session, "Location edit for centre ZZADM-FIN");
+  const claimedF = await decideApproval(String(reqF._id), A1.session, "Rejected", "Wrong centre chosen for pay 128500");
+  await finalizeApprovalDecision(claimedF, A1.session, "Rejected");
+  const reqFdoc = await ApprovalRequest.findById(reqF._id).lean();
+  const mailF = await decisionMailFor(reqFdoc, A1.session, "Rejected");
+  ok("C6 a requester WITH finance.view keeps the reason line", mailF.lines.some((l) => /^Reason: .*Wrong centre chosen/.test(l)), mailF.lines);
+  ok("C6 ...with figures still removed from it", !mailF.lines.join(" ").includes("128500"), mailF.lines);
+  ok("C6 ...and gets no 'ask the approver' line", !mailF.lines.some((l) => /ask the approver/i.test(l)), mailF.lines);
+  ok("C6 a request whose requester no longer exists is treated as WITHOUT finance.view (no note)",
+    !(await decisionMailFor({ ...reqNF, initiator: oid() }, A1.session, "Rejected")).lines.some((l) => NOTE_LINE.test(l)));
+
+  // ---------------------------------------------------------------- C7
+  await Defaults.updateOne({ _singleton: "defaults" }, { $set: { digest_only_approval_mails: true } }, { upsert: true });
+  await setRule([A1.session.id]);
+  // Precondition: the switch really is ON in this run - a per-event mail is folded by the mail door.
+  const probeId = oid();
+  await mailUsers({ perEvent: true, userIds: [R.session.id], subject: "zzadm probe", title: "t", lines: ["x"], entity: "ZZADMProbe", entity_id: probeId });
+  const probeRows = await settle("ZZADMProbe", probeId, 1);
+  ok("C7 [precondition] digest-only is ON: a per-event mail IS folded into the digest by the mail door",
+    probeRows.length === 1 && /digest-only/.test(probeRows[0]?.reason ?? ""), probeRows.map((r) => r.reason));
+  const reqD = await raise(R.session, "Location edit for centre ZZADM-DIGEST");
+  const claimedD = await decideApproval(String(reqD._id), A1.session, "Approved", "ok");
+  await finalizeApprovalDecision(claimedD, A1.session, "Approved");
+  const rowsD = await settle("ApprovalDecision", reqD._id, 1);
+  ok("C7 digest-only ON -> the requester still gets exactly one decision mail row", rowsD.length === 1 && emails(rowsD)[0] === R.email, rowsD);
+  // A test environment cannot send, so 'sent' is unreachable here; what is provable is WHICH door stopped it:
+  // the test-environment door at sendMail, not the digest-only fold that sits before it.
+  ok("C7 ...and it was NOT held back by digest-only (its skip reason is the test-environment door's)",
+    !/digest-only/.test(rowsD[0]?.reason ?? "") && /test environment/.test(rowsD[0]?.reason ?? ""), rowsD[0]?.reason);
+  // email_enabled-off cannot be driven: sendMail checks the test-database shape BEFORE it reads email_enabled,
+  // so in any center_erp_ci* run the reason is always the test-environment one. The account switch (C3) can.
 } finally {
-  const ids = [R, A1, A2, Rquiet].map((u) => u.doc._id);
+  if (priorDefaults) await Defaults.updateOne({ _singleton: "defaults" }, { $set: { digest_only_approval_mails: priorDefaults.digest_only_approval_mails === true } });
+  else await Defaults.deleteOne({ _singleton: "defaults" });
+  const ids = [R, A1, A2, Rquiet, Rfin].map((u) => u.doc._id);
   const reqs = await ApprovalRequest.find({ summary: /ZZADM/ }).select("_id").lean();
   const reqIds = reqs.map((r) => r._id);
   await MailLog.deleteMany({ entity: { $in: ["ApprovalRequest", "ApprovalDecision"] }, entity_id: { $in: reqIds } });
+  await MailLog.deleteMany({ entity: "ZZADMProbe" });
   await Notification.deleteMany({ entity: "ApprovalRequest", entity_id: { $in: reqIds } });
   await ApprovalRequest.deleteMany({ _id: { $in: reqIds } });
   await User.deleteMany({ _id: { $in: ids } });
