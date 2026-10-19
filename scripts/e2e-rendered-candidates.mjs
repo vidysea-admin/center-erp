@@ -80,6 +80,8 @@ rawClient = new MongoClient(rawMongoUrl, { serverSelectionTimeoutMS: 8000 });
 await rawClient.connect();
 const rawDb = rawClient.db(rawDbName);
 const rawCategories = rawDb.collection("costcategories");
+// pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (null = the head shows none).
+const seenCapOf = async (headId) => { const h = await rawCategories.findOne({ _id: new ObjectId(String(headId)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; };
 const rawResults = rawDb.collection("candidateresults");
 const rawCosts = rawDb.collection("costentries");
 const rawApprovals = rawDb.collection("approvalrequests");
@@ -1407,7 +1409,7 @@ if (bulkRowVisible) {
     const pending = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(id)),
       "payload.kind": "head-approval", status: "Pending" }, { maxTimeMS: 5000 }) : null;
     const signed = pending && signerCookie ? await req(signerCookie, "POST", `/api/approvals/${pending._id}`,
-      { decision: "Approved", note: "QA1971 second-person fixture sign-off", seen_cap: await (async () => { const h = await rawCategories.findOne({ _id: new ObjectId(String(pending.entity_id)) }); return h?.pre_approved === true && typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null; })() }) : { status: 0 };
+      { decision: "Approved", note: "QA1971 second-person fixture sign-off", seen_cap: await seenCapOf(pending.entity_id) }) : { status: 0 };
     signoffs.push({ id: id ?? null, pending: !!pending, status: signed.status });
   }
   const parentCat = parentId ? await rawCategories.findOne({ _id: new ObjectId(String(parentId)) }, { maxTimeMS: 5000 }) : null;
@@ -3027,7 +3029,7 @@ for (const r of results) {
           "payload.kind": "head-approval", status: "Pending" }, { maxTimeMS: 5000 }) : null;
         const before = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }, { maxTimeMS: 5000 }) : null;
         const decided = pending && financeCookie && String(pending.initiator) !== String(financeUserId)
-          ? await req(financeCookie, "POST", `/api/approvals/${pending._id}`, { decision, note: "Rendered label second-person fixture decision" })
+          ? await req(financeCookie, "POST", `/api/approvals/${pending._id}`, { decision, note: "Rendered label second-person fixture decision", seen_cap: await seenCapOf(id) })
           : { status: 0 };
         const after = id ? await rawCategories.findOne({ _id: new ObjectId(String(id)) }, { maxTimeMS: 5000 }) : null;
         labelSignoffs.push({ id, decision, before: before?.approval_status, active: after?.active,

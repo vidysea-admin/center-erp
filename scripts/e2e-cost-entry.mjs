@@ -1995,7 +1995,7 @@ for (const variant of ["ordinary", "mark_paid"]) {
     const amt = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "x", approved_amount: 5 });
     ok("QA-1977: a head-only request carries no amount, so a partial amount is refused (400)", amt.status === 400, `got ${amt.status}`);
     await rawApprovals.updateOne({ _id: selfReqId }, { $set: { initiator: opsUserRow?._id } });
-    const ok2 = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "pin" });
+    const ok2 = await req(admin, "POST", `/api/approvals/${selfReqId}`, { decision: "Approved", note: "pin", seen_cap: null });
     const selfAfter = await rawCategories.findOne({ _id: selfHeadId });
     ok("QA-1977: a head the request never got linked to can still be approved by it (and is linked on the way)",
       ok2.status === 200 && selfAfter?.approval_status === "Approved" && String(selfAfter?.approval_request) === String(selfReqId),
