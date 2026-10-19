@@ -565,6 +565,9 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   const [tab, setTab] = useState("Pending");
   const [pending, setPending] = useState<any[]>([]);
   const [decided, setDecided] = useState<any[]>([]);
+  // The server's true count of cost.post rows for each list (the list itself is capped at 100 rows).
+  const [pendingTotal, setPendingTotal] = useState(0);
+  const [decidedTotal, setDecidedTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [fLoc, setFLoc] = useState("");
   const [fBy, setFBy] = useState("");
@@ -574,10 +577,12 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   const anchor = useRef<HTMLDivElement>(null);
   const isCost = (r: any) => r.action === "cost.post";
 
-  // The Pending list is always fetched: its length is the number in the title whichever tab is open.
+  // The Pending list is always fetched: its count is the number in the title whichever tab is open. Both
+  // lists ask the server for cost.post only (`action=`), so other kinds of request cannot fill the 100-row
+  // window and hide a parked cost, and `total` is the true count past that window.
   const load = () => Promise.all([
-    api("/api/approvals?status=Pending").then((d) => setPending((d.items ?? []).filter(isCost))),
-    tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${tab}`).then((d) => setDecided((d.items ?? []).filter(isCost))),
+    api("/api/approvals?status=Pending&action=cost.post").then((d) => { const l = (d.items ?? []).filter(isCost); setPending(l); setPendingTotal(typeof d.total === "number" ? d.total : l.length); }),
+    tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${tab}&action=cost.post`).then((d) => { const l = (d.items ?? []).filter(isCost); setDecided(l); setDecidedTotal(typeof d.total === "number" ? d.total : l.length); }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [tab]);
   // /costs#approvals lands here from the Home card; the box renders after its data, so the browser's
@@ -599,6 +604,7 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   }
 
   const rows = tab === "Pending" ? pending : decided;
+  const rowsTotal = tab === "Pending" ? pendingTotal : decidedTotal;
   const locs = [...new Set(rows.map((r) => r.location?.name).filter(Boolean))].sort() as string[];
   const bys = [...new Set(rows.map((r) => r.initiator?.name).filter(Boolean))].sort() as string[];
   const needle = q.trim().toLowerCase();
@@ -607,7 +613,7 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
 
   return (
     <div id="approvals" ref={anchor} data-cost-approval-box>
-      <Section title={`Waiting for your approval (${pending.length})`}>
+      <Section title={`Waiting for your approval (${pendingTotal})`}>
         <Tabs tabs={COST_BOX_TABS} active={tab} onChange={setTab} />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <select aria-label="Filter by centre" className={inputCls + " min-w-0 max-w-[13rem]"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
@@ -620,6 +626,11 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
           </select>
           <input aria-label="Search requests" className={inputCls + " max-w-72"} placeholder="Search" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        {loaded && rowsTotal > rows.length && (
+          <p data-cost-approval-truncated className="mt-2 text-xs text-amber-700">
+            Showing the newest {rows.length} of {rowsTotal} {tab.toLowerCase()} cost requests. Decide some to see the rest.
+          </p>
+        )}
         <div className="mt-3">
           {!loaded ? <p className="text-sm text-gray-400">Loading…</p>
             : rows.length === 0 ? <p className="text-sm text-gray-400">{tab === "Pending" ? "Nothing waiting." : `Nothing ${tab.toLowerCase()} yet.`}</p>

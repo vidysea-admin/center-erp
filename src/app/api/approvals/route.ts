@@ -65,6 +65,14 @@ export const GET = apiHandler(async (req: NextRequest) => {
   if (headsOnly) Object.assign(filter, HEAD_APPROVALS);
   // A reader with no queue right sees head sign-offs only, and those carry no location.
   if (queueRight && isScoped(user)) Object.assign(filter, headRight ? { $or: [locationFilter(user), HEAD_APPROVALS] } : locationFilter(user));
+  // costs-approval-box (cycle 1): ?action=<one known action> NARROWS the list to that action (the Costs box and
+  // the Home card ask for cost.post, so 100 newer approvals of other kinds cannot hide a parked cost). It is
+  // ANDed onto the filter built above and never replaces a key in it, so the queue right, headsOnly, the
+  // location scope and the money masking below decide exactly what they did before; a caller that could not see
+  // an action's rows still gets none of them. A value that is not a known action is ignored.
+  const actionParam = req.nextUrl.searchParams.get("action");
+  const narrowAction = actionParam && (APPROVAL_ACTIONS as readonly string[]).includes(actionParam) ? actionParam : null;
+  if (narrowAction) filter.$and = [{ action: narrowAction }];
 
   const queryItems = (queryFilter: Record<string, unknown>, take: number, oldestFirst = false) =>
     ApprovalRequest.find(queryFilter).sort({ createdAt: oldestFirst ? 1 : -1 }).limit(take)
@@ -81,7 +89,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
         return [...applying, ...pending];
       })()
     : queryItems(filter, 100);
-  const [items, rules] = await Promise.all([itemsPromise, queueRight ? ApprovalRule.find({}).lean() : Promise.resolve([] as any[])]);
+  // The true number behind a narrowed list (same filter, no row limit), so a title can be right past 100 rows.
+  const totalPromise = narrowAction ? ApprovalRequest.countDocuments(filter) : Promise.resolve(null);
+  const [items, rules, total] = await Promise.all([itemsPromise, queueRight ? ApprovalRule.find({}).lean() : Promise.resolve([] as any[]), totalPromise]);
   // Actions with no stored rule are simply off. A head-only reader (5B) gets no rule config.
   const config = !queueRight ? [] : APPROVAL_ACTIONS.map((action) => {
     const r = rules.find((x: any) => x.action === action);
@@ -99,7 +109,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // QA-2852: a parked cost names its head and the head's current approval state (display only).
   // pending-head-cap-bind: a head sign-off shows the head's current pre-approved limit (finance.view readers only).
   const maskedItems = await attachCostHeads(items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), items as any[]);
-  return NextResponse.json({ items: await attachHeadCaps(maskedItems, items as any[], canSeeMoney), config });
+  return NextResponse.json({ items: await attachHeadCaps(maskedItems, items as any[], canSeeMoney), config, ...(total === null ? {} : { total }) });
 });
 
 // PUT — Admin toggles which actions require approval (RPL M24, configurable by design).

@@ -34,8 +34,9 @@ export default function HomePage() {
   const [costWaiting, setCostWaiting] = useState(0);
   useEffect(() => {
     if (!canDecideCosts) return;
-    api("/api/approvals?status=Pending")
-      .then((d) => setCostWaiting((d.items ?? []).filter((r: any) => r.action === "cost.post").length))
+    // action=cost.post: the server counts them, so more than 100 other pending approvals cannot hide a cost.
+    api("/api/approvals?status=Pending&action=cost.post")
+      .then((d) => setCostWaiting(typeof d.total === "number" ? d.total : (d.items ?? []).filter((r: any) => r.action === "cost.post").length))
       .catch((e: any) => console.error("[home] the cost-approval count failed to load; the card is hidden, not zero:", e));
   }, [canDecideCosts]);
   useEffect(() => { api("/api/mapping/readiness").then(setMapping).catch(() => setMapping(null)); }, []);
