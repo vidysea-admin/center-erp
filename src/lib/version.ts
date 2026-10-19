@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-327";
+export const RELEASE = "2026.08.14-328";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,10 +285,24 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -328 note: each clause is one checked criterion. approval-decision-mail (PASS,
+// qa/verdicts/approval-decision-mail.md): C1-C3 decision mail, C4 requester excluded from the
+// approval-needed mail, C5 self-approval refusal (already enforced, now pinned - so the note says
+// "still", not "now"). approval-decision-mail-r2 (PASS, -r2.md): C6 reason only with finance.view,
+// C7 not folded into digest-only. Not live-exercised on production: no decision is taken there.
+export const RELEASE_NOTE_CURRENT =
+  "-328 changes who is emailed about approval requests. " +
+  "When a request is approved or rejected, the person who raised it now gets an email saying which way it went and who decided it. " +
+  "The approver's typed reason or comment is included only for someone who can see the finance pages; anyone else is told to open the app or ask the approver. " +
+  "This email is sent straight away even when the per-request emails are set to arrive in the daily digest, because the digest does not list decisions; it is still not sent when email is switched off, or switched off for that person's account. " +
+  "The 'approval needed' email no longer goes to the person who raised the request, even when they are themselves an approver; it goes to everyone else who receives it. " +
+  "As before, nobody can approve their own request. " +
+  "No other screen, figure or permission changes in this release.";
+
 // -327 note: each clause is one checked criterion. QA-2930 (dual PASS, verdicts
 // qa-2930-import-lookalike-scope.md / .b.md): C1, C4, C5; C2 is the "unchanged" clause.
 // QA-2923 (dual PASS): C1-C4. -326 (fb40e2b, 52e600c) changed nothing a user receives.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_327 =
   "-327 changes what the candidate import reveals about people outside your access, and who may add an outside email address to the daily digest. " +
   "In the Import Excel preview, when a row looks like a candidate who belongs to a centre outside your access (by phone, alternate phone, or name and date of birth), that candidate is no longer named and none of their details are shown; the preview says only that a possible duplicate exists at a centre you cannot see. " +
   "The lines saying an APAAR ID or portal Candidate ID is already taken no longer name a holder outside your access either, and the ID is still not used for the new row. " +
@@ -2080,6 +2094,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -328: ARCHIVE_327 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_327 + " " +
   // -327: ARCHIVE_325 wired in here in the SAME bump that declared it (-326 had no note of its own).
   RELEASE_NOTE_ARCHIVE_325 + " " +
   RELEASE_NOTE_ARCHIVE_324 + " " +
