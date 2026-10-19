@@ -33,6 +33,9 @@
   .hero { background:linear-gradient(120deg,#1d4ed8,#3b82f6); color:#fff; border-radius:16px; padding:26px 30px; margin-bottom:8px; }
   .hero h1 { font-size:26px; } .hero p { opacity:.9; margin-top:4px; font-size:14.5px; }
   .rolebar { background:#ecfdf5; border:1px solid #a7f3d0; border-radius:10px; padding:8px 14px; font-size:13.5px; margin:10px 0; display:none; }
+  section.screen figure { margin:12px 0; }
+  section.screen figure img { max-width:100%; height:auto; border:1px solid var(--border); border-radius:8px; display:block; }
+  section.screen figcaption { font-size:12.5px; color:var(--muted); margin-top:4px; }
   mark { background:#fef08a; }
   @media(max-width:900px){ nav.toc{display:none;} main{padding:16px;} }
 </style>
@@ -62,6 +65,7 @@
   <a href="#reports" data-roles="Admin,Operations,Location">Reports</a>
   <a href="#sync" data-roles="Admin">Sync Inbox &amp; Sheet Watch</a>
   <a href="#admin" data-roles="Admin">Admin</a>
+  <a href="#approvals" data-roles="Admin">Approvals (deciding requests)</a>
 </nav>
 <main>
 <div class="searchbar"><input id="q" type="search" placeholder="Search the manual… (type to filter sections)"></div>
@@ -301,10 +305,33 @@
     <li><b>Programs</b> — job-role programs per scheme; the trainer-skill field suggests from the job-roles master.</li>
     <li><b>Users &amp; Access</b> — create/approve/edit users; per-user special rights and removals; <span class="btn">Stop access</span> (instant), <span class="btn">Drop…</span> (terminal, frees the email), and <span class="btn">Activity</span> — what did this person do, dropped accounts included.</li>
     <li><b>Permissions</b> — the role matrix, three levels per cell: — / view / edit. Applies within seconds, no re-login. Admin's own rights are fixed.</li>
-    <li><b>Approvals</b> — the decision queue (costs, invoices, closures, cancellations) with each request's full context; deciding needs the edit level, seeing the queue needs view.</li>
+    <li><b>Approvals</b> — the decision queue (costs, invoices, closures, cancellations) with each request's full context; deciding needs the edit level, seeing the queue needs view. Step by step, with pictures: <a href="#approvals">Approvals</a>.</li>
     <li><b>Master Lists</b> — cost categories, drop reasons, failure reasons, job roles, and <b>schemes</b> (hours &amp; amount). The per-scheme amount is visible to Admin only; hours stay open because the rules read them.</li>
     <li><b>Defaults</b> — planning knobs (mobilisation lead, day window, fee rules), the outbound-email switch, and the <b>Mail panel</b>: the last 20 mail attempts with honest statuses — "accepted by SES — delivery not confirmed" is exactly what it says.</li>
   </ol>
+</section>
+
+<section class="screen" id="approvals" data-roles="Admin">
+  <h2>Approvals &mdash; deciding a request</h2>
+  <p class="sub">Where a request that needs a second person's approval waits, and how to approve it in full, approve less, or reject it. (The screenshots have names, centres and amounts blurred.)</p>
+  <ol class="steps">
+    <li><b>Open Admin.</b> It is the last item in the left menu, below the line under Daily digest, and it appears for the Admin role only.
+      <figure><img src="manual/m21-approvals-sidebar.png" alt="The left menu with the Admin item, last in the list, outlined in green"><figcaption>The Admin item is outlined in green.</figcaption></figure></li>
+    <li><b>Click the Approvals tab</b> in the tab bar (Programs, Users &amp; Access, Permissions, Sync Source, <b>Approvals</b>, Master Lists, Defaults).
+      <figure><img src="manual/m22-approvals-tab.png" alt="The Admin tab bar with the Approvals tab outlined in green"><figcaption>The Approvals tab is outlined in green.</figcaption></figure></li>
+    <li><b>The top of the tab is the rules, not the requests.</b> "Which actions need a second person's approval" lists each kind of action with a role box and an <span class="chip">Approval required</span> / <span class="chip">Off</span> tick box. Changing one takes effect straight away, so do not touch it in order to decide a request.</li>
+    <li><b>Scroll down to "Requests".</b> The heading shows how many requests are in the list, and the box on the right filters them. It opens on <span class="chip">Pending</span> &mdash; the ones still waiting for a decision. The other choices are Applying, Approved, Rejected and all.
+      <figure><img src="manual/m23-approvals-requests.png" alt="The Requests heading with the Pending filter outlined in green"><figcaption>The Pending filter is outlined in green. If nothing is waiting the list says "Nothing waiting."</figcaption></figure></li>
+    <li><b>Read the card before you decide.</b> Each card has a one-line summary of what is being asked (for a cost: the amount, who entered it and the reason they typed), the centre, who requested it and when. The card also shows its status.</li>
+    <li><b>Approve in full.</b> Leave the amount box empty and press <span class="btn">Approve &amp; apply</span>. The request is applied as it was asked, at the full amount.</li>
+    <li><b>Approve less.</b> On a cost request the amount box reads "Approve &#8377;X or less". Type a lower amount there <em>and</em> write the reason in <b>Note</b>; a lower amount without a note is refused. An amount above what was asked is refused too.</li>
+    <li><b>Reject.</b> Type the reason in <b>Note</b> and press <span class="btn" style="background:#dc2626">Reject</span>. The box says "optional" and nothing stops a blank one, but write a reason so the record explains itself.
+      <figure><img src="manual/m24-approvals-card.png" alt="One pending request card: the amount box and Note box outlined in orange, Approve and apply in green, Reject in red"><figcaption>Green: Approve &amp; apply. Red: Reject. Orange: the amount box and the Note box.</figcaption></figure></li>
+    <li><b>After you decide.</b> The request leaves Pending and cannot be decided again. Your note is saved with it and can be read on the card afterwards (as "Note" on an approval, "Reason" on a rejection); there is no way to edit it later.</li>
+  </ol>
+  <div class="warn"><b>You cannot approve your own request.</b> If you raised it, the system refuses; another person who is allowed to decide it must do it. If the rule names specific approvers, only those people can decide it.</div>
+  <div class="tip"><b>New cost heads waiting for approval also show on Finance.</b> A cost head added from the cost form is already in use and marked "Not approved" until someone signs it off. People who hold the finance approve right see these in an amber panel, "New cost heads waiting for approval", near the top of the Finance screen, above the filters, with <span class="btn">Approve</span> and <span class="btn" style="background:#dc2626">Reject</span> (Reject asks for a reason). The panel appears only when something is waiting, and on a head you added yourself it shows no buttons.</div>
+  <div class="tip"><b>The Costs page total is not an approval queue.</b> The total on the Costs page adds up entries that are already in the ledger. A cost sent for approval is not written to the ledger until it is approved; until then you find it here, under Requests.</div>
 </section>
 
 <p style="color:var(--muted);font-size:12.5px;margin-top:24px">Manual for release 2026.08.14-67. The Help button opens this manual filtered to your role; append <span class="chip">?role=</span> (empty) to the URL to see everything.</p>
