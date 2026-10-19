@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-330";
+export const RELEASE = "2026.08.14-331";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,17 +285,37 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -331 note: each clause is one checked criterion, and the note is judged over what users receive
+// (6c0b46d = -330 .. this bump). costs-approval-box (dual PASS cycle 2, qa/verdicts/costs-approval-box.md
+// and .b.md): the "Waiting for your approval" box on the Costs page, the pending count in its title and
+// on a new Home card, the count staying right with more than 100 approvals of all kinds waiting, the
+// "newest 100 of the total" line when more than 100 cost requests wait, Admin -> Approvals unchanged.
+// f1-partial-amount (PASS cycle 0, qa/verdicts/f1-partial-amount.md): approving less than requested -
+// 3,000 or the rupee-sign form is read as 3000; unreadable text is not sent and never approves the full
+// amount; Admin -> Approvals and the new box. No clause claims more than those verdicts.
+export const RELEASE_NOTE_CURRENT =
+  "-331 adds a \"Waiting for your approval\" box for cost requests, and makes the amount typed when approving less than requested safer. " +
+  "People who can decide cost requests now see a \"Waiting for your approval\" box at the top of the Costs page, with filters and Pending, Approved and Rejected tabs. " +
+  "The box title and a new card on the Home page show the number of cost requests waiting for a decision, and that number stays right when more than 100 approvals of all kinds are waiting. " +
+  "When more than 100 cost requests are waiting, the box says it shows the newest 100 of the total. " +
+  "Admin -> Approvals keeps working as before. " +
+  "When approving less than the requested amount, an amount written like 3,000 or ₹3,000 is now understood as 3000. " +
+  "An amount that cannot be read is not sent; the screen asks for a plain number instead of approving the full requested amount. " +
+  "This applies in Admin -> Approvals and in the new box. " +
+  "No other screen, figure or permission changes in this release.";
+
 // -330 note: each clause is one checked criterion. pending-head-cap-bind (dual PASS cycle 1,
 // qa/verdicts/pending-head-cap-bind.md and .b.md): the approver sees the limit of a Pending cost head;
 // Approve is refused when the creator changed amount, unit, minimum billable or basis after the approver
 // loaded it, and nothing is saved. help-approvals (PASS, qa/verdicts/help-approvals.md): the Approvals
 // section in the Help manual (Admin role, with screenshots). No clause claims more than those verdicts.
-export const RELEASE_NOTE_CURRENT =
+// -331: the Costs approval box sentence that HEAD carried here shipped after -330 (12f6ec1 came after
+// 6c0b46d) and now lives in -331's note, so this archive describes only what -330 shipped.
+const RELEASE_NOTE_ARCHIVE_330 =
   "-330 changes how a cost head waiting for approval is signed off, and adds a section to the Help manual. " +
   "The person approving a cost head that is still waiting for approval now sees its pre-approved limit on the approval screen. " +
   "If the person who created the head changes that limit (the amount, the unit, the minimum billable or the basis) after the approver opened it and before the approver presses Approve, the approval is refused with a message that reads \"Limit changed from ... to ..., please review again.\" and nothing is saved, so the head stays waiting and the approver can look at the new limit and decide again. " +
   "The Help manual has a new Approvals section, shown to Admins, with screenshots of where the Approvals tab is and how to approve in full, approve less or reject a request. " +
-  "People who can decide cost requests now see a \"Waiting for your approval\" box at the top of the Costs page, with filters and Pending, Approved and Rejected tabs, and a card on the Home page that links to it; Admin -> Approvals is unchanged. " +
   "No other screen, figure or permission changes in this release.";
 
 // -329 note: each clause is one checked criterion. subject-amount (Umesh 2026-10-19, "Amount in mail
@@ -2122,6 +2142,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -331: ARCHIVE_330 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_330 + " " +
   // -330: ARCHIVE_329 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_329 + " " +
   // -329: ARCHIVE_328 wired in here in the SAME bump that declared it, same discipline.
