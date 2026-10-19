@@ -3386,9 +3386,11 @@ for (const variant of ["ordinary", "mark_paid"]) {
           const own = fp.locator(`[data-head-approval="${qa5bUi.ownReqId}"]`);
           const ownSeen = qa5bUi.ownReqId ? await own.waitFor({ timeout: 45000 }).then(() => true).catch(() => false) : false;
           const ownText = ownSeen ? await own.innerText() : "";
-          ok("QA-1977 5B UI: on a head they added THEMSELVES the approver gets no Approve/Reject - only the note that someone else must sign it off",
+          // approval-withdraw: the raiser's own Pending head row now carries ONE button - Withdraw - and still never Approve / Reject.
+          ok("QA-1977 5B UI: on a head they added THEMSELVES the approver gets no Approve/Reject - only the note that someone else must sign it off (and a Withdraw)",
             ownSeen && ownText.includes(qa5bUi.ownName) && /another finance approver must sign it off/i.test(ownText)
-              && (await own.getByRole("button").count()) === 0,
+              && (await own.getByRole("button", { name: /Approve|Reject/ }).count()) === 0
+              && (await own.getByRole("button").count()) === 1 && (await own.getByRole("button", { name: "Withdraw", exact: true }).count()) === 1,
             `own row seen=${ownSeen} text=${JSON.stringify(ownText.slice(0, 200))}`);
           const row = fp.locator(`[data-head-approval="${qa5bUi.reqId}"]`);
           const seen = await row.waitFor({ timeout: 45000 }).then(() => true).catch(() => false);

@@ -549,8 +549,8 @@ try {
     const longR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: "x".repeat(501) });
     const numR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: 5 });
     ok("W1 body: a wrong / missing action, a non-text reason and a 501-character reason are each 400 with their own message, and nothing is written",
-      badAct.status === 400 && badAct.data?.error === 'action must be "withdraw"' && noAct.status === 400 && noAct.data?.error === 'action must be "withdraw"'
-        && numR.status === 400 && numR.data?.error === "reason must be text"
+      badAct.status === 400 && badAct.data?.error === 'Action must be "withdraw"' && noAct.status === 400 && noAct.data?.error === 'Action must be "withdraw"'
+        && numR.status === 400 && numR.data?.error === "Reason must be text"
         && longR.status === 400 && /too long/.test(longR.data?.error ?? "") && untouched(await reqDoc(Wt.w1.id)),
       JSON.stringify({ badAct, noAct, numR, longR }));
     const anon = await fetch(BASE + `/api/approvals/${Wt.w1.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "withdraw" }) });
