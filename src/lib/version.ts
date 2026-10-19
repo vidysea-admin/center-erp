@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-325";
+export const RELEASE = "2026.08.14-327";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,7 +285,19 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -327 note: each clause is one checked criterion. QA-2930 (dual PASS, verdicts
+// qa-2930-import-lookalike-scope.md / .b.md): C1, C4, C5; C2 is the "unchanged" clause.
+// QA-2923 (dual PASS): C1-C4. -326 (fb40e2b, 52e600c) changed nothing a user receives.
 export const RELEASE_NOTE_CURRENT =
+  "-327 changes what the candidate import reveals about people outside your access, and who may add an outside email address to the daily digest. " +
+  "In the Import Excel preview, when a row looks like a candidate who belongs to a centre outside your access (by phone, alternate phone, or name and date of birth), that candidate is no longer named and none of their details are shown; the preview says only that a possible duplicate exists at a centre you cannot see. " +
+  "The lines saying an APAAR ID or portal Candidate ID is already taken no longer name a holder outside your access either, and the ID is still not used for the new row. " +
+  "A user whose access covers no centre is refused the import. " +
+  "What an administrator, or someone looking at candidates inside their own access, sees is unchanged. " +
+  "In the daily digest settings, only an administrator can add a recipient by typing an email address; others with access to the settings choose from existing users, and the typing box is not shown to them. Addresses already on the list are kept when they save. " +
+  "No other screen, figure or permission changes in this release.";
+
+const RELEASE_NOTE_ARCHIVE_325 =
   "-325 lets the candidate import put the sheet's people straight onto a batch. " +
   "In the Import Excel window, once a location and a job role are chosen, an optional Add to batch list offers the open batches (planning, ready or active) of that location and job role. It is offered only to someone who may assign candidates, and the server asks for both the import right and the assign right. " +
   "The preview says how many will be added to the batch and warns before the roster would pass its target. " +
@@ -2068,6 +2080,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -327: ARCHIVE_325 wired in here in the SAME bump that declared it (-326 had no note of its own).
+  RELEASE_NOTE_ARCHIVE_325 + " " +
   RELEASE_NOTE_ARCHIVE_324 + " " +
   RELEASE_NOTE_ARCHIVE_323 + " " +
   // -323: ARCHIVE_322 wired in here in the SAME bump that declared it, same discipline.
