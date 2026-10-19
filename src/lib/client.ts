@@ -191,3 +191,28 @@ export function fmtAuditValue(v: unknown): string {
 export function canDecideCostApprovals(can: (key: string, level?: "view" | "edit") => boolean): boolean {
   return can("approvals.decide", "edit") && can("finance.view") && can("finance.approve", "edit");
 }
+
+// QA-2958 (F1, senior review of the Costs approval box): the partial-amount box on Admin -> Approvals
+// and on the Costs approval box was `<input type="number">` and the decide call did
+// `amount ? { approved_amount: Number(amount) } : {}`. A browser hands a number input's `.value` back as
+// "" for text it cannot parse ("3,000", "Rs 3000"), and `Number("3,000")` is NaN, which JSON writes as
+// `null` - so the server saw NO amount and approved the FULL requested figure. An approver who meant
+// "less" silently sanctioned "all". ONE parser for both screens, so the two cannot drift again.
+//
+// Returns the positive amount, or null when the text is not one. Accepts: digits, an optional rupee
+// sign / "Rs" / "Rs." / "INR" in front, spaces anywhere, comma grouping that is a real grouping
+// (3,000 and 1,00,000 and 1,000,000, never "3,5" or "3,00"), and up to two decimals. When
+// `requested` is given, an amount above it is also refused (the server refuses it too; saying so
+// here keeps the row as it was instead of posting a request that cannot succeed).
+// An EMPTY box is not this function's business: the callers keep "empty = approve in full".
+export function parsePartialAmount(raw: unknown, requested?: number): number | null {
+  if (typeof raw !== "string") return null;
+  const text = raw.replace(/\s+/g, "").replace(/^(₹|rs\.?|inr)/i, "");
+  if (!/^(\d+|\d{1,3}(,\d{2})*,\d{3}|\d{1,3}(,\d{3})+)(\.\d{1,2})?$/.test(text)) return null;
+  const n = Number(text.replace(/,/g, ""));
+  if (!Number.isFinite(n) || !(n > 0)) return null;
+  if (requested !== undefined && Number.isFinite(requested) && n > requested) return null;
+  return n;
+}
+
+export const PARTIAL_AMOUNT_UNCLEAR = "Amount samajh nahi aaya - sirf number likhiye, jaise 3000";

@@ -210,5 +210,26 @@ const has = (o, s) => JSON.stringify(o).includes(s);
   const granted = maskApprovalMoney({ summary: "Policy change", payload: policy }, true);
   ok("CAP: finance viewer keeps complete policy snapshots for review", granted.payload.expected.pre_approved_amount === Number(FIG) && granted.payload.proposed.pre_approved_amount === Number(FIG) + 1);
 }
+// ---------------------------------------------------------------------------
+// QA-2958 (F1): parsePartialAmount - the ONE client parser both approval screens use for the partial
+// amount box. It lives in this file because this is the no-server, real-module, function-level
+// family; it is a money-DECISION input, not a masker. A text the browser cannot read as a number used
+// to become "no amount" and approve the FULL figure; every refusal below is that defect's shape.
+// ---------------------------------------------------------------------------
+{
+  const C = jiti(path.join(root, "src/lib/client.ts"));
+  const P = C.parsePartialAmount;
+  ok("[instrument] the real client module loaded and exports parsePartialAmount", typeof P === "function" && typeof C.PARTIAL_AMOUNT_UNCLEAR === "string");
+  if (typeof P === "function") {
+    for (const [raw, want] of [["3000", 3000], ["3,000", 3000], ["\u20B93,000", 3000], ["Rs 3000", 3000], ["Rs. 3,000", 3000], [" 3 000 ", 3000], ["1,00,000", 100000], ["1,000,000", 1000000], ["2500.50", 2500.5], ["INR 750", 750]]) {
+      ok(`F1a parser: ${JSON.stringify(raw)} -> ${want}`, P(raw) === want, { got: P(raw) });
+    }
+    for (const raw of ["abc", "0", "-5", "", "   ", "3,5", "3,00", "30,00,0", "1e3", "3000x", "3.", ".5", "3.555", "NaN", "Infinity", "\u20B9", "Rs"]) {
+      ok(`F1a parser: ${JSON.stringify(raw)} is refused (null), never a number`, P(raw) === null, { got: P(raw) });
+    }
+    ok("F1a parser: a non-string is refused", P(3000) === null && P(null) === null && P(undefined) === null);
+    ok("F1a parser: an amount above the requested figure is refused", P("3,000", 2000) === null && P("2,000", 2000) === 2000 && P("1,999.99", 2000) === 1999.99);
+  }
+}
 console.log(`\ncheck-money-mask: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

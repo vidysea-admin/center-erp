@@ -230,7 +230,10 @@ try {
     await waitBox(d.page);
     const R = (id) => row(d.page, id);
     const gone = (id) => R(id).waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
-    const amtInput = (id) => R(id).locator('input[type="number"]');
+    // QA-2958: the partial-amount box is a text input now (a number input hides the approver's raw text from the page), found by its own marker.
+    const amtInput = (id) => R(id).locator("input[data-partial-amount]");
+    const decidePosts = [];
+    d.page.on("request", (r) => { if (r.method() === "POST" && /\/api\/approvals\/[0-9a-f]{24}$/.test(r.url())) decidePosts.push(r.url()); });
     const noteInput = (id) => R(id).locator('input[placeholder="Note (optional)"]');
 
     // The register's own total is the evidence it was reloaded after each decision.
@@ -255,6 +258,19 @@ try {
     ok("K2 partial: and nothing was written - request still Pending, no ledger row",
       (await rawApprovals.findOne({ _id: new ObjectId(T.t5.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t5") })) === 0);
     await noteInput(T.t5.id).fill("cut to the voucher total");
+    // QA-2958 F1c: a NON-EMPTY amount the screen cannot read must never become "approve in full" - it posts nothing, says so inline, and the row stays as it was.
+    for (const bad of ["abc", "3,5", "0", "-5", "99,999"]) {
+      const before = decidePosts.length;
+      await amtInput(T.t5.id).fill(bad);
+      await R(T.t5.id).getByRole("button", { name: /Approve & apply/ }).click();
+      await R(T.t5.id).locator("[data-partial-amount-error]").waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+      const msg = await R(T.t5.id).locator("[data-partial-amount-error]").innerText().catch(() => "");
+      ok(`F1c Costs box: ${JSON.stringify(bad)} is refused inline, posts NOTHING, and the request stays Pending with no ledger row`,
+        (bad === "99,999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
+          && (await rawApprovals.findOne({ _id: new ObjectId(T.t5.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t5") })) === 0,
+        JSON.stringify({ msg, posts: decidePosts.length - before }));
+    }
+    await amtInput(T.t5.id).fill("₹3,000");
     await R(T.t5.id).getByRole("button", { name: /Approve & apply/ }).click();
     const t5gone = await gone(T.t5.id);
     const t5led = await rawCosts.findOne({ note: tag("t5") });
@@ -295,6 +311,48 @@ try {
     const shape = (doc) => Object.keys(doc ?? {}).filter((k) => !skip.has(k) && !k.startsWith("_audit")).sort().map((k) => `${k}=${JSON.stringify(doc[k])}`).join("|");
     ok("K2 same path: a cost approved from the box is written exactly as one approved through the Admin tab's endpoint (same fields, same values bar id/note/amount)",
       tw.status === 200 && !!t4led && !!t1led && shape(t1led) === shape(t4led), `\nbox:  ${shape(t1led)}\ntab:  ${shape(t4led)}`);
+
+    // ---- F1b the SAME rule on Admin -> Approvals (QA-2958) -------------------------------------
+    AMT.t6 = 6666;
+    T.t6 = await park(ops, "t6", locA);
+    ok("[precondition] a sixth request is parked for the Admin -> Approvals check", T.t6.status === 202 && !!T.t6.id, JSON.stringify(T.t6));
+    await d.page.goto(BASE + "/admin?tab=Approvals", { waitUntil: "networkidle" });
+    const AR = d.page.locator(`#approval-request-${T.t6.id}`);
+    await AR.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const aAmt = AR.locator("input[data-partial-amount]");
+    ok("[precondition] the Admin approvals row shows its partial-amount box and an Approve button", (await aAmt.count()) === 1 && (await AR.getByRole("button", { name: /Approve & apply/ }).count()) === 1);
+    await AR.locator('input[placeholder="Note (optional)"]').fill("admin tab partial");
+    for (const bad of ["abc", "Rs", "0", "9,99,999"]) {
+      const before = decidePosts.length;
+      await aAmt.fill(bad);
+      await AR.getByRole("button", { name: /Approve & apply/ }).click();
+      await AR.locator("[data-partial-amount-error]").waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+      const msg = await AR.locator("[data-partial-amount-error]").innerText().catch(() => "");
+      ok(`F1b Admin tab: ${JSON.stringify(bad)} is refused inline, posts NOTHING, and the request stays Pending with no ledger row`,
+        (bad === "9,99,999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
+          && (await rawApprovals.findOne({ _id: new ObjectId(T.t6.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t6") })) === 0,
+        JSON.stringify({ msg, posts: decidePosts.length - before }));
+    }
+    await aAmt.fill("3,000");
+    await AR.getByRole("button", { name: /Approve & apply/ }).click();
+    const t6gone = await AR.waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
+    const t6led = await rawCosts.findOne({ note: tag("t6") });
+    ok('F1b Admin tab: "3,000" records exactly 3000 against a 6666 request - never the full amount',
+      t6gone && t6led?.amount === 3000 && t6led?.requested_amount === AMT.t6 && (await rawCosts.countDocuments({ note: tag("t6") })) === 1,
+      JSON.stringify({ t6gone, amount: t6led?.amount, req: t6led?.requested_amount }));
+
+    // F1d: the server refuses a PRESENT approved_amount that is not a finite positive number - null is what JSON makes of NaN.
+    AMT.t7 = 7777;
+    T.t7 = await park(ops, "t7", locB);
+    const srv = [["null", null], ["NaN-as-string", "abc"], ["zero", 0], ["negative", -5]];
+    const srvResults = [];
+    for (const [label, v] of srv) srvResults.push([label, (await req(admin, "POST", `/api/approvals/${T.t7.id}`, { decision: "Approved", note: "x", approved_amount: v })).status]);
+    ok("F1d server: a present approved_amount that is null / non-numeric / zero / negative answers 400 and approves nothing",
+      srvResults.every(([, st]) => st === 400) && (await rawApprovals.findOne({ _id: new ObjectId(T.t7.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t7") })) === 0,
+      JSON.stringify(srvResults));
+    const okFull = await req(admin, "POST", `/api/approvals/${T.t7.id}`, { decision: "Approved" });
+    ok("F1d server: an ABSENT approved_amount still approves in full (today's meaning is untouched)",
+      okFull.status === 200 && (await rawCosts.findOne({ note: tag("t7") }))?.amount === AMT.t7, String(okFull.status));
 
     // ---- K3 tabs -------------------------------------------------------------------------------
     await d.page.goto(BASE + "/costs", { waitUntil: "networkidle" });

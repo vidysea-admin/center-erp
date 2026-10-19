@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { api, fmtAuditValue, fmtDT, fmtDate, offerable } from "@/lib/client";
+import { api, fmtAuditValue, fmtDT, fmtDate, offerable, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote } from "@/components/ui";
 import { usePerms } from "@/components/shell";
@@ -984,6 +984,7 @@ function Approvals({ error, setError }: any) {
   const [status, setStatus] = useState("Pending");
   const [note, setNote] = useState<Record<string, string>>({});
   const [approvedAmount, setApprovedAmount] = useState<Record<string, string>>({});
+  const [amountError, setAmountError] = useState<Record<string, string>>({});
 
   // QA-1827: the named-approver picker needs people to pick. Fetched once; the list is small.
   const [people, setPeople] = useState<any[]>([]);
@@ -1036,6 +1037,20 @@ function Approvals({ error, setError }: any) {
   }
   async function decide(id: string, decision: string) {
     const amount = approvedAmount[id];
+    // QA-2958: a non-empty partial amount that is not a usable number must NEVER fall through to "approve in full".
+    // Empty keeps today's meaning; anything else is parsed, and a refusal posts nothing and leaves the row as it is.
+    let sanctioned: number | undefined;
+    if (decision === "Approved" && String(amount ?? "").trim() !== "") {
+      const requested = Number(items.find((i: any) => i._id === id)?.payload?.amount);
+      const parsed = parsePartialAmount(amount);
+      if (parsed === null) { setAmountError({ ...amountError, [id]: PARTIAL_AMOUNT_UNCLEAR }); return; }
+      if (Number.isFinite(requested) && parsed > requested) {
+        setAmountError({ ...amountError, [id]: `Amount maangi gayi raashi (₹${requested.toLocaleString("en-IN")}) se zyada nahi ho sakti` });
+        return;
+      }
+      sanctioned = parsed;
+    }
+    if (amountError[id]) setAmountError({ ...amountError, [id]: "" });
     // QA-2578: sent ONLY on an approval that actually chose a head. An empty string is not sent at
     // all rather than sent as "", because the route treats `map_to_category !== undefined` as the
     // caller having expressed an intent — passing "" would mean "map to nothing", which is a third
@@ -1047,7 +1062,7 @@ function Approvals({ error, setError }: any) {
         json: {
           decision,
           note: note[id],
-          ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}),
+          ...(sanctioned !== undefined ? { approved_amount: sanctioned } : {}),
           ...(mapped ? { map_to_category: mapped } : {}),
         },
       });
@@ -1154,11 +1169,12 @@ function Approvals({ error, setError }: any) {
                 {["Pending", "Applying"].includes(r.status) && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {r.status === "Pending" && (r.action === "cost.post" || r.action === "costcategory.create") && r.payload?.amount !== undefined && (
-                      <input type="number" min="0.01" max={Number(r.payload.amount)} step="0.01"
+                      <input type="text" inputMode="decimal" data-partial-amount aria-invalid={!!amountError[r._id]}
                         className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                         value={approvedAmount[r._id] ?? ""}
-                        onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
+                        onChange={(e) => { setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
                     )}
+                    {amountError[r._id] && <p role="alert" data-partial-amount-error className="w-full text-xs text-red-700">{amountError[r._id]}</p>}
                     {/* QA-2578. `min-w-0 max-w-[13rem]` is not decoration: a <select> takes its
                         intrinsic width from its WIDEST OPTION, and a head label here is
                         "Head → Subhead" of two admin-typed names, so it is the longest option list
