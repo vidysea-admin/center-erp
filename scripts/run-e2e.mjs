@@ -149,6 +149,9 @@ const SUITES = [
   // mtg-b3 (QA-2898/2899, Umesh 2026-10-07): the person who entered a cost edits / deletes it themselves
   // (Pending: free; Approved: asks, amount/head change goes back through cost.post; Paid: locked; soft delete).
   "e2e-cost-own-edit-delete.mjs",
+  // costs-approval-box (Umesh 2026-10-19): the Costs page box "Waiting for your approval (N)" for cost requests, its filters,
+  // Pending/Approved/Rejected tabs and the Home card - deciders only; decides through the same /api/approvals/[id] path.
+  "e2e-cost-approval-box.mjs",
   // qa-import-into-batch (release -325): the Candidates import drawer can add the sheet's people straight to a
   // batch - preview "N will be added", per-row refusals, portal-ID holders ticked or skipped (never a duplicate
   // candidate), truthful created / assigned / refused counts, import AND assign both required - and the join

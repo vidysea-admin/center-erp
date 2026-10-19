@@ -179,3 +179,15 @@ export function fmtAuditValue(v: unknown): string {
   }
   return JSON.stringify(v);
 }
+
+// costs-approval-box (Umesh, 2026-10-19: "top box with filters ... along with home page too").
+// WHO MAY DECIDE A PARKED COST, for the two screens that SHOW the shortcut (Costs box, Home card).
+// This is the CLIENT mirror of the three checks `POST /api/approvals/[id]` runs for a cost.post
+// request - `requirePerm(approvals.decide)` and `requireFinance(approve)`, which is finance.view
+// plus finance.approve at edit level (api/approvals/[id]/route.ts). It decides only whether the
+// shortcut is DRAWN; the server still refuses every decision it does not allow, and the per-row
+// role / named-approver / own-request rules are applied by the box row by row. One definition,
+// because the same three-key sentence written separately on two screens is how a gate drifts.
+export function canDecideCostApprovals(can: (key: string, level?: "view" | "edit") => boolean): boolean {
+  return can("approvals.decide", "edit") && can("finance.view") && can("finance.approve", "edit");
+}
