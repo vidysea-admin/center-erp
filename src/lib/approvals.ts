@@ -903,7 +903,7 @@ export async function assertSeenHeadCap(categoryId: unknown, seen: unknown): Pro
   const cat = await CostCategory.collection.findOne({ _id: new Types.ObjectId(String(categoryId)) },
     { projection: { pre_approved: 1, pre_approved_amount: 1 } });
   if (!cat) return;
-  const current = headCapOf(cat);
+  const current = headCapOf(cat as any);
   const seenOk = seen === null || (typeof seen === "number" && Number.isFinite(seen));
   if (!seenOk) throw new HttpError(409, "Reload this approval to see the head's current limit, then approve again.");
   if ((seen as number | null) !== current) {
