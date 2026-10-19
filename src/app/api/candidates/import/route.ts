@@ -392,22 +392,27 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // in this file that is DROPPED rather than stored-as-given - QA-141's "a row is never dropped
   // over format" still holds, because it is the FIELD that is dropped, not the row.
   const apaarTaken: string[] = [];
+  // QA-2930 (Rule 38): the centres a scoped importer may see (undefined = unscoped: Admin / all-location users).
+  // A holder at any other centre is never NAMED in the "already taken" lines below; the ID is still dropped.
+  const dupScope = isScoped(user) ? (user.location_scope ?? []).map(String) : undefined;
+  const holderSeen = (h: { location?: unknown }) => !dupScope || dupScope.includes(String(h.location ?? ""));
+  const holderNamed = (h: { name?: unknown; location?: unknown }) => holderSeen(h) ? String(h.name) : "a candidate at a centre you cannot see";
   // qa-import-into-batch (-325): with a batch chosen, a row whose portal ID is already held is NOT inserted
   // as a new candidate - that is the duplicate-creation path this feature closes. It is recorded here with
   // the holder document and resolved further down. Without a batch nothing below changes (QA-991).
   type HolderHit = { matched_on: "apaar" | "sidh"; value: string; holder: any };
   const holderHits = new Map<object, HolderHit[]>();
   const addHit = (c: object, h: HolderHit) => { const l = holderHits.get(c) ?? []; l.push(h); holderHits.set(c, l); };
-  const HOLDER_FIELDS = " phone location program archived_at batch_interest dob education last_training_date";
+  const HOLDER_FIELDS = " phone program archived_at batch_interest dob education last_training_date";
   if (apaarSeen.size) {
-    const holders = await Candidate.find({ apaar_id: { $in: [...apaarSeen.keys()] } }).select("name apaar_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
+    const holders = await Candidate.find({ apaar_id: { $in: [...apaarSeen.keys()] } }).select("name location apaar_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
     const byKey = new Map(holders.map((h) => [String(h.apaar_id), h]));
     for (const c of candidates) {
       if (typeof c.apaar_id !== "string") continue;
       const holderDoc = byKey.get(c.apaar_id);
       if (!holderDoc) continue;
       if (joinBatch) { addHit(c, { matched_on: "apaar", value: c.apaar_id, holder: holderDoc }); continue; }
-      const holder = holderDoc.name;
+      const holder = holderNamed(holderDoc);
       apaarTaken.push(`${personLabel(c)} — "${c.apaar_id}" is already the APAAR ID of ${holder}`);
       delete c.apaar_id;
     }
@@ -425,7 +430,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (canon) wanted.add(canon);
     }
     if (wanted.size) {
-      const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE }).select("name sidh_candidate_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
+      const holders = await Candidate.find({ sidh_candidate_id: CAN_SHAPE }).select("name location sidh_candidate_id" + (joinBatch ? HOLDER_FIELDS : "")).lean<any[]>();
       const byCanon = new Map<string, any>();
       for (const h of holders) {
         const hc = normalizeCan(h.sidh_candidate_id);
@@ -437,7 +442,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
         const holderDoc = canon ? byCanon.get(canon) : undefined;
         if (!holderDoc) continue;
         if (joinBatch) { addHit(c, { matched_on: "sidh", value: c.sidh_candidate_id, holder: holderDoc }); continue; }
-        const holder = holderDoc.name;
+        const holder = holderNamed(holderDoc);
         sidhTaken.push(`${personLabel(c)} — "${c.sidh_candidate_id}" is already recorded for ${holder} (the same government identity, written differently)`);
         delete c.sidh_candidate_id;
       }
@@ -456,10 +461,20 @@ export const POST = apiHandler(async (req: NextRequest) => {
   }
   const existingHits: string[] = [];
   const existingHitOf = new Map<object, string>();
+  // QA-2930 (Rule 38): a Location-scoped importer is told about look-alikes at THEIR centres in full, exactly
+  // as before. A look-alike at a centre they cannot see is still flagged - so they ask an Admin - but with
+  // no name, phone or centre. The scope goes into the query (findDuplicateCandidates' locationScope, the
+  // same argument check-duplicate passes), never a post-filter: the hit carries a centre NAME.
   for (const c of candidates.slice(0, 300)) { // bounded: preview only, not a full-file scan
-    const hits = await findDuplicateCandidates({ name: String(c.name), phone: String(c.phone), dob: c.dob as Date });
+    const probe = { name: String(c.name), phone: String(c.phone), dob: c.dob as Date };
+    // (an empty scope matches nothing: findDuplicateCandidates treats only `undefined` as unscoped)
+    const hits = await findDuplicateCandidates(probe, undefined, dupScope);
     if (hits.length) {
       const msg = `${personLabel(c)} → already exists: ${hits[0].message}`;
+      existingHits.push(msg);
+      existingHitOf.set(c, msg);
+    } else if (dupScope && (await findDuplicateCandidates(probe)).length) {
+      const msg = `${personLabel(c)} → a possible duplicate exists at a centre you cannot see. Ask an Admin to check before you import.`;
       existingHits.push(msg);
       existingHitOf.set(c, msg);
     }
