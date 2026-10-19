@@ -292,9 +292,9 @@ export const RELEASE_NOTE_CURRENT =
   "-327 changes what the candidate import reveals about people outside your access, and who may add an outside email address to the daily digest. " +
   "In the Import Excel preview, when a row looks like a candidate who belongs to a centre outside your access (by phone, alternate phone, or name and date of birth), that candidate is no longer named and none of their details are shown; the preview says only that a possible duplicate exists at a centre you cannot see. " +
   "The lines saying an APAAR ID or portal Candidate ID is already taken no longer name a holder outside your access either, and the ID is still not used for the new row. " +
-  "A user whose access covers no centre is refused the import. " +
-  "What an administrator, or someone looking at candidates inside their own access, sees is unchanged. " +
-  "In the daily digest settings, only an administrator can add a recipient by typing an email address; others with access to the settings choose from existing users, and the typing box is not shown to them. Addresses already on the list are kept when they save. " +
+  "What an administrator, or any user whose access covers every centre, sees is unchanged, and so is what a user sees about candidates at their own centres. " +
+  "In the daily digest settings, only an administrator can add a recipient by typing an email address; anyone else who holds the settings right is refused if they try, and can still pick existing users and keep or remove addresses already on the list. " +
+  "The duplicate check on the Add Candidate form, for a Location or Trainer user whose access covers no centre, now finds nothing instead of searching every centre. " +
   "No other screen, figure or permission changes in this release.";
 
 const RELEASE_NOTE_ARCHIVE_325 =
