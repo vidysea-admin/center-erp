@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-329";
+export const RELEASE = "2026.08.14-330";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,6 +285,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -330 note: each clause is one checked criterion. pending-head-cap-bind (dual PASS cycle 1,
+// qa/verdicts/pending-head-cap-bind.md and .b.md): the approver sees the limit of a Pending cost head;
+// Approve is refused when the creator changed amount, unit, minimum billable or basis after the approver
+// loaded it, and nothing is saved. help-approvals (PASS, qa/verdicts/help-approvals.md): the Approvals
+// section in the Help manual (Admin role, with screenshots). No clause claims more than those verdicts.
+export const RELEASE_NOTE_CURRENT =
+  "-330 changes how a cost head waiting for approval is signed off, and adds a section to the Help manual. " +
+  "The person approving a cost head that is still waiting for approval now sees its pre-approved limit on the approval screen. " +
+  "If the person who created the head changes that limit (the amount, the unit, the minimum billable or the basis) after the approver opened it and before the approver presses Approve, the approval is refused with a message that reads \"Limit changed from ... to ..., please review again.\" and nothing is saved, so the head stays waiting and the approver can look at the new limit and decide again. " +
+  "The Help manual has a new Approvals section, shown to Admins, with screenshots of where the Approvals tab is and how to approve in full, approve less or reject a request. " +
+  "No other screen, figure or permission changes in this release.";
+
 // -329 note: each clause is one checked criterion. subject-amount (Umesh 2026-10-19, "Amount in mail
 // subjects: show it only to the 4 people with finance access"): C1 the approval-needed email, C2 the
 // decision email, C3 the "not changed" clauses (bell, everyone without the right). "finance pages" is
@@ -292,7 +304,7 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // beyond what the pins in check-approval-decision-mail.mjs (S1-S3) exercise: three audiences
 // (everyone holding the role, a named list, finance approvers) and both decisions.
 // Mail-log clause: S4 pins (MailLog rows masked for the holder on the role, named, finance-grant and decision paths).
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_329 =
   "-329 changes who sees the amount in approval emails. " +
   "In the 'approval needed' email, the amount, and any other figure in the request's description, now appears in the subject and in the message only for people who can see the finance pages; everyone else who receives that email gets the same text as before, with the amount hidden. " +
   "The email that tells someone their request was approved or rejected follows the same rule: it shows the amount only if that person can see the finance pages. " +
@@ -2109,6 +2121,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -330: ARCHIVE_329 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_329 + " " +
   // -329: ARCHIVE_328 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_328 + " " +
   // -328: ARCHIVE_327 wired in here in the SAME bump that declared it, same discipline.
