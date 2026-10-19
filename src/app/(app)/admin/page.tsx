@@ -1041,6 +1041,10 @@ function Approvals({ error, setError }: any) {
     // caller having expressed an intent — passing "" would mean "map to nothing", which is a third
     // state nobody asked for.
     const mapped = decision === "Approved" ? String(mapTo[id] ?? "").trim() : "";
+    // pending-head-cap-bind: approving a Pending head carries the limit the approver is looking at; the
+    // server refuses (and the list reloads to the current limit) if its creator changed it meanwhile.
+    const row = items.find((x: any) => String(x._id) === String(id));
+    const seenCap = decision === "Approved" && row?.payload?.kind === "head-approval" ? { seen_cap: row.head_cap ? { amount: row.head_cap.amount, unit: row.head_cap.unit, min_billable: row.head_cap.min_billable, basis: row.head_cap.basis } : null } : {};
     try {
       await api(`/api/approvals/${id}`, {
         method: "POST",
@@ -1049,11 +1053,12 @@ function Approvals({ error, setError }: any) {
           note: note[id],
           ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}),
           ...(mapped ? { map_to_category: mapped } : {}),
+          ...seenCap,
         },
       });
       load();
     }
-    catch (e: any) { setError(e.message); }
+    catch (e: any) { setError(e.message); load(); }
   }
 
   return (
@@ -1169,6 +1174,11 @@ function Approvals({ error, setError }: any) {
                     {r.status === "Pending" && r.action === "costcategory.create" && r.payload?.kind === "head-approval" && (
                       <span className="text-xs text-gray-600">
                         This head was added while entering a cost and is already in use, marked &quot;Not approved&quot;. Approving marks it approved; rejecting marks it rejected and keeps the costs filed under it.
+                        {r.head_cap && (
+                          <span className="block font-medium text-gray-800" data-head-cap>
+                            {r.head_cap.amount === null && !r.head_cap.basis ? "No pre-approved limit" : `Pre-approved limit: ${r.head_cap.label}`}
+                          </span>
+                        )}
                       </span>
                     )}
                     {r.status === "Pending" && r.action === "costcategory.create" && !["head-approval", "cap-approval"].includes(r.payload?.kind) && (

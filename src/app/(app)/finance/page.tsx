@@ -597,9 +597,12 @@ function HeadApprovals() {
     }
     setBusy(String(r._id)); setErr("");
     try {
-      await api(`/api/approvals/${r._id}`, { method: "POST", json: { decision, ...(note ? { note } : {}) } });
+      // A head sign-off carries the limit the approver is looking at; the server refuses (and the list
+      // reloads to the current limit) if its creator changed it meanwhile.
+      const seen = decision === "Approved" && r.payload?.kind === "head-approval" ? { seen_cap: r.head_cap ? { amount: r.head_cap.amount, unit: r.head_cap.unit, min_billable: r.head_cap.min_billable, basis: r.head_cap.basis } : null } : {};
+      await api(`/api/approvals/${r._id}`, { method: "POST", json: { decision, ...(note ? { note } : {}), ...seen } });
       await load();
-    } catch (e: any) { setErr(e.message); }
+    } catch (e: any) { setErr(e.message); await load(); }
     finally { setBusy(""); }
   };
   if (!rows || rows.length === 0) return err ? <ErrorBanner msg={err} /> : null;
@@ -617,6 +620,11 @@ function HeadApprovals() {
             <li key={String(r._id)} data-head-approval={String(r._id)} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
               <span>
                 <span className="font-semibold text-gray-900">{r.payload?.name ?? "(unnamed head)"}</span>
+                {r.payload?.kind === "head-approval" && r.head_cap && (
+                  <span className="block text-xs text-gray-700" data-head-cap>
+                    {r.head_cap.amount === null && !r.head_cap.basis ? "No pre-approved limit" : `Pre-approved limit: ${r.head_cap.label}`}
+                  </span>
+                )}
                 {r.payload?.kind === "cap-approval" && <span className="ml-2 text-xs text-amber-800">Policy change — existing cap remains effective until approval</span>}
                 {r.payload?.kind === "cap-approval" && r.payload?.proposed && <span className="block text-xs text-gray-700">{r.payload.expected?.pre_approved ? "Enabled" : "Disabled"} → {r.payload.proposed.pre_approved ? "Enabled" : "Disabled"}; cap {r.payload.expected?.pre_approved_amount == null ? "None" : `₹${Number(r.payload.expected.pre_approved_amount).toLocaleString("en-IN")}`} → {r.payload.proposed.pre_approved_amount == null ? "None" : `₹${Number(r.payload.proposed.pre_approved_amount).toLocaleString("en-IN")}`}; {r.payload.proposed.pre_approved_unit ?? "Fixed amount"}; basis: {r.payload.proposed.pre_approved_basis ?? "None"}; minimum billable: {r.payload.proposed.pre_approved_min_billable ?? "None"}</span>}
                 <span className="ml-2 text-[11px] text-gray-500">added by {r.initiator?.name ?? "someone"}{r.createdAt ? `, ${fmtDT(r.createdAt)}` : ""}</span>

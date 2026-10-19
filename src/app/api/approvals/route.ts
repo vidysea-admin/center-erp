@@ -5,7 +5,7 @@ import { requirePerm, requireView, hasPermission, hasFinanceApprove, maskApprova
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
-import { attachCostHeads, flushPendingFinanceAuditEvents } from "@/lib/approvals";
+import { attachCostHeads, attachHeadCaps, flushPendingFinanceAuditEvents } from "@/lib/approvals";
 
 // GET — pending/decided requests plus the current rule configuration.
 export const GET = apiHandler(async (req: NextRequest) => {
@@ -107,7 +107,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // echoes are finance facts and stay masked.
   const canSeeMoney = await hasPermission(user, FINANCE_VIEW);
   // QA-2852: a parked cost names its head and the head's current approval state (display only).
-  return NextResponse.json({ items: await attachCostHeads(items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), items as any[]), config, ...(total === null ? {} : { total }) });
+  // pending-head-cap-bind: a head sign-off shows the head's current pre-approved limit (finance.view readers only).
+  const maskedItems = await attachCostHeads(items.map((r: any) => maskApprovalMoney(r, canSeeMoney)), items as any[]);
+  return NextResponse.json({ items: await attachHeadCaps(maskedItems, items as any[], canSeeMoney), config, ...(total === null ? {} : { total }) });
 });
 
 // PUT — Admin toggles which actions require approval (RPL M24, configurable by design).

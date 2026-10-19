@@ -98,12 +98,14 @@ try {
   ok("[precondition] cost.post approval OFF while the fixture ledger rows are posted", (await rule(false)).status === 200);
 
   // ---- fixtures through the real doors -------------------------------------------------------
-  const mkHead = async (name, parent) => {
+  // pending-head-cap-bind: signing off a Pending head carries the limit the approver saw (the whole limit: amount, unit, min_billable, basis).
+  const seenCap = async (hr) => { const h = await db.collection("costcategories").findOne({ _id: new ObjectId(String(hr.entity_id)) }); return h?.pre_approved === true ? { amount: typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null, unit: h.pre_approved_unit || "Fixed amount", min_billable: typeof h.pre_approved_min_billable === "number" ? h.pre_approved_min_billable : 0, basis: typeof h.pre_approved_basis === "string" && h.pre_approved_basis.trim() ? h.pre_approved_basis : null } : { amount: null, unit: "Fixed amount", min_billable: 0, basis: null }; };
+    const mkHead = async (name, parent) => {
     const r = await req(admin, "POST", "/api/master-lists/cost-categories", { name, ...(parent ? { parent } : {}) });
     const id = r.data?.item?._id;
     // signed off by the SECOND approver, as production does (a creator never approves their own head)
     const hr = id ? await rawApprovals.findOne({ action: "costcategory.create", entity_id: new ObjectId(String(id)), status: "Pending" }) : null;
-    if (hr) await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off" });
+    if (hr) await req(approverB.cookie, "POST", `/api/approvals/${hr._id}`, { decision: "Approved", note: "fixture: sign off", seen_cap: await seenCap(hr) });
     return { id: id ? String(id) : "", status: r.status };
   };
   const H1 = await mkHead(N.h1);
