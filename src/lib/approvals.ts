@@ -858,6 +858,59 @@ export async function attachCostHeads<T extends Record<string, any>>(masked: T[]
   });
 }
 
+// pending-head-cap-bind (Umesh, 2026-10-19 ~16:00 IST, "go with best way"): the approver of a Pending
+// cost head sees the head's pre-approved limit, the creator may still edit it meanwhile, and Approve
+// carries the limit that was seen. The effective limit is the ONE definition below: the amount, but
+// only while the head's pre-approval is switched on (a stored amount on a head with pre_approved off
+// is not a limit anyone is bound by). `null` means "no limit".
+export function headCapOf(cat: { pre_approved?: unknown; pre_approved_amount?: unknown } | null | undefined): number | null {
+  return cat?.pre_approved === true && typeof cat.pre_approved_amount === "number" && Number.isFinite(cat.pre_approved_amount)
+    ? cat.pre_approved_amount : null;
+}
+const fmtHeadCap = (n: number | null) => (n === null ? "none" : `₹${n.toLocaleString("en-IN")}`);
+
+// Adds `head_cap: { amount, unit? }` to each head sign-off row. Read NOW from the head, never stored in
+// the request (the creator may edit it while the head is Pending, so a stored copy would go stale), and
+// only for a reader who may see money (`canSeeMoney` = finance.view; REQ-235a). `raw` is the same rows
+// before masking, in the same order.
+export async function attachHeadCaps<T extends Record<string, any>>(masked: T[], raw: any[], canSeeMoney: boolean): Promise<T[]> {
+  if (!canSeeMoney) return masked;
+  const isHead = (r: any) => r?.action === "costcategory.create" && r?.payload?.kind === "head-approval"
+    && Types.ObjectId.isValid(String(r?.payload?.category ?? ""));
+  const ids = [...new Set(raw.filter(isHead).map((r) => String(r.payload.category)))];
+  if (ids.length === 0) return masked;
+  const cats = await CostCategory.collection
+    .find({ _id: { $in: ids.map((id) => new Types.ObjectId(id)) } }, { projection: { pre_approved: 1, pre_approved_amount: 1, pre_approved_unit: 1 } })
+    .toArray();
+  const byId = new Map(cats.map((c: any) => [String(c._id), c]));
+  return masked.map((m, i) => {
+    if (!isHead(raw[i])) return m;
+    const c: any = byId.get(String(raw[i].payload.category));
+    if (!c) return m;
+    const amount = headCapOf(c);
+    const unit = amount !== null && c.pre_approved_unit && c.pre_approved_unit !== "Fixed amount" ? String(c.pre_approved_unit) : undefined;
+    return { ...m, head_cap: { amount, ...(unit ? { unit } : {}) } };
+  });
+}
+
+// The compare behind Approve on a Pending head. `seen` is the body's `seen_cap`: a number, or null for
+// "the head showed no limit". Anything else - absent, a string, NaN - is refused too (fail closed), so
+// a client that never learned the limit cannot approve past it. Called BEFORE decideApproval, so a
+// refusal writes nothing at all. Returns silently when the head cannot be found: the replay's own
+// "no longer exists" refusal owns that case.
+export async function assertSeenHeadCap(categoryId: unknown, seen: unknown): Promise<void> {
+  if (!Types.ObjectId.isValid(String(categoryId ?? ""))) return;
+  const cat = await CostCategory.collection.findOne({ _id: new Types.ObjectId(String(categoryId)) },
+    { projection: { pre_approved: 1, pre_approved_amount: 1 } });
+  if (!cat) return;
+  const current = headCapOf(cat);
+  const seenOk = seen === null || (typeof seen === "number" && Number.isFinite(seen));
+  if (!seenOk) throw new HttpError(409, "Reload this approval to see the head's current limit, then approve again.");
+  if ((seen as number | null) !== current) {
+    throw new HttpError(409, `Limit changed from ${fmtHeadCap(seen as number | null)} to ${fmtHeadCap(current)}, please review again.`);
+  }
+}
+
 // Approve/reject. The Pending predicate is the claim: among concurrent approvers, exactly one
 // changes the row and receives a request to replay. Reading Pending and then saving a document is
 // not a claim — two readers can both do that — so do not replace the findOneAndUpdate with save().

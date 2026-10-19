@@ -948,6 +948,9 @@ const rows5 = {};
     good.status === 200 && goodHead?.approval_status === "Approved" && goodHead?.pre_approved_amount === 6000, `got ${good.status} ${goodHead?.approval_status}`);
   const noneStaleNum = await req(approverB.cookie, "POST", `/api/approvals/${N0.hr._id}`, { decision: "Approved", note: "phcb nocap stale", seen_cap: 100 });
   ok("PHCB C3: a head with NO cap: a seen_cap of 100 is stale -> 409, still Pending", noneStaleNum.status === 409 && (await rawApprovals.findOne({ _id: N0.hr._id }))?.status === "Pending", `got ${noneStaleNum.status}`);
+  const noneMissing = await req(approverB.cookie, "POST", `/api/approvals/${N0.hr._id}`, { decision: "Approved", note: "phcb nocap no seen" });
+  ok("PHCB C3: a head with NO cap is not approvable by a request that carries no seen_cap at all (409, fail closed - absent is not the same as 'no limit seen'), still Pending",
+    noneMissing.status === 409 && (await rawApprovals.findOne({ _id: N0.hr._id }))?.status === "Pending", `got ${noneMissing.status}`);
   const noneOk = await req(approverB.cookie, "POST", `/api/approvals/${N0.hr._id}`, { decision: "Approved", note: "phcb nocap", seen_cap: null });
   ok("PHCB C3: a head with NO cap approves when the approver saw none (seen_cap null) - 200, Approved",
     noneOk.status === 200 && (await rawCats.findOne({ _id: oid(N0.id) }))?.approval_status === "Approved", `got ${noneOk.status}`);

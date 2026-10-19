@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { applyApprovedCostEdit, decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
+import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
@@ -46,7 +46,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // proposed; approving WITH it files the cost under an existing head instead and creates nothing.
   // Both are an approval, because in both cases the cost is real and belongs somewhere - only the
   // taxonomy differs, and that is the approver's expertise, not the poster's.
-  const { decision, note, map_to_category, approved_amount } = await readJson(req);
+  const { decision, note, map_to_category, approved_amount, seen_cap } = await readJson(req);
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would
@@ -65,7 +65,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // ("the head now exists", "the entry is in the ledger") failed downstream of the two 400s rather
   // than independently. The pins were right; nobody ran them.
   const pending = await ApprovalRequest.findById(id)
-    .select("action payload status approved_amount decision_map_to_category").lean<any>();
+    .select("action payload status initiator approved_amount decision_map_to_category").lean<any>();
   if (!pending) {
     if (queueDenied) throw queueDenied;
     throw new HttpError(404, "Approval request not found");
@@ -179,6 +179,13 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     }
   }
 
+  // pending-head-cap-bind: Approve on a Pending cost head carries the limit the approver saw. If the
+  // head's limit is different now (its creator may edit it while the head is Pending) the decision is
+  // refused here, BEFORE decideApproval writes anything. Reject is not gated. The raiser's own attempt
+  // and an already-decided request skip this and meet decideApproval's own, more specific refusal.
+  if (decision === "Approved" && headOnly && pending.status === "Pending" && String(pending.initiator) !== String(user.id)) {
+    await assertSeenHeadCap((pending.payload as any)?.category, seen_cap);
+  }
   const request = await decideApproval(id, user, decision, note, {
     approvedAmount: sanctionedAmount,
     applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action) && !headOnly,
