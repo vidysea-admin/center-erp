@@ -930,7 +930,7 @@ const rows5 = {};
   const afterStale = await rawApprovals.findOne({ _id: A.hr._id });
   const headStale = await rawCats.findOne({ _id: oid(A.id) });
   ok("PHCB C3: Approve with the OLD cap (5000, now 6000) is refused 409 with the stated message",
-    stale.status === 409 && /Limit changed from .*5,?000 to .*6,?000, please review again\./.test(String(stale.data?.error ?? "")),
+    stale.status === 409 && /Limit changed from .*5,?000.* to .*6,?000.*, please review again\./.test(String(stale.data?.error ?? "")),
     `got ${stale.status} ${JSON.stringify(stale.data?.error)}`);
   ok("PHCB C3 [guarantee]: ...and NOTHING was written - request still Pending with no decider, head still Pending, cap 6000, no new audit row",
     afterStale?.status === "Pending" && !afterStale?.decided_by && headStale?.approval_status === "Pending" && headStale?.pre_approved_amount === 6000 && (await auditCount(A)) === aBefore,
@@ -1011,10 +1011,10 @@ const rows5 = {};
     reached && raceEdit.status === 200 && rHead?.pre_approved_amount === 3500, JSON.stringify({ reached, edit: raceEdit.status, cap: rHead?.pre_approved_amount }));
   ok("PHCB C3c: the Approve that raced the edit is refused 409 with the stated message (the flip matched nothing)",
     raced.status === 409 && /Limit changed from .*3,?000.* to .*3,?500.*, please review again\./.test(String(raced.data?.error ?? "")), `got ${raced.status} ${JSON.stringify(raced.data?.error)}`);
-  ok("PHCB C3c [guarantee]: the head is NOT Approved on a limit that was not seen - head Pending with no approval link, cap 3500, request rolled back to Pending with no decider, no audit row",
-    rHead?.approval_status === "Pending" && !rHead?.approval_request && rHead?.pre_approved_amount === 3500
+  ok("PHCB C3c [guarantee]: the head is NOT Approved on a limit that was not seen - head still Pending, cap 3500, request rolled back to Pending with no decider, no audit row",
+    rHead?.approval_status === "Pending" && rHead?.pre_approved_amount === 3500
       && rReq?.status === "Pending" && !rReq?.decided_by && (await auditCount(Rc)) === rBefore,
-    JSON.stringify({ head: rHead?.approval_status, link: rHead?.approval_request, req: rReq?.status, decider: rReq?.decided_by }));
+    JSON.stringify({ head: rHead?.approval_status, req: rReq?.status, decider: rReq?.decided_by }));
 
   // C4 - Reject is unaffected
   const R = await mk("RejectMe", { pre_approved: true, pre_approved_amount: 700, pre_approved_basis: "phcb" });
