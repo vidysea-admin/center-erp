@@ -55,7 +55,7 @@ const { dbConnect } = jiti(path.join(root, "src/lib/db.ts"));
 const M = jiti(path.join(root, "src/models/index.ts"));
 const A = jiti(path.join(root, "src/lib/approvals.ts"));
 const { User, ApprovalRule, ApprovalRequest, MailLog, Notification, Defaults } = M;
-const { mailUsers } = jiti(path.join(root, "src/lib/mailer.ts"));
+const { mailUsers, mailFor, renderMail } = jiti(path.join(root, "src/lib/mailer.ts"));
 const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail } = A;
 const mongoose = require_(path.join(root, "node_modules/mongoose"));
 const oid = () => new mongoose.Types.ObjectId();
@@ -238,6 +238,23 @@ try {
   ok("S1 builder: a recipient without it gets the masked text in subject AND body (S3)",
     MASKED(bNone.subject) && MASKED(bNone.lines[0]), bNone);
   ok("S2 builder: a bare call (no flag) is masked - fail closed", MASKED(bBare.subject) && MASKED(bBare.lines[0]), bBare);
+
+  // the mail door: the BODY of what is sent follows the same per-recipient split as the subject (MailLog
+  // stores a subject only, so the body is asserted on the function the send is built from)
+  {
+    const door = { title: "t", subject: "S masked ₹—", lines: ["masked ₹—"],
+      perRecipient: async (u) => (u.role === "Holder" ? { subject: "S raw ₹128500", lines: ["raw ₹128500"] } : undefined) };
+    const base = renderMail({ title: door.title, lines: door.lines });
+    const mH = await mailFor(door, { role: "Holder" }, base, undefined);
+    const mN = await mailFor(door, { role: "Other" }, base, undefined);
+    const mT = await mailFor({ ...door, perRecipient: async () => { throw new Error("lookup failed"); } }, { role: "Holder" }, base, undefined);
+    ok("S1 mail door: the callback's body reaches the holder (text and html), with its own subject",
+      mH.subject === "S raw ₹128500" && mH.text.includes("128500") && mH.html.includes("128500"), mH);
+    ok("S1 mail door: a recipient the callback declines gets exactly the base text, subject and body (S3)",
+      mN.subject === door.subject && mN.text === base.text && mN.html === base.html && !mN.text.includes("128500"), mN);
+    ok("S2 mail door: a callback that throws leaves the recipient on the base (masked) text - fail closed",
+      mT.subject === door.subject && mT.text === base.text && !mT.text.includes("128500"), mT);
+  }
 
   // role audience: every Admin; the holder is Rfin, the others (A1, A2) hold no finance.view
   await setRule([]);

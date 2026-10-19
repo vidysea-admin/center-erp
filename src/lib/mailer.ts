@@ -180,7 +180,7 @@ type MailExclusion = { excludeUserIds?: unknown[]; excludeEmails?: unknown[] };
 // base is always the masked one. Eligibility, exclusion, switches and MailLog stay at this one door.
 export type MailRecipient = { _id?: unknown; email?: unknown; role?: unknown; name?: unknown };
 export type PerRecipientMail = (u: MailRecipient) => Promise<{ subject: string; lines: string[] } | undefined>;
-async function mailFor(
+export async function mailFor(
   opts: { title: string; subject: string; lines: string[]; perRecipient?: PerRecipientMail },
   u: MailRecipient, base: { html: string; text: string }, cta: { label: string; url: string } | undefined,
 ): Promise<{ subject: string; html: string; text: string }> {
