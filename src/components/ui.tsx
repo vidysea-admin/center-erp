@@ -157,14 +157,24 @@ export function statusLabel(value?: string | null): string {
 
 // QA-2736: `label` is the per-batch word the server derived (`status_label`, from batchStatusLabel);
 // colour still keys on the stored value.
+// approval-withdraw: an approval REQUEST that its raiser took back is stored as "Cancelled" (the enum
+// value that already existed) and shown as "Withdrawn". Only approval-request rows go through this; a
+// batch's "Cancelled" keeps its own word. The Chip below takes the word as its `label`.
+export const WITHDRAWN_LABEL = "Withdrawn";
+export function approvalStatusLabel(status?: string | null): string {
+  return status === "Cancelled" ? WITHDRAWN_LABEL : (status ?? "");
+}
+
 export function Chip({ value, label }: { value?: string | null; label?: string | null }) {
   if (!value) return <span className="text-gray-400">—</span>;
   const shown = label || statusLabel(value);
   return (
-    <span title={shown === value ? undefined : shown === SIGNOFF_PENDING_LABEL
+    <span title={shown === value ? undefined : shown === WITHDRAWN_LABEL
+      ? `Stored as “${value}” — the person who raised this request took it back before anyone decided it. Nothing was applied.`
+      : shown === SIGNOFF_PENDING_LABEL
       ? `Stored as “${value}” — a result was removed after the assessment sign-off was derived, so the sign-off no longer holds. Record the missing result, or an Admin can reopen the batch to Active.`
       : `Stored as “${value}” — assessment is done, the result is awaited; certification takes it to Completed.`}
-      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${CHIP_COLORS[value] ?? "bg-gray-100 text-gray-700"}`}>
+      className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap ${shown === WITHDRAWN_LABEL ? "bg-gray-100 text-gray-700" : (CHIP_COLORS[value] ?? "bg-gray-100 text-gray-700")}`}>
       {shown}
     </span>
   );
@@ -1531,6 +1541,52 @@ export function ConfirmModal({ open, title, message, confirmLabel, kind = "dange
         </div>
       </div>
     </div>
+  );
+}
+
+// approval-withdraw (Umesh, 2026-10-20): the "Withdraw" control on a requester's OWN Pending approval
+// request. ONE copy for every screen that lists the requester's own requests (Costs box, Costs "My
+// submissions", Admin -> Approvals, Finance head sign-offs). It is display only: the button is drawn by
+// the caller only for the raiser's own Pending row, and PATCH /api/approvals/[id] re-checks both on the
+// server. A confirm step with an optional reason comes first; a refusal from the server is shown inside
+// the dialog and the dialog stays open.
+export function WithdrawRequestButton({ onWithdraw, what }: { onWithdraw: (reason: string) => Promise<unknown>; what?: string }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [open]);
+  async function submit() {
+    setErr("");
+    try { await onWithdraw(reason.trim()); setOpen(false); setReason(""); }
+    catch (e: any) { setErr(String(e?.message ?? "Could not withdraw this request.")); }
+  }
+  return (
+    <>
+      <span data-withdraw-open><Btn small kind="ghost" onClick={() => { setErr(""); setOpen(true); }}>Withdraw</Btn></span>
+      {open && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Withdraw this request" data-withdraw-dialog>
+          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div className="relative w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 className="text-base font-semibold">Withdraw this request?</h2>
+            {what && <p className="mt-2 text-sm font-medium text-gray-800" data-withdraw-what>{what}</p>}
+            <p className="mt-2 text-sm text-gray-700">Nothing will be applied and no approver will be asked to decide it. You can raise it again if you need to.</p>
+            <label className="mt-3 block text-xs font-medium text-gray-600">Reason (optional)
+              <textarea data-withdraw-reason className={inputCls + " mt-1"} rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
+            </label>
+            {err && <div className="mt-3" data-withdraw-error><ErrorBanner msg={err} /></div>}
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <Btn kind="ghost" onClick={() => setOpen(false)}>Keep request</Btn>
+              <Btn kind="danger" onClick={submit}>Withdraw request</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

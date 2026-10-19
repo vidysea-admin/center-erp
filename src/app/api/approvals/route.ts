@@ -28,7 +28,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
       // payload location. Keeping decision_note out entirely also prevents a new prose field from
       // becoming a second finance door.
       const masked: any = maskApprovalMoney(raw, canSeeMoney);
-      delete masked.decision_note;
+      // approval-withdraw: on a request the raiser withdrew, `decision_note` is the raiser's OWN reason
+      // (typed by them, already figure-redacted by the masker above), not an approver's prose.
+      if (raw.status !== "Cancelled") delete masked.decision_note;
       if (raw.payload && typeof raw.payload === "object" && !Array.isArray(raw.payload)
           && raw.payload.amount !== undefined) {
         masked.payload = { ...(masked.payload ?? {}), amount: raw.payload.amount };

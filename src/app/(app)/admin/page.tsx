@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { api, fmtAuditValue, fmtDT, fmtDate, offerable, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
@@ -979,6 +979,9 @@ function SyncSources({ error, setError }: any) {
 // RPL M24 — which actions need a second person, and the queue of requests waiting.
 // Everything ships OFF: with no switch enabled the app behaves exactly as before.
 function Approvals({ error, setError }: any) {
+  // approval-withdraw: which rows are the signed-in user's own (display only; the server decides).
+  const { data: _approvalsSession } = useSession();
+  const meId = String((_approvalsSession?.user as any)?.id ?? "");
   const [config, setConfig] = useState<any[]>([]);
   const [items, setItems] = useState<any[]>([]);
   const [status, setStatus] = useState("Pending");
@@ -1137,7 +1140,7 @@ function Approvals({ error, setError }: any) {
 
       <Section title={`Requests — ${items.length}`} actions={
         <select className="rounded-lg border border-gray-300 px-2 py-1 text-sm" value={status} onChange={(e) => setStatus(e.target.value)}>
-          {["Pending", "Applying", "Approved", "Rejected", "all"].map((s) => <option key={s}>{s}</option>)}
+          {["Pending", "Applying", "Approved", "Rejected", "Cancelled", "all"].map((s) => <option key={s} value={s}>{approvalStatusLabel(s)}</option>)}
         </select>
       }>
         {items.length === 0 ? <p className="text-sm text-gray-400">Nothing waiting.</p> : (
@@ -1152,7 +1155,7 @@ function Approvals({ error, setError }: any) {
                       {/* QA-2296: this said "decided by X" beside the REQUEST's timestamp. The
                           decision time is stored (`decided_at`) and was rendered nowhere, so the one
                           line an auditor reads carried the wrong clock. */}
-                      {r.decided_by?.name ? ` · decided by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
+                      {r.decided_by?.name ? ` · ${r.status === "Cancelled" ? "withdrawn" : "decided"} by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
                     </div>
                     {/* QA-2295 (live checker, -299): the rejection REASON was stored and readable on
                         no screen the raiser could reach. It is rendered here for any decided request,
@@ -1161,7 +1164,7 @@ function Approvals({ error, setError }: any) {
                         can read is a cost that quietly never gets reposted. */}
                     {r.status !== "Pending" && r.decision_note ? (
                       <div className="mt-1 text-xs text-gray-700">
-                        <span className="text-gray-500">{r.status === "Rejected" ? "Reason: " : "Note: "}</span>
+                        <span className="text-gray-500">{r.status === "Rejected" || r.status === "Cancelled" ? "Reason: " : "Note: "}</span>
                         {r.decision_note}
                       </div>
                     ) : null}
@@ -1169,8 +1172,18 @@ function Approvals({ error, setError }: any) {
                       <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
                     ) : null}
                   </div>
-                  <Chip value={r.status} />
+                  <Chip value={r.status} label={approvalStatusLabel(r.status)} />
                 </div>
+                {/* approval-withdraw: the raiser's own Pending request can be taken back (the server re-checks both). */}
+                {r.status === "Pending" && meId && String(r.initiator?._id ?? r.initiator ?? "") === meId && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2" data-own-request>
+                    <span className="text-xs text-gray-500">You raised this request.</span>
+                    <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => {
+                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+                      await load();
+                    }} />
+                  </div>
+                )}
                 {["Pending", "Applying"].includes(r.status) && (
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {r.status === "Pending" && (r.action === "cost.post" || r.action === "costcategory.create") && r.payload?.amount !== undefined && (

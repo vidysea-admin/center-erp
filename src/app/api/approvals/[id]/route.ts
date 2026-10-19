@@ -2,12 +2,32 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, headLimitChanged, headLimitOf, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents } from "@/lib/approvals";
+import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, headLimitChanged, headLimitOf, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents, withdrawApproval } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
 import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
+
+// PATCH { action: "withdraw", reason? } - approval-withdraw (Umesh, 2026-10-20).
+// The person who raised a request takes it back while it is still Pending. This is NOT a decision and
+// needs no approvals.decide right: the only test is "are you the initiator", made inside
+// withdrawApproval (lib/approvals.ts) together with the Pending-only compare-and-swap. An Admin who did
+// not raise the request is refused (403) like anyone else; they use Reject.
+export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  requireEdit(user);
+  const { id } = await ctx.params;
+  const body = await readJson(req);
+  if (body?.action !== "withdraw") throw new HttpError(400, 'action must be "withdraw"');
+  if (body.reason !== undefined && body.reason !== null && typeof body.reason !== "string") throw new HttpError(400, "reason must be text");
+  const reason = String(body.reason ?? "").trim();
+  if (reason.length > 500) throw new HttpError(400, "The reason is too long - keep it under 500 characters.");
+  const request = await withdrawApproval(id, user, reason || undefined);
+  const seeMoney = await hasPermission(user, FINANCE_VIEW);
+  return NextResponse.json({ item: maskApprovalMoney(request.toObject ? request.toObject() : request, seeMoney), withdrawn: true });
+});
 
 // POST { decision: "Approved" | "Rejected", note? }
 // On approval the parked action is replayed here, so approval and execution stay in one

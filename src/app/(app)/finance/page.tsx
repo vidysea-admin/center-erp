@@ -3,7 +3,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT, offerable } from "@/lib/client";
 import { BASE_PATH } from "@/lib/base-path";
-import { Btn, costHeadApprovalNote, DataTable, ErrorBanner, useOwnCostActions, ownCostActionable } from "@/components/ui";
+import { Btn, costHeadApprovalNote, DataTable, ErrorBanner, useOwnCostActions, ownCostActionable, WithdrawRequestButton } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { useSession } from "next-auth/react";
 
@@ -630,7 +630,16 @@ function HeadApprovals() {
                 <span className="ml-2 text-[11px] text-gray-500">added by {r.initiator?.name ?? "someone"}{r.createdAt ? `, ${fmtDT(r.createdAt)}` : ""}</span>
               </span>
               {mine ? (
-                <span className="text-[11px] text-gray-500">You added this head - another finance approver must sign it off.</span>
+                <span className="flex flex-wrap items-center gap-2">
+                  <span className="text-[11px] text-gray-500">You added this head - another finance approver must sign it off.</span>
+                  {/* approval-withdraw: only while the request is still Pending (an Applying claim is in flight and cannot be taken back). */}
+                  {r.status === "Pending" && (
+                    <WithdrawRequestButton what={r.payload?.name} onWithdraw={async (reason) => {
+                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+                      await load();
+                    }} />
+                  )}
+                </span>
               ) : (
                 <span className="flex gap-1">
                   <Btn small onClick={() => decide(r, "Approved")} disabled={busy === String(r._id)}>Approve</Btn>

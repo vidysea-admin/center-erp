@@ -3,7 +3,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
 
@@ -371,11 +371,15 @@ function CostsInner() {
                 columns={[
                   { key: "createdAt", label: "Submitted", sortable: true, sortValue: (r: any) => new Date(r.createdAt).getTime(), render: (r: any) => fmtDate(r.createdAt) },
                   { key: "summary", label: "Entry", render: (r: any) => `${r.summary}${parkedCostHeadNote(r)}` },
-                  { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} /> },
-                  { key: "decision_note", label: "Admin's note", render: (r: any) => r.decision_note ?? "—" },
-                  { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.decided_by?.name ?? "—" },
+                  { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} label={approvalStatusLabel(r.status)} /> },
+                  { key: "decision_note", label: "Admin's note", render: (r: any) => r.status === "Cancelled" ? (r.decision_note ? `Your reason: ${r.decision_note}` : "—") : (r.decision_note ?? "—") },
+                  { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.status === "Cancelled" ? (r.decided_by?.name ? `Withdrawn by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : "Withdrawn") : (r.decided_by?.name ?? "—") },
+                  // approval-withdraw: your own request can be taken back while it is still waiting.
+                  { key: "withdraw", label: "Action", render: (r: any) => r.status === "Pending"
+                    ? <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); await load(postOnly); }} />
+                    : null },
                 ]} empty="Nothing submitted yet — post your first entry above." />
-              <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost.</p>
+              <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost. A request that is still waiting can be withdrawn.</p>
             </Section>
           )}
           {postOnly && canManageCosts && ownRows.length > 0 && (
@@ -560,7 +564,9 @@ function CostsInner() {
 // judge of who may decide what. The checks drawn here (own request, role, named approvers) only
 // decide whether a row offers buttons; they mirror decideApproval and never replace it.
 // Cost-head requests (costcategory.create) are deliberately NOT here: they carry the seen_cap rule.
-const COST_BOX_TABS = ["Pending", "Approved", "Rejected"];
+const COST_BOX_TABS = ["Pending", "Approved", "Rejected", "Withdrawn"];
+// approval-withdraw: the tab says "Withdrawn", the stored status of such a request is "Cancelled".
+const boxTabStatus = (t: string) => (t === "Withdrawn" ? "Cancelled" : t);
 function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: string; setError: (m: string) => void; onDecided: () => void }) {
   const [tab, setTab] = useState("Pending");
   const [pending, setPending] = useState<any[]>([]);
@@ -583,7 +589,7 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   // window and hide a parked cost, and `total` is the true count past that window.
   const load = () => Promise.all([
     api("/api/approvals?status=Pending&action=cost.post").then((d) => { const l = (d.items ?? []).filter(isCost); setPending(l); setPendingTotal(typeof d.total === "number" ? d.total : l.length); }),
-    tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${tab}&action=cost.post`).then((d) => { const l = (d.items ?? []).filter(isCost); setDecided(l); setDecidedTotal(typeof d.total === "number" ? d.total : l.length); }),
+    tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${boxTabStatus(tab)}&action=cost.post`).then((d) => { const l = (d.items ?? []).filter(isCost); setDecided(l); setDecidedTotal(typeof d.total === "number" ? d.total : l.length); }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [tab]);
   // /costs#approvals lands here from the Home card; the box renders after its data, so the browser's
@@ -616,6 +622,13 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
       await load();
       onDecided(); // the register below: an approved cost has just become a ledger row
     } catch (e: any) { setError(e.message); }
+  }
+
+  // approval-withdraw: the raiser takes their own Pending request back. A refusal is thrown to the dialog.
+  async function withdraw(id: string, reason: string) {
+    await api(`/api/approvals/${id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+    await load();
+    onDecided();
   }
 
   const rows = tab === "Pending" ? pending : decided;
@@ -661,21 +674,26 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
                         <div className="text-sm font-medium">{r.summary}{parkedCostHeadNote(r)}</div>
                         <div className="text-xs text-gray-500">
                           {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
-                          {r.decided_by?.name ? ` · decided by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
+                          {r.decided_by?.name ? ` · ${r.status === "Cancelled" ? "withdrawn" : "decided"} by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : ""}
                         </div>
                         {r.status !== "Pending" && r.decision_note ? (
                           <div className="mt-1 text-xs text-gray-700">
-                            <span className="text-gray-500">{r.status === "Rejected" ? "Reason: " : "Note: "}</span>{r.decision_note}
+                            <span className="text-gray-500">{r.status === "Rejected" || r.status === "Cancelled" ? "Reason: " : "Note: "}</span>{r.decision_note}
                           </div>
                         ) : null}
                         {["Applying", "Approved"].includes(r.status) && r.approved_amount !== undefined ? (
                           <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
                         ) : null}
                       </div>
-                      <Chip value={r.status} />
+                      <Chip value={r.status} label={approvalStatusLabel(r.status)} />
                     </div>
                     {["Pending", "Applying"].includes(r.status) && (
-                      own ? <p className="mt-2 text-xs text-gray-500">Your own request - another approver decides.</p>
+                      own ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <p className="text-xs text-gray-500">Your own request - another approver decides.</p>
+                          {r.status === "Pending" && <WithdrawRequestButton what={r.summary} onWithdraw={(reason) => withdraw(r._id, reason)} />}
+                        </div>
+                      )
                       : !(role === "Admin" || role === r.approver_role) ? <p className="mt-2 text-xs text-gray-500">Only {r.approver_role} may decide this request.</p>
                       : named.length && !named.includes(me) ? <p className="mt-2 text-xs text-gray-500">This request is assigned to named approvers; you are not one of them.</p>
                       : (

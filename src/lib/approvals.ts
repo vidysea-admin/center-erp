@@ -334,7 +334,7 @@ export async function settleFinanceAuditEvents(input: {
     failure = undefined;
   }
   for (const id of input.approvalIds ?? []) {
-    await deliverOwnerEvents(ApprovalRequest.collection, new Types.ObjectId(String(id)), { status: { $in: ["Approved", "Rejected"] } }, failure);
+    await deliverOwnerEvents(ApprovalRequest.collection, new Types.ObjectId(String(id)), { status: { $in: ["Approved", "Rejected", "Cancelled"] } }, failure);
     failure = undefined;
   }
 }
@@ -459,7 +459,7 @@ export async function flushPendingFinanceAuditEvents(limit = 100) {
   }
 
   await drainOwners(CostEntry.collection, COST_AUDIT_OWNER_ELIGIBLE, "cost");
-  await drainOwners(ApprovalRequest.collection, { status: { $in: ["Approved", "Rejected"] } }, "approval");
+  await drainOwners(ApprovalRequest.collection, { status: { $in: ["Approved", "Rejected", "Cancelled"] } }, "approval");
 }
 
 // Returns null → proceed with the action.
@@ -960,7 +960,8 @@ export async function decideApproval(
   const request = await ApprovalRequest.findById(requestId);
   if (!request) throw new HttpError(404, "Approval request not found");
   const resuming = request.status === "Applying" && decision === "Approved" && decisionData.applying;
-  if (request.status !== "Pending" && !resuming) throw new HttpError(409, `Already ${request.status}.`);
+  // approval-withdraw: "Cancelled" is the stored word, "withdrawn" is what the person who raised it did.
+  if (request.status !== "Pending" && !resuming) throw new HttpError(409, request.status === "Cancelled" ? "Already withdrawn by the person who raised it." : `Already ${request.status}.`);
   // QA-1977 5B: a head-approval request is decided by the finance approve GRANT, which the caller
   // (POST /api/approvals/[id]) has already asserted with requireFinance(user, "approve"). The role
   // and named-list checks below therefore do not apply to it - "ANY user holding finance.approve,
@@ -1029,6 +1030,111 @@ export async function decideApproval(
   );
   if (!claimed) {
     throw new HttpError(409, "This request was already claimed by another approver. Refresh the queue.");
+  }
+  return claimed;
+}
+
+// approval-withdraw (Umesh, 2026-10-20, chat "2": a requester could not take back a wrong or duplicate
+// request - self-decision is banned above, and nothing moved a request to "Cancelled").
+//
+// WHO: only the request's initiator. No role and no permission widens this - an Admin who did not raise
+// it gets 403 and keeps using Reject. WHEN: only while Pending, enforced in the UPDATE FILTER below, not
+// in a read before it, so a concurrent approve (decideApproval claims with the same {status: "Pending"}
+// filter) and a withdraw can never both win: one of the two compare-and-swaps matches, the other 409s.
+// EFFECT: status -> Cancelled (never Rejected) with decided_by / decided_at / decision_note holding who,
+// when and the optional reason; nothing in the payload is applied and no cost-ledger row is written.
+// The links a parked request holds on other rows are released the way a Reject releases them, and a
+// reservation row tied to it is released the way a failed replay releases it.
+export async function withdrawApproval(requestId: string, user: SessionUser, reason?: string) {
+  const notFound = () => new HttpError(404, "Approval request not found");
+  if (!Types.ObjectId.isValid(String(requestId))) throw notFound();
+  const request: any = await ApprovalRequest.findById(requestId).select("action payload status initiator entity_id").lean();
+  if (!request) throw notFound();
+  // Whose it is is checked BEFORE what state it is in: a stranger learns nothing about the request.
+  if (!request.initiator || String(request.initiator) !== String(user.id)) {
+    throw new HttpError(403, "Only the person who raised a request can withdraw it.");
+  }
+  const refuseState = (status: unknown) => new HttpError(409, status === "Cancelled"
+    ? "This request was already withdrawn."
+    : `This request is already ${String(status).toLowerCase()}, so it can no longer be withdrawn. Only a request that is still waiting can be taken back.`);
+  if (request.status !== "Pending") throw refuseState(request.status);
+
+  const decidedAt = new Date();
+  const note = String(reason ?? "").trim();
+  const isFinance = request.action === "cost.post" || request.action === "costcategory.create";
+  const event = isFinance
+    ? financeAuditEvent(`approval:${request._id}:status:Withdrawn`, {
+        entity: "ApprovalRequest", entity_id: new Types.ObjectId(String(request._id)), field: "status",
+        old_value: "Pending", new_value: "Withdrawn", actor: new Types.ObjectId(String(user.id)),
+      })
+    : null;
+  const claimed = await ApprovalRequest.findOneAndUpdate(
+    { _id: request._id, status: "Pending", initiator: user.id },
+    {
+      $set: {
+        status: "Cancelled", decided_by: user.id, decided_at: decidedAt,
+        ...(note ? { decision_note: note } : {}),
+        ...(event ? { _audit_events: [event] } : {}),
+      },
+      // The idempotency key of the POST that parked this request: left in place, a repeat of that
+      // POST would hand the raiser this withdrawn request back instead of letting them raise it again.
+      $unset: { idempotency_key: 1 },
+    },
+    { new: true, runValidators: true },
+  );
+  if (!claimed) {
+    // Lost the race (an approver claimed it, or it was withdrawn twice) or it vanished.
+    const now: any = await ApprovalRequest.findById(requestId).select("status").lean();
+    if (!now) throw notFound();
+    throw refuseState(now.status);
+  }
+
+  const p = (claimed.payload ?? {}) as any;
+  const id = claimed._id as Types.ObjectId;
+  // A cap proposal / a cost edit parked a link on the row it is about; Reject clears them, so does this.
+  if (claimed.action === "costcategory.create" && p.kind === "cap-approval" && Types.ObjectId.isValid(String(p.category))) {
+    await CostCategory.collection.updateOne(
+      { _id: new Types.ObjectId(String(p.category)), pre_approval_proposal: id },
+      { $unset: { pre_approval_proposal: 1 }, $set: { updatedAt: new Date() } },
+    );
+  }
+  if (claimed.action === "cost.post" && p.kind === "cost-edit" && Types.ObjectId.isValid(String(p.cost_entry))) {
+    await CostEntry.collection.updateOne(
+      { _id: new Types.ObjectId(String(p.cost_entry)), cost_edit_request: id },
+      { $unset: { cost_edit_request: 1, cost_edit_proposal: 1 } },
+    );
+  }
+  // A head sign-off: the head already exists and is in use. Reject FLAGS it rather than deleting it
+  // (costs may be filed under it); a withdrawn sign-off leaves it in the same closed state, not as a
+  // head that is waiting on a request nobody can decide any more.
+  if (claimed.action === "costcategory.create" && p.kind === "head-approval" && Types.ObjectId.isValid(String(p.category))) {
+    const flagged = await CostCategory.collection.updateOne(
+      { _id: new Types.ObjectId(String(p.category)), $or: [{ approval_request: id }, { approval_request: { $exists: false }, approval_status: "Pending" }] },
+      { $set: { approval_status: "Rejected" } },
+    );
+    if (flagged.modifiedCount) {
+      await audit({ entity: "CostCategory", entityId: p.category, field: "approval_status", oldValue: "Pending", newValue: "Rejected", actor: user.id });
+    }
+  }
+  // Reservation rows tied to this request (the fencing rows a replay leaves while it runs). A Pending
+  // request normally owns none; if one is there it is cancelled exactly as a failed replay cancels it,
+  // and the hidden cost / unpublished head it staged are removed with the same exact predicates.
+  await CostEntry.collection.updateMany(
+    { approval_request: id, reservation_state: "Pending" },
+    { $set: { reservation_state: "Cancelled", reservation_cancel_reason: "request withdrawn", updatedAt: new Date() }, $unset: { reservation_expires_at: 1, idempotency_key: 1 } },
+  );
+  await CostEntry.collection.deleteMany({ approval_request: id, reservation_kind: "ApprovalHead", reservation_state: "Cancelled" });
+  await CostCategory.collection.deleteMany({ staged_by_approval: id, active: false });
+
+  // The approvers' bell for this request is no longer actionable.
+  await Notification.updateMany(
+    { entity: "ApprovalRequest", entity_id: id, status: { $in: ["New", "Acknowledged"] } },
+    { $set: { status: "Resolved" } },
+  ).catch(() => {});
+  if (isFinance) {
+    await settleFinanceAuditEvents({ approvalIds: [id] }).catch(() => {});
+  } else {
+    await audit({ entity: "ApprovalRequest", entityId: id, field: "status", oldValue: "Pending", newValue: "Withdrawn", actor: user.id });
   }
   return claimed;
 }
