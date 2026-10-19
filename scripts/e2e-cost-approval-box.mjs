@@ -15,6 +15,14 @@
 //   K4  the Home card is shown to deciders only, carries the number, and links to /costs#approvals
 //   K5  a non-decider (Operations; an Admin without finance.approve) sees nothing new, fetches
 //       nothing of the queue, and no money leaks onto their page
+//   K6  (fix cycle 1, 6c r2 on release 330) the count is the TRUE number of Pending cost.post
+//       requests even when more than 100 approvals of mixed kinds are pending: the box title and
+//       the Home card read it from the server (GET /api/approvals?action=cost.post -> total), the
+//       list says when it is cut off, and the new `action` narrowing never widens what a caller can
+//       see. Every count in this suite is read from the database at the moment it is asserted, or
+//       is relative to a baseline read before this suite parked anything, never an absolute total:
+//       other suites leave Pending approvals behind (the r2 wall had 65 cost.post, 40
+//       costcategory.create and 4 others).
 //
 // Fixtures are made through the real doors (POST /api/costs with cost.post approval ON parks a
 // request) and removed at the end; the approval rule is put back as it was.
@@ -62,10 +70,10 @@ const ops = await login("ops@vidysea.com", PW);
 ok("[precondition] admin (finance grants) and operations sign in", !!admin && !!ops, `admin=${!!admin} ops=${!!ops}`);
 const adminRow = await rawUsers.findOne({ email: "admin@vidysea.com" });
 
-const created = { users: [], requests: [], ledgerNotes: [] };
+const created = { users: [], requests: [], ledgerNotes: [], seeded: [] };
 let ruleBefore = null;
-const mkUser = async (name, email, grants) => {
-  const made = await req(admin, "POST", "/api/users", { name, email, password: PW, role: "Admin", can_edit: true, location_scope: [] });
+const mkUser = async (name, email, grants, role = "Admin") => {
+  const made = await req(admin, "POST", "/api/users", { name, email, password: PW, role, can_edit: true, location_scope: [] });
   if (made.data?.item?._id) {
     created.users.push(String(made.data.item._id));
     if (grants.length) await req(admin, "PATCH", `/api/users/${made.data.item._id}`, { extra_permissions: grants });
@@ -74,8 +82,10 @@ const mkUser = async (name, email, grants) => {
 };
 const approverB = await mkUser(`Approver Bee ${stamp}`, `zz.box.bee.${stamp}@vidysea-test.local`, ["finance.view", "finance.approve"]);
 const adminNoFin = await mkUser(`Admin Nofin ${stamp}`, `zz.box.nofin.${stamp}@vidysea-test.local`, []);
-ok("[precondition] a second approver and an Admin without the finance rights exist and sign in",
-  !!approverB.cookie && !!adminNoFin.cookie, JSON.stringify({ b: !!approverB.cookie, n: !!adminNoFin.cookie }));
+// A non-Admin holding the finance grants but NOT the queue right: the server lists head sign-offs to them and nothing else.
+const headOnly = await mkUser(`Head Only ${stamp}`, `zz.box.headonly.${stamp}@vidysea-test.local`, ["finance.view", "finance.approve"], "Operations");
+ok("[precondition] a second approver, an Admin without the finance rights and a head-sign-off-only reader exist and sign in",
+  !!approverB.cookie && !!adminNoFin.cookie && !!headOnly.cookie, JSON.stringify({ b: !!approverB.cookie, n: !!adminNoFin.cookie, h: !!headOnly.cookie }));
 
 const locs = ((await req(admin, "GET", "/api/locations?limit=2000")).data?.items ?? []).filter((l) => l.name);
 const locA = locs[0], locB = locs.find((l) => l.name !== locA?.name);
@@ -104,6 +114,8 @@ try {
     created.ledgerNotes.push(tag(k));
     return { status: r.status, id };
   };
+  const baseline = await rawApprovals.countDocuments({ action: "cost.post", status: { $in: ["Pending", "Applying"] } });
+  console.log(`info: Pending|Applying cost.post requests left by earlier suites: ${baseline}; all Pending|Applying approvals: ${await rawApprovals.countDocuments({ status: { $in: ["Pending", "Applying"] } })}`);
   const T = {
     t1: await park(ops, "t1", locA), t2: await park(ops, "t2", locB), t3: await park(approverB.cookie, "t3", locA),
     t4: await park(ops, "t4", locA), t5: await park(ops, "t5", locB),
@@ -157,6 +169,8 @@ try {
     const nBox = await pendingN();
     ok("K1 box: a decider sees the box titled with the number waiting", (await title(a.page)) === `Waiting for your approval (${nBox})`, `want (${nBox}) got "${await title(a.page)}"`);
     const shown0 = mine(await idsShown(a.page));
+    ok("K1 box: the title is the baseline read before this suite parked anything plus its five requests (whatever other suites left behind)",
+      (await title(a.page)) === `Waiting for your approval (${baseline + 5})`, `baseline ${baseline}, title "${await title(a.page)}"`);
     ok("K1 box: all five parked cost requests are listed, Pending by default", [T.t1, T.t2, T.t3, T.t4, T.t5].every((t) => shown0.includes(t.id)), JSON.stringify(shown0));
     const t1text = (await row(a.page, T.t1.id).innerText()).replace(/\s+/g, " ");
     ok("K1 box: a row carries the summary, centre, who requested it and the Pending status",
@@ -319,6 +333,111 @@ try {
     const pendAfter = mine(await idsShown(d.page));
     ok("K3 tabs: Pending no longer lists anything we decided, and still lists the raiser's own request", pendAfter.length === 1 && pendAfter[0] === T.t3.id, JSON.stringify(pendAfter));
     await d.context.close();
+
+    // ---- K6 masking, read BEFORE the window is filled: the plain list and the narrowed one still contain our request
+    // (an Admin without finance.view sees the narrowed row exactly as the plain list shows it)
+    // money masking: an Admin without finance.view sees the narrowed row exactly as the plain list shows it
+    const nfPlain = await req(adminNoFin.cookie, "GET", "/api/approvals?status=Pending");
+    const nfNar = await req(adminNoFin.cookie, "GET", "/api/approvals?status=Pending&action=cost.post");
+    const nfA = (nfPlain.data?.items ?? []).find((r) => String(r._id) === T.t3.id);
+    const nfB = (nfNar.data?.items ?? []).find((r) => String(r._id) === T.t3.id);
+    ok("K6 masking: a reader without finance.view gets the cost request through ?action=cost.post byte-for-byte as the plain list gives it, and no amount in it",
+      !!nfA && !!nfB && JSON.stringify(nfA) === JSON.stringify(nfB) && JSON.stringify(nfB).indexOf(String(AMT.t3)) < 0 && JSON.stringify(nfB).indexOf(fmt(AMT.t3)) < 0,
+      `plain=${!!nfA} narrowed=${!!nfB} ${JSON.stringify(nfB).slice(0, 240)}`);
+
+    // ---- K6 the true count past the 100-row window ---------------------------------------------
+    const seedRow = (action, k, extra = {}) => ({
+      action, summary: `zzbox ${stamp} seed ${action} ${k}`, payload: {}, status: "Pending", approver_role: "Admin",
+      initiator: adminRow._id, approver_users: [], createdAt: new Date(), updatedAt: new Date(), ...extra,
+    });
+    const otherActions = ["batch.cancel", "invoice.raise", "location.close", "costcategory.create"];
+    const seedOther = Array.from({ length: 110 }, (_, i) => seedRow(otherActions[i % otherActions.length], i));
+    const insOther = await rawApprovals.insertMany(seedOther);
+    created.seeded.push(...Object.values(insOther.insertedIds));
+    const trueCost = await pendingN();
+    const win = (await req(admin, "GET", "/api/approvals?status=Pending")).data?.items ?? [];
+    const costInWin = win.filter((r) => r.action === "cost.post").length;
+    ok("K6 [precondition]: the unfiltered Pending list is full (100) and hides every cost request - the scenario the r2 wall hit",
+      win.length === 100 && costInWin < trueCost, `window=${win.length} costInWindow=${costInWin} trueCost=${trueCost}`);
+    const nar = await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post");
+    const narItems = nar.data?.items ?? [];
+    ok("K6 API: ?action=cost.post returns only cost.post rows and the server's true count",
+      nar.status === 200 && narItems.length === Math.min(100, trueCost) && narItems.every((r) => r.action === "cost.post") && nar.data?.total === trueCost,
+      `status ${nar.status} items=${narItems.length} total=${nar.data?.total} trueCost=${trueCost}`);
+    ok("K6 API: the cost.post list still carries this suite's own pending request although 110 newer approvals of other kinds exist",
+      narItems.some((r) => String(r._id) === T.t3.id));
+
+    const h = await asPage(browser, "admin@vidysea.com", ADMIN_PW);
+    await h.page.goto(BASE + "/", { waitUntil: "networkidle" });
+    const hcard = h.page.locator("[data-cost-approvals-card]");
+    await hcard.waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const hcardText = (await hcard.count()) ? (await hcard.first().innerText()).replace(/\s+/g, " ") : "";
+    ok("K6 Home: with more than 100 mixed approvals pending the card shows the TRUE number of cost requests waiting",
+      new RegExp(`^${trueCost} cost approvals? waiting for you`).test(hcardText), `want ${trueCost} got "${hcardText}"`);
+    await h.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    await box(h.page).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    await row(h.page, T.t3.id).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    ok("K6 box: the title shows the TRUE number of Pending cost requests with more than 100 mixed approvals pending",
+      (await title(h.page)) === `Waiting for your approval (${trueCost})`, `want (${trueCost}) got "${await title(h.page)}"`);
+    ok("K6 box: and the list has the cost requests (not emptied by the other kinds)", mine(await idsShown(h.page)).includes(T.t3.id));
+    await box(h.page).getByRole("button", { name: "Rejected", exact: true }).click();
+    await settle(h.page);
+    ok("K6 box: the title stays the true Pending number while another tab is open", (await title(h.page)) === `Waiting for your approval (${trueCost})`, await title(h.page));
+    await box(h.page).getByRole("button", { name: "Pending", exact: true }).click();
+    await settle(h.page);
+
+    // push the cost.post queue itself past 100, and the list must say it is cut off
+    const needCost = Math.max(0, 101 - trueCost);
+    if (needCost) {
+      const insCost = await rawApprovals.insertMany(Array.from({ length: needCost }, (_, i) =>
+        seedRow("cost.post", i, { location: locA._id, payload: { amount: 10, category: String(plain._id) } })));
+      created.seeded.push(...Object.values(insCost.insertedIds));
+    }
+    const bigCost = await pendingN();
+    await h.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    await box(h.page).waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    await h.page.locator("[data-cost-approval-truncated]").waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const truncLoc = h.page.locator("[data-cost-approval-truncated]");
+    const trunc = (await truncLoc.count()) ? (await truncLoc.first().innerText()).replace(/\s+/g, " ") : "";
+    ok(`K6 box: past 100 Pending cost requests the title is still the true number (${bigCost})`, (await title(h.page)) === `Waiting for your approval (${bigCost})`, `want (${bigCost}) got "${await title(h.page)}"`);
+    const shownRows = (await idsShown(h.page)).length;
+    ok("K6 box: ...and it says the list is cut off, with the shown and the true number",
+      bigCost > 100 && trunc === `Showing the newest 100 of ${bigCost} pending cost requests. Decide some to see the rest.` && shownRows === 100, `trunc "${trunc}" rows=${shownRows}`);
+    const bigNar = await req(admin, "GET", "/api/approvals?status=Pending&action=cost.post");
+    ok("K6 API: past 100 the list is capped at 100 rows and total is the true count", bigNar.data?.items?.length === 100 && bigNar.data?.total === bigCost, `items=${bigNar.data?.items?.length} total=${bigNar.data?.total} want ${bigCost}`);
+    await h.context.close();
+
+    // ---- K6 the narrowing never widens ---------------------------------------------------------
+    const idsOf = (r) => (r.data?.items ?? []).map((x) => String(x._id));
+    const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    // a head-sign-off-only reader: no parked cost, whatever they ask for
+    const hoPlain = await req(headOnly.cookie, "GET", "/api/approvals?status=Pending");
+    const hoCost = await req(headOnly.cookie, "GET", "/api/approvals?status=Pending&action=cost.post");
+    const hoCat = await req(headOnly.cookie, "GET", "/api/approvals?status=Pending&action=costcategory.create");
+    const hoBatch = await req(headOnly.cookie, "GET", "/api/approvals?status=Pending&action=batch.cancel");
+    ok("K6 no widening: a reader without the queue right who asks action=cost.post gets NO cost request (and total 0)",
+      hoCost.status === 200 && (hoCost.data?.items ?? []).length === 0 && hoCost.data?.total === 0, `status ${hoCost.status} ${JSON.stringify(hoCost.data).slice(0, 200)}`);
+    ok("K6 no widening: asking for another action (batch.cancel) gives that reader nothing either",
+      hoBatch.status === 200 && (hoBatch.data?.items ?? []).length === 0 && hoBatch.data?.total === 0, `status ${hoBatch.status} items=${(hoBatch.data?.items ?? []).length}`);
+    const seededCat = (hoCat.data?.items ?? []).filter((r) => String(r.summary).startsWith(`zzbox ${stamp} seed`));
+    ok("K6 no widening: asking for costcategory.create gives them head sign-offs only, never this suite's non-head costcategory.create rows",
+      hoCat.status === 200 && seededCat.length === 0 && (hoCat.data?.items ?? []).every((r) => ["head-approval", "cap-approval"].includes(r.payload?.kind)),
+      `status ${hoCat.status} seededVisible=${seededCat.length}`);
+    ok("K6 no widening: that reader's plain list is untouched (head sign-offs only, no rule config)",
+      hoPlain.status === 200 && (hoPlain.data?.items ?? []).every((r) => r.action === "costcategory.create" && ["head-approval", "cap-approval"].includes(r.payload?.kind)) && (hoPlain.data?.config ?? []).length === 0,
+      `status ${hoPlain.status}`);
+    // a caller with no approvals right at all is refused the same way with or without the parameter
+    const opsPlain = await req(ops, "GET", "/api/approvals?status=Pending");
+    const opsCost = await req(ops, "GET", "/api/approvals?status=Pending&action=cost.post");
+    ok("K6 no widening: a caller with no approvals right gets the same refusal with or without ?action=cost.post (and no rows)",
+      opsPlain.status === opsCost.status && opsCost.status !== 200 && !(opsCost.data?.items ?? []).length, `plain ${opsPlain.status} narrowed ${opsCost.status}`);
+    // an unknown action value is ignored (the list is exactly the un-narrowed one), never widened and never an error
+    const unk = await req(admin, "GET", "/api/approvals?status=Pending&action=no.such.action");
+    const unkPlain = await req(admin, "GET", "/api/approvals?status=Pending");
+    ok("K6 unknown action: an unrecognised value is ignored - same rows as no parameter, no total, no error",
+      unk.status === 200 && same(idsOf(unk), idsOf(unkPlain)) && unk.data?.total === undefined, `status ${unk.status} total=${unk.data?.total}`);
+    const inj = await req(admin, "GET", "/api/approvals?status=Pending&action[$ne]=cost.post&action=%24ne");
+    ok("K6 unknown action: an operator-shaped value is ignored too (same rows, no total)", inj.status === 200 && same(idsOf(inj), idsOf(unkPlain)) && inj.data?.total === undefined, `status ${inj.status}`);
   });
 } catch (e) {
   ok("the suite ran without a crash", false, String(e?.stack ?? e).slice(0, 500));
@@ -327,9 +446,10 @@ try {
   try {
     if (ruleBefore) await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: !!ruleBefore.enabled, approver_role: ruleBefore.approver_role ?? "Admin" });
     await rawCosts.deleteMany({ note: { $regex: `^zzbox ${stamp} ` } });
-    await rawApprovals.deleteMany({ _id: { $in: created.requests.map((i) => new ObjectId(i)) } });
+    await rawApprovals.deleteMany({ _id: { $in: [...created.requests.map((i) => new ObjectId(i)), ...created.seeded] } });
     await rawUsers.deleteMany({ _id: { $in: created.users.map((i) => new ObjectId(i)) } });
-    const left = (await rawCosts.countDocuments({ note: { $regex: `^zzbox ${stamp} ` } })) + (await rawApprovals.countDocuments({ _id: { $in: created.requests.map((i) => new ObjectId(i)) } }))
+    const left = (await rawCosts.countDocuments({ note: { $regex: `^zzbox ${stamp} ` } })) + (await rawApprovals.countDocuments({ _id: { $in: [...created.requests.map((i) => new ObjectId(i)), ...created.seeded] } }))
+      + (await rawApprovals.countDocuments({ summary: { $regex: `^zzbox ${stamp} seed` } }))
       + (await rawUsers.countDocuments({ _id: { $in: created.users.map((i) => new ObjectId(i)) } }));
     ok("cleanup read back: every fixture this suite made is gone", left === 0, `left=${left}`);
   } catch (e) { console.log("cleanup note: " + String(e?.message ?? e).slice(0, 200)); }
