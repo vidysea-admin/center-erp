@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals } from "@/lib/client";
+import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
@@ -574,6 +574,7 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   const [q, setQ] = useState("");
   const [note, setNote] = useState<Record<string, string>>({});
   const [approvedAmount, setApprovedAmount] = useState<Record<string, string>>({});
+  const [amountError, setAmountError] = useState<Record<string, string>>({});
   const anchor = useRef<HTMLDivElement>(null);
   const isCost = (r: any) => r.action === "cost.post";
 
@@ -593,10 +594,24 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
 
   async function decide(id: string, decision: string) {
     const amount = approvedAmount[id];
+    // QA-2958: same rule as Admin -> Approvals. A non-empty partial amount that is not a usable number
+    // must NEVER fall through to "approve in full"; it posts nothing and the row stays as it is.
+    let sanctioned: number | undefined;
+    if (decision === "Approved" && String(amount ?? "").trim() !== "") {
+      const requested = Number(pending.find((p: any) => p._id === id)?.payload?.amount);
+      const parsed = parsePartialAmount(amount);
+      if (parsed === null) { setAmountError({ ...amountError, [id]: PARTIAL_AMOUNT_UNCLEAR }); return; }
+      if (Number.isFinite(requested) && parsed > requested) {
+        setAmountError({ ...amountError, [id]: `Amount maangi gayi raashi (₹${requested.toLocaleString("en-IN")}) se zyada nahi ho sakti` });
+        return;
+      }
+      sanctioned = parsed;
+    }
+    if (amountError[id]) setAmountError({ ...amountError, [id]: "" });
     try {
       await api(`/api/approvals/${id}`, {
         method: "POST",
-        json: { decision, note: note[id], ...(decision === "Approved" && amount ? { approved_amount: Number(amount) } : {}) },
+        json: { decision, note: note[id], ...(sanctioned !== undefined ? { approved_amount: sanctioned } : {}) },
       });
       await load();
       onDecided(); // the register below: an approved cost has just become a ledger row
@@ -666,11 +681,12 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
                       : (
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           {r.status === "Pending" && r.payload?.amount !== undefined && (
-                            <input type="number" min="0.01" max={Number(r.payload.amount)} step="0.01"
+                            <input type="text" inputMode="decimal" data-partial-amount aria-invalid={!!amountError[r._id]}
                               className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                               value={approvedAmount[r._id] ?? ""}
-                              onChange={(e) => setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value })} />
+                              onChange={(e) => { setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
                           )}
+                          {amountError[r._id] && <p role="alert" data-partial-amount-error className="w-full text-xs text-red-700">{amountError[r._id]}</p>}
                           {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"
                             value={note[r._id] ?? ""} onChange={(e) => setNote({ ...note, [r._id]: e.target.value })} />}
                           <Btn small onClick={() => decide(r._id, "Approved")}>{r.status === "Applying" ? "Resume apply" : <>Approve &amp; apply</>}</Btn>

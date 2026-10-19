@@ -82,6 +82,14 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // still required and the money gate below still applies.
   if (queueDenied && !((headOnly || capOnly) && await hasFinanceApprove(user))) throw queueDenied;
   if (headOnly || MONEY_ACTIONS.has(pending.action)) await requireFinance(user, "approve");
+  // QA-2958: `approved_amount` that is PRESENT but is not a finite positive number is refused, never read
+  // as "no amount". A browser that cannot parse the approver's text ("3,000") serialises NaN as `null`,
+  // and treating `null` as absent approved the FULL requested amount. Absent (undefined) keeps its meaning,
+  // and "" stays absent for the one legacy caller shape. Placed after the permission gates so a caller who
+  // may not decide still gets their 403, not a 400.
+  if (approved_amount !== undefined && approved_amount !== "" && !(typeof approved_amount === "number" && Number.isFinite(approved_amount) && approved_amount > 0)) {
+    throw new HttpError(400, "Approved amount must be a positive number.");
+  }
   await flushPendingFinanceAuditEvents().catch(() => {});
   // The head this request decides: linked to it, or - if the post that created both died before the
   // link was written - still Pending with no link at all (senior review). Never a head another
