@@ -14,6 +14,8 @@
 //       ONLY to a recipient holding finance.view - decided per recipient, on all three audience paths
 //       (role, named list, finance-grant holders); everyone else gets the masked text; the bell stays masked
 //   S2  the decision mail does the same for the requester, and a bare buildDecisionMail call fails closed
+//   S4  the MAIL LOG never stores an amount, for any recipient: it is readable by any Admin (who does not hold
+//       finance.view), so a holder's row carries the masked base subject while the delivered mail is raw
 //   S3  nothing else moves: a recipient without finance.view still sees no amount and no typed figure
 //       (QA-2447), and the mail body carries the same split as the subject
 //
@@ -56,14 +58,14 @@ const M = jiti(path.join(root, "src/models/index.ts"));
 const A = jiti(path.join(root, "src/lib/approvals.ts"));
 const { User, ApprovalRule, ApprovalRequest, MailLog, Notification, Defaults } = M;
 const { mailUsers, mailFor, renderMail } = jiti(path.join(root, "src/lib/mailer.ts"));
-const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail } = A;
+const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail, approvalNeededRecipientMail } = A;
 const mongoose = require_(path.join(root, "node_modules/mongoose"));
 const oid = () => new mongoose.Types.ObjectId();
 
 ok("[instrument] the real lib loaded and exports the functions under test",
-  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail].every((f) => typeof f === "function"),
+  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail, approvalNeededRecipientMail].every((f) => typeof f === "function"),
   { buildDecisionMail: typeof buildDecisionMail, decisionMailFor: typeof decisionMailFor, approvalNeededMail: typeof approvalNeededMail });
-if (typeof buildDecisionMail !== "function" || typeof decisionMailFor !== "function" || typeof approvalNeededMail !== "function") {
+if (typeof buildDecisionMail !== "function" || typeof decisionMailFor !== "function" || typeof approvalNeededMail !== "function" || typeof approvalNeededRecipientMail !== "function") {
   console.log(`\ncheck-approval-decision-mail: ${passed} passed, ${failed} failed`);
   process.exit(1);
 }
@@ -224,10 +226,16 @@ try {
     !(await decisionMailFor({ ...reqNF, initiator: oid() }, A1.session, "Rejected")).lines.some((l) => NOTE_LINE.test(l)));
 
   // ---------------------------------------------------------------- S1..S3 (subject-amount)
-  const RAW = (tag) => `Cost entry \u20b9128500 for ZZADM-${tag} - advance 424242 paid`;
+  // TWO SEAMS, and they must not be confused. What a recipient is SENT is read where the send is built
+  // (mailFor with the real callback, the builders). What the MAIL LOG stores is read from MailLog, and it
+  // must be MASKED for everybody: MailLog is readable by any Admin (GET /api/test-email) and an Admin does
+  // not hold finance.view. A pin that read the holder's raw subject back from MailLog would assert the leak.
+  const RAW = (tag) => `Cost entry ₹128500 for ZZADM-${tag} - advance 424242 paid`;
   const subj = (rows, email) => rows.find((r) => String(r.to).toLowerCase() === email)?.subject ?? null;
-  const HOLDER_SEES = (t) => typeof t === "string" && t.includes("\u20b9128500") && t.includes("424242");
-  const MASKED = (t) => typeof t === "string" && t.includes("\u20b9\u2014") && !t.includes("128500") && !t.includes("424242");
+  const HOLDER_SEES = (t) => typeof t === "string" && t.includes("₹128500") && t.includes("424242");
+  const MASKED = (t) => typeof t === "string" && t.includes("₹—") && !t.includes("128500") && !t.includes("424242");
+  const NO_FIGURE = (t) => typeof t === "string" && !/₹\s?\d/.test(t) && !t.includes("128500") && !t.includes("424242");
+  const recip = (u) => ({ _id: u.doc._id, role: "Admin", email: u.email, name: u.doc.name });
 
   // the pure builder first: it is what every send is made from
   const bHold = approvalNeededMail(RAW("PURE"), { amount: 128500 }, "Requester", true);
@@ -239,8 +247,8 @@ try {
     MASKED(bNone.subject) && MASKED(bNone.lines[0]), bNone);
   ok("S2 builder: a bare call (no flag) is masked - fail closed", MASKED(bBare.subject) && MASKED(bBare.lines[0]), bBare);
 
-  // the mail door: the BODY of what is sent follows the same per-recipient split as the subject (MailLog
-  // stores a subject only, so the body is asserted on the function the send is built from)
+  // the mail door: the BODY and SUBJECT of what is sent follow the per-recipient split, and the LOGGED subject
+  // does not (MailLog stores a subject only, so the body is asserted on the function the send is built from)
   {
     const door = { title: "t", subject: "S masked ₹—", lines: ["masked ₹—"],
       perRecipient: async (u) => (u.role === "Holder" ? { subject: "S raw ₹128500", lines: ["raw ₹128500"] } : undefined) };
@@ -254,6 +262,39 @@ try {
       mN.subject === door.subject && mN.text === base.text && mN.html === base.html && !mN.text.includes("128500"), mN);
     ok("S2 mail door: a callback that throws leaves the recipient on the base (masked) text - fail closed",
       mT.subject === door.subject && mT.text === base.text && !mT.text.includes("128500"), mT);
+    ok("S4 mail door: for a PERSONALISED send the logged subject is the masked base, not the delivered raw one",
+      mH.subject !== mH.log_subject && mH.log_subject === door.subject && !mH.log_subject.includes("128500"), { subject: mH.subject, log_subject: mH.log_subject });
+    ok("S4 mail door: a personalised send with NO explicit logSubject still logs the masked base (fail closed)",
+      !("logSubject" in door) && mH.log_subject === door.subject);
+  }
+
+  // the REAL callback requireApproval hands the mailer: holder -> raw subject and body, everyone else -> undefined
+  {
+    const pr = approvalNeededRecipientMail(RAW("CB"), { amount: 128500 }, "Requester");
+    const forHolder = await pr(recip(Rfin));
+    const forAdmin = await pr(recip(A1));
+    const forGhost = await pr({ role: "Admin", email: "nobody@vidysea-test.local" });
+    ok("S1 callback: a finance.view holder is handed the raw subject and first line", HOLDER_SEES(forHolder?.subject) && HOLDER_SEES(forHolder?.lines?.[0]), forHolder);
+    ok("S1 callback: an Admin without finance.view is declined (stays on the masked base) (S3)", forAdmin === undefined, forAdmin);
+    ok("S1 callback: a recipient with no id is declined - fail closed", forGhost === undefined, forGhost);
+    const door2 = { title: "t", subject: bNone.subject, lines: bNone.lines, perRecipient: pr };
+    const base2 = renderMail({ title: door2.title, lines: door2.lines });
+    const delivered = await mailFor(door2, recip(Rfin), base2, undefined);
+    ok("S1 delivered to the holder: raw subject and body; the log subject is masked",
+      HOLDER_SEES(delivered.subject) && HOLDER_SEES(delivered.text) && NO_FIGURE(delivered.log_subject), { subject: delivered.subject, log_subject: delivered.log_subject });
+  }
+
+  // call-site wiring (the mail door cannot be intercepted from here): every mail send in requireApproval hands
+  // the callback over, and the decision mail hands the masked log subject over
+  {
+    const fsx = await import("node:fs");
+    const src = fsx.readFileSync(path.join(root, "src/lib/approvals.ts"), "utf8");
+    const body = src.slice(src.indexOf("export async function requireApproval("), src.indexOf("export async function decideApproval"));
+    const sends = (body.match(/mailUsers(?:ByRole)?\(\{/g) ?? []).length;
+    const wired = (body.match(/^\s+perRecipient,$/gm) ?? []).length;
+    ok("S1 wiring [precondition] requireApproval has mail sends", sends === 3, sends);
+    ok("S1 wiring: every mail send in requireApproval passes the per-recipient callback", wired === sends, { sends, wired });
+    ok("S4 wiring: the decision mail is sent with the masked log subject", /logSubject:\s*m\.log_subject/.test(src));
   }
 
   // role audience: every Admin; the holder is Rfin, the others (A1, A2) hold no finance.view
@@ -261,8 +302,9 @@ try {
   const reqS1 = await raise(R.session, RAW("S1ROLE"), { payload: { amount: 128500 } });
   const rowsS1 = await settle("ApprovalRequest", reqS1._id, 3);
   ok("S1 role path [precondition] all three approvers have a row", [Rfin, A1, A2].every((u) => hasRow(rowsS1, u.email)), emails(rowsS1));
-  ok("S1 role path: the finance.view holder's subject shows the amount and the typed figure", HOLDER_SEES(subj(rowsS1, Rfin.email)), subj(rowsS1, Rfin.email));
-  ok("S1 role path: an Admin WITHOUT finance.view still gets the masked subject (S3)", MASKED(subj(rowsS1, A1.email)) && MASKED(subj(rowsS1, A2.email)), [subj(rowsS1, A1.email), subj(rowsS1, A2.email)]);
+  ok("S4 role path: MailLog holds the MASKED subject for the finance.view holder too", MASKED(subj(rowsS1, Rfin.email)), subj(rowsS1, Rfin.email));
+  ok("S1 role path: an Admin WITHOUT finance.view gets the masked subject (S3)", MASKED(subj(rowsS1, A1.email)) && MASKED(subj(rowsS1, A2.email)), [subj(rowsS1, A1.email), subj(rowsS1, A2.email)]);
+  ok("S4 role path: no MailLog row for this request carries a rupee figure or the typed figure, for any recipient", rowsS1.every((r) => NO_FIGURE(r.subject)), rowsS1.map((r) => r.subject));
   const bellS1 = await Notification.find({ entity: "ApprovalRequest", entity_id: reqS1._id }).lean();
   ok("S1 the bell notification stays masked for everyone", bellS1.length >= 1 && bellS1.every((n) => MASKED(n.message)), bellS1.map((n) => n.message));
 
@@ -270,8 +312,8 @@ try {
   await setRule([A1.session.id, Rfin.session.id]);
   const reqS1n = await raise(R.session, RAW("S1NAMED"), { payload: { amount: 128500 } });
   const rowsS1n = await settle("ApprovalRequest", reqS1n._id, 2);
-  ok("S1 named path: holder sees the amount, non-holder sees the masked text",
-    HOLDER_SEES(subj(rowsS1n, Rfin.email)) && MASKED(subj(rowsS1n, A1.email)), [subj(rowsS1n, Rfin.email), subj(rowsS1n, A1.email)]);
+  ok("S4 named path: MailLog is masked for the holder and the non-holder alike",
+    MASKED(subj(rowsS1n, Rfin.email)) && MASKED(subj(rowsS1n, A1.email)) && rowsS1n.every((r) => NO_FIGURE(r.subject)), rowsS1n.map((r) => r.subject));
 
   // finance-grant audience (a cost head): the holders are the audience by definition
   await setRule([]);
@@ -280,12 +322,12 @@ try {
     payload: { kind: "head-approval", name: "ZZADM-S1GRANT 424242" }, fallbackApproverRole: "Admin", decidedByGrant: true,
   });
   const rowsS1g = await settle("ApprovalRequest", reqS1g.request._id, 1);
-  ok("S1 grant path: the finance approver is mailed the unredacted summary", (subj(rowsS1g, AG.email) ?? "").includes("424242"), subj(rowsS1g, AG.email));
+  ok("S4 grant path: the finance approver is mailed, and the MailLog row is masked", hasRow(rowsS1g, AG.email) && !(subj(rowsS1g, AG.email) ?? "").includes("424242"), subj(rowsS1g, AG.email));
   ok("S1 grant path: a non-holder is not in that audience at all (S3)", !hasRow(rowsS1g, A1.email) && !hasRow(rowsS1g, A2.email), emails(rowsS1g));
   const bellS1g = await Notification.find({ entity: "ApprovalRequest", entity_id: reqS1g.request._id }).lean();
   ok("S1 grant path: the bell stays masked", bellS1g.length >= 1 && bellS1g.every((n) => !n.message.includes("424242")), bellS1g.map((n) => n.message));
 
-  // decision mail, end to end through the send path (MailLog subject) for a holder and a non-holder requester
+  // decision mail, through the send path (MailLog subject) for a holder and a non-holder requester
   await setRule([A1.session.id]);
   const reqS2h = await raise(Rfin.session, RAW("S2HOLD"), { payload: { amount: 128500 } });
   const reqS2n = await raise(R.session, RAW("S2NONE"), { payload: { amount: 128500 } });
@@ -295,14 +337,15 @@ try {
   }
   const rowsS2h = await settle("ApprovalDecision", reqS2h._id, 1);
   const rowsS2n = await settle("ApprovalDecision", reqS2n._id, 1);
-  ok("S2 decision mail: a requester WITH finance.view gets the amount and typed figure in the subject", HOLDER_SEES(rowsS2h[0]?.subject), rowsS2h[0]?.subject);
+  ok("S4 decision mail: MailLog holds the MASKED subject for a requester WITH finance.view", MASKED(rowsS2h[0]?.subject) && NO_FIGURE(rowsS2h[0]?.subject), rowsS2h[0]?.subject);
   ok("S2 decision mail: a requester WITHOUT it gets the masked subject (S3)", MASKED(rowsS2n[0]?.subject), rowsS2n[0]?.subject);
   const dmH = await decisionMailFor(await ApprovalRequest.findById(reqS2h._id).lean(), A1.session, "Approved");
   const dmN = await decisionMailFor(await ApprovalRequest.findById(reqS2n._id).lean(), A1.session, "Rejected");
-  ok("S2 decision mail body: first line carries the raw summary for the holder", HOLDER_SEES(dmH.lines[0]), dmH.lines);
-  ok("S2 decision mail body: first line is masked for the non-holder (S3)", MASKED(dmN.lines[0]), dmN.lines);
+  ok("S2 decision mail, delivered to the holder: raw subject and raw first line", HOLDER_SEES(dmH.subject) && HOLDER_SEES(dmH.lines[0]), dmH);
+  ok("S4 decision mail: the holder's logged subject is the masked one, and differs from the delivered one", MASKED(dmH.log_subject) && dmH.log_subject !== dmH.subject, dmH.log_subject);
+  ok("S2 decision mail body: first line is masked for the non-holder (S3)", MASKED(dmN.lines[0]) && MASKED(dmN.subject) && MASKED(dmN.log_subject), dmN);
   const bareDM = buildDecisionMail({ summary: RAW("BARE"), payload: { amount: 128500 } }, A1.session, "Approved");
-  ok("S2 a bare buildDecisionMail call is masked in subject and first line - fail closed", MASKED(bareDM.subject) && MASKED(bareDM.lines[0]), bareDM);
+  ok("S2 a bare buildDecisionMail call is masked in subject, first line and log subject - fail closed", MASKED(bareDM.subject) && MASKED(bareDM.lines[0]) && MASKED(bareDM.log_subject), bareDM);
   ok("S2 an unknown requester gets the masked summary too", MASKED((await decisionMailFor({ summary: RAW("GONE"), payload: { amount: 128500 }, initiator: oid() }, A1.session, "Approved")).subject));
 
   // ---------------------------------------------------------------- C7

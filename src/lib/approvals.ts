@@ -582,6 +582,13 @@ export function approvalNeededMail(
   return { subject: `Approval needed: ${shown}`, lines: [shown, `Requested by ${requesterName}.`] };
 }
 
+// The per-recipient callback `requireApproval` hands the mailer, as a function of its own so the wiring
+// (finance.view question + raw builder) is testable without a server. A recipient who may not see figures
+// gets `undefined`, which the mailer reads as "stay on the masked base text".
+export function approvalNeededRecipientMail(summary: string, payload: unknown, requesterName: string): PerRecipientMail {
+  return async (u) => (await canSeeMailFigures(u)) ? approvalNeededMail(summary, payload, requesterName, true) : undefined;
+}
+
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
@@ -724,8 +731,8 @@ export async function requireApproval(
   const safeSummary = redactFiguresInText(redactMoneyInText(ctx.summary, ctx.payload));
   // subject-amount: the MAIL (not the bell) is decided per recipient. The base subject/lines passed to the
   // mailer below stay the masked text; a recipient holding finance.view is handed the raw summary instead.
-  const perRecipient: PerRecipientMail = async (u) =>
-    (await canSeeMailFigures(u)) ? approvalNeededMail(ctx.summary, ctx.payload, user.name, true) : undefined;
+  // The MailLog row for that send stores the masked base subject (mailer `logSubject` default), never the raw.
+  const perRecipient = approvalNeededRecipientMail(ctx.summary, ctx.payload, user.name);
   if (grantHolders.length) {
     // QA-1977 5B: addressed person by person. `role_target` carries every role among them because
     // the inbox query matches on role first and user second; `user_target` is what narrows it to
@@ -956,16 +963,19 @@ export function buildDecisionMail(
   // text. The default is false (FAIL CLOSED, it was true): a bare call can no longer leak; the one send
   // path (decisionMailFor) always passes the real answer.
   canSeeNote = false,
-): { subject: string; title: string; lines: string[]; link: string } {
+): { subject: string; title: string; lines: string[]; link: string; log_subject: string } {
   const verb = decision === "Approved" ? "approved" : "rejected";
   const rawSummary = String(request.summary ?? "");
-  const summary = canSeeNote ? rawSummary : redactFiguresInText(redactMoneyInText(rawSummary, request.payload));
+  const maskedSummary = redactFiguresInText(redactMoneyInText(rawSummary, request.payload));
+  const summary = canSeeNote ? rawSummary : maskedSummary;
   const note = String(request.decision_note ?? "").trim();
   const lines = [summary, `${decision === "Approved" ? "Approved" : "Rejected"} by ${decider.name}.`];
   if (note && canSeeNote) lines.push(`${decision === "Approved" ? "Comment" : "Reason"}: ${redactFiguresInText(note)}`);
   else if (note) lines.push("Open the app or ask the approver for the reason.");
   const link = request.action === "cost.post" ? "/costs" : request.action === "costcategory.create" ? "/finance" : "/";
-  return { subject: `Your request was ${verb}: ${summary}`, title: `Your request was ${verb}`, lines, link };
+  // `log_subject` is ALWAYS the masked subject: the mail log is readable by any Admin, who does not hold
+  // finance.view, so what is stored must not depend on who the recipient is.
+  return { subject: `Your request was ${verb}: ${summary}`, title: `Your request was ${verb}`, lines, link, log_subject: `Your request was ${verb}: ${maskedSummary}` };
 }
 
 // The mail for one request, for ITS requester: whether the note travels is decided by the same
@@ -995,7 +1005,7 @@ async function notifyRequesterOfDecision(
   const m = await decisionMailFor(request, decider, decision);
   await mailUsers({
     userIds: [request.initiator],
-    subject: m.subject, title: m.title, lines: m.lines, link: m.link,
+    subject: m.subject, logSubject: m.log_subject, title: m.title, lines: m.lines, link: m.link,
     entity: "ApprovalDecision", entity_id: request._id,
   });
 }

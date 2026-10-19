@@ -178,21 +178,28 @@ type MailExclusion = { excludeUserIds?: unknown[]; excludeEmails?: unknown[] };
 // recipient and may return a replacement subject + body lines. The base `subject`/`lines` stay the
 // FAIL-CLOSED text: a callback that throws, or returns nothing, leaves that person on the base text, so the
 // base is always the masked one. Eligibility, exclusion, switches and MailLog stay at this one door.
+//
+// MAILLOG IS NOT A RECIPIENT. It is read by any Admin (GET /api/test-email, the Admin mail panel) and an
+// Admin does not hold finance.view, so the row must never carry what only a holder may read. The row
+// therefore stores `logSubject`, which defaults to the caller's BASE `subject` (the masked one): a
+// personalised send that forgets to say so logs the masked text - fail closed. The delivered mail keeps
+// the personalised subject.
 export type MailRecipient = { _id?: unknown; email?: unknown; role?: unknown; name?: unknown };
 export type PerRecipientMail = (u: MailRecipient) => Promise<{ subject: string; lines: string[] } | undefined>;
 export async function mailFor(
-  opts: { title: string; subject: string; lines: string[]; perRecipient?: PerRecipientMail },
+  opts: { title: string; subject: string; lines: string[]; perRecipient?: PerRecipientMail; logSubject?: string },
   u: MailRecipient, base: { html: string; text: string }, cta: { label: string; url: string } | undefined,
-): Promise<{ subject: string; html: string; text: string }> {
+): Promise<{ subject: string; log_subject: string; html: string; text: string }> {
+  const log_subject = opts.logSubject ?? opts.subject;
   const v = opts.perRecipient ? await opts.perRecipient(u).catch(() => undefined) : undefined;
-  if (!v) return { subject: opts.subject, ...base };
-  return { subject: v.subject, ...renderMail({ title: opts.title, lines: v.lines, cta }) };
+  if (!v) return { subject: opts.subject, log_subject, ...base };
+  return { subject: v.subject, log_subject, ...renderMail({ title: opts.title, lines: v.lines, cta }) };
 }
 export const isExcludedRecipient = (u: { _id?: unknown; email?: unknown }, ex: MailExclusion) =>
   (ex.excludeUserIds ?? []).some((id) => id && u._id && String(id) === String(u._id))
   || (ex.excludeEmails ?? []).some((e) => e && u.email && String(e).trim().toLowerCase() === String(u.email).trim().toLowerCase());
 
-export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail } & MailExclusion) {
+export async function mailUsers(opts: { userIds: unknown[]; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail; logSubject?: string } & MailExclusion) {
   const ids = (opts.userIds ?? []).filter(Boolean);
   if (!ids.length) return 0;
   const foldedIntoDigest = await perEventSuppress(opts.perEvent);
@@ -208,12 +215,12 @@ export async function mailUsers(opts: { userIds: unknown[]; subject: string; tit
     if (!to || seen.has(to)) continue;
     seen.add(to);
     const m = await mailFor(opts, u, base, cta);
-    await sendMail({ to, subject: m.subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
+    await sendMail({ to, subject: m.subject, log_subject: m.log_subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }
 
-export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail } & MailExclusion) {
+export async function mailUsersByRole(opts: { roles: string[]; location?: unknown; subject: string; title: string; lines: string[]; link?: string; entity?: string; entity_id?: unknown; perEvent?: boolean; perRecipient?: PerRecipientMail; logSubject?: string } & MailExclusion) {
   const foldedIntoDigest = await perEventSuppress(opts.perEvent);
   const users = await User.find({
     role: { $in: opts.roles }, active: true, dropped: { $ne: true },
@@ -233,7 +240,7 @@ export async function mailUsersByRole(opts: { roles: string[]; location?: unknow
     if (!to || seen.has(to)) continue;
     seen.add(to);
     const m = await mailFor(opts, u, base, cta);
-    await sendMail({ to, subject: m.subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
+    await sendMail({ to, subject: m.subject, log_subject: m.log_subject, html: m.html, text: m.text, entity: opts.entity, entity_id: opts.entity_id, suppress: suppressFor(u) ?? foldedIntoDigest });
   }
   return seen.size;
 }

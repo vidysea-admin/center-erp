@@ -291,10 +291,12 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // the finance.view right, the same one the in-app lists use. Nothing here says "every" or "always"
 // beyond what the pins in check-approval-decision-mail.mjs (S1-S3) exercise: three audiences
 // (everyone holding the role, a named list, finance approvers) and both decisions.
+// Mail-log clause: S4 pins (MailLog rows masked for the holder on the role, named, finance-grant and decision paths).
 export const RELEASE_NOTE_CURRENT =
   "-329 changes who sees the amount in approval emails. " +
   "In the 'approval needed' email, the amount, and any other figure in the request's description, now appears in the subject and in the message only for people who can see the finance pages; everyone else who receives that email gets the same text as before, with the amount hidden. " +
   "The email that tells someone their request was approved or rejected follows the same rule: it shows the amount only if that person can see the finance pages. " +
+  "The mail log that administrators can open records both of these emails with the amount hidden, even for the people who were sent the amount. " +
   "The in-app notification bell is not changed by this release. " +
   "No other screen, figure or permission changes in this release.";
 
