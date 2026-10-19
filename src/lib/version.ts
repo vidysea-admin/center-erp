@@ -293,8 +293,8 @@ const RELEASE_NOTE_ARCHIVE_321 =
 export const RELEASE_NOTE_CURRENT =
   "-328 changes who is emailed about approval requests. " +
   "When a request is approved or rejected, the person who raised it now gets an email saying which way it went and who decided it. " +
-  "The approver's typed reason or comment is included only for someone who can see the finance pages; anyone else is told to open the app or ask the approver. " +
-  "This email is sent straight away even when the per-request emails are set to arrive in the daily digest, because the digest does not list decisions; it is still not sent when email is switched off, or switched off for that person's account. " +
+  "When the approver typed a reason or comment, it is included only for someone who can see the finance pages; anyone else is told to open the app or ask the approver instead. " +
+  "This email is not held back for the daily digest, even when per-request emails are set to arrive that way, because the digest does not list decisions; switching email off, or off for that person's account, still stops it. " +
   "The 'approval needed' email no longer goes to the person who raised the request, even when they are themselves an approver; it goes to everyone else who receives it. " +
   "As before, nobody can approve their own request. " +
   "No other screen, figure or permission changes in this release.";
