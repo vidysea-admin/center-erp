@@ -5153,7 +5153,7 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
             const holdsThisPart = held.startsWith(`${part}-`);
             const decision = holdsThisPart ? (held.endsWith("Rejected") ? "Rejected" : null) : "Approved";
             if (decision) {
-              const signed = headRequest && second1960 ? await req(second1960, "POST", `/api/approvals/${headRequest._id}`, { decision, note: "QA-1960 second-person fixture" }) : { status: 0 };
+              const signed = headRequest && second1960 ? await req(second1960, "POST", `/api/approvals/${headRequest._id}`, { decision, note: "QA-1960 second-person fixture", seen_cap: await (async () => { const h = id ? await headDb1960.collection("costcategories").findOne({ _id: id }) : null; return h?.pre_approved === true ? { amount: typeof h.pre_approved_amount === "number" ? h.pre_approved_amount : null, unit: h.pre_approved_unit || "Fixed amount", min_billable: typeof h.pre_approved_min_billable === "number" ? h.pre_approved_min_billable : 0, basis: typeof h.pre_approved_basis === "string" && h.pre_approved_basis.trim() ? h.pre_approved_basis : null } : { amount: null, unit: "Fixed amount", min_billable: 0, basis: null }; })() }) : { status: 0 };
               const rawHead = id ? await headDb1960.collection("costcategories").findOne({ _id: id }) : null;
               const rawRequest = headRequest ? await headDb1960.collection("approvalrequests").findOne({ _id: headRequest._id }) : null;
               ok(`QA-1960 fixture: the second person persists ${held} ${part} as ${decision}`,
