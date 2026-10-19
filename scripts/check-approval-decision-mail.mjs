@@ -10,6 +10,12 @@
 //   C6  (r2) the decision note is mailed only to a requester who holds finance.view - the same rule the
 //       in-app list applies (api/approvals ?mine=1 deletes decision_note for everyone else)
 //   C7  (r2) digest-only mode does NOT hold back the decision mail (the daily digest never lists decisions)
+//   S1  (subject-amount, Umesh 2026-10-19) the "approval needed" mail shows the amount in subject and body
+//       ONLY to a recipient holding finance.view - decided per recipient, on all three audience paths
+//       (role, named list, finance-grant holders); everyone else gets the masked text; the bell stays masked
+//   S2  the decision mail does the same for the requester, and a bare buildDecisionMail call fails closed
+//   S3  nothing else moves: a recipient without finance.view still sees no amount and no typed figure
+//       (QA-2447), and the mail body carries the same split as the subject
 //
 // WHY THIS IS A FUNCTION-LEVEL CHECK AND NOT AN HTTP SUITE. Both routes that decide an approval end in
 // the same two lib functions, and the mail door records every attempt in MailLog (in a test environment
@@ -50,14 +56,14 @@ const M = jiti(path.join(root, "src/models/index.ts"));
 const A = jiti(path.join(root, "src/lib/approvals.ts"));
 const { User, ApprovalRule, ApprovalRequest, MailLog, Notification, Defaults } = M;
 const { mailUsers } = jiti(path.join(root, "src/lib/mailer.ts"));
-const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor } = A;
+const { requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail } = A;
 const mongoose = require_(path.join(root, "node_modules/mongoose"));
 const oid = () => new mongoose.Types.ObjectId();
 
 ok("[instrument] the real lib loaded and exports the functions under test",
-  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor].every((f) => typeof f === "function"),
-  { buildDecisionMail: typeof buildDecisionMail, decisionMailFor: typeof decisionMailFor });
-if (typeof buildDecisionMail !== "function" || typeof decisionMailFor !== "function") {
+  [requireApproval, decideApproval, finalizeApprovalDecision, buildDecisionMail, decisionMailFor, approvalNeededMail].every((f) => typeof f === "function"),
+  { buildDecisionMail: typeof buildDecisionMail, decisionMailFor: typeof decisionMailFor, approvalNeededMail: typeof approvalNeededMail });
+if (typeof buildDecisionMail !== "function" || typeof decisionMailFor !== "function" || typeof approvalNeededMail !== "function") {
   console.log(`\ncheck-approval-decision-mail: ${passed} passed, ${failed} failed`);
   process.exit(1);
 }
@@ -75,6 +81,9 @@ const A2 = await mk("appr2");         // approver two
 const Rquiet = await mk("quiet", { mail_enabled: false }); // a requester whose account mail switch is off
 // C6: Admin does NOT carry finance.view (NO_ADMIN_BYPASS), so R above is a requester without it; Rfin holds it by grant.
 const Rfin = await mk("fin", { extra_permissions: ["finance.view"] });
+// subject-amount: a finance APPROVER (view + approve:edit) - the audience of a cost-head approval is whoever
+// financeApprovers() returns, and this account is one by grant.
+const AG = await mk("grant", { extra_permissions: ["finance.view", "finance.approve:edit"] });
 
 const priorDefaults = await Defaults.findOne({ _singleton: "defaults" }).lean();
 const prior = await ApprovalRule.findOne({ action: "location.edit" }).lean();
@@ -100,6 +109,7 @@ const raise = async (user, summary = "Location edit for centre ZZADM", extra = {
   return out.request;
 };
 const emails = (rows) => rows.map((r) => String(r.to).toLowerCase()).sort();
+const hasRow = (rows, email) => rows.some((r) => String(r.to).toLowerCase() === email);
 
 try {
   // ---------------------------------------------------------------- C4
@@ -144,12 +154,16 @@ try {
   const rowsB = await settle("ApprovalDecision", reqB._id, 1);
   ok("C2 reject -> exactly one ApprovalDecision row, to the requester", rowsB.length === 1 && emails(rowsB)[0] === R.email, emails(rowsB));
   ok("C2 ...whose subject names Rejected and not Approved", /rejected/i.test(rowsB[0]?.subject ?? "") && !/approved/i.test(rowsB[0]?.subject ?? ""), rowsB[0]?.subject);
-  const built = buildDecisionMail(await ApprovalRequest.findById(reqB._id).lean(), A1.session, "Rejected");
+  // subject-amount (C2): the default of the 4th argument is now false (fail closed), so the pins that read the
+  // reason out of a bare call pass `true` explicitly - this is the intended behaviour change, not a loosened pin.
+  const built = buildDecisionMail(await ApprovalRequest.findById(reqB._id).lean(), A1.session, "Rejected", true);
   ok("C2 the mail body says who rejected it", built.lines.some((l) => l.includes(A1.session.name) && /rejected/i.test(l)), built.lines);
   ok("C2 the mail body carries the reason", built.lines.some((l) => l.includes("Wrong centre chosen")), built.lines);
-  ok("C2 a figure typed into the reason is not mailed out", !buildDecisionMail({ summary: "s", decision_note: "pay 128500 instead" }, A1.session, "Rejected").lines.join(" ").includes("128500"),
-    buildDecisionMail({ summary: "s", decision_note: "pay 128500 instead" }, A1.session, "Rejected").lines);
-  ok("C2 an approval with no comment adds no empty Reason line", !buildDecisionMail({ summary: "s" }, A1.session, "Approved").lines.some((l) => /reason|comment/i.test(l)));
+  ok("C2 [precondition] with the note shown, the reason line IS in the mail (so the next pin can fail)",
+    buildDecisionMail({ summary: "s", decision_note: "pay 128500 instead" }, A1.session, "Rejected", true).lines.some((l) => /^Reason: /.test(l)));
+  ok("C2 a figure typed into the reason is not mailed out", !buildDecisionMail({ summary: "s", decision_note: "pay 128500 instead" }, A1.session, "Rejected", true).lines.join(" ").includes("128500"),
+    buildDecisionMail({ summary: "s", decision_note: "pay 128500 instead" }, A1.session, "Rejected", true).lines);
+  ok("C2 an approval with no comment adds no empty Reason line", !buildDecisionMail({ summary: "s" }, A1.session, "Approved", true).lines.some((l) => /reason|comment/i.test(l)));
 
   // ---------------------------------------------------------------- C3
   const everyone = [...rowsA, ...rowsB].map((r) => String(r.to).toLowerCase());
@@ -209,6 +223,71 @@ try {
   ok("C6 a request whose requester no longer exists is treated as WITHOUT finance.view (no note)",
     !(await decisionMailFor({ ...reqNF, initiator: oid() }, A1.session, "Rejected")).lines.some((l) => NOTE_LINE.test(l)));
 
+  // ---------------------------------------------------------------- S1..S3 (subject-amount)
+  const RAW = (tag) => `Cost entry \u20b9128500 for ZZADM-${tag} - advance 424242 paid`;
+  const subj = (rows, email) => rows.find((r) => String(r.to).toLowerCase() === email)?.subject ?? null;
+  const HOLDER_SEES = (t) => typeof t === "string" && t.includes("\u20b9128500") && t.includes("424242");
+  const MASKED = (t) => typeof t === "string" && t.includes("\u20b9\u2014") && !t.includes("128500") && !t.includes("424242");
+
+  // the pure builder first: it is what every send is made from
+  const bHold = approvalNeededMail(RAW("PURE"), { amount: 128500 }, "Requester", true);
+  const bNone = approvalNeededMail(RAW("PURE"), { amount: 128500 }, "Requester", false);
+  const bBare = approvalNeededMail(RAW("PURE"), { amount: 128500 }, "Requester");
+  ok("S1 builder: a finance.view recipient gets the amount and the typed figure in subject AND first body line",
+    HOLDER_SEES(bHold.subject) && HOLDER_SEES(bHold.lines[0]), bHold);
+  ok("S1 builder: a recipient without it gets the masked text in subject AND body (S3)",
+    MASKED(bNone.subject) && MASKED(bNone.lines[0]), bNone);
+  ok("S2 builder: a bare call (no flag) is masked - fail closed", MASKED(bBare.subject) && MASKED(bBare.lines[0]), bBare);
+
+  // role audience: every Admin; the holder is Rfin, the others (A1, A2) hold no finance.view
+  await setRule([]);
+  const reqS1 = await raise(R.session, RAW("S1ROLE"), { payload: { amount: 128500 } });
+  const rowsS1 = await settle("ApprovalRequest", reqS1._id, 3);
+  ok("S1 role path [precondition] all three approvers have a row", [Rfin, A1, A2].every((u) => hasRow(rowsS1, u.email)), emails(rowsS1));
+  ok("S1 role path: the finance.view holder's subject shows the amount and the typed figure", HOLDER_SEES(subj(rowsS1, Rfin.email)), subj(rowsS1, Rfin.email));
+  ok("S1 role path: an Admin WITHOUT finance.view still gets the masked subject (S3)", MASKED(subj(rowsS1, A1.email)) && MASKED(subj(rowsS1, A2.email)), [subj(rowsS1, A1.email), subj(rowsS1, A2.email)]);
+  const bellS1 = await Notification.find({ entity: "ApprovalRequest", entity_id: reqS1._id }).lean();
+  ok("S1 the bell notification stays masked for everyone", bellS1.length >= 1 && bellS1.every((n) => MASKED(n.message)), bellS1.map((n) => n.message));
+
+  // named-list audience
+  await setRule([A1.session.id, Rfin.session.id]);
+  const reqS1n = await raise(R.session, RAW("S1NAMED"), { payload: { amount: 128500 } });
+  const rowsS1n = await settle("ApprovalRequest", reqS1n._id, 2);
+  ok("S1 named path: holder sees the amount, non-holder sees the masked text",
+    HOLDER_SEES(subj(rowsS1n, Rfin.email)) && MASKED(subj(rowsS1n, A1.email)), [subj(rowsS1n, Rfin.email), subj(rowsS1n, A1.email)]);
+
+  // finance-grant audience (a cost head): the holders are the audience by definition
+  await setRule([]);
+  const reqS1g = await requireApproval("costcategory.create", R.session, {
+    entity: "CostCategory", entity_id: oid(), summary: `New cost head "ZZADM-S1GRANT 424242" added by ${R.session.name} - not approved yet`,
+    payload: { kind: "head-approval", name: "ZZADM-S1GRANT 424242" }, fallbackApproverRole: "Admin", decidedByGrant: true,
+  });
+  const rowsS1g = await settle("ApprovalRequest", reqS1g.request._id, 1);
+  ok("S1 grant path: the finance approver is mailed the unredacted summary", (subj(rowsS1g, AG.email) ?? "").includes("424242"), subj(rowsS1g, AG.email));
+  ok("S1 grant path: a non-holder is not in that audience at all (S3)", !hasRow(rowsS1g, A1.email) && !hasRow(rowsS1g, A2.email), emails(rowsS1g));
+  const bellS1g = await Notification.find({ entity: "ApprovalRequest", entity_id: reqS1g.request._id }).lean();
+  ok("S1 grant path: the bell stays masked", bellS1g.length >= 1 && bellS1g.every((n) => !n.message.includes("424242")), bellS1g.map((n) => n.message));
+
+  // decision mail, end to end through the send path (MailLog subject) for a holder and a non-holder requester
+  await setRule([A1.session.id]);
+  const reqS2h = await raise(Rfin.session, RAW("S2HOLD"), { payload: { amount: 128500 } });
+  const reqS2n = await raise(R.session, RAW("S2NONE"), { payload: { amount: 128500 } });
+  for (const [rq, dec] of [[reqS2h, "Approved"], [reqS2n, "Rejected"]]) {
+    const cl = await decideApproval(String(rq._id), A1.session, dec, "ok");
+    await finalizeApprovalDecision(cl, A1.session, dec);
+  }
+  const rowsS2h = await settle("ApprovalDecision", reqS2h._id, 1);
+  const rowsS2n = await settle("ApprovalDecision", reqS2n._id, 1);
+  ok("S2 decision mail: a requester WITH finance.view gets the amount and typed figure in the subject", HOLDER_SEES(rowsS2h[0]?.subject), rowsS2h[0]?.subject);
+  ok("S2 decision mail: a requester WITHOUT it gets the masked subject (S3)", MASKED(rowsS2n[0]?.subject), rowsS2n[0]?.subject);
+  const dmH = await decisionMailFor(await ApprovalRequest.findById(reqS2h._id).lean(), A1.session, "Approved");
+  const dmN = await decisionMailFor(await ApprovalRequest.findById(reqS2n._id).lean(), A1.session, "Rejected");
+  ok("S2 decision mail body: first line carries the raw summary for the holder", HOLDER_SEES(dmH.lines[0]), dmH.lines);
+  ok("S2 decision mail body: first line is masked for the non-holder (S3)", MASKED(dmN.lines[0]), dmN.lines);
+  const bareDM = buildDecisionMail({ summary: RAW("BARE"), payload: { amount: 128500 } }, A1.session, "Approved");
+  ok("S2 a bare buildDecisionMail call is masked in subject and first line - fail closed", MASKED(bareDM.subject) && MASKED(bareDM.lines[0]), bareDM);
+  ok("S2 an unknown requester gets the masked summary too", MASKED((await decisionMailFor({ summary: RAW("GONE"), payload: { amount: 128500 }, initiator: oid() }, A1.session, "Approved")).subject));
+
   // ---------------------------------------------------------------- C7
   await Defaults.updateOne({ _singleton: "defaults" }, { $set: { digest_only_approval_mails: true } }, { upsert: true });
   await setRule([A1.session.id]);
@@ -232,7 +311,7 @@ try {
 } finally {
   if (priorDefaults) await Defaults.updateOne({ _singleton: "defaults" }, { $set: { digest_only_approval_mails: priorDefaults.digest_only_approval_mails === true } });
   else await Defaults.deleteOne({ _singleton: "defaults" });
-  const ids = [R, A1, A2, Rquiet, Rfin].map((u) => u.doc._id);
+  const ids = [R, A1, A2, Rquiet, Rfin, AG].map((u) => u.doc._id);
   const reqs = await ApprovalRequest.find({ summary: /ZZADM/ }).select("_id").lean();
   const reqIds = reqs.map((r) => r._id);
   await MailLog.deleteMany({ entity: { $in: ["ApprovalRequest", "ApprovalDecision"] }, entity_id: { $in: reqIds } });
