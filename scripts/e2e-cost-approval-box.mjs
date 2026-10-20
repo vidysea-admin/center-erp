@@ -747,6 +747,12 @@ try {
     const errText = (await ob.page.locator("[data-withdraw-error]").count()) ? (await ob.page.locator("[data-withdraw-error]").innerText()).replace(/\s+/g, " ") : "";
     ok("W5 My submissions: a withdraw that loses to a change made elsewhere keeps the confirm step open and shows the server's message",
       staleOk.status === 200 && errText.includes(M_TWICE) && (await dlg(ob.page).count()) === 1 && (await reqDoc(Wt.w6.id))?.decision_note === undefined, errText);
+    // closing that refused dialog reloads the list: the row now shows the withdrawal and has no Withdraw button
+    await dlg(ob.page).getByRole("button", { name: "Keep request", exact: true }).click();
+    await until(async () => (await wbtn("w6").count()) === 0);
+    const w6t = await mtext("w6");
+    ok("W5 My submissions: closing a refused withdraw reloads the list - the row now says Withdrawn and offers no Withdraw button",
+      (await wbtn("w6").count()) === 0 && /Withdrawn/.test(w6t) && (await dlg(ob.page).count()) === 0, w6t.slice(0, 300));
     await ob.context.close();
 
     // (c) Home: the card's number follows the withdrawal

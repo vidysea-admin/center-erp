@@ -1549,17 +1549,19 @@ export function ConfirmModal({ open, title, message, confirmLabel, kind = "dange
 // submissions", Admin -> Approvals, Finance head sign-offs). It is display only: the button is drawn by
 // the caller only for the raiser's own Pending row, and PATCH /api/approvals/[id] re-checks both on the
 // server. A confirm step with an optional reason comes first; a refusal from the server is shown inside
-// the dialog and the dialog stays open.
-export function WithdrawRequestButton({ onWithdraw, what }: { onWithdraw: (reason: string) => Promise<unknown>; what?: string }) {
+// the dialog and the dialog stays open; `onDismiss` runs when the person closes a dialog that showed such a
+// refusal, so the screen can reload the list and the row shows what it is now (the dialog lives inside that row).
+export function WithdrawRequestButton({ onWithdraw, onDismiss, what }: { onWithdraw: (reason: string) => Promise<unknown>; onDismiss?: () => unknown; what?: string }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
   useEffect(() => {
     if (!open) return;
-    const h = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const h = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [open]);
+  }, [open, err]);
+  function close() { setOpen(false); if (err) onDismiss?.(); }
   async function submit() {
     setErr("");
     try { await onWithdraw(reason.trim()); setOpen(false); setReason(""); }
@@ -1570,7 +1572,7 @@ export function WithdrawRequestButton({ onWithdraw, what }: { onWithdraw: (reaso
       <span data-withdraw-open><Btn small kind="ghost" onClick={() => { setErr(""); setOpen(true); }}>Withdraw</Btn></span>
       {open && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Withdraw this request" data-withdraw-dialog>
-          <div className="absolute inset-0 bg-black/40" onClick={() => setOpen(false)} />
+          <div className="absolute inset-0 bg-black/40" onClick={close} />
           <div className="relative w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
             <h2 className="text-base font-semibold">Withdraw this request?</h2>
             {what && <p className="mt-2 text-sm font-medium text-gray-800" data-withdraw-what>{what}</p>}
@@ -1580,7 +1582,7 @@ export function WithdrawRequestButton({ onWithdraw, what }: { onWithdraw: (reaso
             </label>
             {err && <div className="mt-3" data-withdraw-error><ErrorBanner msg={err} /></div>}
             <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <Btn kind="ghost" onClick={() => setOpen(false)}>Keep request</Btn>
+              <Btn kind="ghost" onClick={close}>Keep request</Btn>
               <Btn kind="danger" onClick={submit}>Withdraw request</Btn>
             </div>
           </div>

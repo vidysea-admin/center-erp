@@ -1178,9 +1178,9 @@ function Approvals({ error, setError }: any) {
                 {r.status === "Pending" && meId && String(r.initiator?._id ?? r.initiator ?? "") === meId && (
                   <div className="mt-2 flex flex-wrap items-center gap-2" data-own-request>
                     <span className="text-xs text-gray-500">You raised this request.</span>
-                    <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => {
-                      try { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); }
-                      finally { await load(); }
+                    <WithdrawRequestButton what={r.summary} onDismiss={() => load()} onWithdraw={async (reason) => {
+                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+                      await load();
                     }} />
                   </div>
                 )}

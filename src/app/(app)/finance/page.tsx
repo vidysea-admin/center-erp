@@ -634,9 +634,9 @@ function HeadApprovals() {
                   <span className="text-[11px] text-gray-500">You added this head - another finance approver must sign it off.</span>
                   {/* approval-withdraw: only while the request is still Pending (an Applying claim is in flight and cannot be taken back). */}
                   {r.status === "Pending" && (
-                    <WithdrawRequestButton what={r.payload?.name} onWithdraw={async (reason) => {
-                      try { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); }
-                      finally { await load(); }
+                    <WithdrawRequestButton what={r.payload?.name} onDismiss={() => load()} onWithdraw={async (reason) => {
+                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+                      await load();
                     }} />
                   )}
                 </span>
