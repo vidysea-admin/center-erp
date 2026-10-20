@@ -1179,8 +1179,8 @@ function Approvals({ error, setError }: any) {
                   <div className="mt-2 flex flex-wrap items-center gap-2" data-own-request>
                     <span className="text-xs text-gray-500">You raised this request.</span>
                     <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => {
-                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
-                      await load();
+                      try { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); }
+                      finally { await load(); }
                     }} />
                   </div>
                 )}

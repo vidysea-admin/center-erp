@@ -110,6 +110,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (approved_amount !== undefined && approved_amount !== "" && !(typeof approved_amount === "number" && Number.isFinite(approved_amount) && approved_amount > 0)) {
     throw new HttpError(400, "Approved amount must be a positive number.");
   }
+  // approval-withdraw: a request its raiser took back says so, before any body check can say anything else
+  // (the cap-approval and head-approval paths below read their own rows, and would otherwise answer a vaguer 409).
+  if (pending.status === "Cancelled") throw new HttpError(409, "Already withdrawn by the person who raised it.");
   await flushPendingFinanceAuditEvents().catch(() => {});
   // The head this request decides: linked to it, or - if the post that created both died before the
   // link was written - still Pending with no link at all (senior review). Never a head another

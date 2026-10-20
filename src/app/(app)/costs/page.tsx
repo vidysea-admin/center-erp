@@ -376,7 +376,7 @@ function CostsInner() {
                   { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.status === "Cancelled" ? (r.decided_by?.name ? `Withdrawn by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : "Withdrawn") : (r.decided_by?.name ?? "—") },
                   // approval-withdraw: your own request can be taken back while it is still waiting.
                   { key: "withdraw", label: "Action", render: (r: any) => r.status === "Pending"
-                    ? <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); await load(postOnly); }} />
+                    ? <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => { try { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); } finally { await load(postOnly); } }} />
                     : null },
                 ]} empty="Nothing submitted yet — post your first entry above." />
               <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost. A request that is still waiting can be withdrawn.</p>
@@ -626,9 +626,13 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
 
   // approval-withdraw: the raiser takes their own Pending request back. A refusal is thrown to the dialog.
   async function withdraw(id: string, reason: string) {
-    await api(`/api/approvals/${id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
-    await load();
-    onDecided();
+    // a refusal (already decided by someone else a moment ago) still reloads, so the row shows what it is now
+    try {
+      await api(`/api/approvals/${id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
+    } finally {
+      await load();
+      onDecided();
+    }
   }
 
   const rows = tab === "Pending" ? pending : decided;

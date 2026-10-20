@@ -635,8 +635,8 @@ function HeadApprovals() {
                   {/* approval-withdraw: only while the request is still Pending (an Applying claim is in flight and cannot be taken back). */}
                   {r.status === "Pending" && (
                     <WithdrawRequestButton what={r.payload?.name} onWithdraw={async (reason) => {
-                      await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } });
-                      await load();
+                      try { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); }
+                      finally { await load(); }
                     }} />
                   )}
                 </span>
