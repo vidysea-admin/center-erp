@@ -623,6 +623,20 @@ try {
       JSON.stringify({ hr: hr.status, cr: cr.status, head: headDoc?.approval_status, cap: capDoc?.pre_approval_proposal }));
     ok("W3 every type: the finance-type withdrawals (head sign-off, cap proposal) reach the audit trail through the outbox",
       await until(async () => (await wAudit(String(headReq._id))).length === 1 && (await wAudit(String(capReq._id))).length === 1));
+    // a withdrawn head sign-off / cap proposal cannot be decided afterwards: the exact 409, and nothing moves
+    const M_GONE = "Already withdrawn by the person who raised it.";
+    for (const [label, rq] of [["head sign-off", headReq], ["cap proposal", capReq]]) {
+      for (const decision of ["Approved", "Rejected"]) {
+        const dr = await req(admin, "POST", `/api/approvals/${rq._id}`, { decision, note: "late" });
+        const after = await reqDoc(String(rq._id));
+        ok(`W3 after withdrawal: ${decision === "Approved" ? "approving" : "rejecting"} a withdrawn ${label} is 409 with its own message, and the request, its head and the ledger are unchanged`,
+          dr.status === 409 && dr.data?.error === M_GONE && after?.status === "Cancelled" && String(after.decided_by) === String(opsRow._id)
+            && (await db.collection("costcategories").findOne({ _id: headId }))?.approval_status === "Rejected"
+            && (await db.collection("costcategories").findOne({ _id: capId }))?.pre_approval_proposal === undefined
+            && (await rawCosts.countDocuments({ approval_request: rq._id })) === 0,
+          JSON.stringify({ status: dr.status, body: dr.data, after: after?.status }));
+      }
+    }
 
     // ---- W4 the effect -------------------------------------------------------------------------
     const pendBefore = await pendingN();
