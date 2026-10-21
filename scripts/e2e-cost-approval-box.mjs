@@ -519,7 +519,9 @@ try {
     const auditAll = db.collection("auditlogs");
     const wAudit = (id) => auditAll.find({ entity: "ApprovalRequest", entity_id: new ObjectId(id), new_value: "Withdrawn" }).toArray();
     const until = async (fn, ms = 15000) => { const t0 = Date.now(); for (;;) { const v = await fn(); if (v || Date.now() - t0 > ms) return v; await new Promise((r) => setTimeout(r, 300)); } };
-    const M_OWNER = "Only the person who raised a request can withdraw it.";
+    // QA-2977 (Umesh approved 2026-10-21, a deliberate contract change from the approved finding): a caller who
+    // is not the raiser gets the SAME answer as an id that does not exist, so approval ids cannot be enumerated.
+    const M_NOTFOUND = "Approval request not found";
     const M_TWICE = "This request was already withdrawn.";
     const M_LATE = (s) => `This request is already ${s}, so it can no longer be withdrawn. Only a request that is still waiting can be taken back.`;
     const untouched = (d) => d?.status === "Pending" && !d?.decided_by && !d?.decided_at && !d?.decision_note;
@@ -537,8 +539,10 @@ try {
     // ---- W1 only the person who raised it ------------------------------------------------------
     for (const [who, label] of [[approverB.cookie, "another approver"], [admin, "an Admin"], [headOnly.cookie, "a finance reader without the queue right"]]) {
       const r = await wd(who, Wt.w1.id);
-      ok(`W1 owner only: ${label} withdrawing someone else's request is 403 with its own message, and the request is untouched`,
-        r.status === 403 && r.data?.error === M_OWNER && untouched(await reqDoc(Wt.w1.id)) && (await wAudit(Wt.w1.id)).length === 0, JSON.stringify(r));
+      const miss = await wd(who, new ObjectId().toString());
+      ok(`W1 owner only: ${label} withdrawing someone else's request is 404 'Approval request not found', byte-for-byte what a missing id answers (QA-2977), and the request is untouched`,
+        r.status === 404 && r.data?.error === M_NOTFOUND && miss.status === 404 && r.status === miss.status && JSON.stringify(r.data) === JSON.stringify(miss.data)
+          && untouched(await reqDoc(Wt.w1.id)) && (await wAudit(Wt.w1.id)).length === 0 && (await reqDoc(Wt.w1.id))?.status === "Pending", JSON.stringify({ r, miss }));
     }
     const noSuch = await wd(ops, new ObjectId().toString());
     ok("W1 owner only: an id that does not exist is 404 'Approval request not found'", noSuch.status === 404 && noSuch.data?.error === "Approval request not found", JSON.stringify(noSuch));
@@ -612,8 +616,8 @@ try {
         r.status === 200 && d?.status === "Cancelled" && String(d.decided_by) === String(opsRow._id) && !!d.decided_at && (await until(async () => (await wAudit(String(o._id))).length === 1)), JSON.stringify(r).slice(0, 200));
     }
     const strangerAct = await wd(admin, String(headReq._id));
-    ok("W3 every type: a head sign-off cannot be withdrawn by an approver who did not raise it (403, head still Pending)",
-      strangerAct.status === 403 && strangerAct.data?.error === M_OWNER && (await db.collection("costcategories").findOne({ _id: headId }))?.approval_status === "Pending");
+    ok("W3 every type: a head sign-off cannot be withdrawn by an approver who did not raise it (404 like a missing id, QA-2977; request and head still Pending)",
+      strangerAct.status === 404 && strangerAct.data?.error === M_NOTFOUND && (await reqDoc(String(headReq._id)))?.status === "Pending" && (await db.collection("costcategories").findOne({ _id: headId }))?.approval_status === "Pending");
     const hr = await wd(ops, String(headReq._id));
     const cr = await wd(ops, String(capReq._id), { action: "withdraw", reason: "wrong limit" });
     const headDoc = await db.collection("costcategories").findOne({ _id: headId });
