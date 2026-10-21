@@ -988,7 +988,13 @@ console.log("\n--- -155 (QA-414 S1 / 415 / 424 / 425 / 426): the portal ID lands
     // assessmentCompleteness walks the ROSTER (not the rows) to catch. Pre-fix, their name was
     // read off the nonexistent row, so the refusal named nobody at all.
     await req(admin, "PUT", `/api/batches/${b491._id}/results`, { rows: [{ member: m491pass._id, result: "Pass" }] }, 200);
-    await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { assessment_date: "2026-10-20" }, 200);
+    // QA-2980: the assessment day is the batch's OWN day (its planned_start, the day every member above joined),
+    // not a calendar literal. rosterOnDate(assessment_date) only counts members who joined on or before that
+    // day, so a literal that falls before "today" empties the roster ("0 candidate(s) still have no final
+    // result") and the two Rule 43 arms below go red on any later run date while proving nothing.
+    const day491 = String(b491.planned_start).slice(0, 10);
+    ok("QA-2980 precondition: the batch's own start day is a calendar date the closure can be assessed on", /^\d{4}-\d{2}-\d{2}$/.test(day491), String(b491.planned_start));
+    await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { assessment_date: day491 }, 200);
     const r43 = await req(admin, "PUT", `/api/batches/${b491._id}/closure`, { assessment_status: "Completed" }, 409);
     ok("QA-491: Rule 43's refusal names the pending candidates, not nobody",
       r43.data.error?.includes("FL491DUP"), JSON.stringify(r43.data));
