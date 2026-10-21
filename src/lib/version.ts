@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-332";
+export const RELEASE = "2026.08.14-333";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -297,6 +297,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // question; the head's costs are NOT claimed usable). No number is quoted. No clause claims more than
 // those verdicts and the manifest.
 export const RELEASE_NOTE_CURRENT =
+  "-333 adds a new user role, Center Manager, and makes two small corrections to the Withdraw button. " +
+  "In Admin -> Users an Admin can now give a user the Center Manager role and must pick one or more centres for them; a Center Manager cannot be saved without a centre. " +
+  "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): records of other centres cannot be seen or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
+  "Changes a Center Manager makes to their centre's fixed details go to an Admin for approval, as a Principal login's do. " +
+  "A Center Manager gets only the alerts tied to their own centre(s), can enter costs for them, cannot approve anything and cannot create users. " +
+  "When an Admin changes a Center Manager's centres, the change applies to their open session within a few seconds. " +
+  "The Operations team is unchanged. " +
+  "Withdraw: asking to withdraw a request raised by someone else now gets the same answer as asking for a request that does not exist; and after a cost-edit request is withdrawn, its raiser can submit the same edit again. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -333 note: one clause per checked criterion (center-manager-role CM1-CM7, withdraw-fixes QA-2977/QA-2978).
+const RELEASE_NOTE_ARCHIVE_332 =
   "-332 lets the person who raised a cost or approval request withdraw it while it is still waiting. " +
   "On a request you raised that is still Pending, the Costs page (My submissions), Admin -> Approvals and the Finance cost head approvals now show a Withdraw button. " +
   "It asks you to confirm and lets you add a reason. " +
@@ -2165,6 +2177,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -333: ARCHIVE_332 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_332 + " " +
   // -332: ARCHIVE_331 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_331 + " " +
   // -331: ARCHIVE_330 wired in here in the SAME bump that declared it, same discipline.
