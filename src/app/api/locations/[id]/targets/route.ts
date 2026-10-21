@@ -7,6 +7,7 @@ import { capacitySummary, trainerCountsFor } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
+import { fixedEditApprovalOpts, parksFixedEdits } from "@/lib/roles";
 // 2026-08-31: LocationTarget now carries aebas_password (per job-role AEBAS login, same reason
 // tc_id is duplicated onto this schema). This GET has no role gate of its own — every reader
 // with location scope reaches it — so it needs the SAME masking the centre-level door already
@@ -102,11 +103,12 @@ export const PUT = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   // R-F (CEO 14/08 [36:55]): "a location is now approved for a certain program — they
   // should be able to do that … let us send it for the approval to the admin." A centre
   // login's target change parks; the row is written by the approval replay.
-  if (user.role === "Location") {
+  if (parksFixedEdits(user.role)) { // Location login or Center Manager (lib/roles.ts)
     const gate = await requireApproval("location.edit", user, {
       entity: "Location", entity_id: id, location: id,
       summary: `${user.name} suggests a target change (${program.name}): ${Object.keys(set).join(", ")}`,
       payload: { target: { program: body.program, set } },
+      ...fixedEditApprovalOpts(user.role),
     });
     if (gate) return NextResponse.json({ queued: true, item: gate.request }, { status: 202 });
   }

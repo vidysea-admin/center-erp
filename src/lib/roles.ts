@@ -22,6 +22,26 @@ export const ADMIN_OPS = ["Admin", ...OPS_TEAM] as const;
 /** Roles confined to `location_scope` whatever its length (an empty scope sees nothing). */
 export const ALWAYS_SCOPED_ROLES = ["Location", "Trainer", "Center Manager"] as const;
 
+/**
+ * Logins whose edits to their OWN centre's fixed details are not applied directly (Umesh, 2026-10-21,
+ * qa/gates/center-manager-role.md item 5): the centre's identity fields are refused, and the rest of the
+ * centre details, the approved targets and the rooms are parked as a location.edit request for Admin.
+ * ONE group read by the three doors that carry that branch (locations/[id], locations/[id]/rooms,
+ * locations/[id]/targets) - a Center Manager is exactly as bound as a Location (Principal) login.
+ */
+export const FIXED_EDIT_PARKING_ROLES = ["Location", "Center Manager"] as const;
+
+export function parksFixedEdits(role: unknown): boolean {
+  return (FIXED_EDIT_PARKING_ROLES as readonly string[]).includes(String(role));
+}
+
+/** Extra requireApproval options for a parked centre edit. A Center Manager's edit must ALWAYS reach
+ *  Admin (the decision is "must park"), so it does not depend on the location.edit rule being switched
+ *  on; a Location login keeps the rule-dependent behaviour it has always had. */
+export function fixedEditApprovalOpts(role: unknown): { fallbackApproverRole?: string } {
+  return role === "Center Manager" ? { fallbackApproverRole: "Admin" } : {};
+}
+
 export function isOpsTeam(role: unknown): boolean {
   return (OPS_TEAM as readonly string[]).includes(String(role));
 }

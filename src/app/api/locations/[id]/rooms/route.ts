@@ -5,6 +5,7 @@ import { requirePerm } from "@/lib/permissions";
 import { Room } from "@/models";
 import { requireApproval } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
+import { fixedEditApprovalOpts, parksFixedEdits } from "@/lib/roles";
 
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
@@ -31,11 +32,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // QA-075 (CEO [36:52-37:28]): a SPOC "should be able to add number of classrooms … number
   // of labs … once they do that, let us send it for the approval to the admin" — the same
   // location.edit parking as their field edits (direct while the rule is off).
-  if (user.role === "Location") {
+  if (parksFixedEdits(user.role)) { // Location login or Center Manager (lib/roles.ts)
     const gate = await requireApproval("location.edit", user, {
       entity: "Location", entity_id: id, location: id,
       summary: `${user.name} suggests adding a ${String(body.type).toLowerCase()}: ${body.name}${body.capacity ? ` (capacity ${body.capacity})` : ""}`,
       payload: { room: { name: body.name, type: body.type, capacity: body.capacity } },
+      ...fixedEditApprovalOpts(user.role),
     });
     if (gate) return NextResponse.json({ queued: true, item: gate.request }, { status: 202 });
   }

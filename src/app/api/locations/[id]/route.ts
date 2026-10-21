@@ -1,4 +1,4 @@
-import { ADMIN_OPS } from "@/lib/roles";
+import { ADMIN_OPS, fixedEditApprovalOpts, parksFixedEdits } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
@@ -33,7 +33,7 @@ export const { GET, PATCH } = itemRoutes({
     // than whatever eight, ten fields you want to fix" — and their change applies only once
     // the Admin approves it. The fixed ten are the centre's identity and the master-sheet
     // truth; everything else parks as a location.edit request (direct while the rule is off).
-    if (user.role === "Location") {
+    if (parksFixedEdits(user.role)) { // Location login or Center Manager (lib/roles.ts)
       // QA-089: district and operating_partner ride the AVPL rebase too — everything the
       // master sheet writes is fixed the same way, or the next rebase silently undoes an
       // approved SPOC edit.
@@ -49,6 +49,7 @@ export const { GET, PATCH } = itemRoutes({
           entity: "Location", entity_id: id, location: id,
           summary: `${existing.name}: ${user.name} suggests changing ${changed.join(", ")}`,
           payload: { patch: data },
+          ...fixedEditApprovalOpts(user.role),
         });
         if (gate) throw new HttpError(202, `Sent for approval: ${gate.request.summary}`);
       }

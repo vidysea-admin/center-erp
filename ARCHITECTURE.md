@@ -492,7 +492,16 @@ rights confined to the centres in `location_scope`, so the copies became `isOpsT
 (`api/users/route.ts`, Admin only), the approver pickers (a Center Manager can never approve - `api/approvals` PUT refuses
 it, the Admin dropdown omits it), and centre-LESS alerts (public trainer-apply, enrol-otp, portal-lookup stay Operations/Admin).
 The scope is `authz.isScoped` reading `ALWAYS_SCOPED_ROLES`; an empty `location_scope` is refused on create/edit and sees
-nothing (fail closed). Pinned by the `[CM1]..[CM5]` block at the end of `scripts/e2e-roles.mjs`.
+nothing (fail closed). Pinned by the `[CM1]..[CM7]` block at the end of `scripts/e2e-roles.mjs`.
+
+Fix cycle 1 (review Block + Umesh gate items 5 and 6): (a) Rule 38 has a DESTINATION half - `batches/[id]` PATCH (location, room,
+trainer), `trainer-requests` POST and `candidates/[id]` PATCH now check where a record is being SENT, not only where it is;
+(b) a Center Manager's own-centre FIXED details are bound exactly like a Location login's through ONE group,
+`FIXED_EDIT_PARKING_ROLES` / `parksFixedEdits` / `fixedEditApprovalOpts` in `roles.ts`, read by the three doors that carry the
+branch (`locations/[id]`, `locations/[id]/rooms`, `locations/[id]/targets`): identity fields refuse, the rest parks as a
+`location.edit` request that always reaches Admin for a Center Manager (no dependence on the rule switch); (c) a scope change
+applies immediately because `authz.requireUser` already re-reads role and `location_scope` from the User row (5 s cache, dropped
+on every users PATCH) - no new mechanism was needed, `[CM7]` pins it.
 
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
