@@ -55,6 +55,17 @@ export const { GET, PATCH } = itemRoutes({
         const had = new Set(((existing as any).capable_locations ?? []).map(was));
         for (const v of body.capable_locations as unknown[]) if (v && !had.has(String(v))) assertLocationInScope(user, String(v));
       }
+      // Release -333 final review (R3): the REMOVAL half. A trainer tied to A and B is in scope for A's manager, and
+      // dropping or clearing the tie to B is a write at B. A tie that is CHANGED away from, or DROPPED, must itself
+      // be inside the scope; ties inside the scope stay editable. Same refusal text as the add side.
+      for (const f of ["home_location", "nominated_for_location"] as const) {
+        const old = was((existing as any)[f]);
+        if (body[f] !== undefined && old && String(body[f] ?? "") !== old) assertLocationInScope(user, old);
+      }
+      if (Array.isArray(body.capable_locations)) {
+        const keep = new Set((body.capable_locations as unknown[]).map((v) => was(v)));
+        for (const oldTie of ((existing as any).capable_locations ?? []).map(was)) if (oldTie && !keep.has(oldTie)) assertLocationInScope(user, oldTie);
+      }
     }
     // QA-141 (Umesh): edits are as strict as creates — a fixed-up phone lands as the bare 10.
     if (body.phone !== undefined) {

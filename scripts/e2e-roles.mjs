@@ -6333,6 +6333,62 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const mvCand = await req(cm, "PATCH", `/api/candidates/${candOwn?._id}`, { location: foreign._id });
     refused("[CM3] move an own candidate to ANOTHER centre (candidate PATCH location)", mvCand, [403], /out of scope/i);
     ok("[CM3] ...the candidate is still at the own centre", idOf((await req(admin, "GET", `/api/candidates/${candOwn?._id}`)).data.item?.location) === idOf(own._id));
+    // Fix cycle 2 (release-333 bump review, R2): the planner READ takes a centre id too. A scoped login must get the same
+    // 403 as every other door for a foreign centre, before any lookup; an own centre still answers.
+    const pbForeign = await req(cm, "GET", `/api/plan-batch?start=2027-04-12&location=${foreign._id}`);
+    refused("[CM3] read the batch planner for ANOTHER centre (plan-batch GET location)", pbForeign, [403], /^Location out of scope/i);
+    ok("[CM3] ...and the refusal carries no plan data", pbForeign.data?.milestones === undefined && pbForeign.data?.scoped_to === undefined, JSON.stringify(Object.keys(pbForeign.data ?? {})));
+    const pbOwn = await req(cm, "GET", `/api/plan-batch?start=2027-04-12&location=${own._id}`);
+    ok("[CM2] the batch planner for the OWN centre still answers (200 with milestones)", pbOwn.status === 200 && Array.isArray(pbOwn.data?.milestones), `got ${pbOwn.status} ${JSON.stringify(pbOwn.data?.error)}`);
+    const pbOps = await req(ops, "GET", `/api/plan-batch?start=2027-04-12&location=${foreign._id}`);
+    ok("[CM2] Operations still reads the planner for any centre (200, unchanged)", pbOps.status === 200, `got ${pbOps.status} ${JSON.stringify(pbOps.data?.error)}`);
+    // Fix cycle 2 (R1): the operational-status check on a batch MOVE is for scoped logins only. Operations and Admin behave as at
+    // base 3cfe6ed, where PATCH location had no Rule 1 check at all - so moving a batch to a halted centre succeeds (200).
+    const haltCode = "CMH" + Date.now().toString().slice(-6);
+    const haltLoc = (await req(admin, "POST", "/api/locations", { name: `CM2 Halted ${S}`, code: haltCode, approval_status: "Approved", operational_status: "Stopped" }, 201)).data?.item;
+    ok("[CM2] fixture: a marked Stopped centre exists", !!haltLoc?._id, "location create failed");
+    const hb = await req(admin, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-08-02" });
+    ok("[CM2] fixture: an own-centre Planning batch for Operations to move", hb.status === 201 && !!hb.data?.item?._id, `got ${hb.status} ${JSON.stringify(hb.data?.error)}`);
+    if (haltLoc?._id && hb.data?.item?._id) {
+      const mvOps = await req(ops, "PATCH", `/api/batches/${hb.data.item._id}`, { location: haltLoc._id });
+      ok("[CM2] Operations moves a batch to a Stopped centre exactly as at base (200, no new 409)", mvOps.status === 200, `got ${mvOps.status} ${JSON.stringify(mvOps.data?.error)}`);
+      ok("[CM2] ...and the batch is now at that centre", idOf((await req(admin, "GET", `/api/batches/${hb.data.item._id}`)).data.item?.location) === idOf(haltLoc._id));
+    }
+    // Fix cycle 2 (final review, R3): REMOVING or CLEARING a tie to another centre is a write at that centre. A trainer tied to the
+    // own centre AND a foreign one is in scope for the Center Manager; dropping the foreign tie must be refused, ties inside scope stay editable.
+    const phoneN = (n) => `96${S}${n}`.slice(0, 10);
+    const twoTie = (await req(admin, "POST", "/api/trainers", { name: `CM TwoTie ${S}`, phone: phoneN("11"), skills: ["x"], home_location: own._id, nominated_for_location: foreign._id, capable_locations: [own._id, foreign._id] })).data?.item;
+    ok("[CM3] fixture: a trainer tied to the own centre AND a foreign centre", !!twoTie?._id && idOf(twoTie.nominated_for_location) === idOf(foreign._id), JSON.stringify(twoTie ?? null));
+    if (twoTie?._id) {
+      const tiesNow = async () => { const t = (await req(admin, "GET", `/api/trainers/${twoTie._id}`)).data.item; return JSON.stringify([idOf(t?.home_location), idOf(t?.nominated_for_location), (t?.capable_locations ?? []).map(idOf).sort()]); };
+      const t0 = await tiesNow();
+      const rmCap = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { capable_locations: [own._id] });
+      refused("[CM3] drop the tie to ANOTHER centre from capable_locations (trainer PATCH)", rmCap, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (capable_locations)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const clrNom = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { nominated_for_location: null });
+      refused("[CM3] clear the nomination to ANOTHER centre (trainer PATCH nominated_for_location null)", clrNom, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (nomination)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const moveNom = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { nominated_for_location: own._id });
+      refused("[CM3] change the nomination away from ANOTHER centre to the own one (trainer PATCH)", moveNom, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (nomination moved)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const resave = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { home_location: own._id, nominated_for_location: foreign._id, capable_locations: [own._id, foreign._id] });
+      ok("[CM2] re-saving the trainer form with the SAME ties still works (200, no over-refusal)", resave.status === 200, `got ${resave.status} ${JSON.stringify(resave.data?.error)}`);
+      ok("[CM3] ...and nothing changed", (await tiesNow()) === t0);
+    }
+    // Fix cycle 2 (R4): fulfilling a trainer request is a destination too - the trainer must be inside the scope.
+    const foreignOnly = (await req(admin, "POST", "/api/trainers", { name: `CM ForeignOnly ${S}`, phone: phoneN("22"), skills: ["x"], home_location: foreign._id })).data?.item;
+    const ownOnly = (await req(admin, "POST", "/api/trainers", { name: `CM OwnOnly ${S}`, phone: phoneN("33"), skills: ["x"], home_location: own._id })).data?.item;
+    const trq = (await req(admin, "POST", "/api/trainer-requests", { location: own._id, program: prog._id, required_by_date: "2027-09-09" })).data?.item;
+    ok("[CM3] fixture: an own-centre trainer request and two trainers (own-only, foreign-only)", !!trq?._id && !!foreignOnly?._id && !!ownOnly?._id, `${trq?._id} ${foreignOnly?._id} ${ownOnly?._id}`);
+    if (trq?._id && foreignOnly?._id && ownOnly?._id) {
+      const fulOf = async () => idOf((await req(admin, "GET", `/api/trainer-requests/${trq._id}`)).data.item?.fulfilled_by_trainer);
+      const f0 = await fulOf();
+      const fulF = await req(cm, "PATCH", `/api/trainer-requests/${trq._id}`, { fulfilled_by_trainer: foreignOnly._id });
+      refused("[CM3] fulfil an own request with a trainer of ANOTHER centre (trainer-request PATCH)", fulF, [403], /out of scope/i);
+      ok("[CM3] ...the request is still unfulfilled", (await fulOf()) === f0 && (await fulOf()) !== idOf(foreignOnly._id), `now ${await fulOf()}`);
+      const fulO = await req(cm, "PATCH", `/api/trainer-requests/${trq._id}`, { fulfilled_by_trainer: ownOnly._id });
+      ok("[CM2] ...but a trainer of the own centre is accepted (200)", fulO.status === 200 && (await fulOf()) === idOf(ownOnly._id), `got ${fulO.status} ${JSON.stringify(fulO.data?.error)}`);
+    }
   }
 
   // ---------------- CM6 (Umesh 2026-10-21, gate item 5): own-centre FIXED details park for Admin ----------------
