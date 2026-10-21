@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError, isScoped, assertLocationInScope } from "@/lib/authz";
-import { ACTIVE_BATCH_STATUSES, earliestPossibleStart, earliestStartNote, planBatchBackward } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, assertTrainerInScope, earliestPossibleStart, earliestStartNote, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { Batch, Trainer } from "@/models";
 
@@ -31,6 +31,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // it names them directly. Without it the centre's CURRENT trainer is used, which is what the
   // planner screen wants.
   const trainerParam = q.get("trainer");
+  // QA-2983 (S3): the named trainer is another person's record. A scoped login (Location, Center Manager) may name only a trainer tied to its own
+  // centres - the SAME check the trainer routes and the batch doors use (rules.ts assertTrainerInScope), 403 before the lookup, so the name,
+  // pipeline_status and tot_done_on of another centre's trainer never leave. Admin and Operations are unscoped and skip it.
+  if (trainerParam && isScoped(user)) await assertTrainerInScope(user, trainerParam);
   if (!start || isNaN(new Date(start).getTime())) throw new HttpError(400, "start (YYYY-MM-DD) is required");
   const defaults = await getDefaults();
 
