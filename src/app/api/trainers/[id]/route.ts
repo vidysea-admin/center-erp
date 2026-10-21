@@ -47,6 +47,13 @@ export const { GET, PATCH } = itemRoutes({
     // CHANGED value is checked (the trainer form re-sends all three ties on every save, and a legacy tie outside
     // the scope must not turn a re-save into a refusal).
     if (isScoped(user)) {
+      // Release -333 cycle 3 (R9, checker B P2): both tie guards below run only for an ARRAY, so a scoped login sending
+      // capable_locations as null, a string, a number or an object skipped them and wiped the whole list, including
+      // ties to other centres. A key that is present must be a list. (home_location / nominated_for_location need no
+      // such branch: a null or non-string value reaches the removal loop below and asserts the OLD tie is in scope.)
+      if ("capable_locations" in body && !Array.isArray(body.capable_locations)) {
+        throw new HttpError(400, "capable_locations must be a list of centres.");
+      }
       const was = (v: unknown) => String((v as { _id?: unknown })?._id ?? v ?? "");
       for (const f of ["home_location", "nominated_for_location"] as const) {
         if (body[f] && String(body[f]) !== was((existing as any)[f])) assertLocationInScope(user, String(body[f]));

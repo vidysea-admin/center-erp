@@ -6436,6 +6436,20 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const resave = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { home_location: own._id, nominated_for_location: foreign._id, capable_locations: [own._id, foreign._id] });
       ok("[CM2] re-saving the trainer form with the SAME ties still works (200, no over-refusal)", resave.status === 200, `got ${resave.status} ${JSON.stringify(resave.data?.error)}`);
       ok("[CM3] ...and nothing changed", (await tiesNow()) === t0);
+      // Fix cycle 3 (R9): the capable_locations guards ran only for an ARRAY, so null, a string or an object skipped them
+      // and wiped the whole list including the foreign tie. A scoped login now gets 400 for a non-list; nothing is written.
+      for (const [label, val] of [["null", null], ["a string", "not-a-list"], ["an object", { x: 1 }]]) {
+        const bad = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { capable_locations: val });
+        refused(`[CM3] capable_locations sent as ${label} by a Center Manager is 400 (trainer PATCH, R9)`, bad, [400], /capable_locations must be a list/i);
+        ok(`[CM3] ...the capable list incl. the foreign tie is unchanged (${label})`, (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      }
+    }
+    // Fix cycle 3 (R9): an unscoped Operations login is not touched by the new refusal (behaves as at base 3cfe6ed).
+    const opsTrainer = (await req(admin, "POST", "/api/trainers", { name: `CM OpsNull ${S}`, phone: phoneN("44"), skills: ["x"], home_location: own._id, capable_locations: [own._id, foreign._id] })).data?.item;
+    ok("[CM3] fixture: a trainer with two capable centres for the Operations null arm", !!opsTrainer?._id, JSON.stringify(opsTrainer ?? null));
+    if (opsTrainer?._id) {
+      const opsNull = await req(ops, "PATCH", `/api/trainers/${opsTrainer._id}`, { capable_locations: null });
+      ok("[CM2] Operations PATCH with capable_locations null is NOT refused (200, as at base 3cfe6ed)", opsNull.status === 200, `got ${opsNull.status} ${JSON.stringify(opsNull.data?.error)}`);
     }
     // Fix cycle 2 (R4): fulfilling a trainer request is a destination too - the trainer must be inside the scope.
     const foreignOnly = (await req(admin, "POST", "/api/trainers", { name: `CM ForeignOnly ${S}`, phone: phoneN("22"), skills: ["x"], home_location: foreign._id })).data?.item;
