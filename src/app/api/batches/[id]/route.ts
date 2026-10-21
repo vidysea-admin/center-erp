@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, assertLocationInScope, isScoped } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
-import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
-import { assertBatchInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
+import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Room, Trainer } from "@/models";
+import { assertBatchInScope, assertLocationOperational, assertTrainerInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
 import { batchStatusLabel } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
@@ -281,6 +281,24 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const batch = await Batch.findById(id);
   if (!batch) throw new HttpError(404, "Batch not found");
   const body = await readJson(req);
+  // Rule 38, the DESTINATION half (center-manager-role review, finding 1): assertBatchInScope above only
+  // asks where the batch IS. This door also writes where it is GOING - location, room, trainer - and a
+  // scoped login (Location, Center Manager) could send any id and move its batch, or hang a foreign
+  // room/trainer on it, into a centre it has no right to. 403 comes before any 409 so a refused caller
+  // learns nothing about the target state. Only a value that CHANGES is checked: the batch page
+  // re-sends the whole form on every save, and a legacy value must not turn a re-save into a refusal.
+  if (body.location !== undefined && String(body.location) !== String(batch.location)) {
+    assertLocationInScope(user, String(body.location));
+    await assertLocationOperational(String(body.location), "Moving a batch to this centre"); // Rule 1, as on create
+  }
+  if (isScoped(user)) {
+    if (body.room && String(body.room) !== String(batch.room ?? "")) {
+      const rm = await Room.findById(body.room).select("location").lean<any>();
+      if (!rm) throw new HttpError(404, "Room not found");
+      if (!user.location_scope.map(String).includes(String(rm.location))) throw new HttpError(403, "Room out of scope - it belongs to another centre.");
+    }
+    if (body.trainer && String(body.trainer) !== String(batch.trainer ?? "")) await assertTrainerInScope(user, String(body.trainer));
+  }
   // A closed batch is frozen - with ONE exception, and the portal's own timing is what demands it:
   // SIDH issues the batch ID at or after completion, so the single status in which that id actually
   // arrives was the one status in which this door refused to record it. The batch page has been

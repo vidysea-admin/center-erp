@@ -3,6 +3,7 @@ import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
 import { Location, Notification, Program, TrainerRequest } from "@/models";
 import { assertLocationOperational } from "@/lib/rules";
+import { assertLocationInScope } from "@/lib/authz";
 import { mailUsersByRole } from "@/lib/mailer";
 
 export const { GET, POST } = collectionRoutes({
@@ -12,7 +13,10 @@ export const { GET, POST } = collectionRoutes({
   writeRoles: [...ADMIN_OPS, "Location"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no new trainer requests for it.
-  async beforeCreate(body) {
+  // center-manager-role review, finding 2: a scoped login (Location, Center Manager) may raise a request
+  // only for a centre in its own list - the row, the alert and the mail all land AT the named centre.
+  async beforeCreate(body, user) {
+    if (body.location) assertLocationInScope(user, String(body.location));
     if (body.location) await assertLocationOperational(body.location, "Raising a trainer request");
   },
   populate: [
