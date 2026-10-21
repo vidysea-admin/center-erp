@@ -6311,6 +6311,63 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("[CM3] ...the candidate is still at the own centre", idOf((await req(admin, "GET", `/api/candidates/${candOwn?._id}`)).data.item?.location) === idOf(own._id));
   }
 
+  // ---------------- CM6 (Umesh 2026-10-21, gate item 5): own-centre FIXED details park for Admin ----------------
+  // Exactly the Location (Principal) branch, shared through roles.ts: identity fields are refused, the other
+  // centre details / approved targets / rooms are parked as a location.edit request and nothing is applied
+  // until Admin approves. The location.edit rule is OFF in this DB, so this also pins that a Center Manager's
+  // edit parks without the rule being switched on.
+  {
+    const ownNow = async () => (await req(admin, "GET", `/api/locations/${own._id}`)).data.item;
+    const l0 = await ownNow();
+    const codeTry = await req(cm, "PATCH", `/api/locations/${own._id}`, { code: `${l0.code}X` });
+    refused("[CM6] a Center Manager cannot change the centre's code", codeTry, [403], /cannot change/i);
+    ok("[CM6] ...the code is unchanged", (await ownNow()).code === l0.code, String((await ownNow()).code));
+    const addr = `CM Wing ${S}`;
+    const addrTry = await req(cm, "PATCH", `/api/locations/${own._id}`, { address: addr });
+    ok("[CM6] a centre-detail edit parks for approval (202, 'Sent for approval')", addrTry.status === 202 && /Sent for approval/i.test(String(addrTry.data?.error ?? "")), `got ${addrTry.status} ${JSON.stringify(addrTry.data?.error)}`);
+    ok("[CM6] ...nothing is applied while it is parked", (await ownNow()).address === l0.address, String((await ownNow()).address));
+    const pend = async () => (await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [];
+    const pAddr = (await pend()).find((i) => i.action === "location.edit" && /address/i.test(String(i.summary ?? "")) && JSON.stringify(i.payload ?? "").includes(addr));
+    ok("[CM6] ...and it sits in the Admin queue", !!pAddr, "no pending location.edit carrying the new address");
+    if (pAddr) {
+      const dec = await req(admin, "POST", `/api/approvals/${pAddr._id}`, { decision: "Approved" });
+      ok("[CM6] Admin approves it (2xx)", dec.status >= 200 && dec.status < 300, `got ${dec.status} ${JSON.stringify(dec.data?.error)}`);
+      ok("[CM6] ...and only now is the address applied", (await ownNow()).address === addr, String((await ownNow()).address));
+    }
+    const tgtTry = await req(cm, "PUT", `/api/locations/${own._id}/targets`, { program: prog._id, approved_target: 7771 });
+    ok("[CM6] an approved-target change parks (202, queued)", tgtTry.status === 202 && tgtTry.data?.queued === true, `got ${tgtTry.status} ${JSON.stringify(tgtTry.data).slice(0, 120)}`);
+    ok("[CM6] ...no target row carries the number while parked", !JSON.stringify((await req(admin, "GET", `/api/locations/${own._id}/targets`)).data).includes('"approved_target":7771'));
+    const roomName = `CM Lab ${S}`;
+    const roomTry = await req(cm, "POST", `/api/locations/${own._id}/rooms`, { name: roomName, type: "Lab", capacity: 12 });
+    ok("[CM6] a new room parks (202, queued)", roomTry.status === 202 && roomTry.data?.queued === true, `got ${roomTry.status} ${JSON.stringify(roomTry.data).slice(0, 120)}`);
+    const roomsOf = async () => (await req(admin, "GET", `/api/locations/${own._id}/rooms`)).data.items ?? [];
+    ok("[CM6] ...no such room exists while parked", !(await roomsOf()).some((r) => r.name === roomName));
+    if (roomTry.data?.item?._id) {
+      await req(admin, "POST", `/api/approvals/${roomTry.data.item._id}`, { decision: "Approved" });
+      ok("[CM6] ...the room exists only after Admin approves", (await roomsOf()).some((r) => r.name === roomName));
+    }
+  }
+
+  // ---------------- CM7 (Umesh 2026-10-21, gate item 6): a scope change applies IMMEDIATELY ----------------
+  // The existing session (same cookie, no re-login) is judged on the stored scope, not the sign-in token.
+  {
+    const cmTwo = await login(`cm.two.${S}@vidysea-test.local`, PW);
+    const twoId = two.data?.item?._id;
+    const seeBefore = await req(cmTwo, "GET", `/api/locations/${foreign._id}`);
+    ok("[CM7] fixture: with both centres assigned, the session reads the second centre (200)", seeBefore.status === 200, `got ${seeBefore.status}`);
+    const rm = await req(admin, "PATCH", `/api/users/${twoId}`, { location_scope: [own._id] });
+    ok("[CM7] Admin removes the second centre from that Center Manager (2xx)", rm.status >= 200 && rm.status < 300, `got ${rm.status} ${JSON.stringify(rm.data?.error)}`);
+    const seeAfter = await req(cmTwo, "GET", `/api/locations/${foreign._id}`);
+    refused("[CM7] the SAME session is refused that centre on the very next request", seeAfter, [403], /out of scope/i);
+    if (foreignBatch) {
+      const bAfter = await req(cmTwo, "PATCH", `/api/batches/${foreignBatch._id}`, { target_size: 91 });
+      refused("[CM7] ...and cannot edit a batch there either", bAfter, [403], /out of scope/i);
+      ok("[CM7] ...the batch is unchanged", (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size !== 91);
+    }
+    const locsTwo = (await req(cmTwo, "GET", "/api/locations?limit=2000")).data.items ?? [];
+    ok("[CM7] ...and its centre list is now exactly the one remaining centre", locsTwo.length === 1 && idOf(locsTwo[0]) === idOf(own._id), JSON.stringify(locsTwo.map((l) => l.code)));
+  }
+
   // ---------------- CM3: every list shows only the own centre ----------------
   const only = (items, pick) => items.length > 0 && items.every((x) => pick(x));
   const locsCm = (await req(cm, "GET", "/api/locations?limit=2000")).data.items ?? [];
