@@ -6404,6 +6404,27 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     ok("[CM2] the batch planner for the OWN centre still answers (200 with milestones)", pbOwn.status === 200 && Array.isArray(pbOwn.data?.milestones), `got ${pbOwn.status} ${JSON.stringify(pbOwn.data?.error)}`);
     const pbOps = await req(ops, "GET", `/api/plan-batch?start=2027-04-12&location=${foreign._id}`);
     ok("[CM2] Operations still reads the planner for any centre (200, unchanged)", pbOps.status === 200, `got ${pbOps.status} ${JSON.stringify(pbOps.data?.error)}`);
+    // QA-2983 (S3): the planner's `trainer` param answered with another centre's trainer (name, pipeline_status, tot_done_on) to ANY scoped login.
+    // A scoped login gets the existing trainer-scope refusal (assertTrainerInScope); Admin and Operations are unchanged.
+    {
+      const q2983 = (await req(admin, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+      const ties2983 = (t) => [t.nominated_for_location, t.home_location, ...(t.capable_locations ?? [])].filter(Boolean).map(idOf);
+      const frTr = q2983.find((t) => ties2983(t).includes(idOf(foreign._id)) && !ties2983(t).includes(idOf(own._id)));
+      const owTr = q2983.find((t) => ties2983(t).includes(idOf(own._id)));
+      ok("[Q2983] fixtures: a trainer tied only to the other centre, a trainer tied to the own centre, a Location login", !!frTr && !!owTr && !!spoc, `foreign=${!!frTr} own=${!!owTr}`);
+      if (frTr && owTr) {
+        const url = (t) => `/api/plan-batch?start=2027-04-12&location=${own._id}&trainer=${t._id}`;
+        const cmF = await req(cm, "GET", url(frTr));
+        refused("[Q2983] Center Manager reads the planner naming a trainer of ANOTHER centre", cmF, [403], /^Trainer out of scope/i);
+        ok("[Q2983] ...and the refusal carries no trainer data", cmF.data?.scoped_to === undefined && !JSON.stringify(cmF.data ?? {}).includes(String(frTr.name)), JSON.stringify(cmF.data).slice(0, 160));
+        const cmO = await req(cm, "GET", url(owTr));
+        ok("[Q2983] Center Manager reads the planner naming a trainer of the OWN centre (200 with that trainer)", cmO.status === 200 && idOf(cmO.data?.scoped_to?.trainer?._id) === idOf(owTr._id) && cmO.data.scoped_to.trainer.name === owTr.name, `got ${cmO.status} ${JSON.stringify(cmO.data).slice(0, 200)}`);
+        const locF = await req(spoc, "GET", url(frTr));
+        refused("[Q2983] Location login reads the planner naming a trainer of ANOTHER centre", locF, [403], /^Trainer out of scope/i);
+        const opsF = await req(ops, "GET", url(frTr));
+        ok("[Q2983] Operations reads the planner naming a trainer of another centre (200 with that trainer, unchanged)", opsF.status === 200 && idOf(opsF.data?.scoped_to?.trainer?._id) === idOf(frTr._id), `got ${opsF.status} ${JSON.stringify(opsF.data).slice(0, 200)}`);
+      }
+    }
     // Fix cycle 2 (R1): the operational-status check on a batch MOVE is for scoped logins only. Operations and Admin behave as at
     // base 3cfe6ed, where PATCH location had no Rule 1 check at all - so moving a batch to a halted centre succeeds (200).
     const haltCode = "CMH" + Date.now().toString().slice(-6);
