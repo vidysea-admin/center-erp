@@ -4,6 +4,7 @@
 // registration form khulta hai; banane wala edit kare, jise share kiya wo sirf dekhe (ya
 // status update kar paaye), aur ye warnings sirf yahin aayein". The signed-in side: read for
 // anyone who can see the batch; edit for batches.manage holders (Admin/Operations).
+import { isAdminOrOps } from "@/lib/roles";
 import { use, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
@@ -15,7 +16,7 @@ export default function BatchPlanPage({ params }: { params: Promise<{ id: string
   const { id } = use(params);
   const { data: session } = useSession();
   const role = (session?.user as any)?.role;
-  const canEdit = role === "Admin" || role === "Operations";
+  const canEdit = isAdminOrOps(role);
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);

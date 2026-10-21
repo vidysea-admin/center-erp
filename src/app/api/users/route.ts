@@ -1,3 +1,4 @@
+import { centerManagerScopeError } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
@@ -39,13 +40,16 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // 2026-08-12 audit (S1): the guard named only "Admin", so a users.manage holder could mint
   // themselves an Operations account — unscoped, can_edit, and exempt from Rule 39 — which is
   // the same escalation by a different door. Any privileged shape is now Admin-only.
-  const elevated = body.role === "Admin" || body.role === "Operations"
+  const elevated = body.role === "Admin" || body.role === "Operations" || body.role === "Center Manager"
     || (body.extra_permissions?.length ?? 0) > 0
     || body.can_edit === true
     || (body.location_scope?.length ?? 0) === 0; // unscoped == sees every centre
   if (elevated && user.role !== "Admin") {
     throw new HttpError(403, "Only an Admin may create Admin/Operations accounts, unscoped accounts, or grant special rights.");
   }
+  // Center Manager (2026-10-21): one or more centres, never none - refused before anything is written.
+  const scopeErr = centerManagerScopeError(body.role, body.location_scope);
+  if (scopeErr) throw new HttpError(400, scopeErr);
   // QA-141 (Umesh): the login identity itself gets format-checked — a mistyped email here is
   // an account nobody can ever mail or reset.
   const eErr = emailError(body.email);

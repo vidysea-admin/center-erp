@@ -251,7 +251,7 @@ function RolesOverview({ items, onOpen, setError, myId }: { items: any[]; onOpen
   const [rights, setRights] = useState<any[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const roles = ["Admin", "Operations", "Location", "Enrollment", "Trainer"];
+  const roles = ["Admin", "Operations", "Center Manager", "Location", "Enrollment", "Trainer"];
   // Only ACTIVE accounts are counted. A deactivated login cannot do anything, so counting it in
   // "Admin · 4" tells an Admin they have four people with Admin powers when they have two. The rows
   // still LIST the inactive ones (with their badge) — hiding them would be the opposite mistake.
@@ -507,7 +507,7 @@ function Users({ error, setError }: any) {
           { key: "name", label: "Name", sortable: true, render: (r: any) => r.dropped ? <span className="text-gray-400 line-through">{r.name}</span> : r.name },
           { key: "email", label: "Email", sortable: true, render: (r: any) => r.dropped ? <span className="text-gray-400">{r.dropped_email ?? r.email} (dropped)</span> : r.email },
           { key: "role", label: "Role", sortable: true, render: (r: any) => <Chip value={r.role} /> },
-          { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
+          { key: "location_scope", label: "Scope", filterText: (r: any) => ["Location", "Trainer", "Center Manager"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All", render: (r: any) => ["Location", "Trainer", "Center Manager"].includes(r.role) ? (r.location_scope ?? []).map((l: any) => l.name ?? l.code).join(", ") || "none" : "All" },
           { key: "can_edit", label: "Can edit", filterText: (r: any) => (r.can_edit ? "Yes" : "View only"), render: (r: any) => (r.can_edit ? "Yes" : "View only") },
           // QA-2461: visible in the LIST, not only inside the row - a silenced account nobody can spot
           // from the table is how one quietly stays silenced after testing ends.
@@ -621,12 +621,12 @@ function Users({ error, setError }: any) {
           </Field>
           <Field label="Role (the preset profile — its toggled rights apply on sign-in)">
             <select className={inputCls} value={form.role} onChange={(e) => set("role", e.target.value)}>
-              {["Admin", "Operations", "Location", "Enrollment", "Trainer"].map((r) => <option key={r}>{r}</option>)}
+              {["Admin", "Operations", "Center Manager", "Location", "Enrollment", "Trainer"].map((r) => <option key={r}>{r}</option>)}
             </select>
             <RolePresetSummary role={form.role} />
           </Field>
-          {["Location", "Trainer"].includes(form.role) && (
-            <Field label="Which centres this account can see">
+          {["Location", "Trainer", "Center Manager"].includes(form.role) && (
+            <Field label="Which centres this account can see" required={form.role === "Center Manager"}>
               <select multiple className={inputCls + " h-32"} value={form.location_scope ?? []}
                 onChange={(e) => set("location_scope", [...e.target.selectedOptions].map((o) => o.value))}>
                 {offerable(locations, form.location_scope).map((l: any) => <option key={l._id} value={l._id} title={l.name}>{l.name}</option>)}
@@ -635,7 +635,7 @@ function Users({ error, setError }: any) {
                   completely empty app and cannot tell why. Say so at the moment of approval. */}
               {(form.location_scope ?? []).length === 0 && (
                 <p className="mt-1 text-xs font-medium text-amber-700">
-                  ⚠ No location selected — this user will sign in and see no locations, batches or candidates at all. Pick at least one.
+                  {form.role === "Center Manager" ? "A Center Manager must have at least one centre - pick one or more before saving." : "⚠ No location selected — this user will sign in and see no locations, batches or candidates at all. Pick at least one."}
                 </p>
               )}
             </Field>
@@ -656,7 +656,7 @@ function Users({ error, setError }: any) {
               <Btn kind="danger" onClick={async () => { try { await api(`/api/users/${edit._id}`, { method: "PATCH", json: { approval: "reject" } }); setDrawer(false); load(); } catch (e: any) { setError(e.message); } }}>Reject</Btn>
             </div>
           )}
-          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={savingU || !form.name || !form.email || !!emailError(form.email) || (!edit && !form.password)}>{savingU ? "Saving…" : edit ? "Save" : "Add User"}</Btn>
+          <Btn feedback resetKey={JSON.stringify(form)} onClick={save} disabled={savingU || !form.name || !form.email || !!emailError(form.email) || (!edit && !form.password) || (form.role === "Center Manager" && (form.location_scope ?? []).length === 0)}>{savingU ? "Saving…" : edit ? "Save" : "Add User"}</Btn>
         </div>
       </Drawer>
     </Section>

@@ -1,3 +1,4 @@
+import { isAdminOrOps } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
@@ -26,7 +27,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // correction and goes through Edit, which Rule 27 restricts to Ops/Admin.
   // QA-081: "today" is the IST calendar date everywhere — at 1am IST the server's UTC day
   // is still yesterday, which would have refused a trainer's perfectly-on-time round.
-  if (istToday().getTime() !== dayKey(log.log_date).getTime() && user.role !== "Admin" && user.role !== "Operations") {
+  if (istToday().getTime() !== dayKey(log.log_date).getTime() && !isAdminOrOps(user.role)) {
     throw new HttpError(403, "Marking rounds are same-day only — for an earlier date use Edit (Operations/Admin).");
   }
   const body = await readJson(req);

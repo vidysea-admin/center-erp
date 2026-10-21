@@ -1,4 +1,5 @@
 "use client";
+import { isAdminOrOps } from "@/lib/roles";
 import { use, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -2419,7 +2420,7 @@ function AttendanceTab({ batchId, batch, role, error, setError, onGo }: any) {
   // operator unticks absentees, one save posts every day through the same per-day rules
   // (POST /logs/bulk → createDailyLogChecked). Admin/Ops/Trainer (batches.daily_log);
   // Trainer's Rule 53 window still applies per day and is reported per day.
-  const canMark = role === "Admin" || role === "Operations" || role === "Trainer";
+  const canMark = isAdminOrOps(role) || role === "Trainer";
   const { can, loaded: permsLoaded } = usePerms(); // -107: the portal-sheet door follows the RIGHT
   // Umesh: "essaa kuch ui hum admin ko de skte hai kyaa... like a popup ya shutter kindaa" — same
   // self-serve resolve drawer as the Roster tab, opened right where "waiting on a match" is seen.
@@ -4467,7 +4468,7 @@ function ClosureTab({ batchId, batch, role, error, setError, onChanged }: any) {
       </Section>
       {/* QA-038 (checker): a Location/SPOC login saw the whole Invoice section with buttons the
           server refuses — money surfaces render only for the roles that hold them. */}
-      {["Admin", "Operations"].includes(role) && (
+      {isAdminOrOps(role) && (
       <Section title={`Invoice — ${invoice?.status ?? "Not Ready"}`}>
         <div className="space-y-3">
           {/* "Mark Ready for Invoice" is a CLOSURE act, not a money act — it writes

@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
@@ -17,8 +18,8 @@ export const { GET, PATCH } = itemRoutes({
     return maskLocationSecrets(items, user.role === "Admin");
   },
   fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "mobile_otp", "aebas_link", "aebas_id", "aebas_password", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
-  readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-095: not the Trainer's door
-  writeRoles: ["Admin", "Operations", "Location"],
+  readRoles: [...ADMIN_OPS, "Location", "Enrollment"], // QA-095: not the Trainer's door
+  writeRoles: [...ADMIN_OPS, "Location"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   async beforeUpdate(id, data, existing, user) {
     // QA-621 cycle 4 / QA-1502 cycle 6: this route used to bump the slot generation counters here

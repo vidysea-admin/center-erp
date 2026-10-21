@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { dbConnect } from "@/lib/db";
@@ -51,7 +52,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
 export const POST = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations", "Location");
+  requireRole(user, ...ADMIN_OPS, "Location");
   requireEdit(user);
   await requirePerm(user, "feedback.links"); // togglable (2026-08-11)
   const body = await readJson(req);

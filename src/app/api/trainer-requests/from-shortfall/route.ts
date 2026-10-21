@@ -1,3 +1,4 @@
+import { alertRoles } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, locationFilter, assertLocationInScope, readJson } from "@/lib/authz";
@@ -67,11 +68,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
       type: "trainer_request_new", severity: "info",
       message: `New trainer request: ${name.program ?? "job role"} at ${name.location ?? "centre"} (from readiness shortfall)`,
       entity: "TrainerRequest", entity_id: doc._id, link: "/trainers?tab=Requests",
-      location: r.location._id, role_target: ["Admin", "Operations"],
+      location: r.location._id, role_target: alertRoles(["Admin", "Operations"], r.location._id),
     });
     // QA-115: inbox mirror, same audience and scope as the bell.
     mailUsersByRole({
-      roles: ["Admin", "Operations"], location: r.location._id,
+      roles: alertRoles(["Admin", "Operations"], r.location._id), location: r.location._id,
       subject: `Trainer request: ${name.program ?? "job role"} at ${name.location ?? "centre"}`,
       title: "A new trainer request was raised",
       lines: [`${name.program ?? "Job role"} at ${name.location ?? "centre"} (from readiness shortfall).`],

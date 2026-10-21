@@ -8,6 +8,7 @@
 import { RolePermission, User } from "@/models";
 import { HttpError, requireEdit } from "@/lib/authz";
 import type { SessionUser } from "@/auth";
+import { ADMIN_OPS } from "@/lib/roles";
 
 // The catalog — every togglable feature-right, grouped for the Admin UI.
 export const PERMISSIONS: { key: string; label: string; group: string }[] = [
@@ -182,6 +183,11 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // only; the separate finance.view right remains absent.
   Trainer: ["batches.daily_log", "closure.manage", "costs.manage"],
 };
+// Center Manager (qa/gates/center-manager-role.md, 2026-10-21): "rights = the Operations default permission
+// set". Copied from the Operations row (not retyped) so the two cannot drift; SCOPE is what differs
+// (authz.ts isScoped). This is a code fallback only - a stored RolePermission row for the role (Admin
+// toggling the matrix) still wins, exactly like every other role, so no production DB write is needed.
+DEFAULT_ROLE_PERMISSIONS["Center Manager"] = [...DEFAULT_ROLE_PERMISSIONS.Operations];
 
 // Role toggles are read per request; a tiny TTL cache keeps that cheap without letting a
 // toggle take more than a few seconds to bite.
@@ -817,7 +823,7 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
 // statements of one rule is how they drift, and this pair had already drifted before anyone looked.
 export async function canShareLinks(user: SessionUser): Promise<boolean> {
   try {
-    if (!["Admin", "Operations", "Location"].includes(String(user.role))) return false;
+    if (![...ADMIN_OPS, "Location"].includes(String(user.role))) return false;
     requireEdit(user);
     await requirePerm(user, "feedback.links");
     return true;

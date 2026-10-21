@@ -1,3 +1,4 @@
+import { alertRoles } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
@@ -250,11 +251,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     type: "batch_created", severity: "info",
     message: `${doc.code} (${program.name}) opened at ${locDoc?.name ?? "your centre"} — ${poolCount} candidate${poolCount === 1 ? "" : "s"} in your pool to assign`,
     entity: "Batch", entity_id: doc._id, link: `/batches/${doc._id}?tab=Candidates`,
-    location, role_target: ["Location", "Operations", "Enrollment"],
+    location, role_target: alertRoles(["Location", "Operations", "Enrollment"], location),
   });
   // QA-115: the same news lands in those users' inboxes — scoped exactly like the bell.
   mailUsersByRole({
-    roles: ["Location", "Operations", "Enrollment"], location,
+    roles: alertRoles(["Location", "Operations", "Enrollment"], location), location,
     subject: `Batch ${doc.code} opened at ${locDoc?.name ?? "your centre"}`,
     title: "A new batch has opened",
     lines: [`${doc.code} (${program.name}) opened at ${locDoc?.name ?? "your centre"}.`, `${poolCount} candidate${poolCount === 1 ? "" : "s"} in your pool to assign.`],

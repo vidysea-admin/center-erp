@@ -1,6 +1,7 @@
 import { auth, SessionUser } from "@/auth";
 import { NextResponse } from "next/server";
 import { plain } from "@/lib/user-copy";
+import { ALWAYS_SCOPED_ROLES, isAdminOrOps } from "@/lib/roles";
 
 export class HttpError extends Error {
   status: number;
@@ -115,7 +116,7 @@ export function requireRole(user: SessionUser, ...roles: SessionUser["role"][]) 
 // Rule 39: can_edit=false → view/acknowledge only. plan1.md resolution #3: Location
 // read-only users are VIEW ONLY (no acknowledge).
 export function requireEdit(user: SessionUser) {
-  if (user.role === "Admin" || user.role === "Operations") return;
+  if (isAdminOrOps(user.role)) return; // Admin, Operations, Center Manager (lib/roles.ts)
   if (!user.can_edit) throw new HttpError(403, "Read-only access");
 }
 
@@ -125,7 +126,9 @@ export function requireEdit(user: SessionUser) {
 // Trainer users (2026-08-11 self-signup) are ALWAYS scoped: Admin sets their
 // location_scope at approval; until then an empty scope means they see nothing scoped.
 export function isScoped(user: SessionUser): boolean {
-  if (user.role === "Location" || user.role === "Trainer") return true;
+  // Center Manager (2026-10-21): the Operations rights confined to the assigned centres, ALWAYS - an
+  // empty scope sees nothing (fail closed), and POST/PATCH /api/users refuse to create one.
+  if ((ALWAYS_SCOPED_ROLES as readonly string[]).includes(user.role)) return true;
   return user.role === "Enrollment" && (user.location_scope?.length ?? 0) > 0;
 }
 

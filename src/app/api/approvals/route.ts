@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, isScoped, locationFilter, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, isScoped, locationFilter, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireView, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
 import { ApprovalRequest, ApprovalRule } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
@@ -119,6 +119,9 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   requireRole(user, "Admin");
   const { action, enabled, approver_role, approver_users } = await readJson(req);
   if (!APPROVAL_ACTIONS.includes(action)) throw new Error("Unknown approval action: " + action);
+  // Center Manager (2026-10-21): enters costs, never approves them - not an approver option, here as
+  // well as on the Admin screen (the dropdown is a courtesy, this is the door).
+  if (approver_role === "Center Manager") throw new HttpError(400, "A Center Manager cannot be the approver - choose Admin or Operations.");
   // QA-1827: the named list. `undefined` leaves it alone (so an existing caller that only toggles
   // `enabled` cannot silently clear it); an explicit `[]` clears it back to role-only, which is how
   // the setting is switched off.

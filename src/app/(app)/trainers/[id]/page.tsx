@@ -1,4 +1,5 @@
 "use client";
+import { isAdminOrOps } from "@/lib/roles";
 import { use, useEffect, useState } from "react";
 import { BASE_PATH } from "@/lib/base-path";
 import Link from "next/link";
@@ -88,7 +89,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   // QA-149: the missing bridge between a trainer and a login — one click here.
   const [loginRes, setLoginRes] = useState<any>(null);
   const role = (session?.user as any)?.role;
-  const canCreateLogin = role === "Admin" || role === "Operations";
+  const canCreateLogin = isAdminOrOps(role);
   async function createLogin() {
     if (busy) return;
     if (!confirm(`Create a Trainer login for ${t?.name} (${t?.email || "no email"})? Their scope will be every centre they are tied to or assigned at.`)) return;

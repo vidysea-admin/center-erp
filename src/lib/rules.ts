@@ -1,5 +1,6 @@
 // Business rules engine — implements the numbered rules from
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
+import { isAdminOrOps, alertRoles } from "@/lib/roles";
 import crypto from "crypto";
 import { Types } from "mongoose";
 import {
@@ -1884,7 +1885,7 @@ export async function recordRosterGrowth(
     entity: "DailyLog", entity_id: log._id,
     link: `/batches/${String(log.batch)}?tab=Daily Execution`,
     location: batch?.location?._id,
-    role_target: ["Admin", "Operations"],
+    role_target: alertRoles(["Admin", "Operations"], batch?.location?._id),
   });
 }
 
@@ -1937,7 +1938,7 @@ export async function createDailyLogChecked(
 }
 
 export async function canEditDailyLog(log: { entered_by: unknown; entered_at: Date }, userId: string, role: string): Promise<boolean> {
-  if (role === "Admin" || role === "Operations") return true; // Rule 27
+  if (isAdminOrOps(role)) return true; // Rule 27 (Admin, Operations, Center Manager - lib/roles.ts)
   const defaults = await getDefaults();
   const ageHours = (Date.now() - new Date(log.entered_at).getTime()) / 36e5;
   return String(log.entered_by) === String(userId) && ageHours <= defaults.daily_log_edit_window_hours;
@@ -2840,7 +2841,7 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
           severity: "info",
           message: `Assessment for ${b?.code ?? "batch"} scheduled on ${when} — inform the candidates.`,
           entity: "Batch", link: `/batches/${batchId}`,
-          role_target: ["Admin", "Operations", "Location", "Trainer"],
+          role_target: alertRoles(["Admin", "Operations", "Location", "Trainer"], b?.location),
           location: b?.location,
         },
         $setOnInsert: { type: "assessment_scheduled", entity_id: closure.batch, status: "New" },

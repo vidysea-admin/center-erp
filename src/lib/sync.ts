@@ -537,6 +537,18 @@ const LEGACY_REVERT_NOTE = /Reverted to "([^"]*)" by /g;
  * `impact_snapshot.revert`, so masking in place would put bullets into a centre's live password.
  * That is the one way this helper could do real damage, so it is stated here and not just avoided.
  */
+// Center Manager (2026-10-21): a follow-up belongs to the centre of the sheet change it came from.
+// A scoped viewer sees / resolves only follow-ups at their own centres; one with no centre on it is
+// out of scope for them (fail closed). `source_change` may be populated or a bare id.
+export function followUpLocationId(f: any): string {
+  const sc = f?.source_change;
+  const loc = sc?.location;
+  return String(loc?._id ?? loc ?? "");
+}
+export function followUpVisibleTo(user: { location_scope: string[] }, f: any): boolean {
+  const id = followUpLocationId(f);
+  return !!id && user.location_scope.map(String).includes(id);
+}
 export function maskSheetChange<T extends Record<string, any>>(c: T, canSeeSecrets: boolean): T {
   if (canSeeSecrets || !isSecretSheetField(c?.field_name)) return c;
   // Deliberately byte-identical to the two masks this replaces (`c.old_value ? "••••••" : ""`), so

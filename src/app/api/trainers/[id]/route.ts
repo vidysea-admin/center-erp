@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
@@ -36,8 +37,8 @@ export const { GET, PATCH } = itemRoutes({
     // the same list living in two files, which is the disease ARCHITECTURE section 3 names. They
     // are edited on the Planning tab, so the EDIT door is the one that actually matters for them.
     "sidh_profile_verified_on", "eligibility_checked_on", "tot_result_expected_on"],
-  readRoles: ["Admin", "Operations", "Location"], // QA-095: same door as the list
-  writeRoles: ["Admin", "Operations"],
+  readRoles: [...ADMIN_OPS, "Location"], // QA-095: same door as the list
+  writeRoles: [...ADMIN_OPS],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5: re-pointing a trainer's nomination at a halted centre is also hiring for it.
   async beforeUpdate(_id, body, existing) {

@@ -5,7 +5,8 @@ import { Batch, BatchMember, Candidate, DailyLog, FollowUpAction, GovtAttendance
 import { Types } from "mongoose";
 import { ACTIVE_BATCH_STATUSES, addDays, dayStart, istToday, missingLogQueue, trainerForLogin } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
-import { maskSheetChange } from "@/lib/sync";
+import { maskSheetChange, followUpVisibleTo } from "@/lib/sync";
+import { isAdminOrOps } from "@/lib/roles";
 import { hasPermission, maskInvoiceMoneyList, FINANCE_VIEW } from "@/lib/permissions";
 
 // Home Action Center: the three real conditions by name (§5) + operational queues.
@@ -365,11 +366,12 @@ export const GET = apiHandler(async () => {
   // unasked surface there is, and the Sync Inbox is where someone goes to ask. `maskSheetChange` is
   // the one shared definition (lib/sync.ts) - it also covers `impact_snapshot` and the legacy revert
   // notes, which is exactly the count a per-route spread gets wrong.
-  const followUpsRaw = ["Admin", "Operations"].includes(user.role)
+  const followUpsAll = isAdminOrOps(user.role)
     ? await FollowUpAction.find({ status: "Pending" })
         .populate({ path: "source_change", populate: { path: "location", select: "name code" } })
-        .limit(20).lean()
+        .limit(isScoped(user) ? 500 : 20).lean() // scoped: filter to own centres below, THEN cap at 20
     : [];
+  const followUpsRaw = isScoped(user) ? followUpsAll.filter((f: any) => followUpVisibleTo(user, f)).slice(0, 20) : followUpsAll;
   const followUps = followUpsRaw.map((f: any) =>
     f?.source_change ? { ...f, source_change: maskSheetChange(f.source_change, false) } : f);
 
@@ -385,8 +387,8 @@ export const GET = apiHandler(async () => {
   // and only the money leaves (*"sirf paisa chhupao, status sabko rehne do"*, Umesh 2026-09-05).
   const canSeeInvoiceMoney = await hasPermission(user, FINANCE_VIEW);
   const invoices = maskInvoiceMoneyList(
-    ["Admin", "Operations"].includes(user.role)
-      ? await Invoice.find({ status: { $in: ["Ready", "Raised"] } })
+    isAdminOrOps(user.role)
+      ? await Invoice.find({ status: { $in: ["Ready", "Raised"] }, ...(isScoped(user) ? { batch: { $in: await Batch.find(locationFilter(user)).distinct("_id") } } : {}) })
           .populate({ path: "batch", select: "code location", populate: { path: "location", select: "name code" } })
           .limit(10).lean()
       : [],

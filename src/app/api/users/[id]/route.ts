@@ -1,3 +1,4 @@
+import { centerManagerScopeError } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
@@ -248,6 +249,10 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
     const eErr = emailError(body.email);
     if (eErr) throw new HttpError(400, eErr);
   }
+  // Center Manager (2026-10-21): judged on the account AS IT WILL BE after this edit (role and scope may
+  // each arrive alone), refused before any field is assigned.
+  const scopeErr = centerManagerScopeError(body.role ?? doc.role, body.location_scope ?? doc.location_scope);
+  if (scopeErr) throw new HttpError(400, scopeErr);
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }

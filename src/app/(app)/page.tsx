@@ -1,4 +1,5 @@
 "use client";
+import { isAdminOrOps } from "@/lib/roles";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
@@ -23,7 +24,7 @@ export default function HomePage() {
   const [mapping, setMapping] = useState<any>(null);
   // -107: the portal-sheet row follows the `attendance.govt` RIGHT, as the API always has.
   const { can, loaded: permsLoaded } = usePerms();
-  const canImportGovt = permsLoaded ? can("attendance.govt", "edit") : role === "Admin" || role === "Operations";
+  const canImportGovt = permsLoaded ? can("attendance.govt", "edit") : isAdminOrOps(role);
 
   const load = () => api("/api/home").then(setData).catch((e) => setError(e.message));
   useEffect(() => { load(); }, []);
