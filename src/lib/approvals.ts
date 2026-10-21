@@ -1038,7 +1038,7 @@ export async function decideApproval(
 // request - self-decision is banned above, and nothing moved a request to "Cancelled").
 //
 // WHO: only the request's initiator. No role and no permission widens this - an Admin who did not raise
-// it gets 403 and keeps using Reject. WHEN: only while Pending, enforced in the UPDATE FILTER below, not
+// it gets the same 404 a missing id gets (QA-2977) and keeps using Reject. WHEN: only while Pending, enforced in the UPDATE FILTER below, not
 // in a read before it, so a concurrent approve (decideApproval claims with the same {status: "Pending"}
 // filter) and a withdraw can never both win: one of the two compare-and-swaps matches, the other 409s.
 // EFFECT: status -> Cancelled (never Rejected) with decided_by / decided_at / decision_note holding who,
@@ -1051,9 +1051,10 @@ export async function withdrawApproval(requestId: string, user: SessionUser, rea
   const request: any = await ApprovalRequest.findById(requestId).select("action payload status initiator entity_id").lean();
   if (!request) throw notFound();
   // Whose it is is checked BEFORE what state it is in: a stranger learns nothing about the request.
-  if (!request.initiator || String(request.initiator) !== String(user.id)) {
-    throw new HttpError(403, "Only the person who raised a request can withdraw it.");
-  }
+  // QA-2977 (Umesh approved 2026-10-21): and learns nothing about whether it EXISTS either - a caller who
+  // is not the raiser gets exactly the answer a missing id gets (same status, same body), so approval ids
+  // cannot be told apart by trying them. A request with no recorded initiator is nobody's to withdraw.
+  if (!request.initiator || String(request.initiator) !== String(user.id)) throw notFound();
   const refuseState = (status: unknown) => new HttpError(409, status === "Cancelled"
     ? "This request was already withdrawn."
     : `This request is already ${String(status).toLowerCase()}, so it can no longer be withdrawn. Only a request that is still waiting can be taken back.`);
@@ -1103,6 +1104,16 @@ export async function withdrawApproval(requestId: string, user: SessionUser, rea
       { _id: new Types.ObjectId(String(p.cost_entry)), cost_edit_request: id },
       { $unset: { cost_edit_request: 1, cost_edit_proposal: 1 } },
     );
+    // QA-2978 (Umesh approved 2026-10-21): the "queued" receipt the edit left on the cost under its retry key
+    // is released too, so the raiser can send that edit again (a replay against a still-Pending request
+    // keeps its receipt; Reject keeps it on purpose, a withdrawal does not). costs/[id]/route.ts patchOwnCost
+    // also stops matching this Cancelled request by its key (priorQuery).
+    if (typeof p._edit_mutation_key === "string" && p._edit_mutation_key) {
+      await CostEntry.collection.updateOne(
+        { _id: new Types.ObjectId(String(p.cost_entry)), "own_mutations.key": p._edit_mutation_key },
+        { $pull: { own_mutations: { key: p._edit_mutation_key } } } as any,
+      );
+    }
   }
   // A head sign-off: the head already exists and is in use. Reject FLAGS it rather than deleting it
   // (costs may be filed under it); a withdrawn sign-off leaves it in the same closed state, not as a

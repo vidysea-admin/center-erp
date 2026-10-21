@@ -389,8 +389,10 @@ async function patchOwnCost(user: OwnUser, req: NextRequest, id: string) {
     return NextResponse.json(receipt.result, { status: receipt.http_status ?? 200 });
   }
   // An accepted queue result stays the first result even after approval/rejection or payment.
+  // QA-2978: ...except a request its raiser WITHDREW (Cancelled): it was taken back, so the same key raises a
+  // new request instead of being handed the withdrawn one as "queued" (withdrawApproval releases the receipt).
   const priorQuery = {
-    action: "cost.post", entity_id: doc._id, initiator: user.id,
+    action: "cost.post", entity_id: doc._id, initiator: user.id, status: { $ne: "Cancelled" },
     "payload.kind": "cost-edit", "payload._edit_mutation_key": mutationKey,
   };
   const prior: any = await ApprovalRequest.findOne(priorQuery).lean();
