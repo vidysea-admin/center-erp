@@ -6,6 +6,7 @@ import { apiHandler, requireUser, requireEdit, requireRole, HttpError, invalidat
 import { hasPermission, requirePerm } from "@/lib/permissions";
 import { User } from "@/models";
 import { audit } from "@/lib/audit";
+import { centerManagerUnknownCentre } from "@/lib/rules";
 import { emailError } from "@/lib/validate";
 import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
 
@@ -251,8 +252,15 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   }
   // Center Manager (2026-10-21): judged on the account AS IT WILL BE after this edit (role and scope may
   // each arrive alone), refused before any field is assigned.
-  const scopeErr = centerManagerScopeError(body.role ?? doc.role, body.location_scope ?? doc.location_scope);
+  // Judge the value that WILL be stored (checker B P1): `body.location_scope ?? doc.location_scope` let a sent null
+  // fall through to the old good list and pass, then the loop below wrote the null.
+  const finalRole = body.role ?? doc.role;
+  const finalScope = body.location_scope !== undefined ? body.location_scope : doc.location_scope;
+  const scopeErr = centerManagerScopeError(finalRole, finalScope);
   if (scopeErr) throw new HttpError(400, scopeErr);
+  // Existence is checked when the scope or role is being changed (a stored legacy list must not block an unrelated edit).
+  const unknownErr = body.location_scope !== undefined || body.role !== undefined ? await centerManagerUnknownCentre(finalRole, finalScope) : null;
+  if (unknownErr) throw new HttpError(400, unknownErr);
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];
   }

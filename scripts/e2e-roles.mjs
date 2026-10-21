@@ -6169,6 +6169,39 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const toCm = await req(admin, "PATCH", `/api/users/${enrolUser.data.item?._id}`, { role: "Center Manager" });
   refused("[CM1] promote a centre-less account to Center Manager", toCm, [400], /at least one centre/i);
   ok("[CM1] ...and its role did not change", (await usersNow()).find((u) => u.email === `cm.enr.${S}@vidysea-test.local`)?.role === "Enrollment");
+  // Fix cycle 2 (checker B P1): the scope that WILL be stored is what is judged - a sent null, [null] or an id that is not a centre
+  // used to pass (the old list was judged instead) and then be written. Each is the same 400 as an empty list, with the old scope kept.
+  {
+    const scopeOf = async () => JSON.stringify(((await usersNow()).find((u) => u.email === emA)?.location_scope ?? []).map(idOf));
+    const s0 = await scopeOf();
+    const ghost = "64b7f0c2a1d3e4f5a6b7c8d9";
+    for (const [label, val] of [["null", null], ["[null]", [null]], ["[an id that is not a centre]", [ghost]], ["[a good centre and an id that is not a centre]", [own._id, ghost]], ["[a malformed id]", ["not-an-id"]]]) {
+      const r = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: val });
+      refused(`[CM1] edit a Center Manager's centres to ${label}`, r, [400], /at least one centre/i);
+      ok(`[CM1] ...and the stored scope is unchanged (${label})`, (await scopeOf()) === s0, `${s0} -> ${await scopeOf()}`);
+    }
+    const emBad = `cm.bad.${S}@vidysea-test.local`;
+    for (const [label, val] of [["[null]", [null]], ["an id that is not a centre", [ghost]]]) {
+      const r = await mk(emBad, { role: "Center Manager", location_scope: val });
+      refused(`[CM1] create a Center Manager with ${label}`, r, [400], /at least one centre/i);
+    }
+    ok("[CM1] ...and no account was written by either create refusal", !(await usersNow()).some((u) => u.email === emBad));
+    const okEdit = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [own._id, foreign._id] });
+    ok("[CM1] a real list of centres still saves (200, no over-refusal)", okEdit.status === 200 && (await scopeOf()) === JSON.stringify([idOf(own._id), idOf(foreign._id)]), `got ${okEdit.status} ${JSON.stringify(okEdit.data?.error)}`);
+    const back = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [own._id] });
+    ok("[CM1] ...and back to the single centre", back.status === 200 && (await scopeOf()) === s0, `got ${back.status} ${await scopeOf()}`);
+  }
+  // Fix cycle 2 (checker B P2, CM5 "cannot be a rule's approver"): the NAMED approver list is a door too.
+  {
+    const cfgNow = async () => ((await req(admin, "GET", "/api/approvals?limit=1")).data.config ?? []).find((c) => c.action === "cost.post");
+    const c0 = await cfgNow();
+    const base = { action: "cost.post", enabled: !!c0?.enabled, approver_role: c0?.approver_role ?? "Admin" };
+    const same = await req(admin, "PUT", "/api/approvals", { ...base, approver_users: c0?.approver_users ?? [] });
+    ok("[CM5] fixture: re-saving the approval rule unchanged works (200)", same.status === 200, `got ${same.status} ${JSON.stringify(same.data?.error)}`);
+    const withCm = await req(admin, "PUT", "/api/approvals", { ...base, approver_users: [...(c0?.approver_users ?? []), String(aRow._id)] });
+    refused("[CM5] name a Center Manager as a rule's approver (approver_users)", withCm, [400], /Center Manager cannot be the approver/i);
+    ok("[CM5] ...and the rule's approver list is unchanged", JSON.stringify((await cfgNow())?.approver_users ?? []) === JSON.stringify(c0?.approver_users ?? []), JSON.stringify((await cfgNow())?.approver_users));
+  }
 
   // ---------------- CM5 (part): cannot create users; cannot widen own scope ----------------
   const mkByCm = await req(cm, "POST", "/api/users", { name: "x", email: `cm.mint.${S}@vidysea-test.local`, password: PW, role: "Location", location_scope: [own._id] });

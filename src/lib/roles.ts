@@ -68,5 +68,8 @@ export function alertRoles(roles: readonly string[], location: unknown): string[
 export const CENTER_MANAGER_NEEDS_CENTRE = "A Center Manager must be assigned at least one centre. Pick the centre or centres this person manages.";
 export function centerManagerScopeError(role: unknown, scope: unknown): string | null {
   if (role !== "Center Manager") return null;
-  return Array.isArray(scope) && scope.length > 0 ? null : CENTER_MANAGER_NEEDS_CENTRE;
+  // Judge the list that WILL be stored: a non-empty array whose every entry is a well-formed id. null, [null] and
+  // [] are all "no centre" (checker B P1) - a null entry used to be dropped silently by the model cast.
+  const wellFormed = Array.isArray(scope) && scope.length > 0 && scope.every((v) => /^[0-9a-f]{24}$/i.test(String(v ?? "")));
+  return wellFormed ? null : CENTER_MANAGER_NEEDS_CENTRE;
 }
