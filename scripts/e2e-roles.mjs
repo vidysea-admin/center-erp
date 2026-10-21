@@ -6319,7 +6319,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const ties0 = await tiesOf();
       for (const [label, patch] of [["home_location", { home_location: foreign._id }], ["nominated_for_location", { nominated_for_location: foreign._id }], ["capable_locations", { capable_locations: [...(ownTrainer.capable_locations ?? []).map(idOf), foreign._id] }]]) {
         const rt = await req(cm, "PATCH", `/api/trainers/${ownTrainer._id}`, patch);
-        refused(`[CM3] re-tie an own-centre trainer to ANOTHER centre (trainer PATCH ${label})`, rt, [403], /out of scope/i);
+        // The message must be the TIE refusal. Once one re-tie slipped through, the trainer would be out of scope and every later field would be refused by the item scope check ("Trainer out of scope") - a different mechanism that would let the next two arms pass vacuously.
+        refused(`[CM3] re-tie an own-centre trainer to ANOTHER centre (trainer PATCH ${label})`, rt, [403], /^Location out of scope/i);
         ok(`[CM3] ...the trainer ties are unchanged (${label})`, (await tiesOf()) === ties0);
       }
     } else ok("[CM3] fixture: the Center Manager sees at least one trainer", false, "empty trainer list");
