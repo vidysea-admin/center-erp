@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-331";
+export const RELEASE = "2026.08.14-332";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,6 +285,28 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -332 note: each clause is one checked criterion, judged over what users receive (3cfe6ed = -331 ..
+// this bump). approval-withdraw (dual PASS cycle 0, qa/verdicts/approval-withdraw.md and .b.md, head
+// 7a7c79e): the person who raised a request can withdraw it while it is Pending, from My submissions
+// on the Costs page, Admin -> Approvals and the Finance head approvals; a request raised by someone else
+// is refused (another approver, an Admin, a finance reader and a second Operations user were each
+// refused); a request that is no longer Pending cannot be withdrawn; a withdrawn request is shown as
+// "Withdrawn" with who, when and the reason, nothing is applied and no ledger row is written, and it
+// leaves the Pending lists and the Home count; the Costs approval box has a Withdrawn tab; withdrawing a
+// request for a new cost head marks that head Rejected, as a rejection does (manifest, review open
+// question; the head's costs are NOT claimed usable). No number is quoted. No clause claims more than
+// those verdicts and the manifest.
+export const RELEASE_NOTE_CURRENT =
+  "-332 lets the person who raised a cost or approval request withdraw it while it is still waiting. " +
+  "On a request you raised that is still Pending, the Costs page (My submissions), Admin -> Approvals and the Finance cost head approvals now show a Withdraw button. " +
+  "It asks you to confirm and lets you add a reason. " +
+  "A request raised by someone else cannot be withdrawn, even by an Admin, and a request that has already been approved, rejected or withdrawn cannot be withdrawn. " +
+  "A withdrawn request is shown as \"Withdrawn\", with who withdrew it, when, and the reason if one was given. " +
+  "Nothing is applied from a withdrawn request and no cost is posted from it. " +
+  "It leaves the Pending lists, it is no longer counted on the Home page, and the Waiting for your approval box on the Costs page has a Withdrawn tab. " +
+  "Withdrawing a request for a new cost head marks that head as Rejected, in the same way as a rejection does. " +
+  "No other screen, figure or permission changes in this release.";
+
 // -331 note: each clause is one checked criterion, and the note is judged over what users receive
 // (6c0b46d = -330 .. this bump). costs-approval-box (dual PASS cycle 2, qa/verdicts/costs-approval-box.md
 // and .b.md): the "Waiting for your approval" box on the Costs page, the pending count in its title and
@@ -293,7 +315,8 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // f1-partial-amount (PASS cycle 0, qa/verdicts/f1-partial-amount.md): approving less than requested -
 // 3,000 or the rupee-sign form is read as 3000; unreadable text is not sent and never approves the full
 // amount; Admin -> Approvals and the new box. No clause claims more than those verdicts.
-export const RELEASE_NOTE_CURRENT =
+// -332: the -331 note moved here unchanged when -332 became current.
+const RELEASE_NOTE_ARCHIVE_331 =
   "-331 adds a \"Waiting for your approval\" box for cost requests, and makes the amount typed when approving less than requested safer. " +
   "People who can decide cost requests now see a \"Waiting for your approval\" box at the top of the Costs page, with filters and Pending, Approved and Rejected tabs. " +
   "The box title and a new card on the Home page show the number of cost requests waiting for a decision, and that number stays right when more than 100 approvals of all kinds are waiting. " +
@@ -2142,6 +2165,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -332: ARCHIVE_331 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_331 + " " +
   // -331: ARCHIVE_330 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_330 + " " +
   // -330: ARCHIVE_329 wired in here in the SAME bump that declared it, same discipline.
