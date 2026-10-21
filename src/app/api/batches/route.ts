@@ -4,7 +4,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, locationFilter, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { AuditLog, Batch, BatchMember, CandidateResult, Candidate, Closure, DailyLog, GovtAttendanceRow, Invoice, Location, Notification, Program, Trainer } from "@/models";
-import { assertLocationOperational, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, govtBatchIdConflict, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
+import { assertLocationOperational, assertRoomInScope, assertTrainerInScope, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, createBatchWithCode, deriveTrainerStatus, govtBatchIdConflict, settlementStage, trainerBookingWarnings, trainerForLogin } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
 import { batchStatusLabel } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
@@ -169,6 +169,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const { location, program: programId, trainer, room, session = "Full Day", planned_start } = body;
   if (!location || !programId || !planned_start) throw new HttpError(400, "location, program and planned_start are required");
   assertLocationInScope(user, location);
+  // center-manager-role review (cycle 1): room and trainer are DESTINATIONS too. Checked before any availability
+  // rule so a refusal is a 403 about the caller's scope, never a 409 that names another centre's batch.
+  if (room) await assertRoomInScope(user, String(room));
+  if (trainer) await assertTrainerInScope(user, String(trainer));
   await assertLocationOperational(location, "Creating a batch"); // Rule 1
   const program = await Program.findById(programId).lean<any>();
   if (!program) throw new HttpError(400, "Program not found");
