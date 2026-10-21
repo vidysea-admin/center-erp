@@ -6293,6 +6293,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const mvRoom = await req(cm, "PATCH", `/api/batches/${ebId}`, { room: foreignRoom._id });
       refused("[CM3] put an own batch into a room of ANOTHER centre (batch PATCH room)", mvRoom, [403], /out of scope/i);
       ok("[CM3] ...the batch has no foreign room", idOf((await ebNow())?.room) !== idOf(foreignRoom._id) && idOf((await ebNow())?.room) === idOf(ebBefore?.room), `room ${idOf((await ebNow())?.room)}`);
+      // CREATE door (review 2, high): the room is a destination too. 403 about scope, not the 409 that names a foreign batch.
+      const ownBatches = async () => ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length;
+      const nb0 = await ownBatches();
+      const crRoom = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-05-10", room: foreignRoom._id });
+      refused("[CM3] CREATE a batch at the own centre in a room of ANOTHER centre (batch POST room)", crRoom, [403], /out of scope/i);
+      ok("[CM3] ...no batch was created", (await ownBatches()) === nb0, `${nb0} -> ${await ownBatches()}`);
     } else ok("[CM3] fixture: a room at the other centre exists", false, "no room at KOT02 in the seed");
     const allTr = (await req(admin, "GET", "/api/trainers?limit=2000")).data.items ?? [];
     const tieIds = (t) => [t.nominated_for_location, t.home_location, ...(t.capable_locations ?? [])].filter(Boolean).map(idOf);
@@ -6301,7 +6307,22 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       const mvTr = await req(cm, "PATCH", `/api/batches/${ebId}`, { trainer: foreignTrainer._id });
       refused("[CM3] give an own batch a trainer tied only to ANOTHER centre (batch PATCH trainer)", mvTr, [403], /out of scope/i);
       ok("[CM3] ...the batch has no trainer", !idOf((await ebNow())?.trainer), `trainer ${idOf((await ebNow())?.trainer)}`);
+      const nb1 = ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length;
+      const crTr = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-05-17", trainer: foreignTrainer._id });
+      refused("[CM3] CREATE a batch with a trainer tied only to ANOTHER centre (batch POST trainer)", crTr, [403], /out of scope/i);
+      ok("[CM3] ...no batch was created", ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length === nb1);
     } else ok("[CM3] fixture: a trainer tied only to the other centre exists", false, "none in the seed");
+    // Trainer PATCH (review 2, medium): re-tying an in-scope trainer to another centre is refused on each of the three tie fields.
+    const ownTrainer = ((await req(cm, "GET", "/api/trainers?limit=2000")).data.items ?? [])[0];
+    if (ownTrainer) {
+      const tiesOf = async () => { const t = (await req(admin, "GET", `/api/trainers/${ownTrainer._id}`)).data.item; return JSON.stringify([idOf(t?.home_location), idOf(t?.nominated_for_location), (t?.capable_locations ?? []).map(idOf)]); };
+      const ties0 = await tiesOf();
+      for (const [label, patch] of [["home_location", { home_location: foreign._id }], ["nominated_for_location", { nominated_for_location: foreign._id }], ["capable_locations", { capable_locations: [...(ownTrainer.capable_locations ?? []).map(idOf), foreign._id] }]]) {
+        const rt = await req(cm, "PATCH", `/api/trainers/${ownTrainer._id}`, patch);
+        refused(`[CM3] re-tie an own-centre trainer to ANOTHER centre (trainer PATCH ${label})`, rt, [403], /out of scope/i);
+        ok(`[CM3] ...the trainer ties are unchanged (${label})`, (await tiesOf()) === ties0);
+      }
+    } else ok("[CM3] fixture: the Center Manager sees at least one trainer", false, "empty trainer list");
     const dueF = "2027-07-07";
     const trqF = await req(cm, "POST", "/api/trainer-requests", { location: foreign._id, program: prog._id, required_by_date: dueF });
     refused("[CM3] raise a trainer request AT another centre", trqF, [403], /out of scope/i);
