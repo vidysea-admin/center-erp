@@ -6352,8 +6352,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const parkedId = parked.data?.request?._id ?? parked.data?.item?._id ?? pending?._id;
   ok("[CM5] fixture: the parked request is findable", !!parkedId, JSON.stringify(parked.data).slice(0, 160));
   if (parkedId) {
-    const dec = await req(cm, "POST", `/api/approvals/${parkedId}`, { decision: "approve", action: "approve", status: "Approved" });
-    ok("[CM5] a Center Manager cannot approve a cost request (403)", dec.status === 403, `got ${dec.status} ${JSON.stringify(dec.data?.error)}`);
+    const dec = await req(cm, "POST", `/api/approvals/${parkedId}`, { decision: "Approved" });
+    refused("[CM5] a Center Manager cannot approve a cost request", dec, [403], /do not have the .* right|may decide|named approvers/i);
     const after = ((await req(admin, "GET", "/api/approvals?status=all&limit=500")).data.items ?? []).find((a) => a._id === parkedId);
     ok("[CM5] ...and the request is still Pending, nothing posted", (!after || after.status === "Pending") && !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === parkedNote), after?.status);
   }
