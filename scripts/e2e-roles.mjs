@@ -6286,7 +6286,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     refused("[CM3] move an own batch to ANOTHER centre (batch PATCH location)", mvLoc, [403], /out of scope/i);
     ok("[CM3] ...the batch is still at the own centre", idOf((await ebNow())?.location) === idOf(own._id), `now at ${idOf((await ebNow())?.location)}`);
     const allRooms = (await req(admin, "GET", "/api/rooms?limit=2000")).data.items ?? [];
-    const foreignRoom = allRooms.find((r) => idOf(r.location) === idOf(foreign._id));
+    let foreignRoom = allRooms.find((r) => idOf(r.location) === idOf(foreign._id));
+    // The seed gives KOT02 no room: Admin (direct, never parked) puts one there so the arm has a real foreign room to aim at.
+    if (!foreignRoom) foreignRoom = (await req(admin, "POST", `/api/locations/${foreign._id}/rooms`, { name: `CM Foreign Room ${S}`, type: "Classroom", capacity: 10 })).data?.item;
     if (foreignRoom) {
       const mvRoom = await req(cm, "PATCH", `/api/batches/${ebId}`, { room: foreignRoom._id });
       refused("[CM3] put an own batch into a room of ANOTHER centre (batch PATCH room)", mvRoom, [403], /out of scope/i);
