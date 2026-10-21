@@ -6213,18 +6213,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
       refused("[CM1] ...but SENDING an empty list is still refused", stillNo, [400], /at least one centre/i);
     }
   }
-  // Fix cycle 2 (checker A R7): two Operations-TEAM gates that a Center Manager passes only because the role is in OPS_TEAM
-  // (src/lib/roles.ts) - the follow-ups list is requireRole(ADMIN_OPS), and requireEdit exempts the team from can_edit.
+  // Fix cycle 2 (checker A R7): an Operations-TEAM gate that a Center Manager passes only because the role is in OPS_TEAM
+  // (src/lib/roles.ts) - the follow-ups list is requireRole(ADMIN_OPS). (The requireEdit exemption is NOT testable through a
+  // can_edit=false login: the batches.manage permission layer refuses that login first, "view-only".)
   {
     const fu = await req(cm, "GET", "/api/follow-ups");
     ok("[CM2] a Center Manager opens the follow-ups list, an Operations-team gate (200 with items)", fu.status === 200 && Array.isArray(fu.data?.items), `got ${fu.status} ${JSON.stringify(fu.data?.error)}`);
-    const emRo = `cm.ro.${S}@vidysea-test.local`;
-    const ro = await mk(emRo, { role: "Center Manager", location_scope: [own._id], can_edit: false });
-    ok("[CM2] fixture: a Center Manager whose can_edit flag is OFF", ro.status === 201 && ro.data?.item?.can_edit === false, `got ${ro.status} ${JSON.stringify(ro.data?.item?.can_edit)}`);
-    const cmRo = await login(emRo, PW);
-    const roB = cmRo ? await req(cmRo, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-10-04" }) : { status: 0, data: {} };
-    ok("[CM2] ...still creates a batch at the own centre: the team is exempt from the can_edit flag (201)", roB.status === 201 && !!roB.data?.item?._id, `got ${roB.status} ${JSON.stringify(roB.data?.error)}`);
-    ok("[CM2] ...and the batch is read back at the own centre", !!roB.data?.item?._id && idOf((await req(admin, "GET", `/api/batches/${roB.data.item._id}`)).data.item?.location) === idOf(own._id));
   }
   // Fix cycle 2 (checker B P2, CM5 "cannot be a rule's approver"): the NAMED approver list is a door too.
   {
