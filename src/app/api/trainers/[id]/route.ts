@@ -47,6 +47,13 @@ export const { GET, PATCH } = itemRoutes({
     // CHANGED value is checked (the trainer form re-sends all three ties on every save, and a legacy tie outside
     // the scope must not turn a re-save into a refusal).
     if (isScoped(user)) {
+      // Release -333 cycle 3 (R9, checker B P2): both tie guards below run only for an ARRAY, so a scoped login sending
+      // capable_locations as null, a string, a number or an object skipped them and wiped the whole list, including
+      // ties to other centres. A key that is present must be a list. (home_location / nominated_for_location need no
+      // such branch: a null or non-string value reaches the removal loop below and asserts the OLD tie is in scope.)
+      if ("capable_locations" in body && !Array.isArray(body.capable_locations)) {
+        throw new HttpError(400, "capable_locations must be a list of centres.");
+      }
       const was = (v: unknown) => String((v as { _id?: unknown })?._id ?? v ?? "");
       for (const f of ["home_location", "nominated_for_location"] as const) {
         if (body[f] && String(body[f]) !== was((existing as any)[f])) assertLocationInScope(user, String(body[f]));
@@ -54,6 +61,17 @@ export const { GET, PATCH } = itemRoutes({
       if (Array.isArray(body.capable_locations)) {
         const had = new Set(((existing as any).capable_locations ?? []).map(was));
         for (const v of body.capable_locations as unknown[]) if (v && !had.has(String(v))) assertLocationInScope(user, String(v));
+      }
+      // Release -333 final review (R3): the REMOVAL half. A trainer tied to A and B is in scope for A's manager, and
+      // dropping or clearing the tie to B is a write at B. A tie that is CHANGED away from, or DROPPED, must itself
+      // be inside the scope; ties inside the scope stay editable. Same refusal text as the add side.
+      for (const f of ["home_location", "nominated_for_location"] as const) {
+        const old = was((existing as any)[f]);
+        if (body[f] !== undefined && old && String(body[f] ?? "") !== old) assertLocationInScope(user, old);
+      }
+      if (Array.isArray(body.capable_locations)) {
+        const keep = new Set((body.capable_locations as unknown[]).map((v) => was(v)));
+        for (const oldTie of ((existing as any).capable_locations ?? []).map(was)) if (oldTie && !keep.has(oldTie)) assertLocationInScope(user, oldTie);
       }
     }
     // QA-141 (Umesh): edits are as strict as creates — a fixed-up phone lands as the bare 10.

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole, isScoped, locationFilter, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireView, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { ApprovalRequest, ApprovalRule } from "@/models";
+import { ApprovalRequest, ApprovalRule, User } from "@/models";
 import { APPROVAL_ACTIONS } from "@/models";
 import { audit } from "@/lib/audit";
 import { attachCostHeads, attachHeadCaps, flushPendingFinanceAuditEvents } from "@/lib/approvals";
@@ -128,6 +128,13 @@ export const PUT = apiHandler(async (req: NextRequest) => {
   // `enabled` cannot silently clear it); an explicit `[]` clears it back to role-only, which is how
   // the setting is switched off.
   const named = approver_users === undefined ? undefined : (Array.isArray(approver_users) ? approver_users.filter(Boolean) : []);
+  // Release -333 checker B P2 (CM5 "cannot be a rule's approver"): the named list is a door too - a Center Manager id in it is refused.
+  if (named && named.length > 0) {
+    const ids = named.map(String).filter((i: string) => /^[0-9a-f]{24}$/i.test(i));
+    if (ids.length > 0 && (await User.countDocuments({ _id: { $in: ids }, role: "Center Manager" })) > 0) {
+      throw new HttpError(400, "A Center Manager cannot be the approver - choose Admin or Operations.");
+    }
+  }
   const rule = await ApprovalRule.findOneAndUpdate(
     { action },
     { $set: { enabled: !!enabled, ...(approver_role ? { approver_role } : {}), ...(named === undefined ? {} : { approver_users: named }) } },

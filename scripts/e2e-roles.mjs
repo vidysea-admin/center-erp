@@ -6169,6 +6169,68 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const toCm = await req(admin, "PATCH", `/api/users/${enrolUser.data.item?._id}`, { role: "Center Manager" });
   refused("[CM1] promote a centre-less account to Center Manager", toCm, [400], /at least one centre/i);
   ok("[CM1] ...and its role did not change", (await usersNow()).find((u) => u.email === `cm.enr.${S}@vidysea-test.local`)?.role === "Enrollment");
+  // Fix cycle 2 (checker B P1): the scope that WILL be stored is what is judged - a sent null, [null] or an id that is not a centre
+  // used to pass (the old list was judged instead) and then be written. Each is the same 400 as an empty list, with the old scope kept.
+  {
+    const scopeOf = async () => JSON.stringify(((await usersNow()).find((u) => u.email === emA)?.location_scope ?? []).map(idOf));
+    const s0 = await scopeOf();
+    const ghost = "64b7f0c2a1d3e4f5a6b7c8d9";
+    for (const [label, val] of [["null", null], ["[null]", [null]], ["[an id that is not a centre]", [ghost]], ["[a good centre and an id that is not a centre]", [own._id, ghost]], ["[a malformed id]", ["not-an-id"]]]) {
+      const r = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: val });
+      refused(`[CM1] edit a Center Manager's centres to ${label}`, r, [400], /at least one centre/i);
+      ok(`[CM1] ...and the stored scope is unchanged (${label})`, (await scopeOf()) === s0, `${s0} -> ${await scopeOf()}`);
+    }
+    const emBad = `cm.bad.${S}@vidysea-test.local`;
+    for (const [label, val] of [["[null]", [null]], ["an id that is not a centre", [ghost]]]) {
+      const r = await mk(emBad, { role: "Center Manager", location_scope: val });
+      refused(`[CM1] create a Center Manager with ${label}`, r, [400], /at least one centre/i);
+    }
+    ok("[CM1] ...and no account was written by either create refusal", !(await usersNow()).some((u) => u.email === emBad));
+    const okEdit = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [own._id, foreign._id] });
+    ok("[CM1] a real list of centres still saves (200, no over-refusal)", okEdit.status === 200 && (await scopeOf()) === JSON.stringify([idOf(own._id), idOf(foreign._id)]), `got ${okEdit.status} ${JSON.stringify(okEdit.data?.error)}`);
+    const back = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [own._id] });
+    ok("[CM1] ...and back to the single centre", back.status === 200 && (await scopeOf()) === s0, `got ${back.status} ${await scopeOf()}`);
+  }
+  // Fix cycle 2 (checker A P3): a PATCH that leaves the centre list alone - deactivating, renaming - works even when the stored list is empty.
+  {
+    const emLegacy = `cm.legacy.${S}@vidysea-test.local`;
+    const lg = await mk(emLegacy, { role: "Center Manager", location_scope: [own._id] });
+    ok("[CM1] fixture: a Center Manager to leave with an empty stored list", lg.status === 201 && !!lg.data?.item?._id, `got ${lg.status} ${JSON.stringify(lg.data?.error)}`);
+    if (lg.data?.item?._id) {
+      const { MongoClient } = await import("mongodb");
+      const lmc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await lmc.connect();
+      const wr = await lmc.db(process.env.MONGODB_DB || "center_erp_ci").collection("users").updateOne({ email: emLegacy }, { $set: { location_scope: [] } });
+      await lmc.close();
+      ok("[CM1] fixture: the stored list is now empty (written straight to the database)", wr.modifiedCount === 1, JSON.stringify(wr));
+      const rowNow = async () => (await usersNow()).find((u) => u.email === emLegacy);
+      ok("[CM1] ...read back: the Center Manager has no stored centre", (rowNow && (await rowNow())?.location_scope?.length) === 0);
+      const rn = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { name: `CM Legacy Renamed ${S}` });
+      ok("[CM1] renaming a Center Manager whose stored list is empty works (200)", rn.status === 200 && (await rowNow())?.name === `CM Legacy Renamed ${S}`, `got ${rn.status} ${JSON.stringify(rn.data?.error)}`);
+      const de = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { active: false });
+      ok("[CM1] deactivating a Center Manager whose stored list is empty works (200)", de.status === 200 && (await rowNow())?.active === false, `got ${de.status} ${JSON.stringify(de.data?.error)}`);
+      const stillNo = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { location_scope: [] });
+      refused("[CM1] ...but SENDING an empty list is still refused", stillNo, [400], /at least one centre/i);
+    }
+  }
+  // Fix cycle 2 (checker A R7): an Operations-TEAM gate that a Center Manager passes only because the role is in OPS_TEAM
+  // (src/lib/roles.ts) - the follow-ups list is requireRole(ADMIN_OPS). (The requireEdit exemption is NOT testable through a
+  // can_edit=false login: the batches.manage permission layer refuses that login first, "view-only".)
+  {
+    const fu = await req(cm, "GET", "/api/follow-ups");
+    ok("[CM2] a Center Manager opens the follow-ups list, an Operations-team gate (200 with items)", fu.status === 200 && Array.isArray(fu.data?.items), `got ${fu.status} ${JSON.stringify(fu.data?.error)}`);
+  }
+  // Fix cycle 2 (checker B P2, CM5 "cannot be a rule's approver"): the NAMED approver list is a door too.
+  {
+    const cfgNow = async () => ((await req(admin, "GET", "/api/approvals?limit=1")).data.config ?? []).find((c) => c.action === "cost.post");
+    const c0 = await cfgNow();
+    const base = { action: "cost.post", enabled: !!c0?.enabled, approver_role: c0?.approver_role ?? "Admin" };
+    const same = await req(admin, "PUT", "/api/approvals", { ...base, approver_users: c0?.approver_users ?? [] });
+    ok("[CM5] fixture: re-saving the approval rule unchanged works (200)", same.status === 200, `got ${same.status} ${JSON.stringify(same.data?.error)}`);
+    const withCm = await req(admin, "PUT", "/api/approvals", { ...base, approver_users: [...(c0?.approver_users ?? []), String(aRow._id)] });
+    refused("[CM5] name a Center Manager as a rule's approver (approver_users)", withCm, [400], /Center Manager cannot be the approver/i);
+    ok("[CM5] ...and the rule's approver list is unchanged", JSON.stringify((await cfgNow())?.approver_users ?? []) === JSON.stringify(c0?.approver_users ?? []), JSON.stringify((await cfgNow())?.approver_users));
+  }
 
   // ---------------- CM5 (part): cannot create users; cannot widen own scope ----------------
   const mkByCm = await req(cm, "POST", "/api/users", { name: "x", email: `cm.mint.${S}@vidysea-test.local`, password: PW, role: "Location", location_scope: [own._id] });
@@ -6333,6 +6395,76 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const mvCand = await req(cm, "PATCH", `/api/candidates/${candOwn?._id}`, { location: foreign._id });
     refused("[CM3] move an own candidate to ANOTHER centre (candidate PATCH location)", mvCand, [403], /out of scope/i);
     ok("[CM3] ...the candidate is still at the own centre", idOf((await req(admin, "GET", `/api/candidates/${candOwn?._id}`)).data.item?.location) === idOf(own._id));
+    // Fix cycle 2 (release-333 bump review, R2): the planner READ takes a centre id too. A scoped login must get the same
+    // 403 as every other door for a foreign centre, before any lookup; an own centre still answers.
+    const pbForeign = await req(cm, "GET", `/api/plan-batch?start=2027-04-12&location=${foreign._id}`);
+    refused("[CM3] read the batch planner for ANOTHER centre (plan-batch GET location)", pbForeign, [403], /^Location out of scope/i);
+    ok("[CM3] ...and the refusal carries no plan data", pbForeign.data?.milestones === undefined && pbForeign.data?.scoped_to === undefined, JSON.stringify(Object.keys(pbForeign.data ?? {})));
+    const pbOwn = await req(cm, "GET", `/api/plan-batch?start=2027-04-12&location=${own._id}`);
+    ok("[CM2] the batch planner for the OWN centre still answers (200 with milestones)", pbOwn.status === 200 && Array.isArray(pbOwn.data?.milestones), `got ${pbOwn.status} ${JSON.stringify(pbOwn.data?.error)}`);
+    const pbOps = await req(ops, "GET", `/api/plan-batch?start=2027-04-12&location=${foreign._id}`);
+    ok("[CM2] Operations still reads the planner for any centre (200, unchanged)", pbOps.status === 200, `got ${pbOps.status} ${JSON.stringify(pbOps.data?.error)}`);
+    // Fix cycle 2 (R1): the operational-status check on a batch MOVE is for scoped logins only. Operations and Admin behave as at
+    // base 3cfe6ed, where PATCH location had no Rule 1 check at all - so moving a batch to a halted centre succeeds (200).
+    const haltCode = "CMH" + Date.now().toString().slice(-6);
+    const haltLoc = (await req(admin, "POST", "/api/locations", { name: `CM2 Halted ${S}`, code: haltCode, approval_status: "Approved", operational_status: "Stopped" }, 201)).data?.item;
+    ok("[CM2] fixture: a marked Stopped centre exists", !!haltLoc?._id, "location create failed");
+    const hb = await req(admin, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-08-02" });
+    ok("[CM2] fixture: an own-centre Planning batch for Operations to move", hb.status === 201 && !!hb.data?.item?._id, `got ${hb.status} ${JSON.stringify(hb.data?.error)}`);
+    if (haltLoc?._id && hb.data?.item?._id) {
+      const mvOps = await req(ops, "PATCH", `/api/batches/${hb.data.item._id}`, { location: haltLoc._id });
+      ok("[CM2] Operations moves a batch to a Stopped centre exactly as at base (200, no new 409)", mvOps.status === 200, `got ${mvOps.status} ${JSON.stringify(mvOps.data?.error)}`);
+      ok("[CM2] ...and the batch is now at that centre", idOf((await req(admin, "GET", `/api/batches/${hb.data.item._id}`)).data.item?.location) === idOf(haltLoc._id));
+    }
+    // Fix cycle 2 (final review, R3): REMOVING or CLEARING a tie to another centre is a write at that centre. A trainer tied to the
+    // own centre AND a foreign one is in scope for the Center Manager; dropping the foreign tie must be refused, ties inside scope stay editable.
+    const phoneN = (n) => `96${S}${n}`.slice(0, 10);
+    const twoTie = (await req(admin, "POST", "/api/trainers", { name: `CM TwoTie ${S}`, phone: phoneN("11"), skills: ["x"], home_location: own._id, nominated_for_location: foreign._id, capable_locations: [own._id, foreign._id] })).data?.item;
+    ok("[CM3] fixture: a trainer tied to the own centre AND a foreign centre", !!twoTie?._id && idOf(twoTie.nominated_for_location) === idOf(foreign._id), JSON.stringify(twoTie ?? null));
+    if (twoTie?._id) {
+      const tiesNow = async () => { const t = (await req(admin, "GET", `/api/trainers/${twoTie._id}`)).data.item; return JSON.stringify([idOf(t?.home_location), idOf(t?.nominated_for_location), (t?.capable_locations ?? []).map(idOf).sort()]); };
+      const t0 = await tiesNow();
+      const rmCap = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { capable_locations: [own._id] });
+      refused("[CM3] drop the tie to ANOTHER centre from capable_locations (trainer PATCH)", rmCap, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (capable_locations)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const clrNom = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { nominated_for_location: null });
+      refused("[CM3] clear the nomination to ANOTHER centre (trainer PATCH nominated_for_location null)", clrNom, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (nomination)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const moveNom = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { nominated_for_location: own._id });
+      refused("[CM3] change the nomination away from ANOTHER centre to the own one (trainer PATCH)", moveNom, [403], /^Location out of scope/i);
+      ok("[CM3] ...the ties are unchanged (nomination moved)", (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      const resave = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { home_location: own._id, nominated_for_location: foreign._id, capable_locations: [own._id, foreign._id] });
+      ok("[CM2] re-saving the trainer form with the SAME ties still works (200, no over-refusal)", resave.status === 200, `got ${resave.status} ${JSON.stringify(resave.data?.error)}`);
+      ok("[CM3] ...and nothing changed", (await tiesNow()) === t0);
+      // Fix cycle 3 (R9): the capable_locations guards ran only for an ARRAY, so null, a string or an object skipped them
+      // and wiped the whole list including the foreign tie. A scoped login now gets 400 for a non-list; nothing is written.
+      for (const [label, val] of [["null", null], ["a string", "not-a-list"], ["an object", { x: 1 }]]) {
+        const bad = await req(cm, "PATCH", `/api/trainers/${twoTie._id}`, { capable_locations: val });
+        refused(`[CM3] capable_locations sent as ${label} by a Center Manager is 400 (trainer PATCH, R9)`, bad, [400], /capable_locations must be a list/i);
+        ok(`[CM3] ...the capable list incl. the foreign tie is unchanged (${label})`, (await tiesNow()) === t0, `${t0} -> ${await tiesNow()}`);
+      }
+    }
+    // Fix cycle 3 (R9): an unscoped Operations login is not touched by the new refusal (behaves as at base 3cfe6ed).
+    const opsTrainer = (await req(admin, "POST", "/api/trainers", { name: `CM OpsNull ${S}`, phone: phoneN("44"), skills: ["x"], home_location: own._id, capable_locations: [own._id, foreign._id] })).data?.item;
+    ok("[CM3] fixture: a trainer with two capable centres for the Operations null arm", !!opsTrainer?._id, JSON.stringify(opsTrainer ?? null));
+    if (opsTrainer?._id) {
+      const opsNull = await req(ops, "PATCH", `/api/trainers/${opsTrainer._id}`, { capable_locations: null });
+      ok("[CM2] Operations PATCH with capable_locations null is NOT refused (200, as at base 3cfe6ed)", opsNull.status === 200, `got ${opsNull.status} ${JSON.stringify(opsNull.data?.error)}`);
+    }
+    // Fix cycle 2 (R4): fulfilling a trainer request is a destination too - the trainer must be inside the scope.
+    const foreignOnly = (await req(admin, "POST", "/api/trainers", { name: `CM ForeignOnly ${S}`, phone: phoneN("22"), skills: ["x"], home_location: foreign._id })).data?.item;
+    const ownOnly = (await req(admin, "POST", "/api/trainers", { name: `CM OwnOnly ${S}`, phone: phoneN("33"), skills: ["x"], home_location: own._id })).data?.item;
+    const trq = (await req(admin, "POST", "/api/trainer-requests", { location: own._id, program: prog._id, required_by_date: "2027-09-09" })).data?.item;
+    ok("[CM3] fixture: an own-centre trainer request and two trainers (own-only, foreign-only)", !!trq?._id && !!foreignOnly?._id && !!ownOnly?._id, `${trq?._id} ${foreignOnly?._id} ${ownOnly?._id}`);
+    if (trq?._id && foreignOnly?._id && ownOnly?._id) {
+      const fulOf = async () => idOf((await req(admin, "GET", `/api/trainer-requests/${trq._id}`)).data.item?.fulfilled_by_trainer);
+      const f0 = await fulOf();
+      const fulF = await req(cm, "PATCH", `/api/trainer-requests/${trq._id}`, { fulfilled_by_trainer: foreignOnly._id });
+      refused("[CM3] fulfil an own request with a trainer of ANOTHER centre (trainer-request PATCH)", fulF, [403], /out of scope/i);
+      ok("[CM3] ...the request is still unfulfilled", (await fulOf()) === f0 && (await fulOf()) !== idOf(foreignOnly._id), `now ${await fulOf()}`);
+      const fulO = await req(cm, "PATCH", `/api/trainer-requests/${trq._id}`, { fulfilled_by_trainer: ownOnly._id });
+      ok("[CM2] ...but a trainer of the own centre is accepted (200)", fulO.status === 200 && (await fulOf()) === idOf(ownOnly._id), `got ${fulO.status} ${JSON.stringify(fulO.data?.error)}`);
+    }
   }
 
   // ---------------- CM6 (Umesh 2026-10-21, gate item 5): own-centre FIXED details park for Admin ----------------

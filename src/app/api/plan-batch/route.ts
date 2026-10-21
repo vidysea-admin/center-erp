@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, HttpError, isScoped, assertLocationInScope } from "@/lib/authz";
 import { ACTIVE_BATCH_STATUSES, earliestPossibleStart, earliestStartNote, planBatchBackward } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { Batch, Trainer } from "@/models";
@@ -20,10 +20,12 @@ import { Batch, Trainer } from "@/models";
 // or a centre exists, and there the full plan is the honest answer.
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
-  await requireUser();
+  const user = await requireUser();
   const q = req.nextUrl.searchParams;
   const start = q.get("start");
   const location = q.get("location");
+  // Rule 38: a scoped login (Location, Center Manager, scoped Enrollment) reads the planner only for its own centres - 403 before any lookup.
+  if (location && isScoped(user)) assertLocationInScope(user, location);
   const program = q.get("program");
   // QA-509 (-168): the batch form is choosing a trainer that may not be on any batch here yet, so
   // it names them directly. Without it the centre's CURRENT trainer is used, which is what the

@@ -1,6 +1,6 @@
 // Business rules engine — implements the numbered rules from
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
-import { isAdminOrOps, alertRoles } from "@/lib/roles";
+import { isAdminOrOps, alertRoles, CENTER_MANAGER_NEEDS_CENTRE } from "@/lib/roles";
 import crypto from "crypto";
 import { Types } from "mongoose";
 import {
@@ -59,6 +59,16 @@ export const PLAN_CREATE_STATUSES = ["Planning", "Active"];
 // unavoidable. NOT the same list as models OPERATIONAL_STATUS (what a status may BE, 5 values) —
 // this is which of those halt operations (Rule 1). check-user-copy.mjs pins the literal.
 export const HALTED_LOCATION_STATUSES = ["On Hold", "Stopped", "Closed"];
+
+// Center Manager (checker B P1): every centre in the list that will be stored must EXIST. The shape check in
+// roles.ts is synchronous and cannot see the database; this is its other half, shared by both user doors
+// (create and edit). null = fine, else the same message as an empty list.
+export async function centerManagerUnknownCentre(role: unknown, scope: unknown): Promise<string | null> {
+  if (role !== "Center Manager" || !Array.isArray(scope)) return null;
+  const ids = [...new Set(scope.map((v) => String(v ?? "")))];
+  if (ids.length === 0 || ids.some((i) => !Types.ObjectId.isValid(i))) return CENTER_MANAGER_NEEDS_CENTRE;
+  return (await Location.countDocuments({ _id: { $in: ids } })) === ids.length ? null : CENTER_MANAGER_NEEDS_CENTRE;
+}
 
 export async function assertLocationOperational(locationId: unknown, action = "This action") {
   const loc = await Location.findById(locationId).select("name operational_status").lean<any>();

@@ -5,7 +5,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { User } from "@/models";
-import { linkTrainerLoginByEmail } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
+import { linkTrainerLoginByEmail, centerManagerUnknownCentre } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
@@ -50,6 +50,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Center Manager (2026-10-21): one or more centres, never none - refused before anything is written.
   const scopeErr = centerManagerScopeError(body.role, body.location_scope);
   if (scopeErr) throw new HttpError(400, scopeErr);
+  const unknownErr = await centerManagerUnknownCentre(body.role, body.location_scope); // every listed centre must exist
+  if (unknownErr) throw new HttpError(400, unknownErr);
   // QA-141 (Umesh): the login identity itself gets format-checked — a mistyped email here is
   // an account nobody can ever mail or reset.
   const eErr = emailError(body.email);

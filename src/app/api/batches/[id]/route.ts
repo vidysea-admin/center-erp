@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson, assertLocationInScope } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, assertLocationInScope, isScoped } from "@/lib/authz";
 import { requirePerm, requireFinance } from "@/lib/permissions";
 import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, assertLocationOperational, assertRoomInScope, assertTrainerInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
@@ -289,7 +289,9 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // re-sends the whole form on every save, and a legacy value must not turn a re-save into a refusal.
   if (body.location !== undefined && String(body.location) !== String(batch.location)) {
     assertLocationInScope(user, String(body.location));
-    await assertLocationOperational(String(body.location), "Moving a batch to this centre"); // Rule 1, as on create
+    // Rule 1 on a move is for scoped logins only: Admin and Operations behave exactly as before the Center Manager role
+    // (release -333 bump review) - this door never had the check for them.
+    if (isScoped(user)) await assertLocationOperational(String(body.location), "Moving a batch to this centre");
   }
   if (body.room && String(body.room) !== String(batch.room ?? "")) await assertRoomInScope(user, String(body.room));
   if (body.trainer && String(body.trainer) !== String(batch.trainer ?? "")) await assertTrainerInScope(user, String(body.trainer));
