@@ -6383,9 +6383,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const seeAfter = await req(cmTwo, "GET", `/api/locations/${foreign._id}`);
     refused("[CM7] the SAME session is refused that centre on the very next request", seeAfter, [403], /out of scope/i);
     if (foreignBatch) {
+      const tsBefore = (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size;
       const bAfter = await req(cmTwo, "PATCH", `/api/batches/${foreignBatch._id}`, { target_size: 91 });
       refused("[CM7] ...and cannot edit a batch there either", bAfter, [403], /out of scope/i);
-      ok("[CM7] ...the batch is unchanged", (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size !== 91);
+      ok("[CM7] ...the batch is unchanged", (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size === tsBefore);
     }
     const locsTwo = (await req(cmTwo, "GET", "/api/locations?limit=2000")).data.items ?? [];
     ok("[CM7] ...and its centre list is now exactly the one remaining centre", locsTwo.length === 1 && idOf(locsTwo[0]) === idOf(own._id), JSON.stringify(locsTwo.map((l) => l.code)));
