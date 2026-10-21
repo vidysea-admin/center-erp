@@ -300,17 +300,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // question; the head's costs are NOT claimed usable). No number is quoted. No clause claims more than
 // those verdicts and the manifest.
 export const RELEASE_NOTE_CURRENT =
-  "-333 adds a new user role, Center Manager, and makes two small corrections to the Withdraw button. " +
+  "-333 adds a new user role, Center Manager, makes two small corrections to the Withdraw button, and tightens what centre (Location) logins can do with trainers. " +
   "In Admin -> Users an Admin can now give a user the Center Manager role and must pick one or more centres for them; a Center Manager cannot be saved without a centre. " +
-  "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): records of other centres cannot be opened or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
+  "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): with those default rights, records of other centres cannot be opened or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
   "As with a Principal login, a Center Manager cannot change their centre's code, name, TC, AEBAS or status fields, and their changes to its other details, approved targets and rooms go to an Admin for approval. " +
   "A Center Manager gets only the alerts tied to their own centre(s) and can enter costs for them; by default the role has no right to approve requests or to create users. " +
   "When an Admin changes a Center Manager's centres, the change applies to their open session within a few seconds. " +
+  "Centre-limited logins (Center Manager and Location) can no longer tie a trainer to, or untie a trainer from, another centre, and asking batch planning about a trainer outside their centre(s) is now refused instead of showing that trainer's name and status. " +
   "The Operations team is unchanged. " +
   "Withdraw: asking to withdraw a request raised by someone else now gets the same answer as asking for a request that does not exist; and after a cost-edit request is withdrawn, its raiser can submit the same edit again. " +
   "No other screen, figure or permission changes in this release.";
 
-// -333 note: one clause per checked criterion (center-manager-role CM1-CM7, withdraw-fixes QA-2977/QA-2978).
+// -333 note: one clause per checked criterion (center-manager-role CM1-CM7, withdraw-fixes QA-2977/QA-2978, qa-2983 plan-batch trainer scope).
 const RELEASE_NOTE_ARCHIVE_332 =
   "-332 lets the person who raised a cost or approval request withdraw it while it is still waiting. " +
   "On a request you raised that is still Pending, the Costs page (My submissions), Admin -> Approvals and the Finance cost head approvals now show a Withdraw button. " +
