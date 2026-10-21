@@ -256,10 +256,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // fall through to the old good list and pass, then the loop below wrote the null.
   const finalRole = body.role ?? doc.role;
   const finalScope = body.location_scope !== undefined ? body.location_scope : doc.location_scope;
-  const scopeErr = centerManagerScopeError(finalRole, finalScope);
+  // ...but ONLY when the body sends a list, or turns the account INTO a Center Manager (checker A P3): a PATCH that leaves
+  // the scope alone - deactivating, renaming - must work even when the stored list is empty or invalid.
+  const scopeBeingSet = body.location_scope !== undefined || (body.role === "Center Manager" && doc.role !== "Center Manager");
+  const scopeErr = scopeBeingSet ? centerManagerScopeError(finalRole, finalScope) : null;
   if (scopeErr) throw new HttpError(400, scopeErr);
-  // Existence is checked when the scope or role is being changed (a stored legacy list must not block an unrelated edit).
-  const unknownErr = body.location_scope !== undefined || body.role !== undefined ? await centerManagerUnknownCentre(finalRole, finalScope) : null;
+  const unknownErr = scopeBeingSet ? await centerManagerUnknownCentre(finalRole, finalScope) : null;
   if (unknownErr) throw new HttpError(400, unknownErr);
   for (const f of ["name", "email", "role", "location_scope", "can_edit", "active", "mail_enabled", "extra_permissions", "revoked_permissions"]) {
     if (body[f] !== undefined) (doc as any)[f] = body[f];

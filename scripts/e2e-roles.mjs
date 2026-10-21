@@ -6191,6 +6191,41 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const back = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [own._id] });
     ok("[CM1] ...and back to the single centre", back.status === 200 && (await scopeOf()) === s0, `got ${back.status} ${await scopeOf()}`);
   }
+  // Fix cycle 2 (checker A P3): a PATCH that leaves the centre list alone - deactivating, renaming - works even when the stored list is empty.
+  {
+    const emLegacy = `cm.legacy.${S}@vidysea-test.local`;
+    const lg = await mk(emLegacy, { role: "Center Manager", location_scope: [own._id] });
+    ok("[CM1] fixture: a Center Manager to leave with an empty stored list", lg.status === 201 && !!lg.data?.item?._id, `got ${lg.status} ${JSON.stringify(lg.data?.error)}`);
+    if (lg.data?.item?._id) {
+      const { MongoClient } = await import("mongodb");
+      const lmc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+      await lmc.connect();
+      const wr = await lmc.db(process.env.MONGODB_DB || "center_erp_ci").collection("users").updateOne({ email: emLegacy }, { $set: { location_scope: [] } });
+      await lmc.close();
+      ok("[CM1] fixture: the stored list is now empty (written straight to the database)", wr.modifiedCount === 1, JSON.stringify(wr));
+      const rowNow = async () => (await usersNow()).find((u) => u.email === emLegacy);
+      ok("[CM1] ...read back: the Center Manager has no stored centre", (rowNow && (await rowNow())?.location_scope?.length) === 0);
+      const rn = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { name: `CM Legacy Renamed ${S}` });
+      ok("[CM1] renaming a Center Manager whose stored list is empty works (200)", rn.status === 200 && (await rowNow())?.name === `CM Legacy Renamed ${S}`, `got ${rn.status} ${JSON.stringify(rn.data?.error)}`);
+      const de = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { active: false });
+      ok("[CM1] deactivating a Center Manager whose stored list is empty works (200)", de.status === 200 && (await rowNow())?.active === false, `got ${de.status} ${JSON.stringify(de.data?.error)}`);
+      const stillNo = await req(admin, "PATCH", `/api/users/${lg.data.item._id}`, { location_scope: [] });
+      refused("[CM1] ...but SENDING an empty list is still refused", stillNo, [400], /at least one centre/i);
+    }
+  }
+  // Fix cycle 2 (checker A R7): two Operations-TEAM gates that a Center Manager passes only because the role is in OPS_TEAM
+  // (src/lib/roles.ts) - the follow-ups list is requireRole(ADMIN_OPS), and requireEdit exempts the team from can_edit.
+  {
+    const fu = await req(cm, "GET", "/api/follow-ups");
+    ok("[CM2] a Center Manager opens the follow-ups list, an Operations-team gate (200 with items)", fu.status === 200 && Array.isArray(fu.data?.items), `got ${fu.status} ${JSON.stringify(fu.data?.error)}`);
+    const emRo = `cm.ro.${S}@vidysea-test.local`;
+    const ro = await mk(emRo, { role: "Center Manager", location_scope: [own._id], can_edit: false });
+    ok("[CM2] fixture: a Center Manager whose can_edit flag is OFF", ro.status === 201 && ro.data?.item?.can_edit === false, `got ${ro.status} ${JSON.stringify(ro.data?.item?.can_edit)}`);
+    const cmRo = await login(emRo, PW);
+    const roB = cmRo ? await req(cmRo, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-10-04" }) : { status: 0, data: {} };
+    ok("[CM2] ...still creates a batch at the own centre: the team is exempt from the can_edit flag (201)", roB.status === 201 && !!roB.data?.item?._id, `got ${roB.status} ${JSON.stringify(roB.data?.error)}`);
+    ok("[CM2] ...and the batch is read back at the own centre", !!roB.data?.item?._id && idOf((await req(admin, "GET", `/api/batches/${roB.data.item._id}`)).data.item?.location) === idOf(own._id));
+  }
   // Fix cycle 2 (checker B P2, CM5 "cannot be a rule's approver"): the NAMED approver list is a door too.
   {
     const cfgNow = async () => ((await req(admin, "GET", "/api/approvals?limit=1")).data.config ?? []).find((c) => c.action === "cost.post");
