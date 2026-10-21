@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
 import { Batch, Location, Trainer } from "@/models";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -66,8 +67,8 @@ export const { GET, POST } = collectionRoutes({
   // Trainer's doors in the MENU; the server now closes them too. A Trainer never reads the
   // trainer directory ("I shouldn't be able to see other trainers"), and Enrollment's brief
   // is candidates, not the hiring surface.
-  readRoles: ["Admin", "Operations", "Location"],
-  writeRoles: ["Admin", "Operations"],
+  readRoles: [...ADMIN_OPS, "Location"],
+  writeRoles: [...ADMIN_OPS],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no nominating trainers for it.
   async beforeCreate(body, user) {

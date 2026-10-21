@@ -25,7 +25,11 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // warnings pile up — the bell would show it and the inbox would not.
   const type = req.nextUrl.searchParams.get("type");
   if (type) filter.type = { $in: type.split(",").map((t) => t.trim()).filter(Boolean) };
-  if (isScoped(user)) {
+  if (user.role === "Center Manager") {
+    // Center Manager: alerts tied to no centre (a website trainer-apply, a portal lookup) stay with
+    // Operations/Admin, so unlike Location there is NO `location: null` arm here (gate Q2).
+    filter.$or = [{ ...locationFilter(user) }];
+  } else if (isScoped(user)) {
     filter.$or = [{ location: null }, { ...locationFilter(user) }];
   }
 

@@ -1,4 +1,5 @@
 "use client";
+import { ADMIN_OPS, isAdminOrOps } from "@/lib/roles";
 import { ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -47,7 +48,7 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   // that row dead text. -219 fixed the row the verdict quoted and did not read the row above it,
   // which is word for word the lesson QA-785 was raised for. There is a pin for the SHAPE now, so
   // the next screen cannot repeat it.
-  { prefix: "/sheet-watch", roles: ["Admin", "Operations"], perm: "sheet.sources" },
+  { prefix: "/sheet-watch", roles: [...ADMIN_OPS], perm: "sheet.sources" },
   // QA-806 (-219, checker on qa-218): this ceiling was `["Admin"]`, and `routeAllowed` returns true
   // for Admin before it looks at anything - so the ONLY login that could reach /sync was one for
   // which `can()` is unconditionally true. Every permission gate -218 added on that screen
@@ -64,20 +65,20 @@ const ROUTE_RULES: { prefix: string; roles?: string[]; perm?: string }[] = [
   // The route gate is `sheet.approve` - the reviewing right, which is what this inbox IS. `Sync now`
   // inside it stays on `sheet.sources`, and can now genuinely be false for a login that reviews but
   // does not run sources.
-  { prefix: "/sync", roles: ["Admin", "Operations"], perm: "sheet.approve" },
-  { prefix: "/locations", roles: ["Admin", "Operations", "Location", "Enrollment"] },
-  { prefix: "/trainers", roles: ["Admin", "Operations", "Location"] },
-  { prefix: "/candidates", roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { prefix: "/sync", roles: [...ADMIN_OPS], perm: "sheet.approve" },
+  { prefix: "/locations", roles: [...ADMIN_OPS, "Location", "Enrollment"] },
+  { prefix: "/trainers", roles: [...ADMIN_OPS, "Location"] },
+  { prefix: "/candidates", roles: [...ADMIN_OPS, "Location", "Enrollment"] },
   // mtg-c1 (R4): the daily digest. Same ceiling as the API door (/api/reports/daily): not for Trainers.
   // No `perm`: the centre scope and the finance gate are applied to the DATA, not to the door.
-  { prefix: "/reports/daily", roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { prefix: "/reports/daily", roles: [...ADMIN_OPS, "Location", "Enrollment"] },
   // -107 (Umesh 17/08: "trainer dashboard mai ek aur remaining hai — upload government sheet of
   // attendance"): Trainer joins the CEILING here, and the permission still decides. It is OFF for
   // the Trainer role by default, so the three live trainers who only mark daily attendance see
   // nothing new — but a trainer Umesh grants `attendance.govt` to now actually gets a door.
   // Before this the grant was DEAD: Anuj Kumar already carried the right and no screen ever
   // showed it, because every gate read the ROLE while the API read the PERMISSION.
-  { prefix: "/govt-attendance", roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
+  { prefix: "/govt-attendance", roles: [...ADMIN_OPS, "Trainer"], perm: "attendance.govt" },
   // Cost submission follows the effective right alone. Finance visibility remains a separate
   // no-Admin-bypass door at /finance; opening this form never opens the ledger.
   { prefix: "/costs", perm: "costs.manage" },
@@ -118,18 +119,18 @@ const NAV = [
   // other trainers … why new location tab is here — this all should be disabled … I should
   // just see my batch-wise details." Those directory doors remain shut; Costs is the later,
   // permission-only submission exception and does not expose the trainer directory or ledger.
-  { href: "/locations", label: "Locations", Icon: IconPin, roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { href: "/locations", label: "Locations", Icon: IconPin, roles: [...ADMIN_OPS, "Location", "Enrollment"] },
   // QA-061/065: Enrollment's brief is candidates — the Trainers door (whose page offered
   // them Add/Import buttons the server refuses anyway) closes for them too.
-  { href: "/trainers", label: "Trainers", Icon: IconUser, roles: ["Admin", "Operations", "Location"] },
+  { href: "/trainers", label: "Trainers", Icon: IconUser, roles: [...ADMIN_OPS, "Location"] },
   // Karunn 13/08 [25:28]: "Open Positions kahan-kahan hain — side me chahiye" — the
   // hiring board gets its own door instead of hiding as the third Trainers tab.
-  { href: "/trainers?tab=Open%20Positions", label: "Open Positions", Icon: IconUser, roles: ["Admin", "Operations"] },
-  { href: "/candidates", label: "Candidates", Icon: IconUsers, roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { href: "/trainers?tab=Open%20Positions", label: "Open Positions", Icon: IconUser, roles: [...ADMIN_OPS] },
+  { href: "/candidates", label: "Candidates", Icon: IconUsers, roles: [...ADMIN_OPS, "Location", "Enrollment"] },
   { href: "/batches", label: "Batches", Icon: IconCap },
   // 2026-08-12: the portal attendance export Manish uploads, reconciled against our daily logs.
   // 2026-08-13 (Umesh): attendance is OFF the principal/SPOC plate entirely — Location removed.
-  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: ["Admin", "Operations", "Trainer"], perm: "attendance.govt" },
+  { href: "/govt-attendance", label: "Govt Attendance", Icon: IconCap, roles: [...ADMIN_OPS, "Trainer"], perm: "attendance.govt" },
   { href: "/costs", label: "Costs", Icon: IconWallet, perm: "costs.manage" },
   // QA-1830. `routeAllowed` decides this entry too, so a login without `finance.view` never sees
   // the door — the same single statement of the rule the route gate reads, not a second copy.
@@ -144,7 +145,7 @@ const NAV = [
   // else. Everyone gets the entry; the report itself is what is scoped.
   { href: "/reports", label: "Reports", Icon: IconCap },
   // mtg-c1 (R4): the daily digest screen; the 21:00 IST mail is the same data.
-  { href: "/reports/daily", label: "Daily digest", Icon: IconCap, roles: ["Admin", "Operations", "Location", "Enrollment"] },
+  { href: "/reports/daily", label: "Daily digest", Icon: IconCap, roles: [...ADMIN_OPS, "Location", "Enrollment"] },
 ] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 
 // ---- Location context (header switcher; pages read via this hook) ----
@@ -327,7 +328,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!user) return;
-    if (["Admin", "Operations"].includes(user.role)) {
+    if (isAdminOrOps(user.role)) {
       api("/api/sheet-changes?count=1").then((d) => setSyncCount(d.count ?? 0)).catch(() => {});
       api("/api/workbook-changes?count=1").then((d) => setWatchCount(d.count ?? 0)).catch(() => {});
     }

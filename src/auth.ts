@@ -8,7 +8,7 @@ export type SessionUser = {
   id: string;
   name: string;
   email: string;
-  role: "Admin" | "Operations" | "Location" | "Enrollment" | "Trainer";
+  role: "Admin" | "Operations" | "Center Manager" | "Location" | "Enrollment" | "Trainer";
   location_scope: string[];
   can_edit: boolean;
 };

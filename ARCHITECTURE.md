@@ -86,6 +86,7 @@ StoredFile, ApprovalRule, ApprovalRequest, AuditLog, Scheme, JobRole, CandidateD
 | File | What it is |
 |---|---|
 | `authz.ts` | `HttpError` · `requireUser` · `requireRole` · `requireEdit` · `locationFilter` · **`apiHandler`** — the server error chokepoint (HttpError→`plain()`, E11000→409, Cast→404, Validation→400) |
+| `roles.ts` | **The one definition of "the Operations team" and of "always scoped"** (`OPS_TEAM`, `ADMIN_OPS`, `isOpsTeam`, `isAdminOrOps`, `ALWAYS_SCOPED_ROLES`) plus `alertRoles` (centre-tied alerts also reach that centre's Center Managers) and `centerManagerScopeError` (a Center Manager needs >= 1 centre). Dependency-free so server routes, client screens and `authz.ts` all import it. |
 | `permissions.ts` | `PERMISSIONS` (**21 keys** — QA-904 added `candidates.delete` / `trainers.delete` / `batches.delete`; QA-1825 added `finance.view` / `finance.approve`; QA-1838 **retired `invoices.manage`**, which gated nothing once the invoice book moved to `finance.view`) · `DEFAULT_ROLE_PERMISSIONS` · `hasPermission` · `requireView` · `requirePerm` · **`requireFinance`** (the door rule) · **`NO_ADMIN_BYPASS`** (the key rule) · **`INVOICE_MONEY_FIELDS` + `maskInvoiceMoney` / `maskInvoiceMoneyList` / `maskMoneyInAuditRow`** (the field rule). Deny wins; Admin bypasses **every key except `NO_ADMIN_BYPASS`** (§3.2d) |
 | `crud.ts` | `collectionRoutes` / `itemRoutes` / `pick` — the REST factory. **`CrudConfig.fields` IS the write whitelist** |
 | `validate.ts` | **`canonicalPhone` · `phoneError` · `emailError` · `canonicalAadhaar` · `aadhaarError`** — THE write-time canon for phone/email/Aadhaar. Client-safe (imports nothing — §3.0) |
@@ -482,6 +483,25 @@ per-route code; the only way back is `.setOptions({ archivedOnly: true })` (the 
 `GET /api/costs?mine=1` (their own rows, `is_mine`, `edit_pending`); the register rows carry `is_mine` and never
 the enterer's id. Every edit / delete / restore writes a `financeAuditEvent` through the durable outbox. Suite:
 `scripts/e2e-cost-own-edit-delete.mjs`.
+
+### 3.0h "Who is the Operations team?" - one group, now with a second member (center-manager-role, Manish 2026-10-21)
+
+Before: ~70 hand-typed `role === "Operations"` / `["Admin","Operations"]` copies in ~40 files. "Center Manager" is the Operations
+rights confined to the centres in `location_scope`, so the copies became `isOpsTeam` / `isAdminOrOps` / `ADMIN_OPS` from
+`src/lib/roles.ts`; the next such role is one line there. Three things deliberately did NOT join the group: account creation
+(`api/users/route.ts`, Admin only), the approver pickers (a Center Manager can never approve - `api/approvals` PUT refuses
+it, the Admin dropdown omits it), and centre-LESS alerts (public trainer-apply, enrol-otp, portal-lookup stay Operations/Admin).
+The scope is `authz.isScoped` reading `ALWAYS_SCOPED_ROLES`; an empty `location_scope` is refused on create/edit and sees
+nothing (fail closed). Pinned by the `[CM1]..[CM7]` block at the end of `scripts/e2e-roles.mjs`.
+
+Fix cycle 1 (review Block + Umesh gate items 5 and 6): (a) Rule 38 has a DESTINATION half - `batches/[id]` PATCH (location, room,
+trainer), `trainer-requests` POST and `candidates/[id]` PATCH now check where a record is being SENT, not only where it is;
+(b) a Center Manager's own-centre FIXED details are bound exactly like a Location login's through ONE group,
+`FIXED_EDIT_PARKING_ROLES` / `parksFixedEdits` / `fixedEditApprovalOpts` in `roles.ts`, read by the three doors that carry the
+branch (`locations/[id]`, `locations/[id]/rooms`, `locations/[id]/targets`): identity fields refuse, the rest parks as a
+`location.edit` request that always reaches Admin for a Center Manager (no dependence on the rule switch); (c) a scope change
+applies immediately because `authz.requireUser` already re-reads role and `location_scope` from the User row (5 s cache, dropped
+on every users PATCH) - no new mechanism was needed, `[CM7]` pins it.
 
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 

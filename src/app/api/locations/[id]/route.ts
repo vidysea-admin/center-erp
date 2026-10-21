@@ -1,3 +1,4 @@
+import { ADMIN_OPS, fixedEditApprovalOpts, parksFixedEdits } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
@@ -17,8 +18,8 @@ export const { GET, PATCH } = itemRoutes({
     return maskLocationSecrets(items, user.role === "Admin");
   },
   fields: ["code", "external_id", "institution_id", "name", "city", "state", "address", "approval_status", "operational_status", "status_reason", "status_changed_on", "spoc_name", "spoc_phone", "spoc_user", "principal_name", "principal_phone", "principal_user", "contacts", "district", "tc_id", "tc_password", "tc_status", "mobile_otp", "aebas_link", "aebas_id", "aebas_password", "operating_partner", "cluster_head_name", "cluster_head_phone", "active"],
-  readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-095: not the Trainer's door
-  writeRoles: ["Admin", "Operations", "Location"],
+  readRoles: [...ADMIN_OPS, "Location", "Enrollment"], // QA-095: not the Trainer's door
+  writeRoles: [...ADMIN_OPS, "Location"],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   async beforeUpdate(id, data, existing, user) {
     // QA-621 cycle 4 / QA-1502 cycle 6: this route used to bump the slot generation counters here
@@ -32,7 +33,7 @@ export const { GET, PATCH } = itemRoutes({
     // than whatever eight, ten fields you want to fix" — and their change applies only once
     // the Admin approves it. The fixed ten are the centre's identity and the master-sheet
     // truth; everything else parks as a location.edit request (direct while the rule is off).
-    if (user.role === "Location") {
+    if (parksFixedEdits(user.role)) { // Location login or Center Manager (lib/roles.ts)
       // QA-089: district and operating_partner ride the AVPL rebase too — everything the
       // master sheet writes is fixed the same way, or the next rebase silently undoes an
       // approved SPOC edit.
@@ -48,6 +49,7 @@ export const { GET, PATCH } = itemRoutes({
           entity: "Location", entity_id: id, location: id,
           summary: `${existing.name}: ${user.name} suggests changing ${changed.join(", ")}`,
           payload: { patch: data },
+          ...fixedEditApprovalOpts(user.role),
         });
         if (gate) throw new HttpError(202, `Sent for approval: ${gate.request.summary}`);
       }

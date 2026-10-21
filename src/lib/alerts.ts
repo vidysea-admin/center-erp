@@ -2,6 +2,7 @@
 // notifications. Deliberately pull-free for the user: the scheduler writes rows, the UI
 // reads them. Every rule is deduped by (type, entity_id) so a standing condition raises
 // once, not once per tick.
+import { alertRoles } from "@/lib/roles";
 import {
   Batch, Closure, DailyLog, Invoice, Notification, SheetChange, TrainerRequest, WorkbookChange,
 } from "@/models";
@@ -28,7 +29,9 @@ async function raise(a: Raise) {
     status: { $in: ["New", "Acknowledged"] },
   }).select("_id").lean();
   if (existing) return false;
-  await Notification.create({ severity: "warning", role_target: ["Admin", "Operations"], ...a });
+  const merged = { severity: "warning", role_target: ["Admin", "Operations"], ...a };
+  // Center Manager: a centre-tied alert also reaches that centre's Center Managers (lib/roles.ts alertRoles).
+  await Notification.create({ ...merged, role_target: alertRoles(merged.role_target as string[], merged.location) });
   return true;
 }
 

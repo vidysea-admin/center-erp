@@ -1,3 +1,4 @@
+import { alertRoles } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readFormData } from "@/lib/authz";
@@ -344,7 +345,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
       message: `Portal attendance imported (${imp.period_label}): ${counts.variance_count} candidate(s) differ from our daily logs, ${counts.unmatched_count} not found in the ERP.`,
       entity: "GovtAttendanceImport", entity_id: imp._id,
       link: `/govt-attendance?import=${imp._id}`,
-      role_target: ["Admin", "Operations"],
+      role_target: alertRoles(["Admin", "Operations"], locationId),
       location: locationId ?? undefined,
     });
   }

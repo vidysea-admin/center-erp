@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
 import { Candidate, Location, Program } from "@/models";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
@@ -40,8 +41,8 @@ export const { GET, POST } = collectionRoutes({
   // QA-060/095 (CEO [38:43] "I shouldn't see all the candidates … just my batch-wise
   // details"): a Trainer never reads the centre's candidate pool — their lens is the
   // batch roster and the Attendance tab, which stay open to them.
-  readRoles: ["Admin", "Operations", "Location", "Enrollment"],
-  writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
+  readRoles: [...ADMIN_OPS, "Location", "Enrollment"],
+  writeRoles: [...ADMIN_OPS, "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   populate: [
     { path: "location", select: "name code" },

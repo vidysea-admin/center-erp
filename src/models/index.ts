@@ -89,7 +89,9 @@ export const FOLLOWUP_TYPE = ["Stop batch", "Release trainer", "Cancel trainer r
 export const FOLLOWUP_STATUS = ["Pending", "Done", "Skipped"] as const;
 // "Trainer" added 2026-08-11 (CEO): trainers sign up themselves, choose the role, and wait
 // for Admin approval. A trainer login is scoped to the batches they teach.
-export const USER_ROLE = ["Admin", "Operations", "Location", "Enrollment", "Trainer"] as const;
+// "Center Manager" added 2026-10-21 (qa/gates/center-manager-role.md): the Operations rights, confined
+// to the centres in location_scope. The group of roles that share the Operations rights is lib/roles.ts.
+export const USER_ROLE = ["Admin", "Operations", "Center Manager", "Location", "Enrollment", "Trainer"] as const;
 export const USER_APPROVAL = ["Pending", "Approved", "Rejected"] as const;
 export const ACTOR_TYPE = ["USER", "SYSTEM", "AUTOMATION", "EXTERNAL_SYNC"] as const;
 // QA-1828: Manish's workbook carries a "Head Type" column with exactly these two values, and the

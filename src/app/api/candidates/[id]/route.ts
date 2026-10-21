@@ -1,9 +1,10 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { Candidate } from "@/models";
 import { candidateEligibility } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
-import { HttpError, apiHandler, isScoped, requireEdit, requireUser, readJson } from "@/lib/authz";
+import { HttpError, apiHandler, assertLocationInScope, isScoped, requireEdit, requireUser, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { dbConnect } from "@/lib/db";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
@@ -37,11 +38,15 @@ export const { GET, PATCH } = itemRoutes({
     // the create door accepts cannot be corrected at all.
     "apaar_id",
   ],
-  readRoles: ["Admin", "Operations", "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
-  writeRoles: ["Admin", "Operations", "Location", "Enrollment"],
+  readRoles: [...ADMIN_OPS, "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
+  writeRoles: [...ADMIN_OPS, "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.
   async beforeUpdate(_id, body, existing, user) {
+    // center-manager-role review, finding 3 (Rule 38, the DESTINATION half): the crud door has already
+    // proved the candidate is IN scope; this proves the centre it is being moved TO is too. Same check as
+    // the create door (candidates/route.ts). Only a CHANGED value - the drawer re-sends location on every edit.
+    if (body.location && String(body.location) !== String((existing as any)?.location ?? "")) assertLocationInScope(user, String(body.location));
     // -156 (QA-450): null, not "" - clearing the field has to stay possible, and the QA-417 partial
     // index does not index null. Same reasoning as the create door one file over.
     if (typeof body.sidh_candidate_id === "string" && !body.sidh_candidate_id.trim()) body.sidh_candidate_id = null;

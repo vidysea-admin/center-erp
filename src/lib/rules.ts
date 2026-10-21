@@ -1,5 +1,6 @@
 // Business rules engine — implements the numbered rules from
 // center-erp-data-model-rules.md §4. Rule numbers are cited inline.
+import { isAdminOrOps, alertRoles } from "@/lib/roles";
 import crypto from "crypto";
 import { Types } from "mongoose";
 import {
@@ -252,6 +253,18 @@ export async function assertTrainerInScope(user: SessionUser, trainerId: string)
   if (!isScoped(user)) return;
   const t = await Trainer.findById(trainerId).select("nominated_for_location home_location capable_locations").lean<any>();
   assertTrainerDocInScope(user, t);
+}
+// Rule 38, the destination half for a ROOM (center-manager-role review): a room belongs to one centre, so a
+// scoped login may put a batch only into a room of its own centres. ONE definition for both batch doors
+// (create and PATCH); the 403 comes before any availability check so the refusal never leaks another
+// centre's batch code in a 409.
+export async function assertRoomInScope(user: SessionUser, roomId: string) {
+  if (!isScoped(user)) return;
+  const rm = await Room.findById(roomId).select("location").lean<any>();
+  if (!rm) throw new HttpError(404, "Room not found");
+  if (!user.location_scope.map(String).includes(String(rm.location))) {
+    throw new HttpError(403, "Room out of scope - it belongs to another centre.");
+  }
 }
 
 // QA-1575 (client RPL mandate item 7, relayed by Umesh 2026-08-27; his decision, asked directly and
@@ -1884,7 +1897,7 @@ export async function recordRosterGrowth(
     entity: "DailyLog", entity_id: log._id,
     link: `/batches/${String(log.batch)}?tab=Daily Execution`,
     location: batch?.location?._id,
-    role_target: ["Admin", "Operations"],
+    role_target: alertRoles(["Admin", "Operations"], batch?.location?._id),
   });
 }
 
@@ -1937,7 +1950,7 @@ export async function createDailyLogChecked(
 }
 
 export async function canEditDailyLog(log: { entered_by: unknown; entered_at: Date }, userId: string, role: string): Promise<boolean> {
-  if (role === "Admin" || role === "Operations") return true; // Rule 27
+  if (isAdminOrOps(role)) return true; // Rule 27 (Admin, Operations, Center Manager - lib/roles.ts)
   const defaults = await getDefaults();
   const ageHours = (Date.now() - new Date(log.entered_at).getTime()) / 36e5;
   return String(log.entered_by) === String(userId) && ageHours <= defaults.daily_log_edit_window_hours;
@@ -2840,7 +2853,7 @@ export async function upsertClosureChecked(batchId: string, patch: Record<string
           severity: "info",
           message: `Assessment for ${b?.code ?? "batch"} scheduled on ${when} — inform the candidates.`,
           entity: "Batch", link: `/batches/${batchId}`,
-          role_target: ["Admin", "Operations", "Location", "Trainer"],
+          role_target: alertRoles(["Admin", "Operations", "Location", "Trainer"], b?.location),
           location: b?.location,
         },
         $setOnInsert: { type: "assessment_scheduled", entity_id: closure.batch, status: "New" },

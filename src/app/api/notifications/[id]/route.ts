@@ -1,3 +1,4 @@
+import { isAdminOrOps } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
@@ -12,7 +13,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   const { status } = await readJson(req);
   if (!["Acknowledged", "Resolved"].includes(status)) throw new HttpError(400, "status must be Acknowledged or Resolved");
-  if (status === "Resolved" && !["Admin", "Operations"].includes(user.role) && !user.can_edit) {
+  if (status === "Resolved" && !isAdminOrOps(user.role) && !user.can_edit) {
     throw new HttpError(403, "Read-only access");
   }
 
@@ -22,6 +23,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // Rule 38: the list route scopes by location, so the by-ID route must too — otherwise a
   // scoped user could act on another centre's alert by guessing its id.
   if (n.location) assertLocationInScope(user, String(n.location));
+  // Center Manager: an alert tied to no centre is Operations/Admin's, same as the list (gate Q2).
+  else if (user.role === "Center Manager") throw new HttpError(403, "Not addressed to your role");
 
   n.status = status;
   n.acknowledged_by = user.id as any;

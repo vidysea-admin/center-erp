@@ -1,5 +1,7 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
 import { Location, LocationTarget } from "@/models";
+import { HttpError } from "@/lib/authz";
 import { tcVerdict, trainerTiesFor } from "@/lib/rules";
 
 // 2026-08-12: tc_password is a LIVE government portal credential — "us location ke TC ID aur
@@ -46,9 +48,16 @@ export const { GET, POST } = collectionRoutes({
   searchFields: ["code", "name", "city", "external_id", "institution_id", "tc_id", "district"],
   // QA-095: the CEO shut the Trainer's locations door — the API answers 403 now, not with
   // the centre's commercials. Batch/home surfaces carry the centre NAME on their own.
-  readRoles: ["Admin", "Operations", "Location", "Enrollment"],
-  writeRoles: ["Admin", "Operations"],
+  readRoles: [...ADMIN_OPS, "Location", "Enrollment"],
+  writeRoles: [...ADMIN_OPS],
   permission: "locations.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
+  // Center Manager (2026-10-21): a brand-new centre cannot already be one of theirs, and they may not
+  // widen their own scope (only an Admin edits location_scope), so creating a centre is refused.
+  beforeCreate(_data, user) {
+    if (user.role === "Center Manager") {
+      throw new HttpError(403, "Location out of scope - a Center Manager works only at the centres assigned to them and cannot create a new centre. Ask Operations or an Admin.");
+    }
+  },
   // 2026-08-13 (Manish: "Ongoing scheme bhi saath mein dikhana MUST hai — warna pata hi nahi
   // chalega"): each centre carries its job roles WITH their scheme, plus the per-row TC verdict
   // that decides the "31 approved". One extra query per page, same shape as candidates' batch join.

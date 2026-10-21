@@ -6110,5 +6110,382 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     JSON.stringify((cat.data.catalog ?? []).filter((p) => p.group === "Finance").map((p) => p.key)));
 }
 
+// ---- -333 center-manager-role (qa/gates/center-manager-role.md; Manish 2026-10-21) ----
+// A Center Manager = the Operations rights, confined to the centres in location_scope the way a
+// Location login is. Operations stays unscoped. Every refusal below asserts its STATUS, its MESSAGE
+// and that NOTHING WAS WRITTEN (read back through Admin) - a bare non-2xx proves only that something
+// refused, not that it was the scope gate, and not that the half-write did not happen first.
+{
+  const S = Date.now().toString().slice(-6);
+  const refused = (label, r, statuses, msgRe) => {
+    ok(`${label} - status ${statuses.join("/")}`, statuses.includes(r.status), `got ${r.status} ${JSON.stringify(r.data?.error ?? r.data).slice(0, 160)}`);
+    ok(`${label} - message names the reason`, msgRe.test(String(r.data?.error ?? "")), JSON.stringify(r.data?.error ?? null));
+  };
+  const idOf = (v) => String(v?._id ?? v ?? "");
+  const mk = async (email, extra) => (await req(admin, "POST", "/api/users", { name: `CM ${email.split("@")[0]}`, email, password: PW, can_edit: true, ...extra }));
+
+  const allLocs = (await req(admin, "GET", "/api/locations?limit=2000")).data.items ?? [];
+  const own = allLocs.find((l) => l.code === "JPR03");
+  const foreign = allLocs.find((l) => l.code === "KOT02");
+  const prog = (await req(admin, "GET", "/api/programs?limit=1")).data.items[0];
+  ok("[CM0] fixtures: own centre JPR03, foreign centre KOT02, a programme", !!own && !!foreign && !!prog);
+
+  // ---------------- CM1: the role exists; Admin creates one with >=1 centre; empty is refused ----------------
+  const cm = await login("cm.jpr03@vidysea.com", PW);
+  ok("[CM1] the seeded Center Manager can sign in", !!cm);
+  const matrix = (await req(admin, "GET", "/api/permissions")).data;
+  const cmRow = (matrix.roles ?? []).find((r) => r.role === "Center Manager");
+  const opsRow2 = (matrix.roles ?? []).find((r) => r.role === "Operations");
+  ok("[CM1] 'Center Manager' is in the role enum (permissions matrix lists it)", !!cmRow, JSON.stringify((matrix.roles ?? []).map((r) => r.role)));
+  ok("[CM1] its default rights ARE the Operations default set (code fallback, no stored row)",
+    !!cmRow && !!opsRow2 && cmRow.is_default === true && JSON.stringify([...cmRow.permissions].sort()) === JSON.stringify([...opsRow2.permissions].sort()),
+    JSON.stringify({ cm: cmRow?.permissions, ops: opsRow2?.permissions }));
+  const adminSrc = fs.readFileSync("src/app/(app)/admin/page.tsx", "utf8");
+  ok("[CM1] the admin role dropdown AND the roles overview both list Center Manager",
+    (adminSrc.match(/"Operations", "Center Manager", "Location", "Enrollment", "Trainer"/g) ?? []).length >= 2);
+  ok("[CM1] the admin centre picker is required for a Center Manager (Save is disabled with none)",
+    /form\.role === "Center Manager" && \(form\.location_scope \?\? \[\]\)\.length === 0/.test(adminSrc));
+  ok("[CM1] ...and Center Manager is NOT an approval-rule approver option",
+    /\{\["Admin", "Operations"\]\.map\(\(r\) => <option key=\{r\}>\{r\}<\/option>\)\}/.test(adminSrc));
+
+  const emA = `cm.a.${S}@vidysea-test.local`, emB = `cm.b.${S}@vidysea-test.local`, emFin = `cm.fin.${S}@vidysea-test.local`, emNone = `cm.none.${S}@vidysea-test.local`;
+  const created = await mk(emA, { role: "Center Manager", location_scope: [own._id] });
+  ok("[CM1] Admin creates a Center Manager with one centre (201, role and scope stored)",
+    created.status === 201 && created.data.item?.role === "Center Manager" && (created.data.item?.location_scope ?? []).map(idOf).join() === idOf(own._id), `got ${created.status} ${JSON.stringify(created.data).slice(0, 160)}`);
+  const two = await mk(`cm.two.${S}@vidysea-test.local`, { role: "Center Manager", location_scope: [own._id, foreign._id] });
+  ok("[CM1] ...and with two centres (one or more)", two.status === 201 && (two.data.item?.location_scope ?? []).length === 2, `got ${two.status}`);
+  const usersNow = async () => (await req(admin, "GET", "/api/users")).data.items ?? [];
+  const noScope = await mk(emNone, { role: "Center Manager", location_scope: [] });
+  refused("[CM1] create with an EMPTY centre list", noScope, [400], /at least one centre/i);
+  const noScope2 = await mk(emNone, { role: "Center Manager" });
+  refused("[CM1] create with NO centre list at all", noScope2, [400], /at least one centre/i);
+  ok("[CM1] ...and no account was written by either refusal", !(await usersNow()).some((u) => u.email === emNone));
+  const fresh = await usersNow();
+  const aRow = fresh.find((u) => u.email === emA);
+  const emptied = await req(admin, "PATCH", `/api/users/${aRow._id}`, { location_scope: [] });
+  refused("[CM1] edit an existing Center Manager down to NO centre", emptied, [400], /at least one centre/i);
+  ok("[CM1] ...and the stored scope is untouched", (await usersNow()).find((u) => u.email === emA)?.location_scope?.length === 1);
+  const enrolUser = await mk(`cm.enr.${S}@vidysea-test.local`, { role: "Enrollment" });
+  const toCm = await req(admin, "PATCH", `/api/users/${enrolUser.data.item?._id}`, { role: "Center Manager" });
+  refused("[CM1] promote a centre-less account to Center Manager", toCm, [400], /at least one centre/i);
+  ok("[CM1] ...and its role did not change", (await usersNow()).find((u) => u.email === `cm.enr.${S}@vidysea-test.local`)?.role === "Enrollment");
+
+  // ---------------- CM5 (part): cannot create users; cannot widen own scope ----------------
+  const mkByCm = await req(cm, "POST", "/api/users", { name: "x", email: `cm.mint.${S}@vidysea-test.local`, password: PW, role: "Location", location_scope: [own._id] });
+  ok("[CM5] a Center Manager cannot create a user account (403)", mkByCm.status === 403, `got ${mkByCm.status} ${JSON.stringify(mkByCm.data?.error)}`);
+  ok("[CM5] ...and the message says why and nothing was written", /do not have the .* right/i.test(String(mkByCm.data?.error ?? "")) && !(await usersNow()).some((u) => u.email === `cm.mint.${S}@vidysea-test.local`), JSON.stringify(mkByCm.data?.error));
+  const cmRowSeed = (await usersNow()).find((u) => u.email === "cm.jpr03@vidysea.com");
+  const widen = await req(cm, "PATCH", `/api/users/${cmRowSeed._id}`, { location_scope: [own._id, foreign._id] });
+  ok("[CM5] a Center Manager cannot widen their own centre list (403)", widen.status === 403, `got ${widen.status} ${JSON.stringify(widen.data?.error)}`);
+  ok("[CM5] ...and the stored scope is still exactly one centre", (await usersNow()).find((u) => u.email === "cm.jpr03@vidysea.com")?.location_scope?.length === 1);
+
+  // ---------------- fixtures for the scope tests ----------------
+  const fin = await mk(emFin, { role: "Center Manager", location_scope: [own._id], extra_permissions: ["finance.view"] });
+  const cmB = await mk(emB, { role: "Center Manager", location_scope: [foreign._id] });
+  ok("[CM] fixtures: finance-viewing CM (own centre) and a second CM (foreign centre) created", fin.status === 201 && cmB.status === 201, `${fin.status}/${cmB.status}`);
+  const cmFin = await login(emFin, PW), cmOther = await login(emB, PW), cmA = await login(emA, PW);
+  const foreignBatch = ((await req(admin, "GET", `/api/batches?location=${foreign._id}&limit=2000`)).data.items ?? []).find((b) => idOf(b.location) === idOf(foreign._id));
+  const foreignActive = ((await req(admin, "GET", `/api/batches?location=${foreign._id}&limit=2000`)).data.items ?? []).find((b) => b.status === "Active");
+  const foreignCand = ((await req(admin, "GET", `/api/candidates?location=${foreign._id}&limit=5`)).data.items ?? [])[0];
+  ok("[CM] fixtures: a foreign batch and a foreign candidate exist", !!foreignBatch && !!foreignCand);
+
+  // ---------------- CM2: the Operations rights work at the OWN centre ----------------
+  const newBatch = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-03-15" });
+  ok("[CM2] a Center Manager creates a batch at their own centre (2xx)", newBatch.status === 201, `got ${newBatch.status} ${JSON.stringify(newBatch.data?.error)}`);
+  const cand = await req(cm, "POST", "/api/candidates", { name: `CM Cand ${S}`, phone: `97${S}01`.padEnd(10, "1").slice(0, 10), location: own._id, program: prog._id });
+  ok("[CM2] ...creates a candidate at their own centre (2xx)", cand.status === 201, `got ${cand.status} ${JSON.stringify(cand.data?.error)}`);
+  const mapped = newBatch.data?.item && cand.data?.item ? await req(cm, "POST", `/api/batches/${newBatch.data.item._id}/members`, { candidate: cand.data.item._id }) : { status: 0, data: {} };
+  ok("[CM2] ...maps that candidate into the batch (2xx)", [200, 201].includes(mapped.status), `got ${mapped.status} ${JSON.stringify(mapped.data?.error)}`);
+  const ownActiveAll = ((await req(cm, "GET", "/api/batches?limit=2000")).data.items ?? []).filter((b) => b.status === "Active");
+  ok("[CM2] fixture: the seeded centre has an Active batch the Center Manager can see", ownActiveAll.length > 0);
+  let marked = { status: 0, data: {} };
+  // earlier blocks of this suite (and the seed) already log some dates: try every own Active batch, walking back from today, until a date is free (409 taken, 400 before the batch started)
+  for (const ob of ownActiveAll) {
+    for (let back = 0; back <= 14 && marked.status !== 201; back++) {
+      const d = new Date(Date.now() + 330 * 60_000 - back * 86_400_000).toISOString().slice(0, 10);
+      marked = await req(cm, "POST", `/api/batches/${ob._id}/logs`, { log_date: d, present_member_ids: [] });
+      if (![201, 409, 400].includes(marked.status)) break;
+    }
+    if (marked.status === 201) break;
+  }
+  if (marked.status !== 201 && ownActiveAll[0]) {
+    // every date of the seeded batch is already logged: the same right also covers editing a day's log
+    const lg = ((await req(cm, "GET", `/api/batches/${ownActiveAll[0]._id}/logs`)).data.items ?? [])[0];
+    if (lg) marked = await req(cm, "PATCH", `/api/logs/${lg._id}`, { note: `cm-${S}` });
+  }
+  ok("[CM2] ...marks attendance (writes a daily log, new or edited) on their own batch (2xx)", [200, 201].includes(marked.status), `got ${marked.status} ${JSON.stringify(marked.data?.error)}`);
+  const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data.items ?? [];
+  const cat = cats.find((c) => !c.pre_approved && c.active !== false) ?? cats[0];
+  const costNote = `cm-${S}-own`;
+  const costOwn = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 111, note: costNote });
+  ok("[CM2] ...enters a cost at their own centre (2xx: posted or parked for approval)", [201, 202].includes(costOwn.status), `got ${costOwn.status} ${JSON.stringify(costOwn.data?.error)}`);
+  ok("[CM2] ...but the cost ledger itself stays closed to them without finance.view (403)", (await req(cm, "GET", "/api/costs")).status === 403);
+  ok("[CM2] an Operations login still does what it did: sees every centre and opens a foreign one",
+    ((await req(ops, "GET", "/api/locations?limit=2000")).data.items ?? []).length >= allLocs.length && (await req(ops, "GET", `/api/locations/${foreign._id}`)).status === 200);
+
+  // ---------------- CM3: other centres are unwritable (status + message + nothing written) ----------------
+  const batchCount = async (locId) => (await req(admin, "GET", `/api/batches?location=${locId}&limit=2000`)).data.total;
+  const b0 = await batchCount(foreign._id);
+  const fb = await req(cm, "POST", "/api/batches", { location: foreign._id, program: prog._id, planned_start: "2027-03-16" });
+  refused("[CM3] create a batch at ANOTHER centre", fb, [403], /out of scope/i);
+  ok("[CM3] ...no batch appeared there", (await batchCount(foreign._id)) === b0, `${b0} -> ${await batchCount(foreign._id)}`);
+  const fcName = `CM Foreign Cand ${S}`;
+  const fcand = await req(cm, "POST", "/api/candidates", { name: fcName, phone: `96${S}02`.padEnd(10, "2").slice(0, 10), location: foreign._id, program: prog._id });
+  refused("[CM3] create a candidate at ANOTHER centre", fcand, [403], /out of scope/i);
+  ok("[CM3] ...no such candidate exists", ((await req(admin, "GET", `/api/candidates?q=${encodeURIComponent(fcName)}&limit=5`)).data.items ?? []).length === 0);
+  if (foreignBatch) {
+    const before = (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item;
+    const pb = await req(cm, "PATCH", `/api/batches/${foreignBatch._id}`, { target_size: 91 });
+    refused("[CM3] edit a batch of ANOTHER centre", pb, [403], /out of scope/i);
+    ok("[CM3] ...the batch is unchanged", (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size === before?.target_size);
+    const rb = await req(cm, "GET", `/api/batches/${foreignBatch._id}`);
+    refused("[CM3] read a batch of ANOTHER centre", rb, [403], /out of scope/i);
+  }
+  if (foreignActive && foreignCand) {
+    const logs0 = ((await req(admin, "GET", `/api/batches/${foreignActive._id}/logs`)).data.items ?? []).length;
+    const fl = await req(cm, "POST", `/api/batches/${foreignActive._id}/logs`, { log_date: new Date(Date.now() + 330 * 60_000 - 40 * 86_400_000).toISOString().slice(0, 10), present_member_ids: [] });
+    refused("[CM3] mark attendance on a batch of ANOTHER centre", fl, [403], /out of scope/i);
+    ok("[CM3] ...no daily log was written there", ((await req(admin, "GET", `/api/batches/${foreignActive._id}/logs`)).data.items ?? []).length === logs0);
+    const fm = await req(cm, "POST", `/api/batches/${foreignActive._id}/members`, { candidate: foreignCand._id });
+    refused("[CM3] map a candidate into a batch of ANOTHER centre", fm, [403], /out of scope/i);
+  }
+  if (foreignCand) {
+    const pc = await req(cm, "PATCH", `/api/candidates/${foreignCand._id}`, { name: "Hacked by CM" });
+    refused("[CM3] edit a candidate of ANOTHER centre", pc, [403], /out of scope/i);
+    ok("[CM3] ...the candidate keeps its name", (await req(admin, "GET", `/api/candidates/${foreignCand._id}`)).data.item?.name === foreignCand.name);
+    const ex = await req(cm, "POST", "/api/candidates/export", { cols: ["name"], location: foreign._id });
+    refused("[CM3] export candidates of ANOTHER centre", ex, [403], /out of scope/i);
+  }
+  const pl = await req(cm, "PATCH", `/api/locations/${foreign._id}`, { city: "Hacked" });
+  refused("[CM3] edit ANOTHER centre's record", pl, [403], /out of scope/i);
+  ok("[CM3] ...the centre keeps its city", (await req(admin, "GET", `/api/locations/${foreign._id}`)).data.item?.city === foreign.city);
+  const codeNew = `CMX${S}`;
+  const cl = await req(cm, "POST", "/api/locations", { name: `CM New Centre ${S}`, code: codeNew, city: "Jaipur", state: "Rajasthan" });
+  refused("[CM3] create a NEW centre (cannot be inside their scope)", cl, [403], /out of scope/i);
+  ok("[CM3] ...no such centre exists", ((await req(admin, "GET", `/api/locations?q=${codeNew}`)).data.items ?? []).length === 0);
+  const ft = await req(cm, "POST", "/api/trainers", { name: `CM Trainer ${S}`, phone: `95${S}03`.padEnd(10, "3").slice(0, 10), skills: ["x"], home_location: foreign._id });
+  refused("[CM3] create a trainer tied to ANOTHER centre", ft, [403], /own centre|out of scope/i);
+  ok("[CM3] ...no such trainer exists", ((await req(admin, "GET", `/api/trainers?q=${encodeURIComponent(`CM Trainer ${S}`)}`)).data.items ?? []).length === 0);
+  const costForeignNote = `cm-${S}-foreign`;
+  const parked0 = ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length;
+  const cf = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: foreign._id, category: cat?._id, amount: 222, note: costForeignNote });
+  refused("[CM3] enter a cost at ANOTHER centre", cf, [403], /out of scope/i);
+  ok("[CM3] ...no ledger row and no parked request", !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === costForeignNote)
+    && ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length === parked0);
+
+  // ---------------- CM3 (fix cycle 1): MOVING or CREATING INTO another centre is refused too ----------------
+  // The review (qa/evidence/center-manager-role-review/review.md) found three doors that checked where a record
+  // IS but not where it is being sent. Each arm asserts the status, the message, and a read-back that nothing moved.
+  {
+    const eb = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-04-12" });
+    ok("[CM3] fixture: an own-centre Planning batch with an empty roster", eb.status === 201 && !!eb.data?.item?._id, `got ${eb.status} ${JSON.stringify(eb.data?.error)}`);
+    const ebId = eb.data?.item?._id;
+    const ebNow = async () => (await req(admin, "GET", `/api/batches/${ebId}`)).data.item;
+    const ebBefore = ebId ? await ebNow() : null;
+    const mvLoc = await req(cm, "PATCH", `/api/batches/${ebId}`, { location: foreign._id });
+    refused("[CM3] move an own batch to ANOTHER centre (batch PATCH location)", mvLoc, [403], /out of scope/i);
+    ok("[CM3] ...the batch is still at the own centre", idOf((await ebNow())?.location) === idOf(own._id), `now at ${idOf((await ebNow())?.location)}`);
+    const allRooms = (await req(admin, "GET", "/api/rooms?limit=2000")).data.items ?? [];
+    let foreignRoom = allRooms.find((r) => idOf(r.location) === idOf(foreign._id));
+    // The seed gives KOT02 no room: Admin (direct, never parked) puts one there so the arm has a real foreign room to aim at.
+    if (!foreignRoom) foreignRoom = (await req(admin, "POST", `/api/locations/${foreign._id}/rooms`, { name: `CM Foreign Room ${S}`, type: "Classroom", capacity: 10 })).data?.item;
+    if (foreignRoom) {
+      const mvRoom = await req(cm, "PATCH", `/api/batches/${ebId}`, { room: foreignRoom._id });
+      refused("[CM3] put an own batch into a room of ANOTHER centre (batch PATCH room)", mvRoom, [403], /out of scope/i);
+      ok("[CM3] ...the batch has no foreign room", idOf((await ebNow())?.room) !== idOf(foreignRoom._id) && idOf((await ebNow())?.room) === idOf(ebBefore?.room), `room ${idOf((await ebNow())?.room)}`);
+      // CREATE door (review 2, high): the room is a destination too. 403 about scope, not the 409 that names a foreign batch.
+      const ownBatches = async () => ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length;
+      const nb0 = await ownBatches();
+      const crRoom = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-05-10", room: foreignRoom._id });
+      refused("[CM3] CREATE a batch at the own centre in a room of ANOTHER centre (batch POST room)", crRoom, [403], /out of scope/i);
+      ok("[CM3] ...no batch was created", (await ownBatches()) === nb0, `${nb0} -> ${await ownBatches()}`);
+    } else ok("[CM3] fixture: a room at the other centre exists", false, "no room at KOT02 in the seed");
+    const allTr = (await req(admin, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+    const tieIds = (t) => [t.nominated_for_location, t.home_location, ...(t.capable_locations ?? [])].filter(Boolean).map(idOf);
+    const foreignTrainer = allTr.find((t) => tieIds(t).includes(idOf(foreign._id)) && !tieIds(t).includes(idOf(own._id)));
+    if (foreignTrainer) {
+      const mvTr = await req(cm, "PATCH", `/api/batches/${ebId}`, { trainer: foreignTrainer._id });
+      refused("[CM3] give an own batch a trainer tied only to ANOTHER centre (batch PATCH trainer)", mvTr, [403], /out of scope/i);
+      ok("[CM3] ...the batch has no trainer", !idOf((await ebNow())?.trainer), `trainer ${idOf((await ebNow())?.trainer)}`);
+      const nb1 = ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length;
+      const crTr = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-05-17", trainer: foreignTrainer._id });
+      refused("[CM3] CREATE a batch with a trainer tied only to ANOTHER centre (batch POST trainer)", crTr, [403], /out of scope/i);
+      ok("[CM3] ...no batch was created", ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).length === nb1);
+    } else ok("[CM3] fixture: a trainer tied only to the other centre exists", false, "none in the seed");
+    // Trainer PATCH (review 2, medium): re-tying an in-scope trainer to another centre is refused on each of the three tie fields.
+    const ownTrainer = ((await req(cm, "GET", "/api/trainers?limit=2000")).data.items ?? [])[0];
+    if (ownTrainer) {
+      const tiesOf = async () => { const t = (await req(admin, "GET", `/api/trainers/${ownTrainer._id}`)).data.item; return JSON.stringify([idOf(t?.home_location), idOf(t?.nominated_for_location), (t?.capable_locations ?? []).map(idOf)]); };
+      const ties0 = await tiesOf();
+      for (const [label, patch] of [["home_location", { home_location: foreign._id }], ["nominated_for_location", { nominated_for_location: foreign._id }], ["capable_locations", { capable_locations: [...(ownTrainer.capable_locations ?? []).map(idOf), foreign._id] }]]) {
+        const rt = await req(cm, "PATCH", `/api/trainers/${ownTrainer._id}`, patch);
+        // The message must be the TIE refusal. Once one re-tie slipped through, the trainer would be out of scope and every later field would be refused by the item scope check ("Trainer out of scope") - a different mechanism that would let the next two arms pass vacuously.
+        refused(`[CM3] re-tie an own-centre trainer to ANOTHER centre (trainer PATCH ${label})`, rt, [403], /^Location out of scope/i);
+        ok(`[CM3] ...the trainer ties are unchanged (${label})`, (await tiesOf()) === ties0);
+      }
+    } else ok("[CM3] fixture: the Center Manager sees at least one trainer", false, "empty trainer list");
+    const dueF = "2027-07-07";
+    const trqF = await req(cm, "POST", "/api/trainer-requests", { location: foreign._id, program: prog._id, required_by_date: dueF });
+    refused("[CM3] raise a trainer request AT another centre", trqF, [403], /out of scope/i);
+    const trqAll = (await req(admin, "GET", "/api/trainer-requests?limit=2000")).data.items ?? [];
+    ok("[CM3] ...no trainer request exists there", !trqAll.some((x) => String(x.required_by_date ?? "").startsWith(dueF)), "a row with the probe date exists");
+    const candOwn = cand.data?.item;
+    const mvCand = await req(cm, "PATCH", `/api/candidates/${candOwn?._id}`, { location: foreign._id });
+    refused("[CM3] move an own candidate to ANOTHER centre (candidate PATCH location)", mvCand, [403], /out of scope/i);
+    ok("[CM3] ...the candidate is still at the own centre", idOf((await req(admin, "GET", `/api/candidates/${candOwn?._id}`)).data.item?.location) === idOf(own._id));
+  }
+
+  // ---------------- CM6 (Umesh 2026-10-21, gate item 5): own-centre FIXED details park for Admin ----------------
+  // Exactly the Location (Principal) branch, shared through roles.ts: identity fields are refused, the other
+  // centre details / approved targets / rooms are parked as a location.edit request and nothing is applied
+  // until Admin approves. The location.edit rule is OFF in this DB, so this also pins that a Center Manager's
+  // edit parks without the rule being switched on.
+  {
+    const ownNow = async () => (await req(admin, "GET", `/api/locations/${own._id}`)).data.item;
+    const l0 = await ownNow();
+    const codeTry = await req(cm, "PATCH", `/api/locations/${own._id}`, { code: `${l0.code}X` });
+    refused("[CM6] a Center Manager cannot change the centre's code", codeTry, [403], /cannot change/i);
+    ok("[CM6] ...the code is unchanged", (await ownNow()).code === l0.code, String((await ownNow()).code));
+    const addr = `CM Wing ${S}`;
+    const addrTry = await req(cm, "PATCH", `/api/locations/${own._id}`, { address: addr });
+    ok("[CM6] a centre-detail edit parks for approval (202, 'Sent for approval')", addrTry.status === 202 && /Sent for approval/i.test(String(addrTry.data?.error ?? "")), `got ${addrTry.status} ${JSON.stringify(addrTry.data?.error)}`);
+    ok("[CM6] ...nothing is applied while it is parked", (await ownNow()).address === l0.address, String((await ownNow()).address));
+    const pend = async () => (await req(admin, "GET", "/api/approvals?status=Pending")).data.items ?? [];
+    const pAddr = (await pend()).find((i) => i.action === "location.edit" && /address/i.test(String(i.summary ?? "")) && JSON.stringify(i.payload ?? "").includes(addr));
+    ok("[CM6] ...and it sits in the Admin queue", !!pAddr, "no pending location.edit carrying the new address");
+    if (pAddr) {
+      const dec = await req(admin, "POST", `/api/approvals/${pAddr._id}`, { decision: "Approved" });
+      ok("[CM6] Admin approves it (2xx)", dec.status >= 200 && dec.status < 300, `got ${dec.status} ${JSON.stringify(dec.data?.error)}`);
+      ok("[CM6] ...and only now is the address applied", (await ownNow()).address === addr, String((await ownNow()).address));
+    }
+    const tgtTry = await req(cm, "PUT", `/api/locations/${own._id}/targets`, { program: prog._id, approved_target: 7771 });
+    ok("[CM6] an approved-target change parks (202, queued)", tgtTry.status === 202 && tgtTry.data?.queued === true, `got ${tgtTry.status} ${JSON.stringify(tgtTry.data).slice(0, 120)}`);
+    ok("[CM6] ...no target row carries the number while parked", !JSON.stringify((await req(admin, "GET", `/api/locations/${own._id}/targets`)).data).includes('"approved_target":7771'));
+    const roomName = `CM Lab ${S}`;
+    const roomTry = await req(cm, "POST", `/api/locations/${own._id}/rooms`, { name: roomName, type: "Lab", capacity: 12 });
+    ok("[CM6] a new room parks (202, queued)", roomTry.status === 202 && roomTry.data?.queued === true, `got ${roomTry.status} ${JSON.stringify(roomTry.data).slice(0, 120)}`);
+    const roomsOf = async () => (await req(admin, "GET", `/api/locations/${own._id}/rooms`)).data.items ?? [];
+    ok("[CM6] ...no such room exists while parked", !(await roomsOf()).some((r) => r.name === roomName));
+    if (roomTry.data?.item?._id) {
+      await req(admin, "POST", `/api/approvals/${roomTry.data.item._id}`, { decision: "Approved" });
+      ok("[CM6] ...the room exists only after Admin approves", (await roomsOf()).some((r) => r.name === roomName));
+    }
+  }
+
+  // ---------------- CM7 (Umesh 2026-10-21, gate item 6): a scope change applies IMMEDIATELY ----------------
+  // The existing session (same cookie, no re-login) is judged on the stored scope, not the sign-in token.
+  {
+    const cmTwo = await login(`cm.two.${S}@vidysea-test.local`, PW);
+    const twoId = two.data?.item?._id;
+    const seeBefore = await req(cmTwo, "GET", `/api/locations/${foreign._id}`);
+    ok("[CM7] fixture: with both centres assigned, the session reads the second centre (200)", seeBefore.status === 200, `got ${seeBefore.status}`);
+    const rm = await req(admin, "PATCH", `/api/users/${twoId}`, { location_scope: [own._id] });
+    ok("[CM7] Admin removes the second centre from that Center Manager (2xx)", rm.status >= 200 && rm.status < 300, `got ${rm.status} ${JSON.stringify(rm.data?.error)}`);
+    const seeAfter = await req(cmTwo, "GET", `/api/locations/${foreign._id}`);
+    refused("[CM7] the SAME session is refused that centre on the very next request", seeAfter, [403], /out of scope/i);
+    if (foreignBatch) {
+      const tsBefore = (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size;
+      const bAfter = await req(cmTwo, "PATCH", `/api/batches/${foreignBatch._id}`, { target_size: 91 });
+      refused("[CM7] ...and cannot edit a batch there either", bAfter, [403], /out of scope/i);
+      ok("[CM7] ...the batch is unchanged", (await req(admin, "GET", `/api/batches/${foreignBatch._id}`)).data.item?.target_size === tsBefore);
+    }
+    const locsTwo = (await req(cmTwo, "GET", "/api/locations?limit=2000")).data.items ?? [];
+    ok("[CM7] ...and its centre list is now exactly the one remaining centre", locsTwo.length === 1 && idOf(locsTwo[0]) === idOf(own._id), JSON.stringify(locsTwo.map((l) => l.code)));
+  }
+
+  // ---------------- CM3: every list shows only the own centre ----------------
+  const only = (items, pick) => items.length > 0 && items.every((x) => pick(x));
+  const locsCm = (await req(cm, "GET", "/api/locations?limit=2000")).data.items ?? [];
+  ok("[CM3] locations list = exactly the one assigned centre", locsCm.length === 1 && locsCm[0].code === "JPR03", JSON.stringify(locsCm.map((l) => l.code)));
+  const batchesCm = (await req(cm, "GET", "/api/batches?limit=2000")).data.items ?? [];
+  ok("[CM3] batches list: only own-centre rows, and not empty", only(batchesCm, (b) => idOf(b.location) === idOf(own._id)), `${batchesCm.length} rows`);
+  const candsCm = (await req(cm, "GET", "/api/candidates?limit=2000")).data.items ?? [];
+  ok("[CM3] candidates list: only own-centre rows, and not empty", only(candsCm, (c) => idOf(c.location) === idOf(own._id)), `${candsCm.length} rows`);
+  const candsAdminTotal = (await req(admin, "GET", "/api/candidates?limit=1")).data.total;
+  ok("[CM3] ...and it is a strict subset of what Admin sees (the filter bites)", candsCm.length < candsAdminTotal, `${candsCm.length} vs ${candsAdminTotal}`);
+  const trCm = (await req(cm, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+  const tie = (t) => [t.nominated_for_location, t.home_location, ...(t.capable_locations ?? [])].filter(Boolean).map(idOf);
+  ok("[CM3] trainers list: every trainer is tied to the own centre, and not empty", only(trCm, (t) => tie(t).includes(idOf(own._id))), `${trCm.length} rows`);
+  const costAdmin = await req(admin, "POST", "/api/costs", { entry_date: "2026-10-20", location: foreign._id, category: cat?._id, amount: 333, note: `cm-${S}-admin-foreign` });
+  const costsFin = await req(cmFin, "GET", "/api/costs?limit=2000");
+  ok("[CM3] costs list (with finance.view granted): only own-centre rows, and not empty",
+    costsFin.status === 200 && only(costsFin.data.items ?? [], (c) => idOf(c.location) === idOf(own._id)), `${costsFin.status} ${(costsFin.data.items ?? []).length} rows (admin cost post ${costAdmin.status})`);
+  const homeCm = (await req(cm, "GET", "/api/home")).data;
+  const activeOwn = ((await req(admin, "GET", `/api/batches?location=${own._id}&limit=2000`)).data.items ?? []).filter((b) => b.status === "Active").length;
+  const activeAll = ((await req(admin, "GET", "/api/batches?limit=2000")).data.items ?? []).filter((b) => b.status === "Active").length;
+  ok("[CM3] Home: the Active-batches card counts the own centre only", homeCm.kpis?.active_batches === activeOwn && activeOwn < activeAll, `${homeCm.kpis?.active_batches} vs own ${activeOwn} / all ${activeAll}`);
+  ok("[CM3] Home: nothing from another centre rides in any queue", !JSON.stringify(homeCm.queues ?? {}).includes(foreign.name), "foreign centre name found in queues");
+  ok("[CM3] Home: approved-centres card counts 1 (not the organisation)", Number(homeCm.kpis?.approved_locations ?? 0) <= 1, String(homeCm.kpis?.approved_locations));
+  const dig = await req(cm, "GET", "/api/reports/daily");
+  ok("[CM3] daily digest report opens and names no other centre", dig.status === 200 && !JSON.stringify(dig.data).includes(foreign.name), `status ${dig.status}`);
+
+  // ---------------- CM4: alerts and mails ----------------
+  const reqTr = await req(admin, "POST", "/api/trainer-requests", { location: own._id, program: prog._id, required_by_date: "2027-06-01" });
+  ok("[CM4] fixture: a trainer request is raised at the own centre (centre-tied alert)", reqTr.status === 201, `got ${reqTr.status}`);
+  const reqTrF = await req(admin, "POST", "/api/trainer-requests", { location: foreign._id, program: prog._id, required_by_date: "2027-06-02" });
+  const pubRes = await fetch(BASE + "/api/public/trainer-apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: `CM Untied ${S}`, phone: `94${S}04`.padEnd(10, "4").slice(0, 10), email: `untied.${S}@vidysea-test.local`, skills: "Welding" }) });
+  ok("[CM4] fixture: a website trainer application raises a centre-LESS alert", pubRes.status === 200 || pubRes.status === 201, `got ${pubRes.status}`);
+  const inbox = async (cookie) => (await req(cookie, "GET", "/api/notifications?status=all")).data.items ?? [];
+  const aInbox = await inbox(cmA), bInbox = await inbox(cmOther), opsInbox = await inbox(ops);
+  const tied = (x) => x.type === "trainer_request_new" && idOf(x.location) === idOf(own._id);
+  ok("[CM4] the own-centre trainer-request alert reaches that centre's Center Manager", aInbox.some(tied), `${aInbox.length} rows`);
+  ok("[CM4] ...and the other centre's Center Manager does NOT get it", !bInbox.some(tied));
+  ok("[CM4] ...and Operations still gets it", opsInbox.some(tied));
+  ok("[CM4] a Center Manager's inbox holds only their own centre's alerts", only(aInbox, (n) => idOf(n.location) === idOf(own._id)) && only(bInbox, (n) => idOf(n.location) === idOf(foreign._id)), `${aInbox.length}/${bInbox.length}`);
+  ok("[CM4] the centre-less website application alert reaches Operations but NOT any Center Manager",
+    opsInbox.some((n) => n.type === "trainer_application" || /CM Untied/.test(n.message)) && !aInbox.concat(bInbox).some((n) => n.type === "trainer_application" || /CM Untied/.test(n.message)),
+    JSON.stringify(opsInbox.filter((n) => /Untied/.test(n.message)).length));
+  const tiedRow = opsInbox.find(tied);
+  if (tiedRow) {
+    const ack = await req(cmOther, "POST", `/api/notifications/${tiedRow._id}`, { status: "Acknowledged" });
+    refused("[CM4] a Center Manager cannot act on another centre's alert by id", ack, [403], /out of scope|not addressed/i);
+    ok("[CM4] ...and the alert is still New", ((await req(admin, "GET", "/api/notifications?status=all")).data.items ?? []).find((n) => n._id === tiedRow._id)?.status === "New");
+  }
+  const untiedRow = opsInbox.find((n) => /CM Untied/.test(n.message));
+  if (untiedRow) {
+    const ack2 = await req(cmA, "POST", `/api/notifications/${untiedRow._id}`, { status: "Acknowledged" });
+    refused("[CM4] ...nor on a centre-less alert", ack2, [403], /not addressed/i);
+  }
+  {
+    const { MongoClient } = await import("mongodb");
+    const mcm = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+    await mcm.connect();
+    const logs = mcm.db(process.env.MONGODB_DB || "center_erp_ci").collection("maillogs");
+    await new Promise((r) => setTimeout(r, 1500));
+    const { ObjectId } = await import("mongodb");
+    const reqId = new ObjectId(String(reqTr.data.item?._id ?? reqTr.data.request?._id));
+    const mailedA = await logs.countDocuments({ to: emA, entity_id: reqId });
+    const mailedB = await logs.countDocuments({ to: emB, entity_id: reqId });
+    ok("[CM4] the centre-tied mail goes to the own centre's Center Manager and not to the other centre's", mailedA > 0 && mailedB === 0, `own=${mailedA} other=${mailedB}`);
+    await mcm.close();
+  }
+
+  // ---------------- CM5: cannot approve; Operations unchanged ----------------
+  const badRule = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Center Manager" });
+  refused("[CM5] a Center Manager cannot be set as a rule's approver (Admin tries)", badRule, [400], /cannot be the approver/i);
+  const ruleOn = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
+  ok("[CM5] fixture: the cost.post approval rule is switched ON (Admin approver)", ruleOn.status === 200);
+  const parkedNote = `cm-${S}-parked`;
+  const parked = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 444, note: parkedNote });
+  ok("[CM5] a Center Manager's cost at their own centre PARKS for approval (202)", parked.status === 202, `got ${parked.status} ${JSON.stringify(parked.data?.error)}`);
+  const pending = ((await req(admin, "GET", "/api/approvals?status=Pending&limit=500")).data.items ?? []).find((a) => String(a.summary ?? "").includes(parkedNote)) ?? ((await req(admin, "GET", "/api/approvals?mine=1")).data.items ?? []).find((a) => String(a.summary ?? "").includes(parkedNote));
+  const parkedId = parked.data?.request?._id ?? parked.data?.item?._id ?? pending?._id;
+  ok("[CM5] fixture: the parked request is findable", !!parkedId, JSON.stringify(parked.data).slice(0, 160));
+  if (parkedId) {
+    // decided by a SECOND Center Manager of the same centre: the raiser would meet the self-approval rule instead, which hides whether the role itself is refused
+    const dec = await req(cmA, "POST", `/api/approvals/${parkedId}`, { decision: "Approved" });
+    refused("[CM5] a Center Manager cannot approve a cost request", dec, [403], /do not have the .* right|may decide|named approvers/i);
+    const after = ((await req(admin, "GET", "/api/approvals?status=all&limit=500")).data.items ?? []).find((a) => a._id === parkedId);
+    ok("[CM5] ...and the request is still Pending, nothing posted", (!after || after.status === "Pending") && !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === parkedNote), after?.status);
+  }
+  ok("[CM5] they cannot flip the approval rules either (403)", (await req(cm, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" })).status === 403);
+  await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+  // the group is one definition: no hard-coded "Operations" role gate is left in a route or a screen
+  const left = [];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => { const p = d + "/" + e.name; if (e.isDirectory()) walk(p); else if (/\.(ts|tsx)$/.test(e.name)) { const t = fs.readFileSync(p, "utf8"); t.split("\n").forEach((l, i) => { if (/(role\s*[!=]==?\s*"Operations"|\["Admin",\s*"Operations"[\],])/.test(l) && !/^\s*(\/\/|\*)/.test(l) && !/alertRoles\(/.test(l) && !/"Center Manager"/.test(l) && !/role_target:/.test(l) && !/approver/.test(l) && !/<option/.test(l) && !p.includes("api/public/") && !p.includes("lib/roles.ts")) left.push(`${p}:${i + 1}`); }); } });
+  walk("src");
+  ok("[CM5] no scattered copy of the Operations role gate remains (only the group in lib/roles.ts, untied public-form alerts and the approver list)", left.length === 0, left.slice(0, 6).join(" | "));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

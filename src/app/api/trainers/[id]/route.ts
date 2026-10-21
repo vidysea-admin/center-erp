@@ -1,7 +1,8 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, isScoped } from "@/lib/authz";
 import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission, requirePerm } from "@/lib/permissions";
 import { assertLocationOperational, assertTrainerDocDeleteInScope, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
@@ -36,11 +37,25 @@ export const { GET, PATCH } = itemRoutes({
     // the same list living in two files, which is the disease ARCHITECTURE section 3 names. They
     // are edited on the Planning tab, so the EDIT door is the one that actually matters for them.
     "sidh_profile_verified_on", "eligibility_checked_on", "tot_result_expected_on"],
-  readRoles: ["Admin", "Operations", "Location"], // QA-095: same door as the list
-  writeRoles: ["Admin", "Operations"],
+  readRoles: [...ADMIN_OPS, "Location"], // QA-095: same door as the list
+  writeRoles: [...ADMIN_OPS],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5: re-pointing a trainer's nomination at a halted centre is also hiring for it.
-  async beforeUpdate(_id, body, existing) {
+  async beforeUpdate(_id, body, existing, user) {
+    // center-manager-role review (cycle 1, Rule 38 destination half): the create door refuses a tie to a centre
+    // outside the caller's scope; this door let a scoped login re-tie an in-scope trainer to any centre. Only a
+    // CHANGED value is checked (the trainer form re-sends all three ties on every save, and a legacy tie outside
+    // the scope must not turn a re-save into a refusal).
+    if (isScoped(user)) {
+      const was = (v: unknown) => String((v as { _id?: unknown })?._id ?? v ?? "");
+      for (const f of ["home_location", "nominated_for_location"] as const) {
+        if (body[f] && String(body[f]) !== was((existing as any)[f])) assertLocationInScope(user, String(body[f]));
+      }
+      if (Array.isArray(body.capable_locations)) {
+        const had = new Set(((existing as any).capable_locations ?? []).map(was));
+        for (const v of body.capable_locations as unknown[]) if (v && !had.has(String(v))) assertLocationInScope(user, String(v));
+      }
+    }
     // QA-141 (Umesh): edits are as strict as creates — a fixed-up phone lands as the bare 10.
     if (body.phone !== undefined) {
       const pErr = phoneError(body.phone);

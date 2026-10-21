@@ -4,6 +4,7 @@
 // the manual "किसने क्या बदला" hunt. The watch itself is advisory (WorkbookChanges never touch
 // entities); entity writes happen only through user-approved TabMappings (lib/tab-mapping.ts),
 // and even those turn changes to existing records into review items, never silent overwrites.
+import { alertRoles } from "@/lib/roles";
 import * as XLSX from "xlsx";
 import { Location, Notification, SyncSource, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { HttpError } from "@/lib/authz";
@@ -484,7 +485,7 @@ async function notifyWatchChanges(sourceId: unknown, sourceName: string): Promis
       type: "workbook_change_location", severity: "warning",
       message: `The client's sheet changed ${info.count} value(s) for your centre ${info.name}. Open Sheet Watch to see what moved.`,
       entity: "Location", entity_id: locId, link: "/sheet-watch",
-      location: locId, role_target: ["Admin", "Operations", "Location"],
+      location: locId, role_target: alertRoles(["Admin", "Operations", "Location"], locId),
     });
   }
 }

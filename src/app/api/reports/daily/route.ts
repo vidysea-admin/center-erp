@@ -1,3 +1,4 @@
+import { ADMIN_OPS } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole } from "@/lib/authz";
@@ -12,7 +13,7 @@ import { DIGEST_HOUR_IST, digestHealth } from "@/lib/daily-digest";
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
-  requireRole(user, "Admin", "Operations", "Location", "Enrollment");
+  requireRole(user, ...ADMIN_OPS, "Location", "Enrollment");
   const day = assertDigestDay(req.nextUrl.searchParams.get("date") || istDayOf());
   // digestHealth only feeds the warning and the counts in `meta`: a failure there must not take the report down for a reader.
   const [digest, defaults, health] = await Promise.all([dailyDigest(day, user), getDefaults(), digestHealth().catch(() => ({ digest_only: false, recipients: 0, deliverable: 0, digest_only_nobody: false }))]);

@@ -227,8 +227,10 @@ export async function mailUsersByRole(opts: { roles: string[]; location?: unknow
     approval_status: { $ne: "Pending" },
   }).select("email role name location_scope mail_enabled").lean<any[]>();
   const eligible = users.filter((u) => {
-    if (!opts.location) return true;
     const scope = (u.location_scope ?? []).map(String);
+    // Center Manager: never "everywhere" - no centre on the mail, or an empty scope, means no mail.
+    if (u.role === "Center Manager") return !!opts.location && scope.includes(String(opts.location));
+    if (!opts.location) return true;
     return scope.length === 0 || scope.includes(String(opts.location));
   });
   const seen = new Set<string>();

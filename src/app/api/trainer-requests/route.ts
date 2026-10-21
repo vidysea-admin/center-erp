@@ -1,16 +1,22 @@
+import { alertRoles } from "@/lib/roles";
+import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
 import { Location, Notification, Program, TrainerRequest } from "@/models";
 import { assertLocationOperational } from "@/lib/rules";
+import { assertLocationInScope } from "@/lib/authz";
 import { mailUsersByRole } from "@/lib/mailer";
 
 export const { GET, POST } = collectionRoutes({
   model: TrainerRequest, entity: "TrainerRequest",
   fields: ["location", "program", "required_by_date", "status", "hiring_target_date", "tot_scheduled_on", "tot_done_on", "expected_available_from", "fulfilled_by_trainer", "note"],
-  readRoles: ["Admin", "Operations", "Location"], // QA-091: the hiring surface is not for Trainer/Enrollment
-  writeRoles: ["Admin", "Operations", "Location"],
+  readRoles: [...ADMIN_OPS, "Location"], // QA-091: the hiring surface is not for Trainer/Enrollment
+  writeRoles: [...ADMIN_OPS, "Location"],
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no new trainer requests for it.
-  async beforeCreate(body) {
+  // center-manager-role review, finding 2: a scoped login (Location, Center Manager) may raise a request
+  // only for a centre in its own list - the row, the alert and the mail all land AT the named centre.
+  async beforeCreate(body, user) {
+    if (body.location) assertLocationInScope(user, String(body.location));
     if (body.location) await assertLocationOperational(body.location, "Raising a trainer request");
   },
   populate: [
@@ -30,11 +36,11 @@ export const { GET, POST } = collectionRoutes({
       type: "trainer_request_new", severity: "info",
       message: `New trainer request: ${prog?.name ?? "program"} at ${loc?.name ?? "location"}, required by ${new Date(doc.required_by_date).toLocaleDateString("en-IN")}`,
       entity: "TrainerRequest", entity_id: doc._id, link: "/trainers?tab=Requests",
-      location: doc.location, role_target: ["Admin", "Operations"],
+      location: doc.location, role_target: alertRoles(["Admin", "Operations"], doc.location),
     });
     // QA-115: same news, inbox delivery ("requested trainer ki detail Manish ji ke paas").
     mailUsersByRole({
-      roles: ["Admin", "Operations"], location: doc.location,
+      roles: alertRoles(["Admin", "Operations"], doc.location), location: doc.location,
       subject: `Trainer request: ${prog?.name ?? "program"} at ${loc?.name ?? "location"}`,
       title: "A new trainer request was raised",
       lines: [`${prog?.name ?? "Program"} at ${loc?.name ?? "location"}, required by ${new Date(doc.required_by_date).toLocaleDateString("en-IN")}.`],
