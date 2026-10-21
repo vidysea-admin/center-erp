@@ -6273,6 +6273,44 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   ok("[CM3] ...no ledger row and no parked request", !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === costForeignNote)
     && ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length === parked0);
 
+  // ---------------- CM3 (fix cycle 1): MOVING or CREATING INTO another centre is refused too ----------------
+  // The review (qa/evidence/center-manager-role-review/review.md) found three doors that checked where a record
+  // IS but not where it is being sent. Each arm asserts the status, the message, and a read-back that nothing moved.
+  {
+    const eb = await req(cm, "POST", "/api/batches", { location: own._id, program: prog._id, planned_start: "2027-04-12" });
+    ok("[CM3] fixture: an own-centre Planning batch with an empty roster", eb.status === 201 && !!eb.data?.item?._id, `got ${eb.status} ${JSON.stringify(eb.data?.error)}`);
+    const ebId = eb.data?.item?._id;
+    const ebNow = async () => (await req(admin, "GET", `/api/batches/${ebId}`)).data.item;
+    const ebBefore = ebId ? await ebNow() : null;
+    const mvLoc = await req(cm, "PATCH", `/api/batches/${ebId}`, { location: foreign._id });
+    refused("[CM3] move an own batch to ANOTHER centre (batch PATCH location)", mvLoc, [403], /out of scope/i);
+    ok("[CM3] ...the batch is still at the own centre", idOf((await ebNow())?.location) === idOf(own._id), `now at ${idOf((await ebNow())?.location)}`);
+    const allRooms = (await req(admin, "GET", "/api/rooms?limit=2000")).data.items ?? [];
+    const foreignRoom = allRooms.find((r) => idOf(r.location) === idOf(foreign._id));
+    if (foreignRoom) {
+      const mvRoom = await req(cm, "PATCH", `/api/batches/${ebId}`, { room: foreignRoom._id });
+      refused("[CM3] put an own batch into a room of ANOTHER centre (batch PATCH room)", mvRoom, [403], /out of scope/i);
+      ok("[CM3] ...the batch has no foreign room", idOf((await ebNow())?.room) !== idOf(foreignRoom._id) && idOf((await ebNow())?.room) === idOf(ebBefore?.room), `room ${idOf((await ebNow())?.room)}`);
+    } else ok("[CM3] fixture: a room at the other centre exists", false, "no room at KOT02 in the seed");
+    const allTr = (await req(admin, "GET", "/api/trainers?limit=2000")).data.items ?? [];
+    const tieIds = (t) => [t.nominated_for_location, t.home_location, ...(t.capable_locations ?? [])].filter(Boolean).map(idOf);
+    const foreignTrainer = allTr.find((t) => tieIds(t).includes(idOf(foreign._id)) && !tieIds(t).includes(idOf(own._id)));
+    if (foreignTrainer) {
+      const mvTr = await req(cm, "PATCH", `/api/batches/${ebId}`, { trainer: foreignTrainer._id });
+      refused("[CM3] give an own batch a trainer tied only to ANOTHER centre (batch PATCH trainer)", mvTr, [403], /out of scope/i);
+      ok("[CM3] ...the batch has no trainer", !idOf((await ebNow())?.trainer), `trainer ${idOf((await ebNow())?.trainer)}`);
+    } else ok("[CM3] fixture: a trainer tied only to the other centre exists", false, "none in the seed");
+    const dueF = "2027-07-07";
+    const trqF = await req(cm, "POST", "/api/trainer-requests", { location: foreign._id, program: prog._id, required_by_date: dueF });
+    refused("[CM3] raise a trainer request AT another centre", trqF, [403], /out of scope/i);
+    const trqAll = (await req(admin, "GET", "/api/trainer-requests?limit=2000")).data.items ?? [];
+    ok("[CM3] ...no trainer request exists there", !trqAll.some((x) => String(x.required_by_date ?? "").startsWith(dueF)), "a row with the probe date exists");
+    const candOwn = cand.data?.item;
+    const mvCand = await req(cm, "PATCH", `/api/candidates/${candOwn?._id}`, { location: foreign._id });
+    refused("[CM3] move an own candidate to ANOTHER centre (candidate PATCH location)", mvCand, [403], /out of scope/i);
+    ok("[CM3] ...the candidate is still at the own centre", idOf((await req(admin, "GET", `/api/candidates/${candOwn?._id}`)).data.item?.location) === idOf(own._id));
+  }
+
   // ---------------- CM3: every list shows only the own centre ----------------
   const only = (items, pick) => items.length > 0 && items.every((x) => pick(x));
   const locsCm = (await req(cm, "GET", "/api/locations?limit=2000")).data.items ?? [];
