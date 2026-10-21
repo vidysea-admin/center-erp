@@ -612,6 +612,53 @@ const register = async (cookie) => ((await req(cookie, "GET", "/api/reports/cost
     queueRetryAfterReject.status === 202 && String(queueRetryAfterReject.data?.item?._id) === String(queuedRequest?._id)
       && (await rawApprovals.countDocuments({ entity_id: new ObjectId(queueId), "payload.kind": "cost-edit" })) === 1, `${queueRetryAfterReject.status}`);
 
+  // QA-2978 (Umesh approved 2026-10-21): a cost-edit replay whose request was WITHDRAWN must let the raiser
+  // re-submit. The key is released on withdraw; a replay against a still-Pending request keeps answering
+  // "queued" with the SAME request (idempotency intact), and a replay after a Rejection still returns the
+  // original (the arm above) - only a withdrawal releases the key.
+  const wdId = await mkApproved(creator, "retry-withdrawn");
+  const wdBase = await raw(wdId);
+  const wdBody = { amount: 457, confirm_approved: true, base_updated_at: wdBase.updatedAt.toISOString() };
+  const wdHeaders = { "Idempotency-Key": `${TAG}-withdraw-retry` };
+  const wdFirst = await req(creator.cookie, "PATCH", `/api/costs/${wdId}`, wdBody, wdHeaders);
+  const wdPending = await waitingEdit(wdId);
+  const wdReplayPending = await req(creator.cookie, "PATCH", `/api/costs/${wdId}`, wdBody, wdHeaders);
+  const editRows = (id) => rawApprovals.find({ entity_id: new ObjectId(String(id)), "payload.kind": "cost-edit" }).toArray();
+  ok("QA-2978: a replay with the same key while the edit request is still Pending returns that SAME request (idempotency intact), no second row",
+    wdFirst.status === 202 && wdReplayPending.status === 202 && wdReplayPending.data?.queued === true
+      && String(wdReplayPending.data?.item?._id) === String(wdPending?._id) && (await editRows(wdId)).length === 1,
+    JSON.stringify([wdFirst.status, wdReplayPending.status, wdReplayPending.data?.error]));
+  const wdWithdrawn = await req(creator.cookie, "PATCH", `/api/approvals/${wdPending?._id}`, { action: "withdraw", reason: "wrong amount" });
+  const wdAfterWithdraw = await raw(wdId);
+  ok("QA-2978 precondition: the raiser withdrew the edit request (Cancelled), the cost is unchanged and no longer owned by a request",
+    wdWithdrawn.status === 200 && (await rawApprovals.findOne({ _id: wdPending?._id }))?.status === "Cancelled"
+      && wdAfterWithdraw?.amount === 321 && !wdAfterWithdraw?.cost_edit_request, `${wdWithdrawn.status}`);
+  const wdResubmit = await req(creator.cookie, "PATCH", `/api/costs/${wdId}`, wdBody, wdHeaders);
+  const wdRows = await editRows(wdId);
+  const wdNew = wdRows.find((r) => r.status === "Pending");
+  ok("QA-2978: the SAME key after the request was withdrawn raises a NEW Pending request - not the withdrawn one handed back as 'queued'",
+    wdResubmit.status === 202 && wdResubmit.data?.queued === true && !!wdNew && String(wdNew._id) !== String(wdPending?._id)
+      && String(wdResubmit.data?.item?._id) === String(wdNew._id) && wdResubmit.data?.item?.status === "Pending"
+      && wdRows.length === 2 && wdRows.filter((r) => r.status === "Cancelled").length === 1 && (await raw(wdId))?.amount === 321,
+    JSON.stringify({ status: wdResubmit.status, item: wdResubmit.data?.item?._id, itemStatus: wdResubmit.data?.item?.status, rows: wdRows.map((r) => r.status) }));
+  const wdReplayNew = await req(creator.cookie, "PATCH", `/api/costs/${wdId}`, wdBody, wdHeaders);
+  ok("QA-2978: and a replay of that same key now returns the NEW Pending request (idempotent again), still only two rows",
+    wdReplayNew.status === 202 && String(wdReplayNew.data?.item?._id) === String(wdNew?._id) && (await editRows(wdId)).length === 2,
+    JSON.stringify([wdReplayNew.status, wdReplayNew.data?.item?._id]));
+  // the same, with no Idempotency-Key header: the key is then derived from the revision and the input, so a
+  // re-sent identical edit after a withdrawal collides with the withdrawn request unless the key is released.
+  const wd2Id = await mkApproved(creator, "retry-withdrawn-derived");
+  const wd2Body = { amount: 458, confirm_approved: true, base_updated_at: (await raw(wd2Id)).updatedAt.toISOString() };
+  const wd2First = await req(creator.cookie, "PATCH", `/api/costs/${wd2Id}`, wd2Body);
+  const wd2Req = await waitingEdit(wd2Id);
+  const wd2W = await req(creator.cookie, "PATCH", `/api/approvals/${wd2Req?._id}`, { action: "withdraw" });
+  const wd2Again = await req(creator.cookie, "PATCH", `/api/costs/${wd2Id}`, wd2Body);
+  const wd2Rows = await editRows(wd2Id);
+  ok("QA-2978: without a header, an identical edit re-sent after a withdrawal also raises a NEW Pending request",
+    wd2First.status === 202 && wd2W.status === 200 && wd2Again.status === 202 && wd2Again.data?.item?.status === "Pending"
+      && String(wd2Again.data?.item?._id) !== String(wd2Req?._id) && wd2Rows.length === 2,
+    JSON.stringify({ first: wd2First.status, w: wd2W.status, again: wd2Again.status, st: wd2Again.data?.item?.status, rows: wd2Rows.map((r) => r.status) }));
+
   const raceId = await mkApproved(creator, "edit-edit-race");
   const raceBase = await raw(raceId);
   const rivals = await Promise.all([551, 552].map((amount) => req(creator.cookie, "PATCH",
