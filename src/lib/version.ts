@@ -285,6 +285,9 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -333 note: one clause per checked criterion (center-manager-role CM1-CM7, withdraw-fixes QA-2977/QA-2978),
+// corrected after the bump review (qa/evidence/release-333-bump-review.md): fixed centre fields are REFUSED, not parked;
+// approve/create-users is "by default" (rights are grantable); other centres "cannot be opened" (plan-batch is in repair).
 // -332 note: each clause is one checked criterion, judged over what users receive (3cfe6ed = -331 ..
 // this bump). approval-withdraw (dual PASS cycle 0, qa/verdicts/approval-withdraw.md and .b.md, head
 // 7a7c79e): the person who raised a request can withdraw it while it is Pending, from My submissions
@@ -299,9 +302,9 @@ const RELEASE_NOTE_ARCHIVE_321 =
 export const RELEASE_NOTE_CURRENT =
   "-333 adds a new user role, Center Manager, and makes two small corrections to the Withdraw button. " +
   "In Admin -> Users an Admin can now give a user the Center Manager role and must pick one or more centres for them; a Center Manager cannot be saved without a centre. " +
-  "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): records of other centres cannot be seen or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
-  "Changes a Center Manager makes to their centre's fixed details go to an Admin for approval, as a Principal login's do. " +
-  "A Center Manager gets only the alerts tied to their own centre(s), can enter costs for them, cannot approve anything and cannot create users. " +
+  "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): records of other centres cannot be opened or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
+  "As with a Principal login, a Center Manager cannot change their centre's code, name, TC, AEBAS or status fields, and their changes to its other details, approved targets and rooms go to an Admin for approval. " +
+  "A Center Manager gets only the alerts tied to their own centre(s) and can enter costs for them; by default the role has no right to approve requests or to create users. " +
   "When an Admin changes a Center Manager's centres, the change applies to their open session within a few seconds. " +
   "The Operations team is unchanged. " +
   "Withdraw: asking to withdraw a request raised by someone else now gets the same answer as asking for a request that does not exist; and after a cost-edit request is withdrawn, its raiser can submit the same edit again. " +
