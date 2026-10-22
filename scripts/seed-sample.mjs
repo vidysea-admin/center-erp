@@ -121,8 +121,8 @@ for (const u of [
   // Rule 39's view-only persona moved to its own login (the principal is a WRITER now).
   { name: "View-only Reviewer", email: "viewer.jpr03@vidysea.com", role: "Location", can_edit: false, location_scope: [locations.JPR03._id] },
   { name: "Shubham Enrollment", email: "enroll@vidysea.com", role: "Enrollment", can_edit: true },
-  // Center Manager (2026-10-21, qa/gates/center-manager-role.md): the Operations rights, confined to
-  // ONE sample centre. Tests only - same shared sample password as every other seeded login.
+  // Center Manager (2026-10-21, qa/gates/center-manager-role.md): the Operations rights MINUS costs.manage and the three
+  // deletes (QA-2996, 2026-10-22: 9 default rights), confined to ONE sample centre. Tests only - same shared sample password as every other seeded login.
   { name: "Center Manager JPR03", email: "cm.jpr03@vidysea.com", role: "Center Manager", can_edit: true, location_scope: [locations.JPR03._id] },
 ]) {
   await req("POST", "/api/users", { ...u, password: PW });

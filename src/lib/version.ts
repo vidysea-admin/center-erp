@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-333";
+export const RELEASE = "2026.08.14-334";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,6 +285,20 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -334 note: one clause per checked criterion (qa-2996, Umesh 2026-10-22 "Operations jaise 9"), judged over what users of
+// production receive (-333 .. this bump). The Center Manager code default is now 9 rights (the Operations default set minus
+// the cost right and the three delete rights); a stored role row, which production has, still wins and is not changed. The
+// nine is pinned by the CM1 and CM8 arms of the roles suite, the grant-then-own-centre cost arms by CM2/CM3/CM5. No clause
+// states anything about Operations beyond the match the decision itself names, and none claims a fix to a stored row.
+export const RELEASE_NOTE_CURRENT =
+  "-334 narrows the default rights of the Center Manager role and corrects one sentence of the -333 note. " +
+  "A Center Manager's default rights are now nine, matching the rights the Operations team currently holds: they no longer include entering costs or deleting candidates, trainers or batches. " +
+  "What a Center Manager does at their own centre(s), such as creating batches and candidates, mapping candidates into batches and marking attendance, is unchanged, and so is the limit to their own centre(s). " +
+  "Where an Admin has already set the rights for this role on the permissions screen, those settings keep applying and this release does not change them, and an Admin can still grant a Center Manager the right to enter costs. " +
+  "This corrects the -333 note, which said a Center Manager can enter costs for their own centre(s): by default they cannot, and they can, for their own centre(s), once an Admin has granted that right. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -334: the -333 note moved here unchanged when -334 became current.
 // -333 note: one clause per checked criterion (center-manager-role CM1-CM7, withdraw-fixes QA-2977/QA-2978),
 // corrected after the bump review (qa/evidence/release-333-bump-review.md): fixed centre fields are REFUSED, not parked;
 // approve/create-users is "by default" (rights are grantable); other centres "cannot be opened" (plan-batch is in repair).
@@ -299,7 +313,7 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // request for a new cost head marks that head Rejected, as a rejection does (manifest, review open
 // question; the head's costs are NOT claimed usable). No number is quoted. No clause claims more than
 // those verdicts and the manifest.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_333 =
   "-333 adds a new user role, Center Manager, makes two small corrections to the Withdraw button, and tightens what centre-limited logins can do with trainers. " +
   "In Admin -> Users an Admin can now give a user the Center Manager role and must pick one or more centres for them; a Center Manager cannot be saved without a centre. " +
   "A Center Manager has the same default rights as the Operations team, but only for their own centre(s): with those default rights, records of other centres cannot be opened or changed, and a batch, candidate, trainer request or trainer cannot be moved to or tied to another centre. " +
@@ -2181,6 +2195,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -334: ARCHIVE_333 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_333 + " " +
   // -333: ARCHIVE_332 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_332 + " " +
   // -332: ARCHIVE_331 wired in here in the SAME bump that declared it, same discipline.

@@ -487,7 +487,8 @@ the enterer's id. Every edit / delete / restore writes a `financeAuditEvent` thr
 ### 3.0h "Who is the Operations team?" - one group, now with a second member (center-manager-role, Manish 2026-10-21)
 
 Before: ~70 hand-typed `role === "Operations"` / `["Admin","Operations"]` copies in ~40 files. "Center Manager" is the Operations
-rights confined to the centres in `location_scope`, so the copies became `isOpsTeam` / `isAdminOrOps` / `ADMIN_OPS` from
+rights (default set minus `costs.manage` and the three `*.delete`, 9 of 13 - QA-2996, 2026-10-22, `permissions.ts` `CENTER_MANAGER_WITHHELD`)
+confined to the centres in `location_scope`, so the copies became `isOpsTeam` / `isAdminOrOps` / `ADMIN_OPS` from
 `src/lib/roles.ts`; the next such role is one line there. Three things deliberately did NOT join the group: account creation
 (`api/users/route.ts`, Admin only), the approver pickers (a Center Manager can never approve - `api/approvals` PUT refuses
 it, the Admin dropdown omits it), and centre-LESS alerts (public trainer-apply, enrol-otp, portal-lookup stay Operations/Admin).

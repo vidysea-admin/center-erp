@@ -183,11 +183,17 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   // only; the separate finance.view right remains absent.
   Trainer: ["batches.daily_log", "closure.manage", "costs.manage"],
 };
-// Center Manager (qa/gates/center-manager-role.md, 2026-10-21): "rights = the Operations default permission
-// set". Copied from the Operations row (not retyped) so the two cannot drift; SCOPE is what differs
-// (authz.ts isScoped). This is a code fallback only - a stored RolePermission row for the role (Admin
-// toggling the matrix) still wins, exactly like every other role, so no production DB write is needed.
-DEFAULT_ROLE_PERMISSIONS["Center Manager"] = [...DEFAULT_ROLE_PERMISSIONS.Operations];
+// Center Manager (qa/gates/center-manager-role.md, 2026-10-21; narrowed 2026-10-22, QA-2996): the Operations default
+// set MINUS exactly the four rights below, which is 9 of Operations' 13. Umesh, 2026-10-22, asked directly which
+// default a Center Manager should carry and chose "Operations jaise 9": the rights Operations holds LIVE are these 9, and
+// the first cut (a copy of the whole 13-right code default) was wider than that. DERIVED from
+// the Operations row with a filter, not retyped, so a right later ADDED to Operations still flows through; Operations'
+// own default above is unchanged. SCOPE is what differs between the two roles (authz.ts isScoped). This is a code
+// fallback only - a stored RolePermission row for the role (Admin toggling the matrix) still wins, exactly like every
+// other role. Production already stores the Center Manager row at these 9 (unticked in the UI), so NO production DB
+// write is needed for this change; a fresh install and every test database take the code default.
+const CENTER_MANAGER_WITHHELD: ReadonlySet<string> = new Set(["costs.manage", "candidates.delete", "trainers.delete", "batches.delete"]);
+DEFAULT_ROLE_PERMISSIONS["Center Manager"] = DEFAULT_ROLE_PERMISSIONS.Operations.filter((k) => !CENTER_MANAGER_WITHHELD.has(k));
 
 // Role toggles are read per request; a tiny TTL cache keeps that cheap without letting a
 // toggle take more than a few seconds to bite.

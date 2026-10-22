@@ -6137,9 +6137,17 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const cmRow = (matrix.roles ?? []).find((r) => r.role === "Center Manager");
   const opsRow2 = (matrix.roles ?? []).find((r) => r.role === "Operations");
   ok("[CM1] 'Center Manager' is in the role enum (permissions matrix lists it)", !!cmRow, JSON.stringify((matrix.roles ?? []).map((r) => r.role)));
-  ok("[CM1] its default rights ARE the Operations default set (code fallback, no stored row)",
-    !!cmRow && !!opsRow2 && cmRow.is_default === true && JSON.stringify([...cmRow.permissions].sort()) === JSON.stringify([...opsRow2.permissions].sort()),
+  // QA-2996 (Umesh, 2026-10-22, "Operations jaise 9"): DELIBERATE CONTRACT CHANGE. This arm used to assert the Center Manager default
+  // set EQUALS the Operations default set (13). The decision is that it equals the Operations set MINUS exactly these four (9 rights).
+  const CM_WITHHELD = ["costs.manage", "candidates.delete", "trainers.delete", "batches.delete"];
+  const expectedCm = !!opsRow2 ? [...opsRow2.permissions].filter((k) => !CM_WITHHELD.includes(k)).sort() : [];
+  ok("[CM1] its default rights are the Operations default set MINUS costs.manage and the three deletes (code fallback, no stored row)",
+    !!cmRow && !!opsRow2 && cmRow.is_default === true && JSON.stringify([...cmRow.permissions].sort()) === JSON.stringify(expectedCm),
     JSON.stringify({ cm: cmRow?.permissions, ops: opsRow2?.permissions }));
+  ok("[CM1] ...that is 9 rights, and none of the four withheld ones is among them",
+    !!cmRow && cmRow.permissions.length === 9 && CM_WITHHELD.every((k) => !cmRow.permissions.includes(k)), JSON.stringify(cmRow?.permissions));
+  ok("[CM1] ...while the Operations default is UNCHANGED (still 13, all four held)",
+    !!opsRow2 && opsRow2.permissions.length === 13 && CM_WITHHELD.every((k) => opsRow2.permissions.includes(k)), JSON.stringify(opsRow2?.permissions));
   const adminSrc = fs.readFileSync("src/app/(app)/admin/page.tsx", "utf8");
   ok("[CM1] the admin role dropdown AND the roles overview both list Center Manager",
     (adminSrc.match(/"Operations", "Center Manager", "Location", "Enrollment", "Trainer"/g) ?? []).length >= 2);
@@ -6245,7 +6253,13 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const fin = await mk(emFin, { role: "Center Manager", location_scope: [own._id], extra_permissions: ["finance.view"] });
   const cmB = await mk(emB, { role: "Center Manager", location_scope: [foreign._id] });
   ok("[CM] fixtures: finance-viewing CM (own centre) and a second CM (foreign centre) created", fin.status === 201 && cmB.status === 201, `${fin.status}/${cmB.status}`);
-  const cmFin = await login(emFin, PW), cmOther = await login(emB, PW), cmA = await login(emA, PW);
+  // QA-2996: the default Center Manager no longer holds costs.manage, so the arms that exercise the COST SCOPE gate (own centre posts, foreign
+  // centre refused as out of scope, a parked request for the approval arms) need a Center Manager that was GRANTED the right per user. Without
+  // it those arms would be refused for the missing right and the scope message they assert would never be reached.
+  const emCost = `cm.cost.${S}@vidysea-test.local`;
+  const costCmMk = await mk(emCost, { role: "Center Manager", location_scope: [own._id], extra_permissions: ["costs.manage"] });
+  ok("[CM] fixture: a Center Manager GRANTED costs.manage for their own centre", costCmMk.status === 201, `${costCmMk.status} ${JSON.stringify(costCmMk.data?.error)}`);
+  const cmFin = await login(emFin, PW), cmOther = await login(emB, PW), cmA = await login(emA, PW), cmCost = await login(emCost, PW);
   const foreignBatch = ((await req(admin, "GET", `/api/batches?location=${foreign._id}&limit=2000`)).data.items ?? []).find((b) => idOf(b.location) === idOf(foreign._id));
   const foreignActive = ((await req(admin, "GET", `/api/batches?location=${foreign._id}&limit=2000`)).data.items ?? []).find((b) => b.status === "Active");
   const foreignCand = ((await req(admin, "GET", `/api/candidates?location=${foreign._id}&limit=5`)).data.items ?? [])[0];
@@ -6279,9 +6293,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const cats = (await req(admin, "GET", "/api/master-lists/cost-categories")).data.items ?? [];
   const cat = cats.find((c) => !c.pre_approved && c.active !== false) ?? cats[0];
   const costNote = `cm-${S}-own`;
-  const costOwn = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 111, note: costNote });
-  ok("[CM2] ...enters a cost at their own centre (2xx: posted or parked for approval)", [201, 202].includes(costOwn.status), `got ${costOwn.status} ${JSON.stringify(costOwn.data?.error)}`);
-  ok("[CM2] ...but the cost ledger itself stays closed to them without finance.view (403)", (await req(cm, "GET", "/api/costs")).status === 403);
+  // QA-2996: the DEFAULT Center Manager (`cm`) no longer enters costs; a Center Manager granted costs.manage (`cmCost`) still does, and still only for their own centre.
+  const costOwn = await req(cmCost, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 111, note: costNote });
+  ok("[CM2] a Center Manager GRANTED costs.manage enters a cost at their own centre (2xx: posted or parked for approval)", [201, 202].includes(costOwn.status), `got ${costOwn.status} ${JSON.stringify(costOwn.data?.error)}`);
+  ok("[CM2] ...but the cost ledger itself stays closed to them without finance.view (403)", (await req(cmCost, "GET", "/api/costs")).status === 403);
   ok("[CM2] an Operations login still does what it did: sees every centre and opens a foreign one",
     ((await req(ops, "GET", "/api/locations?limit=2000")).data.items ?? []).length >= allLocs.length && (await req(ops, "GET", `/api/locations/${foreign._id}`)).status === 200);
 
@@ -6329,11 +6344,11 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   refused("[CM3] create a trainer tied to ANOTHER centre", ft, [403], /own centre|out of scope/i);
   ok("[CM3] ...no such trainer exists", ((await req(admin, "GET", `/api/trainers?q=${encodeURIComponent(`CM Trainer ${S}`)}`)).data.items ?? []).length === 0);
   const costForeignNote = `cm-${S}-foreign`;
-  const parked0 = ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length;
-  const cf = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: foreign._id, category: cat?._id, amount: 222, note: costForeignNote });
+  const parked0 = ((await req(cmCost, "GET", "/api/approvals?mine=1")).data.items ?? []).length;
+  const cf = await req(cmCost, "POST", "/api/costs", { entry_date: "2026-10-20", location: foreign._id, category: cat?._id, amount: 222, note: costForeignNote });
   refused("[CM3] enter a cost at ANOTHER centre", cf, [403], /out of scope/i);
   ok("[CM3] ...no ledger row and no parked request", !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === costForeignNote)
-    && ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length === parked0);
+    && ((await req(cmCost, "GET", "/api/approvals?mine=1")).data.items ?? []).length === parked0);
 
   // ---------------- CM3 (fix cycle 1): MOVING or CREATING INTO another centre is refused too ----------------
   // The review (qa/evidence/center-manager-role-review/review.md) found three doors that checked where a record
@@ -6619,8 +6634,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const ruleOn = await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: true, approver_role: "Admin" });
   ok("[CM5] fixture: the cost.post approval rule is switched ON (Admin approver)", ruleOn.status === 200);
   const parkedNote = `cm-${S}-parked`;
-  const parked = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 444, note: parkedNote });
-  ok("[CM5] a Center Manager's cost at their own centre PARKS for approval (202)", parked.status === 202, `got ${parked.status} ${JSON.stringify(parked.data?.error)}`);
+  const parked = await req(cmCost, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 444, note: parkedNote });
+  ok("[CM5] a Center Manager's (costs.manage granted) cost at their own centre PARKS for approval (202)", parked.status === 202, `got ${parked.status} ${JSON.stringify(parked.data?.error)}`);
   const pending = ((await req(admin, "GET", "/api/approvals?status=Pending&limit=500")).data.items ?? []).find((a) => String(a.summary ?? "").includes(parkedNote)) ?? ((await req(admin, "GET", "/api/approvals?mine=1")).data.items ?? []).find((a) => String(a.summary ?? "").includes(parkedNote));
   const parkedId = parked.data?.request?._id ?? parked.data?.item?._id ?? pending?._id;
   ok("[CM5] fixture: the parked request is findable", !!parkedId, JSON.stringify(parked.data).slice(0, 160));
@@ -6638,6 +6653,55 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => { const p = d + "/" + e.name; if (e.isDirectory()) walk(p); else if (/\.(ts|tsx)$/.test(e.name)) { const t = fs.readFileSync(p, "utf8"); t.split("\n").forEach((l, i) => { if (/(role\s*[!=]==?\s*"Operations"|\["Admin",\s*"Operations"[\],])/.test(l) && !/^\s*(\/\/|\*)/.test(l) && !/alertRoles\(/.test(l) && !/"Center Manager"/.test(l) && !/role_target:/.test(l) && !/approver/.test(l) && !/<option/.test(l) && !p.includes("api/public/") && !p.includes("lib/roles.ts")) left.push(`${p}:${i + 1}`); }); } });
   walk("src");
   ok("[CM5] no scattered copy of the Operations role gate remains (only the group in lib/roles.ts, untied public-form alerts and the approver list)", left.length === 0, left.slice(0, 6).join(" | "));
+
+  // ---------------- CM8 (QA-2996, Umesh 2026-10-22 "Operations jaise 9"): the DEFAULT Center Manager has no cost entry and no deletes ----------------
+  // `cm` is the seeded cm.jpr03 login: a Center Manager with NO per-user grants and NO stored CM matrix row, so its rights are the code default alone.
+  // Every refusal below asserts its STATUS (403), the NAMED right in the message (so it is the right gate that refused, not a scope or other gate)
+  // and that NOTHING was written (read back through Admin). The arms fail if the default is reverted to the Operations set: the same calls then succeed.
+  {
+    const labelOf = (k) => (matrix.catalog ?? []).find((p) => p.key === k)?.label ?? k;
+    const me8 = await req(cm, "GET", "/api/permissions/me");
+    ok("[CM8] the default Center Manager's /api/permissions/me holds none of costs.manage, candidates.delete, trainers.delete, batches.delete",
+      me8.status === 200 && ["costs.manage", "candidates.delete", "trainers.delete", "batches.delete"].every((k) => !me8.data.levels?.[k]), JSON.stringify(me8.data.levels));
+    ok("[CM8] ...and still holds the nine Operations rights it keeps (edit level)",
+      ["locations.manage", "trainers.manage", "candidates.manage", "candidates.assign", "batches.manage", "batches.daily_log", "closure.manage", "attendance.govt", "feedback.links"].every((k) => me8.data.levels?.[k] === "edit"), JSON.stringify(me8.data.levels));
+    const namesRight = (r, k) => String(r.data?.error ?? "").includes(`"${labelOf(k)}" right`);
+
+    // cost entry at the OWN centre: refused for the missing right, not for scope; nothing posted, nothing parked
+    const costNote8 = `cm-${S}-default-cost`;
+    const parked8 = ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length;
+    const c8 = await req(cm, "POST", "/api/costs", { entry_date: "2026-10-20", location: own._id, category: cat?._id, amount: 555, note: costNote8 });
+    ok("[CM8] a default Center Manager's cost at their OWN centre is refused (403)", c8.status === 403, `got ${c8.status} ${JSON.stringify(c8.data?.error)}`);
+    ok("[CM8] ...and the message names the Costs right (it is the right that refused, not the scope gate)", namesRight(c8, "costs.manage") && !/out of scope/i.test(String(c8.data?.error ?? "")), JSON.stringify(c8.data?.error));
+    ok("[CM8] ...no ledger row and no parked request were written",
+      !((await req(admin, "GET", "/api/costs?limit=2000")).data.items ?? []).some((c) => c.note === costNote8)
+      && ((await req(cm, "GET", "/api/approvals?mine=1")).data.items ?? []).length === parked8);
+
+    // deletes: each record is created by Admin at the OWN centre, history-free (so the safety refusals cannot be what stops the delete)
+    const prog8 = prog._id;
+    const dCand = await req(admin, "POST", "/api/candidates", { name: `CM8 Cand ${S}`, phone: `93${S}04`.padEnd(10, "4").slice(0, 10), location: own._id, program: prog8 });
+    const dTr = await req(admin, "POST", "/api/trainers", { name: `CM8 Trainer ${S}`, phone: `92${S}05`.padEnd(10, "5").slice(0, 10), skills: ["x"], home_location: own._id });
+    const dBatch = await req(admin, "POST", "/api/batches", { location: own._id, program: prog8, planned_start: "2027-04-12" });
+    ok("[CM8] fixtures: an own-centre candidate, trainer and empty batch created by Admin (201 each)", dCand.status === 201 && dTr.status === 201 && dBatch.status === 201,
+      `${dCand.status}/${dTr.status}/${dBatch.status} ${JSON.stringify([dCand.data?.error, dTr.data?.error, dBatch.data?.error])}`);
+    const exists = async (kind, id) => (await req(admin, "GET", `/api/${kind}/${id}`)).status === 200;
+    for (const [label, kind, key, made] of [["candidate", "candidates", "candidates.delete", dCand], ["trainer", "trainers", "trainers.delete", dTr], ["batch", "batches", "batches.delete", dBatch]]) {
+      const id = made.data?.item?._id;
+      if (!id) { ok(`[CM8] fixture: the ${label} exists to be deleted`, false, JSON.stringify(made.data).slice(0, 160)); continue; }
+      ok(`[CM8] fixture: the own-centre ${label} is readable by the Center Manager (so a refusal below cannot be a scope refusal)`, (await req(cm, "GET", `/api/${kind}/${id}`)).status === 200);
+      const del = await req(cm, "DELETE", `/api/${kind}/${id}`);
+      ok(`[CM8] a default Center Manager's DELETE of an own-centre ${label} is refused (403)`, del.status === 403, `got ${del.status} ${JSON.stringify(del.data?.error)}`);
+      ok(`[CM8] ...the message names the "${labelOf(key)}" right`, namesRight(del, key), JSON.stringify(del.data?.error));
+      ok(`[CM8] ...and the ${label} still exists (read back through Admin)`, await exists(kind, id));
+    }
+    // cleanup of the three Admin-made fixtures (the only deleter is Admin; the cleanup is read back)
+    for (const [kind, made] of [["candidates", dCand], ["trainers", dTr], ["batches", dBatch]]) {
+      const id = made.data?.item?._id;
+      if (!id) continue;
+      const rm = await req(admin, "DELETE", `/api/${kind}/${id}`, kind === "batches" ? { reason: "CM8 fixture cleanup" } : undefined);
+      ok(`[CM8] cleanup: Admin removes the ${kind.slice(0, -1)} fixture and it is gone (read back)`, rm.status === 200 && !(await exists(kind, id)), `got ${rm.status} ${JSON.stringify(rm.data?.error)}`);
+    }
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
