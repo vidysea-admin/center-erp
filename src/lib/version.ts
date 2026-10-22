@@ -291,11 +291,12 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // nine is pinned by the CM1 and CM8 arms of the roles suite, the grant-then-own-centre cost arms by CM2/CM3/CM5. No clause
 // states anything about Operations beyond the match the decision itself names, and none claims a fix to a stored row.
 export const RELEASE_NOTE_CURRENT =
-  "-334 narrows the default rights of the Center Manager role and corrects one sentence of the -333 note. " +
-  "A Center Manager's default rights are now nine, matching the rights the Operations team currently holds: they no longer include entering costs or deleting candidates, trainers or batches. " +
-  "What a Center Manager does at their own centre(s), such as creating batches and candidates, mapping candidates into batches and marking attendance, is unchanged, and so is the limit to their own centre(s). " +
-  "Where an Admin has already set the rights for this role on the permissions screen, those settings keep applying and this release does not change them, and an Admin can still grant a Center Manager the right to enter costs. " +
-  "This corrects the -333 note, which said a Center Manager can enter costs for their own centre(s): by default they cannot, and they can, for their own centre(s), once an Admin has granted that right. " +
+  "-334 changes the built-in default rights of the Center Manager role and corrects two sentences of the -333 note. " +
+  "A Center Manager's default rights are now nine, the same nine rights the Operations team currently holds on this site: they no longer include entering costs, deleting candidates, trainers or batches, or the actions that need those rights, such as restoring archived candidates and archiving or restoring several candidates at once. " +
+  "On this site the Center Manager role was already set to these nine rights on the permissions screen before this release, so this release does not change what any current Center Manager can do; it makes the built-in default match that setting. " +
+  "Creating batches and candidates, mapping candidates into batches and marking attendance at their own centre(s) stay available to a Center Manager, and so does the limit to their own centre(s). " +
+  "An Admin can still give a Center Manager the right to enter costs, for their own centre(s), on the permissions screen. " +
+  "This corrects the -333 note, which said a Center Manager has the same default rights as the Operations team and can enter costs for their own centre(s): by default they cannot enter costs. " +
   "No other screen, figure or permission changes in this release.";
 
 // -334: the -333 note moved here unchanged when -334 became current.
