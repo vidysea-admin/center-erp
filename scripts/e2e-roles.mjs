@@ -6684,7 +6684,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const dBatch = await req(admin, "POST", "/api/batches", { location: own._id, program: prog8, planned_start: "2027-04-12" });
     ok("[CM8] fixtures: an own-centre candidate, trainer and empty batch created by Admin (201 each)", dCand.status === 201 && dTr.status === 201 && dBatch.status === 201,
       `${dCand.status}/${dTr.status}/${dBatch.status} ${JSON.stringify([dCand.data?.error, dTr.data?.error, dBatch.data?.error])}`);
-    const exists = async (kind, id) => (await req(admin, "GET", `/api/${kind}/${id}`)).status === 200;
+    // candidates.delete ARCHIVES (a soft delete, candidate-archive.ts), so for a candidate "still there" must mean "not archived": a bare 200 on GET
+    // would pass after a successful archive and the arm could not tell a refused delete from an allowed one.
+    const stateOf = async (kind, id) => { const r = await req(admin, "GET", `/api/${kind}/${id}`); return r.status !== 200 ? "gone" : kind === "candidates" && r.data?.item?.archived_at ? "archived" : "present"; };
+    const exists = async (kind, id) => (await stateOf(kind, id)) === "present";
     for (const [label, kind, key, made] of [["candidate", "candidates", "candidates.delete", dCand], ["trainer", "trainers", "trainers.delete", dTr], ["batch", "batches", "batches.delete", dBatch]]) {
       const id = made.data?.item?._id;
       if (!id) { ok(`[CM8] fixture: the ${label} exists to be deleted`, false, JSON.stringify(made.data).slice(0, 160)); continue; }
@@ -6697,9 +6700,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     // cleanup of the three Admin-made fixtures (the only deleter is Admin; the cleanup is read back)
     for (const [kind, made] of [["candidates", dCand], ["trainers", dTr], ["batches", dBatch]]) {
       const id = made.data?.item?._id;
+      const one = { candidates: "candidate", trainers: "trainer", batches: "batch" }[kind];
       if (!id) continue;
       const rm = await req(admin, "DELETE", `/api/${kind}/${id}`, kind === "batches" ? { reason: "CM8 fixture cleanup" } : undefined);
-      ok(`[CM8] cleanup: Admin removes the ${kind.slice(0, -1)} fixture and it is gone (read back)`, rm.status === 200 && !(await exists(kind, id)), `got ${rm.status} ${JSON.stringify(rm.data?.error)}`);
+      ok(`[CM8] cleanup: Admin removes the ${one} fixture (${kind === "candidates" ? "archived" : "gone"}, read back)`, rm.status === 200 && (await stateOf(kind, id)) === (kind === "candidates" ? "archived" : "gone"), `got ${rm.status} ${JSON.stringify(rm.data?.error)} state=${await stateOf(kind, id)}`);
     }
   }
 }
