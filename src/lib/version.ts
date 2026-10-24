@@ -293,7 +293,7 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // M5 (MISSING.txt), M6 (the Active entry form unchanged). No number is quoted.
 export const RELEASE_NOTE_CURRENT =
   "-335 makes the photos and videos of a batch's daily logs visible after training ends, and lets them be downloaded as ZIP files, one folder per day. " +
-  "Until this release the Daily Execution tab of a batch showed nothing once the batch had moved past its running stage, so the photos and videos trainers had uploaded could no longer be seen there; they had not been deleted. " +
+  "Until this release the Daily Execution tab of a batch showed nothing once the batch had moved to Assessment Awaited, Completed, Closed or Cancelled, so the photos and videos trainers had uploaded could no longer be seen there; they had not been deleted. " +
   "The tab now lists, for every day that has at least one photo or video, the date, the photos and videos of that day, and a Download ZIP button for that day. A Download all days button gives one ZIP with one folder per day, each folder named by its date. " +
   "The same list also appears under the daily-log form while a batch is running; the form itself is unchanged. " +
   "The ZIP holds photos and videos only: attendance sheets are not included. If a file named in a daily log cannot be fetched from storage, the ZIP includes a MISSING.txt that lists it, instead of leaving it out without saying so. " +
