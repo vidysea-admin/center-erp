@@ -61,15 +61,31 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
         const name = storedNameFromUrl(u);
         const rec = name ? byName.get(name) : undefined;
         if (!name || !rec || (rec.status && rec.status !== "ready")) { missing.push(`${day.date}\t${kind}\t${name ?? u}\t${!rec ? "no stored file" : rec.status}`); continue; }
-        let fs;
-        try { fs = await getFileStream(rec, name); }
-        catch (e: any) { missing.push(`${day.date}\t${kind}\t${name}\tstorage could not return it (${String(e?.code ?? e?.message ?? "error").slice(0, 60)})`); continue; }
+        // Open AND read the first chunk before the entry exists: GCS/Drive hand back a stream at once
+        // and report a vanished object only on the first read, which must land in MISSING.txt rather
+        // than cut the download short. A failure after bytes have started is a real mid-transfer error.
+        let src: Readable | undefined, it: AsyncIterator<Buffer>, first: IteratorResult<Buffer>;
+        try {
+          src = (await getFileStream(rec, name)).stream as unknown as Readable;
+          it = src[Symbol.asyncIterator]();
+          const next = it.next();
+          next.catch(() => {}); // settled by destroy() when the download is cancelled first
+          first = await Promise.race([next, stopped]);
+        } catch (e: any) {
+          src?.destroy();
+          if (out.destroyed) throw e;
+          missing.push(`${day.date}\t${kind}\t${name}\tstorage could not return it (${String(e?.code ?? e?.message ?? "error").slice(0, 60)})`);
+          continue;
+        }
+        const body = Readable.from((async function* () {
+          if (!first.done) yield first.value;
+          for (let r = await it.next(); !r.done; r = await it.next()) yield r.value;
+        })(), { objectMode: false });
         const entry = uniqueName(used, entryBase(rec.original_name, kind, n), path.extname(name));
-        const src = fs.stream as unknown as Readable;
-        const written = new Promise<void>((resolve, reject) => { archive.once("entry", () => resolve()); src.once("error", reject); });
-        archive.append(src, { name: `${day.date}/${entry}` });
+        const written = new Promise<void>((resolve, reject) => { archive.once("entry", () => resolve()); body.once("error", reject); });
+        archive.append(body, { name: `${day.date}/${entry}` });
         try { await Promise.race([written, stopped]); }
-        catch (e) { src.destroy(); throw e; }
+        catch (e) { body.destroy(); src!.destroy(); throw e; }
       }
     }
     if (missing.length) {

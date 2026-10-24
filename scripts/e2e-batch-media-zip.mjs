@@ -12,6 +12,9 @@
 //   [M6] on an Active batch the daily-log form is unchanged and the day folders show under it
 // Run: node scripts/e2e-batch-media-zip.mjs   (server on BASE_URL, MONGODB_DB=center_erp_ci*)
 import { chromium } from "playwright";
+import fs from "fs";
+import path from "path";
+import { execFileSync } from "child_process";
 import { ok, req, login, adminLogin, finish, stamp as mkStamp, BASE } from "./e2e-lib.mjs";
 
 const istDay = (offsetDays = 0) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" })
@@ -70,10 +73,25 @@ const p2 = await upload(PNG, "class.png", "image/png");
 const p3 = await upload(PNG, "class.png", "image/png"); // same original name on the same day → must not overwrite p2
 const missing = `${BASE_PATH}/api/files/${"0".repeat(31)}f.jpg`; // named by the log, never stored
 const sheet = await upload(PNG, "register.png", "image/png"); // attendance sheet: NOT a photo, stays out
+// A file storage KNOWS about but cannot read: the row is "ready", yet the read fails only AFTER the
+// stream is opened - how a GCS/Drive object that vanished behaves in production (the size is on the
+// row, so no metadata call fails up front). Locally: keep the bytes but deny READING them - stat()
+// still succeeds with the real size, and the read stream then fails to open (EPERM/EACCES), which
+// arrives asynchronously, after getFileStream has returned. (A directory in its place does NOT do
+// this: its size is 0, so the stream is refused synchronously and never reaches the late path.)
+// The server and this script share the working directory (both run from the checkout).
+const late = await upload(PNG, "late.png", "image/png");
+const lateDisk = path.join(process.env.UPLOADS_DIR || path.join(process.cwd(), "uploads"), /([a-f0-9]{32}\.[a-z0-9]+)$/.exec(late)[1]);
+const denyRead = (on) => process.platform === "win32"
+  ? execFileSync("icacls", on ? [lateDisk, "/deny", `${process.env.USERNAME}:(RD)`] : [lateDisk, "/reset"], { stdio: "ignore" })
+  : fs.chmodSync(lateDisk, on ? 0o000 : 0o644);
+let lateReady = false;
+try { denyRead(true); lateReady = fs.statSync(lateDisk).size > 0; try { fs.readFileSync(lateDisk); lateReady = false; } catch {} } catch {}
+ok("[precondition] the late-failing file is staged (stat works, reading is refused)", lateReady, lateDisk);
 
 await req(admin, "POST", `/api/batches/${batch._id}/logs`, { log_date: D1, present_member_ids: [mem._id], trainer_present: true, photos: [p1], videos: [v1] }, 201);
 await req(admin, "POST", `/api/batches/${batch._id}/logs`, { log_date: D2, present_member_ids: [mem._id], trainer_present: true, attendance_sheet: [sheet] }, 201);
-await req(admin, "POST", `/api/batches/${batch._id}/logs`, { log_date: D3, present_member_ids: [mem._id], trainer_present: true, photos: [p2, p3, missing] }, 201);
+await req(admin, "POST", `/api/batches/${batch._id}/logs`, { log_date: D3, present_member_ids: [mem._id], trainer_present: true, photos: [p2, p3, missing, late] }, 201);
 
 const nameOf = (u) => /([a-f0-9]{32}\.[a-z0-9]+)$/.exec(u)?.[1];
 async function served(u) {
@@ -103,7 +121,10 @@ function readZip(buf) {
 }
 async function getZip(cookie, query) {
   const res = await fetch(`${BASE}/api/batches/${batch._id}/logs/media-zip${query}`, { headers: cookie ? { cookie } : {} });
-  const buf = Buffer.from(await res.arrayBuffer());
+  // A download cut off mid-stream (the server destroyed it) is a result to assert on, not a crash.
+  let buf = Buffer.alloc(0), cut = "";
+  try { buf = Buffer.from(await res.arrayBuffer()); } catch (e) { cut = String(e?.cause?.code ?? e?.message ?? e); }
+  ok(`[M2-M5] the ${query || "all-days"} download completes (not cut off mid-stream)`, !cut, cut);
   return { status: res.status, type: res.headers.get("content-type"), disp: res.headers.get("content-disposition") ?? "", buf };
 }
 const folderOf = (e) => e.name.split("/")[0];
@@ -139,6 +160,8 @@ ok("[M3] ...the attendance sheet is not in the ZIP", !ea.some((e) => /register/.
 const miss = ea.find((e) => e.name === "MISSING.txt");
 ok("[M5] a file the log names but storage does not have is listed in MISSING.txt (with its day), not dropped silently",
   !!miss && miss.data.toString("utf8").includes(D3) && miss.data.toString("utf8").includes(nameOf(missing)), miss ? miss.data.toString("utf8") : JSON.stringify(ea.map((e) => e.name)));
+ok("[M5] a file whose read fails AFTER it was opened is listed in MISSING.txt too, and the ZIP still completes with the other files",
+  !!miss && miss.data.toString("utf8").includes(nameOf(late)) && d3.length === 2, miss ? miss.data.toString("utf8") : JSON.stringify(ea.map((e) => e.name)));
 ok("[M5] ...and a day with nothing missing carries no MISSING.txt", !e1.some((e) => e.name === "MISSING.txt"));
 
 // ---- [M4] scope ----
@@ -193,11 +216,12 @@ try {
       JSON.stringify(hrefs));
     const shown = await page.locator('[data-media-day]').evaluateAll((els) => els.map((e) => e.getAttribute("data-media-day")));
     ok("[M1] ...the folders are the dates, newest first", JSON.stringify(shown) === JSON.stringify([D3, D1]), JSON.stringify(shown));
-    ok("[M1] ...the photos render as thumbnails (img tags point at /api/files)", (await page.locator('[data-media-day] img[src*="/api/files/"]').count()) === 4);
+    ok("[M1] ...the photos render as thumbnails (img tags point at /api/files)", (await page.locator('[data-media-day] img[src*="/api/files/"]').count()) === 5);
     ok("[M1] no page error", errors.length === 0, errors.join(" | "));
     await ctx.close();
   }
 } finally {
   await browser.close();
+  try { denyRead(false); } catch {} // the copy must stay deletable
 }
 finish();

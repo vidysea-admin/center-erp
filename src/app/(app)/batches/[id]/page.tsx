@@ -3241,7 +3241,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
     return (
       <div className="space-y-4">
         {notStarted && <p className="p-6 text-center text-sm text-gray-400">Daily logs open once the batch is Active.</p>}
-        {(!notStarted || logs.length > 0) && <MediaByDay batchId={batchId} logs={logs} loaded={loaded} />}
+        {(!notStarted || logs.length > 0) && <MediaByDay batchId={batchId} logs={logs} loaded={loaded} failed={!!error} />}
       </div>
     );
   }
@@ -3473,7 +3473,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
             ) : null },
           ]} empty="No logs yet." />
       </Section>
-      <MediaByDay batchId={batchId} logs={logs} loaded={loaded} />
+      <MediaByDay batchId={batchId} logs={logs} loaded={loaded} failed={!!error} />
       <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} error={error} setError={setError} />
       <RoundDrawer log={roundLog} members={members} onClose={() => setRoundLog(null)} onSaved={() => { setRoundLog(null); load(); }} error={error} setError={setError} />
     </div>
@@ -3651,13 +3651,15 @@ function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos"
 // din ka zip; saare din ek saath". One row per class day that has a photo or a video (newest first),
 // its thumbnails, a ZIP for that day, and one ZIP for every day. The grouping is lib/media-days - the
 // same function the ZIP route uses, so the folders here and the folders in the ZIP are the same list.
-function MediaByDay({ batchId, logs, loaded }: { batchId: string; logs: any[]; loaded: boolean }) {
+function MediaByDay({ batchId, logs, loaded, failed }: { batchId: string; logs: any[]; loaded: boolean; failed?: boolean }) {
   const days = mediaDays(logs);
   const zip = (date?: string) => `${BASE_PATH}/api/batches/${batchId}/logs/media-zip${date ? `?date=${date}` : ""}`;
   const totalFiles = days.reduce((n, d) => n + d.photos.length + d.videos.length, 0);
   return (
     <Section title="Photos & videos by day">
       {!loaded ? <p className="p-4 text-sm text-gray-400">Loading…</p>
+        // A failed logs fetch must not read as "nothing was logged" on a finished batch.
+        : !days.length && failed ? <p className="p-4 text-sm text-gray-500">The daily logs could not be loaded, so their photos and videos cannot be listed. Reload the page to try again.</p>
         : !days.length ? <p className="p-4 text-sm text-gray-400">No photos or videos were logged for this batch.</p>
         : (
           <div className="space-y-3 p-3">
