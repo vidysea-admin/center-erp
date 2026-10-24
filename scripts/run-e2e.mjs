@@ -80,6 +80,7 @@ const SUITES = [
   // gate and batch scope, and that the trainer-documentation pull-through writes nothing into
   // BatchDocument (no duplicate storage of trainer identity docs under a batch).
   "e2e-batch-documents.mjs",
+  "e2e-batch-media-zip.mjs",
   // QA-1436 (2026-08-26): the batch Enrollment tab's new Edit-candidate button. Server-side, the
   // only real change is GET /api/batches/[id]/members populating the FULL candidate document — this
   // suite's load-bearing assertion is the regression guard proving that widening did NOT reopen

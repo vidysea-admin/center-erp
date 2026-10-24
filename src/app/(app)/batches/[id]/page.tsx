@@ -24,6 +24,7 @@ import { useDropMember, DropMemberDrawer } from "@/components/drop-member";
 import { GovtRowResolveDrawer } from "@/components/govt-row-resolve-drawer";
 import { compressImage, flushQueue, fmtBytes, getLastUploadInfo, getQueue, pickRecorderMime, uploadWithRetry, videoKnobs, type VideoKnobs } from "@/lib/upload";
 import { BASE_PATH } from "@/lib/base-path";
+import { mediaDays } from "@/lib/media-days";
 import { bulkSmsCsv, smsLink, waLink } from "@/lib/messaging";
 
 const TABS = ["Overview", "Candidates", "Enrollment", "Daily Execution", "Documents", "Attendance", "Closure", "Feedback", "Costs", "Activity"];
@@ -3232,8 +3233,17 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
     setBusy(false);
   }
 
+  // qa-batch-media-zip (field ask 2026-10-24): outside Active/Closing the form stays closed, but the
+  // day-wise photos and videos stay VISIBLE and downloadable. This used to return the line below for
+  // every other status, so a Completed batch's evidence - still in storage - could not be seen at all.
   if (!["Active", "Closing"].includes(batch.status)) {
-    return <p className="p-6 text-center text-sm text-gray-400">Daily logs open once the batch is Active.</p>;
+    const notStarted = ["Planning", "Ready"].includes(batch.status);
+    return (
+      <div className="space-y-4">
+        {notStarted && <p className="p-6 text-center text-sm text-gray-400">Daily logs open once the batch is Active.</p>}
+        {(!notStarted || logs.length > 0) && <MediaByDay batchId={batchId} logs={logs} loaded={loaded} />}
+      </div>
+    );
   }
 
   // CEO 13/08 (3-way): "100% attendance = itne hours; hamare records ke hisaab se itne;
@@ -3463,6 +3473,7 @@ function DailyExecution({ batchId, batch, role, error, setError }: any) {
             ) : null },
           ]} empty="No logs yet." />
       </Section>
+      <MediaByDay batchId={batchId} logs={logs} loaded={loaded} />
       <LogEditDrawer log={editLog} members={members} onClose={() => setEditLog(null)} onSaved={() => { setEditLog(null); load(); }} error={error} setError={setError} />
       <RoundDrawer log={roundLog} members={members} onClose={() => setRoundLog(null)} onSaved={() => { setRoundLog(null); load(); }} error={error} setError={setError} />
     </div>
@@ -3636,6 +3647,42 @@ function PendingMedia({ urls, kind, onRemove }: { urls: string[]; kind: "photos"
     </div>
   );
 }
+// qa-batch-media-zip (field ask 2026-10-24): "date-wise folder, folder ka naam = date; ek button se us
+// din ka zip; saare din ek saath". One row per class day that has a photo or a video (newest first),
+// its thumbnails, a ZIP for that day, and one ZIP for every day. The grouping is lib/media-days - the
+// same function the ZIP route uses, so the folders here and the folders in the ZIP are the same list.
+function MediaByDay({ batchId, logs, loaded }: { batchId: string; logs: any[]; loaded: boolean }) {
+  const days = mediaDays(logs);
+  const zip = (date?: string) => `${BASE_PATH}/api/batches/${batchId}/logs/media-zip${date ? `?date=${date}` : ""}`;
+  const totalFiles = days.reduce((n, d) => n + d.photos.length + d.videos.length, 0);
+  return (
+    <Section title="Photos & videos by day">
+      {!loaded ? <p className="p-4 text-sm text-gray-400">Loading…</p>
+        : !days.length ? <p className="p-4 text-sm text-gray-400">No photos or videos were logged for this batch.</p>
+        : (
+          <div className="space-y-3 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm text-gray-600">{days.length} {days.length === 1 ? "day" : "days"} · {totalFiles} {totalFiles === 1 ? "file" : "files"}. Each day downloads as a folder named by its date.</p>
+              <a href={zip()} download className="rounded-md border border-blue-600 bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">Download all days (ZIP)</a>
+            </div>
+            <ul className="divide-y rounded-md border">
+              {days.map((d) => (
+                <li key={d.date} data-media-day={d.date} className="flex flex-wrap items-start justify-between gap-2 p-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-gray-900">📁 {d.date} <span className="font-normal text-gray-500">· {fmtDate(d.date)}</span></p>
+                    <p className="text-xs text-gray-500">{d.photos.length} {d.photos.length === 1 ? "photo" : "photos"} · {d.videos.length} {d.videos.length === 1 ? "video" : "videos"}</p>
+                    <div className="mt-1"><MediaCell r={{ photos: d.photos, videos: d.videos }} /></div>
+                  </div>
+                  <a href={zip(d.date)} download className="shrink-0 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-800 hover:bg-gray-50">Download ZIP</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+    </Section>
+  );
+}
+
 function MediaCell({ r }: any) {
   const photos: string[] = r.photos ?? [];
   const videos: string[] = r.videos ?? [];
