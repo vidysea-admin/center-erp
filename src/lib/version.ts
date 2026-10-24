@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-334";
+export const RELEASE = "2026.08.14-335";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,12 +285,28 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -335 note: one clause per checked criterion of qa-batch-media-zip (field ask via Umesh, 2026-10-24), judged over what
+// users of production receive (-334 .. this bump). M1 (the section shows after Active; measured on Assessment Awaited by the
+// suite, the other post-Active states share the same branch and are the live checker's to see), M2 (per-day ZIP: that day's
+// photos and videos only, under a folder named by the date), M3 (all-days ZIP: one folder per day with media, attendance
+// sheets left out), M4 (same doors as the daily logs: a Center Manager of another centre and an anonymous caller refused),
+// M5 (MISSING.txt), M6 (the Active entry form unchanged). No number is quoted.
+export const RELEASE_NOTE_CURRENT =
+  "-335 makes the photos and videos of a batch's daily logs visible after training ends, and lets them be downloaded as ZIP files, one folder per day. " +
+  "Until this release the Daily Execution tab of a batch showed nothing once the batch had moved past its running stage, so the photos and videos trainers had uploaded could no longer be seen there; they had not been deleted. " +
+  "The tab now lists, for every day that has at least one photo or video, the date, the photos and videos of that day, and a Download ZIP button for that day. A Download all days button gives one ZIP with one folder per day, each folder named by its date. " +
+  "The same list also appears under the daily-log form while a batch is running; the form itself is unchanged. " +
+  "The ZIP holds photos and videos only: attendance sheets are not included. If a file named in a daily log cannot be fetched from storage, the ZIP includes a MISSING.txt that lists it, instead of leaving it out without saying so. " +
+  "Only people who can already see the batch's daily logs can download them: a user limited to other centres is refused. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -335: the -334 note moved here unchanged when -335 became current.
 // -334 note: one clause per checked criterion (qa-2996, Umesh 2026-10-22 "Operations jaise 9"), judged over what users of
 // production receive (-333 .. this bump). The Center Manager code default is now 9 rights (the Operations default set minus
 // the cost right and the three delete rights); a stored role row, which production has, still wins and is not changed. The
 // nine is pinned by the CM1 and CM8 arms of the roles suite, the grant-then-own-centre cost arms by CM2/CM3/CM5. No clause
 // states anything about Operations beyond the match the decision itself names, and none claims a fix to a stored row.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_334 =
   "-334 changes the built-in default rights of the Center Manager role and corrects two sentences of the -333 note. " +
   "A Center Manager's default rights are now nine, the same nine rights the Operations team currently holds on this site: they no longer include entering costs, deleting candidates, trainers or batches, or the actions that need those rights, such as restoring archived candidates and archiving or restoring several candidates at once. " +
   "On this site the Center Manager role was already set to these nine rights on the permissions screen before this release, so this release does not change what any current Center Manager can do; it makes the built-in default match that setting. " +
@@ -2196,6 +2212,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -335: ARCHIVE_334 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_334 + " " +
   // -334: ARCHIVE_333 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_333 + " " +
   // -333: ARCHIVE_332 wired in here in the SAME bump that declared it, same discipline.
