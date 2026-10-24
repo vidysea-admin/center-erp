@@ -44,6 +44,8 @@ const room = (await req(admin, "POST", `/api/locations/${loc._id}/rooms`, { name
 const batch = (await req(admin, "POST", "/api/batches", {
   code: "B" + s, location: loc._id, program: prog._id, trainer: tr._id, room: room._id, target_size: 1, planned_start: D0, planned_end: D3,
 }, 201)).data.item;
+// The server assigns the batch code (the posted one is not kept) - the ZIP is named after the real one.
+const CODE = String(batch.code).replace(/[^A-Za-z0-9._-]+/g, "_");
 const cand = (await req(admin, "POST", "/api/candidates", { name: "Media Candidate " + s, phone: "7" + Date.now().toString().slice(-9), location: loc._id, program: prog._id }, 201)).data.item;
 await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: cand._id }, 201);
 const mem = (await req(admin, "GET", `/api/batches/${batch._id}/members`)).data.items[0];
@@ -109,7 +111,7 @@ const folderOf = (e) => e.name.split("/")[0];
 // ---- [M2] per-day ZIP ----
 const z1 = await getZip(admin, `?date=${D1}`);
 ok("[M2] GET media-zip?date=<day> → 200 application/zip", z1.status === 200 && /application\/zip/.test(z1.type ?? ""), `${z1.status} ${z1.type} ${z1.buf.toString("utf8", 0, 160)}`);
-ok("[M2] ...downloads as <BATCHCODE>_<date>.zip", z1.disp.includes(`attachment`) && z1.disp.includes(`B${s}_${D1}.zip`), z1.disp);
+ok("[M2] ...downloads as <BATCHCODE>_<date>.zip", z1.disp.includes(`attachment`) && z1.disp.includes(`${CODE}_${D1}.zip`), z1.disp);
 let e1 = [];
 try { e1 = readZip(z1.buf); } catch (e) { ok("[M2] the body is a readable ZIP", false, String(e.message)); }
 ok("[M2] ...holds exactly that day's photo and video, both under the <date>/ folder",
@@ -125,7 +127,7 @@ ok("[M2] a malformed date → 400", (await getZip(admin, `?date=24-10-2026`)).st
 
 // ---- [M3] + [M5] all-days ZIP ----
 const za = await getZip(admin, "");
-ok("[M3] GET media-zip (no date) → 200, named <BATCHCODE>_all-days.zip", za.status === 200 && za.disp.includes(`B${s}_all-days.zip`), `${za.status} ${za.disp}`);
+ok("[M3] GET media-zip (no date) → 200, named <BATCHCODE>_all-days.zip", za.status === 200 && za.disp.includes(`${CODE}_all-days.zip`), `${za.status} ${za.disp}`);
 let ea = [];
 try { ea = readZip(za.buf); } catch (e) { ok("[M3] the body is a readable ZIP", false, String(e.message)); }
 const folders = [...new Set(ea.filter((e) => e.name.includes("/")).map(folderOf))].sort();
@@ -165,17 +167,21 @@ async function openDaily() {
   await page.goto(`${BASE}/batches/${batch._id}`, { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Daily Execution", exact: true }).first().click();
   await page.getByText("Photos & videos by day").first().waitFor({ timeout: 20000 }).catch(() => {});
+  // The heading renders while the logs are still loading; wait for the rows (absent rows still fail below).
+  await page.locator("[data-media-day]").first().waitFor({ timeout: 20000 }).catch(() => {});
   return { page, ctx, errors };
 }
 const zipHref = (q) => `${BASE_PATH}/api/batches/${batch._id}/logs/media-zip${q}`;
 try {
   {
     const { page, ctx, errors } = await openDaily();
-    ok("[M6] Active: the daily-log form still renders (attendance summary present)", await page.getByText("Our records (trainer-marked)").first().isVisible().catch(() => false));
+    ok("[M6] Active: the daily-log entry form still renders", await page.getByText("Trainer present today").first().isVisible().catch(() => false));
     ok("[M6] ...and the day folders show under it", await page.getByText("Photos & videos by day").first().isVisible().catch(() => false));
     ok("[M6] no page error", errors.length === 0, errors.join(" | "));
     await ctx.close();
   }
+  // planned_end is recomputed from the programme length on create; delivery must have ended to leave Active.
+  await req(admin, "PATCH", `/api/batches/${batch._id}`, { planned_end: D3 }, 200);
   await req(admin, "POST", `/api/batches/${batch._id}/transition`, { target: "Assessment Awaited" }, 200);
   {
     const { page, ctx, errors } = await openDaily();

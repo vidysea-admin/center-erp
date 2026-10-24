@@ -31,7 +31,7 @@ export function mediaDays(logs: { log_date: unknown; photos?: string[] | null; v
   return [...byDay.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
 }
 
-// The stored-file name inside a log's URL ("/erp/api/files/<32 hex>.<ext>"), or null.
+// The stored-file name inside a log's URL (BASE_PATH + "/api/files/<32 hex>.<ext>"), or null.
 export function storedNameFromUrl(url: string): string | null {
   return /([a-f0-9]{32}\.[a-z0-9]+)(?:[?#].*)?$/i.exec(String(url ?? ""))?.[1]?.toLowerCase() ?? null;
 }
