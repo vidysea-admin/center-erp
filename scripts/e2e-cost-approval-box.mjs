@@ -292,7 +292,7 @@ try {
       await inp.pressSequentially("Rs 3,000.5.5");
       const typed2 = await val();
       ok(`A1 ${label}: typing "12abc" leaves only "12"; typing "Rs 3,000.5.5" leaves a numeric-only value (digits, at most one dot) - no comma, letter, space or second dot`,
-        typed1 === "12" && numericOnly(typed2) && typed2 === "3000.5", JSON.stringify({ typed1, typed2 }));
+        typed1 === "12" && numericOnly(typed2) && typed2 === "3000.55", JSON.stringify({ typed1, typed2 }));
       await inp.fill("");
       // 3) a REAL paste from the system clipboard: a bad text is refused whole, a plain number goes in
       const paste = async (text) => { await page.evaluate((t) => navigator.clipboard.writeText(t), text); await inp.focus(); await page.keyboard.press("Control+V"); };
