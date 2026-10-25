@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { FollowUpAction, SheetChange } from "@/models";
 import { audit } from "@/lib/audit";
@@ -44,6 +44,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 
   const change = await SheetChange.findById(id);
   if (!change) throw new HttpError(404, "Change not found");
+  assertLocationInScope(user, String(change.location ?? "")); // QA-2984 (S3, dual check): Rule 38 - another centre's change is not this user's to move
   const was = String(change.status);
   if (was === next) throw new HttpError(400, `This change is already ${next}. Nothing has been changed.`);
 

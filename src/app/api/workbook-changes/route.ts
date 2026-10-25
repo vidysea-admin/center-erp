@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser } from "@/lib/authz";
+import { apiHandler, requireUser, isScoped } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { SyncSource, WorkbookChange } from "@/models";
 import { sourceAllowed } from "@/lib/workbook";
@@ -12,6 +12,15 @@ export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requireView(user, "sheet.approve"); // QA-025 P3: reading = view level
+  // QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38. A WorkbookChange is a cell of the CLIENT's whole workbook
+  // (sync_source / tab / row_key) and carries NO centre, so there is no row a centre-scoped user can be shown without
+  // showing them other centres. A row with no centre is handled the way every scoped route handles one: it is not theirs
+  // (locationFilter never matches a missing field; candidates/[id]/documents/route.ts:17 fails closed). So a scoped
+  // user gets an empty answer, count 0 included. Admin and every unscoped role fall through untouched.
+  if (isScoped(user)) {
+    if (req.nextUrl.searchParams.get("count") === "1") return NextResponse.json({ count: 0 });
+    return NextResponse.json({ items: [], tabs: [], sources: [] });
+  }
   const status = req.nextUrl.searchParams.get("status") || "New";
   const tab = req.nextUrl.searchParams.get("tab") || "";
   // -100 (checker QA-169): every watched workbook was merged into one list with no way to tell

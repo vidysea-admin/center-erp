@@ -6708,5 +6708,192 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   }
 }
 
+// ---- QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38 on three route families that were permission-gated and NOT centre-scoped ----
+// GET /api/invoices, /api/sheet-changes (list, count, [id], apply, revert, status, bulk-ignore) and /api/workbook-changes (list,
+// count, [id], create-location). An Admin GRANTS the needed rights (sheet.approve, finance.view) to a Center Manager of ONE centre as
+// per-user special rights; rows are seeded for centre A and centre B straight into the test DB. Every refusal asserts its STATUS, its
+// MESSAGE and that NOTHING WAS WRITTEN (read back from the database, not from the API that just refused). Each refusal is paired with a
+// [control] that the SAME persona succeeds on the SAME door at its own centre, so a refusal cannot be a missing-right refusal in disguise.
+// Rows with no centre: scoped users are refused / shown nothing (the rule candidates/[id]/documents/route.ts:17 and every locationFilter
+// route already apply); WorkbookChange has no centre field at all, so a scoped user gets an empty answer and a 403.
+{
+  const { MongoClient, ObjectId } = await import("mongodb");
+  const gmc = new MongoClient(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await gmc.connect();
+  const gdb = gmc.db(process.env.MONGODB_DB || "center_erp_ci");
+  const S = "Q84" + Date.now().toString().slice(-6);
+  const idOf = (v) => String(v?._id ?? v ?? "");
+  const mkU = (email, extra) => req(admin, "POST", "/api/users", { name: `QA2984 ${email.split("@")[0]}`, email, password: PW, can_edit: true, ...extra });
+  const refused403 = (label, r) => {
+    ok(`${label} - status 403`, r.status === 403, `got ${r.status} ${JSON.stringify(r.data?.error ?? r.data).slice(0, 160)}`);
+    ok(`${label} - message names the reason (out of scope)`, /out of scope/i.test(String(r.data?.error ?? "")), JSON.stringify(r.data?.error ?? null));
+  };
+
+  const allLocs = (await req(admin, "GET", "/api/locations?limit=2000")).data.items ?? [];
+  const locA = allLocs.find((l) => l.code === "JPR03");
+  const locB = allLocs.find((l) => l.code === "KOT02");
+  ok("[QA-2984] fixtures: centre A (JPR03) and centre B (KOT02) exist", !!locA && !!locB);
+  const A = idOf(locA), B = idOf(locB);
+
+  const emCm = `cm.q2984.${S}@vidysea-test.local`, emOps = `ops.q2984.${S}@vidysea-test.local`;
+  const cmMk = await mkU(emCm, { role: "Center Manager", location_scope: [A], extra_permissions: ["sheet.approve", "finance.view"] });
+  const opsMk = await mkU(emOps, { role: "Operations", extra_permissions: ["sheet.approve", "finance.view"] });
+  ok("[QA-2984] fixtures: a Center Manager of centre A GRANTED sheet.approve + finance.view, and an Operations login granted the same (201 each)", cmMk.status === 201 && opsMk.status === 201,
+    `${cmMk.status}/${opsMk.status} ${JSON.stringify([cmMk.data?.error, opsMk.data?.error])}`);
+  const cmQ = await login(emCm, PW), opsQ = await login(emOps, PW);
+  ok("[QA-2984] fixtures: both sign in", !!cmQ && !!opsQ);
+
+  // ---------------- seed ----------------
+  const now = new Date();
+  const addrOf = async (id) => (await req(admin, "GET", `/api/locations/${id}`)).data.item?.address ?? "";
+  const addrA0 = await addrOf(A), addrB0 = await addrOf(B);
+  const src = new ObjectId();
+  const mkChange = (loc, tag, extra = {}) => ({
+    _id: new ObjectId(), sync_source: src, entity_type: "Location", field_name: "address", old_value: "ZZ2984-old", new_value: "ZZ2984-new",
+    detected_at: now, status: "Open", action_taken: null, note: `QA2984 ${S} ${tag}`, createdAt: now, updatedAt: now, ...(loc ? { location: new ObjectId(loc), entity: new ObjectId(loc) } : {}), ...extra,
+  });
+  const rows = {
+    aGet: mkChange(A, "aGet"), bGet: mkChange(B, "bGet"), nGet: mkChange(null, "nGet"),
+    aApply: mkChange(A, "aApply"), bApply: mkChange(B, "bApply"),
+    aStat: mkChange(A, "aStat"), bStat: mkChange(B, "bStat"),
+    aBulk: mkChange(A, "aBulk"), bBulk: mkChange(B, "bBulk"), aBulk2: mkChange(A, "aBulk2"),
+    // a revert restores `old_value` into the entity's field: A's is value-neutral (its current address), B's would be a visible write
+    aRev: mkChange(A, "aRev", { status: "Actioned", action_taken: "Apply value", old_value: addrA0, actioned_at: now }),
+    bRev: mkChange(B, "bRev", { status: "Actioned", action_taken: "Apply value", old_value: "ZZ2984-SHOULD-NOT-LAND", actioned_at: now }),
+  };
+  await gdb.collection("sheetchanges").insertMany(Object.values(rows));
+  const sid = (k) => String(rows[k]._id);
+  const rowNow = (k) => gdb.collection("sheetchanges").findOne({ _id: rows[k]._id });
+
+  // invoices: one per batch (unique). Reuse a batch's own invoice if it already has one, else plant a marked one and remember to remove it.
+  const batchOf = async (loc) => ((await req(admin, "GET", `/api/batches?location=${loc}&limit=2000`)).data.items ?? []).find((b) => idOf(b.location) === loc);
+  const bA = await batchOf(A), bB = await batchOf(B);
+  ok("[QA-2984] fixtures: a batch at centre A and a batch at centre B", !!bA && !!bB);
+  const planted = [];
+  const invFor = async (batch, tag) => {
+    const found = await gdb.collection("invoices").findOne({ batch: new ObjectId(idOf(batch)) });
+    if (found) return String(found._id);
+    const doc = { _id: new ObjectId(), batch: new ObjectId(idOf(batch)), status: "Not Ready", invoice_no: `ZZ2984-${S}-${tag}`, createdAt: now, updatedAt: now };
+    await gdb.collection("invoices").insertOne(doc);
+    planted.push(doc._id);
+    return String(doc._id);
+  };
+  const invA = await invFor(bA, "A"), invB = await invFor(bB, "B");
+
+  const wb = { _id: new ObjectId(), sync_source: src, tab: `ZZ2984-${S}`, row_key: "r1", column: "Name", old_value: "a", new_value: "b", change_type: "Modified", status: "New", detected_at: now, createdAt: now, updatedAt: now };
+  await gdb.collection("workbookchanges").insertOne(wb);
+  const wbNow = () => gdb.collection("workbookchanges").findOne({ _id: wb._id });
+
+  // ---------------- L1: sheet-changes LIST + COUNT ----------------
+  const cmList = await req(cmQ, "GET", "/api/sheet-changes?status=all");
+  const cmItems = cmList.data.items ?? [];
+  ok("[QA-2984 L1] [control] the Center Manager's sheet-changes list opens (200 with items)", cmList.status === 200 && cmItems.length > 0, `got ${cmList.status} ${JSON.stringify(cmList.data?.error)}`);
+  ok("[QA-2984 L1] ...every row in it belongs to centre A", cmItems.length > 0 && cmItems.every((c) => idOf(c.location) === A), JSON.stringify(cmItems.filter((c) => idOf(c.location) !== A).slice(0, 3).map((c) => [c._id, idOf(c.location)])));
+  ok("[QA-2984 L1] ...the centre-A rows seeded for this arm are all there", ["aGet", "aApply", "aStat", "aBulk", "aBulk2", "aRev"].every((k) => cmItems.some((c) => String(c._id) === sid(k))));
+  ok("[QA-2984 L1] ...and NONE of the centre-B rows seeded for this arm are", ["bGet", "bApply", "bStat", "bBulk", "bRev"].every((k) => !cmItems.some((c) => String(c._id) === sid(k))));
+  ok("[QA-2984 L3] ...and the row matched to NO centre is not shown either (same answer every locationFilter route gives)", !cmItems.some((c) => String(c._id) === sid("nGet")));
+  const cmCountOpen = await req(cmQ, "GET", "/api/sheet-changes?count=1");
+  const cmOpenList = (await req(cmQ, "GET", "/api/sheet-changes")).data.items ?? [];
+  ok("[QA-2984 L1] the sidebar COUNT of a Center Manager equals their own (centre A) open list - it does not count other centres", cmCountOpen.status === 200 && cmCountOpen.data.count === cmOpenList.length, `count=${cmCountOpen.data.count} list=${cmOpenList.length}`);
+  const adminList = (await req(admin, "GET", "/api/sheet-changes?status=all")).data.items ?? [];
+  ok("[QA-2984 L2] Admin still sees every seeded row: centre A, centre B and the no-centre one", Object.keys(rows).every((k) => adminList.some((c) => String(c._id) === sid(k))));
+  const opsList = (await req(opsQ, "GET", "/api/sheet-changes?status=all")).data.items ?? [];
+  ok("[QA-2984 L2] an UNSCOPED non-Admin login (Operations granted sheet.approve) sees the same rows as Admin", opsList.length === adminList.length && Object.keys(rows).every((k) => opsList.some((c) => String(c._id) === sid(k))), `ops=${opsList.length} admin=${adminList.length}`);
+  const adminCount = await req(admin, "GET", "/api/sheet-changes?count=1");
+  const adminOpen = (await req(admin, "GET", "/api/sheet-changes")).data.items ?? [];
+  ok("[QA-2984 L2] Admin's COUNT is still the whole open queue", adminCount.data.count === adminOpen.length, `count=${adminCount.data.count} list=${adminOpen.length}`);
+
+  // ---------------- L1: sheet-changes [id] GET ----------------
+  ok("[QA-2984 L1] [control] a Center Manager opens a centre-A change by id (200)", (await req(cmQ, "GET", `/api/sheet-changes/${sid("aGet")}`)).status === 200);
+  refused403("[QA-2984 L1] a Center Manager of A opens a centre-B change by id", await req(cmQ, "GET", `/api/sheet-changes/${sid("bGet")}`));
+  refused403("[QA-2984 L3] ...and a change matched to NO centre", await req(cmQ, "GET", `/api/sheet-changes/${sid("nGet")}`));
+  ok("[QA-2984 L2] Admin opens the centre-B change by id (200)", (await req(admin, "GET", `/api/sheet-changes/${sid("bGet")}`)).status === 200);
+
+  // ---------------- L1: apply ----------------
+  const apB = await req(cmQ, "POST", `/api/sheet-changes/${sid("bApply")}/apply`, { action: "No action" });
+  refused403("[QA-2984 L1] a Center Manager of A applies a centre-B change", apB);
+  const bApplyRow = await rowNow("bApply");
+  ok("[QA-2984 L1] ...the centre-B change is still Open with no action recorded (read back from the database)", bApplyRow.status === "Open" && !bApplyRow.action_taken && !bApplyRow.actioned_at, JSON.stringify([bApplyRow.status, bApplyRow.action_taken]));
+  const apA = await req(cmQ, "POST", `/api/sheet-changes/${sid("aApply")}/apply`, { action: "No action" });
+  ok("[QA-2984 L1] [control] the same Center Manager applies a centre-A change (200)", apA.status === 200, `got ${apA.status} ${JSON.stringify(apA.data?.error)}`);
+  ok("[QA-2984 L1] [control] ...and it is settled in the database", (await rowNow("aApply")).status === "Ignored");
+
+  // ---------------- L1: status ----------------
+  const stB = await req(cmQ, "PATCH", `/api/sheet-changes/${sid("bStat")}/status`, { status: "Ignored" });
+  refused403("[QA-2984 L1] a Center Manager of A moves a centre-B change to Ignored", stB);
+  ok("[QA-2984 L1] ...the centre-B change is still Open (read back from the database)", (await rowNow("bStat")).status === "Open");
+  const stA = await req(cmQ, "PATCH", `/api/sheet-changes/${sid("aStat")}/status`, { status: "Ignored" });
+  ok("[QA-2984 L1] [control] the same Center Manager moves a centre-A change to Ignored (200)", stA.status === 200, `got ${stA.status} ${JSON.stringify(stA.data?.error)}`);
+
+  // ---------------- L1: bulk-ignore ----------------
+  const bkMixed = await req(cmQ, "POST", "/api/sheet-changes/bulk-ignore", { ids: [sid("aBulk"), sid("bBulk")] });
+  refused403("[QA-2984 L1] a Center Manager of A bulk-ignores a selection that includes one centre-B change", bkMixed);
+  ok("[QA-2984 L1] ...NOTHING was closed: the centre-B change AND the centre-A one beside it are both still Open (read back)", (await rowNow("bBulk")).status === "Open" && (await rowNow("aBulk")).status === "Open",
+    JSON.stringify([(await rowNow("bBulk")).status, (await rowNow("aBulk")).status]));
+  const bkOwn = await req(cmQ, "POST", "/api/sheet-changes/bulk-ignore", { ids: [sid("aBulk"), sid("aBulk2")] });
+  ok("[QA-2984 L1] [control] the same Center Manager bulk-ignores two centre-A changes (200, ignored 2)", bkOwn.status === 200 && bkOwn.data.ignored === 2, `got ${bkOwn.status} ${JSON.stringify(bkOwn.data)}`);
+  ok("[QA-2984 L1] [control] ...and both are settled in the database", (await rowNow("aBulk")).status === "Ignored" && (await rowNow("aBulk2")).status === "Ignored");
+  const bkAdmin = await req(admin, "POST", "/api/sheet-changes/bulk-ignore", { ids: [sid("bBulk")] });
+  ok("[QA-2984 L2] Admin bulk-ignores the centre-B change (200, ignored 1)", bkAdmin.status === 200 && bkAdmin.data.ignored === 1, `got ${bkAdmin.status} ${JSON.stringify(bkAdmin.data)}`);
+
+  // ---------------- L1: revert ----------------
+  const rvB = await req(cmQ, "POST", `/api/sheet-changes/${sid("bRev")}/revert`);
+  refused403("[QA-2984 L1] a Center Manager of A reverts a centre-B change", rvB);
+  const bRevRow = await rowNow("bRev");
+  ok("[QA-2984 L1] ...the centre-B change is still Actioned and not marked reverted (read back from the database)", bRevRow.status === "Actioned" && !bRevRow.reverted_at, JSON.stringify([bRevRow.status, bRevRow.reverted_at]));
+  ok("[QA-2984 L1] ...and centre B's record was NOT written (its address is exactly what it was)", (await addrOf(B)) === addrB0 && (await addrOf(B)) !== "ZZ2984-SHOULD-NOT-LAND", `${addrB0} -> ${await addrOf(B)}`);
+  const rvA = await req(cmQ, "POST", `/api/sheet-changes/${sid("aRev")}/revert`);
+  ok("[QA-2984 L1] [control] the same Center Manager reverts a centre-A change (200)", rvA.status === 200, `got ${rvA.status} ${JSON.stringify(rvA.data?.error)}`);
+  ok("[QA-2984 L1] [control] ...and it is marked reverted in the database", !!(await rowNow("aRev")).reverted_at);
+
+  // ---------------- L1/L3: invoices ----------------
+  const cmInv = await req(cmQ, "GET", "/api/invoices");
+  const cmInvItems = cmInv.data.items ?? [];
+  ok("[QA-2984 L1] [control] the Center Manager's invoice book opens (200)", cmInv.status === 200, `got ${cmInv.status} ${JSON.stringify(cmInv.data?.error)}`);
+  ok("[QA-2984 L1] ...it carries the centre-A batch's invoice", cmInvItems.some((i) => String(i._id) === invA));
+  ok("[QA-2984 L1] ...it does NOT carry the centre-B batch's invoice", !cmInvItems.some((i) => String(i._id) === invB));
+  ok("[QA-2984 L1] ...every invoice in it belongs to a centre-A batch", cmInvItems.length > 0 && cmInvItems.every((i) => idOf(i.batch?.location) === A), JSON.stringify(cmInvItems.filter((i) => idOf(i.batch?.location) !== A).slice(0, 3).map((i) => [i._id, idOf(i.batch?.location)])));
+  const adminInv = (await req(admin, "GET", "/api/invoices")).data.items ?? [];
+  ok("[QA-2984 L2] Admin's invoice book still carries both centres' invoices", adminInv.some((i) => String(i._id) === invA) && adminInv.some((i) => String(i._id) === invB));
+  const opsInv = (await req(opsQ, "GET", "/api/invoices")).data.items ?? [];
+  ok("[QA-2984 L2] an unscoped non-Admin login with finance.view sees exactly Admin's invoice rows", opsInv.length === adminInv.length && opsInv.some((i) => String(i._id) === invB), `ops=${opsInv.length} admin=${adminInv.length}`);
+
+  // ---------------- L1/L3: workbook-changes (no centre on the row) ----------------
+  const cmWb = await req(cmQ, "GET", `/api/workbook-changes?status=all&tab=${encodeURIComponent(wb.tab)}`);
+  ok("[QA-2984 L3] a Center Manager's workbook-changes list is empty - a workbook cell carries no centre, so none is theirs (200, no items)", cmWb.status === 200 && (cmWb.data.items ?? []).length === 0 && (cmWb.data.tabs ?? []).length === 0, `got ${cmWb.status} ${JSON.stringify(cmWb.data).slice(0, 200)}`);
+  const cmWbAll = await req(cmQ, "GET", "/api/workbook-changes?status=all");
+  ok("[QA-2984 L3] ...even unfiltered (no rows, no tabs, no source names)", cmWbAll.status === 200 && (cmWbAll.data.items ?? []).length === 0 && (cmWbAll.data.sources ?? []).length === 0, JSON.stringify(cmWbAll.data).slice(0, 200));
+  const cmWbCount = await req(cmQ, "GET", "/api/workbook-changes?count=1");
+  ok("[QA-2984 L3] ...and the sidebar count is 0", cmWbCount.status === 200 && cmWbCount.data.count === 0, JSON.stringify(cmWbCount.data));
+  const adminWb = await req(admin, "GET", `/api/workbook-changes?status=all&tab=${encodeURIComponent(wb.tab)}`);
+  ok("[QA-2984 L2] Admin still sees the workbook change", (adminWb.data.items ?? []).some((c) => String(c._id) === String(wb._id)));
+  const adminWbCount = await req(admin, "GET", "/api/workbook-changes?count=1");
+  ok("[QA-2984 L2] Admin's workbook count still counts every New change (at least the seeded one)", adminWbCount.status === 200 && adminWbCount.data.count >= 1, JSON.stringify(adminWbCount.data));
+  const opsWb = await req(opsQ, "GET", `/api/workbook-changes?status=all&tab=${encodeURIComponent(wb.tab)}`);
+  ok("[QA-2984 L2] an unscoped non-Admin login with sheet.approve still sees it", (opsWb.data.items ?? []).some((c) => String(c._id) === String(wb._id)));
+  const wbPatch = await req(cmQ, "PATCH", `/api/workbook-changes/${wb._id}`, { status: "Seen" });
+  refused403("[QA-2984 L3] a Center Manager marks a workbook change Seen", wbPatch);
+  ok("[QA-2984 L3] ...the workbook change is still New and has no actor (read back from the database)", (await wbNow()).status === "New" && !(await wbNow()).actor, JSON.stringify((await wbNow()).status));
+  refused403("[QA-2984 L3] a Center Manager opens the create-centre prefill of a workbook row", await req(cmQ, "GET", `/api/workbook-changes/${wb._id}/create-location`));
+  const codeX = `ZZ2984${S}`.slice(0, 12);
+  const wbCreate = await req(cmQ, "POST", `/api/workbook-changes/${wb._id}/create-location`, { name: `ZZ2984 Centre ${S}`, code: codeX });
+  refused403("[QA-2984 L3] a Center Manager creates a centre from a workbook row", wbCreate);
+  ok("[QA-2984 L3] ...no centre was created and the row is still New (read back from the database)", !(await gdb.collection("locations").findOne({ code: codeX })) && (await wbNow()).status === "New");
+  const wbPatchAdmin = await req(admin, "PATCH", `/api/workbook-changes/${wb._id}`, { status: "Seen" });
+  ok("[QA-2984 L2] Admin marks the workbook change Seen (200) and it is stored", wbPatchAdmin.status === 200 && (await wbNow()).status === "Seen", `got ${wbPatchAdmin.status} ${JSON.stringify(wbPatchAdmin.data?.error)}`);
+
+  // ---------------- cleanup, read back ----------------
+  const delSc = await gdb.collection("sheetchanges").deleteMany({ _id: { $in: Object.values(rows).map((r) => r._id) } });
+  const delWb = await gdb.collection("workbookchanges").deleteOne({ _id: wb._id });
+  const delInv = planted.length ? await gdb.collection("invoices").deleteMany({ _id: { $in: planted } }) : { deletedCount: 0 };
+  ok("[QA-2984] cleanup: every seeded row is deleted and read back gone",
+    delSc.deletedCount === Object.keys(rows).length && delWb.deletedCount === 1 && delInv.deletedCount === planted.length
+      && (await gdb.collection("sheetchanges").countDocuments({ note: new RegExp(`^QA2984 ${S} `) })) === 0
+      && (await gdb.collection("workbookchanges").countDocuments({ tab: wb.tab })) === 0
+      && (await gdb.collection("invoices").countDocuments({ invoice_no: new RegExp(`^ZZ2984-${S}-`) })) === 0,
+    `${delSc.deletedCount}/${delWb.deletedCount}/${delInv.deletedCount}`);
+  await gmc.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requireView } from "@/lib/permissions";
 import { SheetChange } from "@/models";
 import { maskSheetChange } from "@/lib/sync";
@@ -15,5 +15,8 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const { id } = await ctx.params;
   const item = await SheetChange.findById(id).populate("location", "name code").populate("actor", "name").lean<any>();
   if (!item) throw new HttpError(404, "Change not found");
+  // QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38 on a single record - the reveal door must not hand a scoped
+  // user another centre's row. Fails closed on a change with no centre, like candidates/[id]/documents/route.ts:17.
+  assertLocationInScope(user, String(item.location?._id ?? item.location ?? ""));
   return NextResponse.json({ item: maskSheetChange(item, user.role === "Admin") });
 });
