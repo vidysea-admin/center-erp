@@ -2,7 +2,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
+import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
@@ -702,7 +702,8 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
                             <input type="text" inputMode="decimal" data-partial-amount aria-invalid={!!amountError[r._id]}
                               className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                               value={approvedAmount[r._id] ?? ""}
-                              onChange={(e) => { setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
+                              onPaste={(e) => { partialAmountPasteBlocked(e); }}
+                              onChange={(e) => { if (!partialAmountTypingOk(e.target.value)) return; setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
                           )}
                           {amountError[r._id] && <p role="alert" data-partial-amount-error className="w-full text-xs text-red-700">{amountError[r._id]}</p>}
                           {r.status === "Pending" && <input className={inputCls + " max-w-72"} placeholder="Note (optional)"

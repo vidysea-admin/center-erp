@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { api, fmtAuditValue, fmtDT, fmtDate, offerable, parsePartialAmount, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
+import { api, fmtAuditValue, fmtDT, fmtDate, offerable, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
 import { usePerms } from "@/components/shell";
@@ -1190,7 +1190,8 @@ function Approvals({ error, setError }: any) {
                       <input type="text" inputMode="decimal" data-partial-amount aria-invalid={!!amountError[r._id]}
                         className={inputCls + " max-w-44"} placeholder={`Approve ₹${Number(r.payload.amount).toLocaleString("en-IN")} or less`}
                         value={approvedAmount[r._id] ?? ""}
-                        onChange={(e) => { setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
+                        onPaste={(e) => { partialAmountPasteBlocked(e); }}
+                              onChange={(e) => { if (!partialAmountTypingOk(e.target.value)) return; setApprovedAmount({ ...approvedAmount, [r._id]: e.target.value }); if (amountError[r._id]) setAmountError({ ...amountError, [r._id]: "" }); }} />
                     )}
                     {amountError[r._id] && <p role="alert" data-partial-amount-error className="w-full text-xs text-red-700">{amountError[r._id]}</p>}
                     {/* QA-2578. `min-w-0 max-w-[13rem]` is not decoration: a <select> takes its

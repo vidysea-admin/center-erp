@@ -24,6 +24,13 @@
 //       other suites leave Pending approvals behind (the r2 wall had 65 cost.post, 40
 //       costcategory.create and 4 others).
 //
+//   A1/A2/A3 (QA-2958, Umesh 2026-10-25: "daalne hi mat do, integer or float allow krro bss") the
+//       partial-amount box on BOTH decide screens (Costs box, Admin -> Approvals) refuses the input
+//       itself - only digits with at most one dot can ever be in the field, a typed or pasted comma /
+//       Rs / letter is not entered and never rewritten ("3,000" is NOT turned into 3000); a non-empty
+//       box that is not a usable number (a lone dot) posts NOTHING; and the decide endpoint refuses a
+//       present non-numeric approved_amount with 400 and writes nothing.
+//
 // Fixtures are made through the real doors (POST /api/costs with cost.post approval ON parks a
 // request) and removed at the end; the approval rule is put back as it was.
 import { requireLocalBase } from "./db-guard.mjs";
@@ -255,6 +262,58 @@ try {
     d.page.on("request", (r) => { if (r.method() === "POST" && /\/api\/approvals\/[0-9a-f]{24}$/.test(r.url())) decidePosts.push(r.url()); });
     const noteInput = (id) => R(id).locator('input[placeholder="Note (optional)"]');
 
+    // QA-2958 A1/A2: the real-browser arm for ONE box. `inp` is the partial-amount input, `btn` the Approve button,
+    // `err` the inline message, `id` the request. Bad text is driven through fill() (the input event an autofill or
+    // a drop fires), the real keyboard, and a REAL Ctrl+V from the system clipboard.
+    await d.context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(BASE).origin }).catch(() => {});
+    const a1Arm = async (label, page, inp, btn, err, id, ledgerTag) => {
+      const val = () => inp.inputValue();
+      const numericOnly = (v) => /^\d*\.?\d*$/.test(v);
+      const untouched = async () => (await rawApprovals.findOne({ _id: new ObjectId(id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: ledgerTag })) === 0;
+      const before = decidePosts.length;
+      await inp.fill("");
+      // 1) text that reaches the field in one go: not entered, the previous value is kept
+      const rejected = [];
+      for (const bad of ["3,000", "Rs 3000", "12abc", "\u20B93000", "-5", "1e3", "3.5.5", " 3000", "abc"]) {
+        await inp.fill(bad);
+        if ((await val()) !== "") rejected.push([bad, await val()]);
+      }
+      ok(`A1 ${label}: whole texts "3,000" / "Rs 3000" / "12abc" / rupee sign / "-5" / "1e3" / two dots / a space / letters are NOT entered - the field keeps its previous (empty) value`, rejected.length === 0, JSON.stringify(rejected));
+      await inp.fill("2500");
+      await inp.fill("2,500");
+      ok(`A1 ${label}: a bad text over an existing "2500" leaves "2500" exactly - it is never rewritten to a cleaned number`, (await val()) === "2500", await val());
+      await inp.fill("");
+      // 2) keystroke by keystroke: a non-numeric key is simply not entered
+      await inp.click();
+      await inp.pressSequentially("12abc");
+      const typed1 = await val();
+      await inp.fill("");
+      await inp.click();
+      await inp.pressSequentially("Rs 3,000.5.5");
+      const typed2 = await val();
+      ok(`A1 ${label}: typing "12abc" leaves only "12"; typing "Rs 3,000.5.5" leaves a numeric-only value (digits, at most one dot) - no comma, letter, space or second dot`,
+        typed1 === "12" && numericOnly(typed2) && typed2 === "3000.55", JSON.stringify({ typed1, typed2 }));
+      await inp.fill("");
+      // 3) a REAL paste from the system clipboard: a bad text is refused whole, a plain number goes in
+      const paste = async (text) => { await page.evaluate((t) => navigator.clipboard.writeText(t), text); await inp.focus(); await page.keyboard.press("Control+V"); };
+      const pasteRes = {};
+      for (const bad of ["3,000", "Rs 3000", "12abc"]) { await paste(bad); pasteRes[bad] = await val(); await inp.fill(""); }
+      await paste("2500"); pasteRes["2500"] = await val();
+      ok(`A1 ${label}: a real Ctrl+V of "3,000" / "Rs 3000" / "12abc" enters NOTHING (not even a cleaned copy), a pasted "2500" is entered`,
+        pasteRes["3,000"] === "" && pasteRes["Rs 3000"] === "" && pasteRes["12abc"] === "" && pasteRes["2500"] === "2500", JSON.stringify(pasteRes));
+      await inp.fill("");
+      // 4) A2: a leftover the field CAN hold but that is not an amount (".abc" -> ".") posts nothing and says so
+      await inp.click();
+      await inp.pressSequentially(".abc");
+      const left = await val();
+      await btn.click();
+      await err.waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+      const msg = await err.innerText().catch(() => "");
+      ok(`A2 ${label}: ".abc" leaves a lone "." in the box; Approve sends NO request, says so in plain words, and the request stays Pending with no ledger row (never an approval in full)`,
+        left === "." && /Amount samajh nahi aaya/.test(msg) && decidePosts.length === before && await untouched(), JSON.stringify({ left, msg, posts: decidePosts.length - before }));
+      await inp.fill("");
+    };
+
     // The register's own total is the evidence it was reloaded after each decision.
     const regTotal = async () => {
       const h = await d.page.locator("h3").filter({ hasText: /All cost entries/ }).first().innerText().catch(() => "");
@@ -277,19 +336,21 @@ try {
     ok("K2 partial: and nothing was written - request still Pending, no ledger row",
       (await rawApprovals.findOne({ _id: new ObjectId(T.t5.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t5") })) === 0);
     await noteInput(T.t5.id).fill("cut to the voucher total");
-    // QA-2958 F1c: a NON-EMPTY amount the screen cannot read must never become "approve in full" - it posts nothing, says so inline, and the row stays as it was.
-    for (const bad of ["abc", "3,5", "0", "-5", "99,999"]) {
+    // QA-2958 A1/A2 on the Costs box, real browser
+    await a1Arm("Costs box", d.page, amtInput(T.t5.id), R(T.t5.id).getByRole("button", { name: /Approve & apply/ }), R(T.t5.id).locator("[data-partial-amount-error]"), T.t5.id, tag("t5"));
+    // QA-2958 F1c: a NON-EMPTY amount that is not usable as an amount must never become "approve in full" - it posts nothing, says so inline, and the row stays as it was.
+    for (const bad of [".", "0", "0.00", "3.555", "99999"]) {
       const before = decidePosts.length;
       await amtInput(T.t5.id).fill(bad);
       await R(T.t5.id).getByRole("button", { name: /Approve & apply/ }).click();
       await R(T.t5.id).locator("[data-partial-amount-error]").waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
       const msg = await R(T.t5.id).locator("[data-partial-amount-error]").innerText().catch(() => "");
       ok(`F1c Costs box: ${JSON.stringify(bad)} is refused inline, posts NOTHING, and the request stays Pending with no ledger row`,
-        (bad === "99,999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
+        (bad === "99999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
           && (await rawApprovals.findOne({ _id: new ObjectId(T.t5.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t5") })) === 0,
         JSON.stringify({ msg, posts: decidePosts.length - before }));
     }
-    await amtInput(T.t5.id).fill("₹3,000");
+    await amtInput(T.t5.id).fill("3000");
     await R(T.t5.id).getByRole("button", { name: /Approve & apply/ }).click();
     const t5gone = await gone(T.t5.id);
     const t5led = await rawCosts.findOne({ note: tag("t5") });
@@ -341,32 +402,33 @@ try {
     const aAmt = AR.locator("input[data-partial-amount]");
     ok("[precondition] the Admin approvals row shows its partial-amount box and an Approve button", (await aAmt.count()) === 1 && (await AR.getByRole("button", { name: /Approve & apply/ }).count()) === 1);
     await AR.locator('input[placeholder="Note (optional)"]').fill("admin tab partial");
-    for (const bad of ["abc", "Rs", "0", "9,99,999"]) {
+    await a1Arm("Admin tab", d.page, aAmt, AR.getByRole("button", { name: /Approve & apply/ }), AR.locator("[data-partial-amount-error]"), T.t6.id, tag("t6"));
+    for (const bad of [".", "0", "999999"]) {
       const before = decidePosts.length;
       await aAmt.fill(bad);
       await AR.getByRole("button", { name: /Approve & apply/ }).click();
       await AR.locator("[data-partial-amount-error]").waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
       const msg = await AR.locator("[data-partial-amount-error]").innerText().catch(() => "");
       ok(`F1b Admin tab: ${JSON.stringify(bad)} is refused inline, posts NOTHING, and the request stays Pending with no ledger row`,
-        (bad === "9,99,999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
+        (bad === "999999" ? /zyada nahi ho sakti/.test(msg) : /Amount samajh nahi aaya/.test(msg)) && decidePosts.length === before
           && (await rawApprovals.findOne({ _id: new ObjectId(T.t6.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t6") })) === 0,
         JSON.stringify({ msg, posts: decidePosts.length - before }));
     }
-    await aAmt.fill("3,000");
+    await aAmt.fill("3000");
     await AR.getByRole("button", { name: /Approve & apply/ }).click();
     const t6gone = await AR.waitFor({ state: "detached", timeout: 30000 }).then(() => true).catch(() => false);
     const t6led = await rawCosts.findOne({ note: tag("t6") });
-    ok('F1b Admin tab: "3,000" records exactly 3000 against a 6666 request - never the full amount',
+    ok('F1b Admin tab: "3000" records exactly 3000 against a 6666 request - never the full amount',
       t6gone && t6led?.amount === 3000 && t6led?.requested_amount === AMT.t6 && (await rawCosts.countDocuments({ note: tag("t6") })) === 1,
       JSON.stringify({ t6gone, amount: t6led?.amount, req: t6led?.requested_amount }));
 
     // F1d: the server refuses a PRESENT approved_amount that is not a finite positive number - null is what JSON makes of NaN.
     AMT.t7 = 7777;
     T.t7 = await park(ops, "t7", locB);
-    const srv = [["null", null], ["NaN-as-string", "abc"], ["zero", 0], ["negative", -5]];
+    const srv = [["null", null], ["NaN-as-string", "abc"], ["zero", 0], ["negative", -5], ["comma text", "3,000"], ["rupee text", "Rs 3000"], ["digits then letters", "12abc"], ["numeric string", "3000"], ["boolean", true], ["object", { a: 1 }]];
     const srvResults = [];
     for (const [label, v] of srv) srvResults.push([label, (await req(admin, "POST", `/api/approvals/${T.t7.id}`, { decision: "Approved", note: "x", approved_amount: v })).status]);
-    ok("F1d server: a present approved_amount that is null / non-numeric / zero / negative answers 400 and approves nothing",
+    ok("A3/F1d server: a present approved_amount that is null / non-numeric text (\"abc\", \"3,000\", \"Rs 3000\", \"12abc\") / a numeric string / boolean / object / zero / negative answers 400 and approves nothing (request still Pending, no ledger row)",
       srvResults.every(([, st]) => st === 400) && (await rawApprovals.findOne({ _id: new ObjectId(T.t7.id) }))?.status === "Pending" && (await rawCosts.countDocuments({ note: tag("t7") })) === 0,
       JSON.stringify(srvResults));
     const okFull = await req(admin, "POST", `/api/approvals/${T.t7.id}`, { decision: "Approved" });

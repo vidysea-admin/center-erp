@@ -221,14 +221,23 @@ const has = (o, s) => JSON.stringify(o).includes(s);
   const P = C.parsePartialAmount;
   ok("[instrument] the real client module loaded and exports parsePartialAmount", typeof P === "function" && typeof C.PARTIAL_AMOUNT_UNCLEAR === "string");
   if (typeof P === "function") {
-    for (const [raw, want] of [["3000", 3000], ["3,000", 3000], ["\u20B93,000", 3000], ["Rs 3000", 3000], ["Rs. 3,000", 3000], [" 3 000 ", 3000], ["1,00,000", 100000], ["1,000,000", 1000000], ["2500.50", 2500.5], ["INR 750", 750]]) {
+    for (const [raw, want] of [["3000", 3000], ["2500.50", 2500.5], ["2500.5", 2500.5], ["1", 1], ["0.5", 0.5], ["100000", 100000]]) {
       ok(`F1a parser: ${JSON.stringify(raw)} -> ${want}`, P(raw) === want, { got: P(raw) });
     }
-    for (const raw of ["abc", "0", "-5", "", "   ", "3,5", "3,00", "30,00,0", "1e3", "3000x", "3.", ".5", "3.555", "NaN", "Infinity", "\u20B9", "Rs"]) {
+    // QA-2958 (Umesh 2026-10-25): commas, rupee signs, "Rs", INR and spaces are NOT read any more - the box refuses them as input,
+    // and a text that still reaches the parser is refused rather than cleaned.
+    for (const raw of ["abc", "0", "-5", "", "   ", "3,5", "3,00", "30,00,0", "1e3", "3000x", "3.", ".5", ".", "3.555", "NaN", "Infinity", "₹", "Rs", "3,000", "1,00,000", "₹3,000", "Rs 3000", "Rs. 3,000", " 3 000 ", " 3000", "INR 750", "0.00", "3.5.5"]) {
       ok(`F1a parser: ${JSON.stringify(raw)} is refused (null), never a number`, P(raw) === null, { got: P(raw) });
     }
     ok("F1a parser: a non-string is refused", P(3000) === null && P(null) === null && P(undefined) === null);
-    ok("F1a parser: an amount above the requested figure is refused", P("3,000", 2000) === null && P("2,000", 2000) === 2000 && P("1,999.99", 2000) === 1999.99);
+    ok("F1a parser: an amount above the requested figure is refused", P("3000", 2000) === null && P("2000", 2000) === 2000 && P("1999.99", 2000) === 1999.99);
+    // QA-2958 A1: the TYPING rule (what the field may ever hold) - digits with at most one dot, the empty string, a half-typed "3." / "."
+    const T = C.partialAmountTypingOk;
+    ok("[instrument] the real client module exports partialAmountTypingOk", typeof T === "function");
+    if (typeof T === "function") {
+      for (const good of ["", "0", "3000", "3.", ".", ".5", "2500.50", "12"]) ok(`A1 typing: ${JSON.stringify(good)} may be held by the field`, T(good) === true);
+      for (const bad of ["3,000", "Rs 3000", "12abc", "₹3000", "-5", "1e3", "3.5.5", " 3000", "abc", "3 000", "+5", "٣", "3000\n"]) ok(`A1 typing: ${JSON.stringify(bad)} may NEVER be held by the field`, T(bad) === false);
+    }
   }
 }
 console.log(`\ncheck-money-mask: ${passed} passed, ${failed} failed`);

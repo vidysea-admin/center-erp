@@ -197,19 +197,33 @@ export function canDecideCostApprovals(can: (key: string, level?: "view" | "edit
 // `amount ? { approved_amount: Number(amount) } : {}`. A browser hands a number input's `.value` back as
 // "" for text it cannot parse ("3,000", "Rs 3000"), and `Number("3,000")` is NaN, which JSON writes as
 // `null` - so the server saw NO amount and approved the FULL requested figure. An approver who meant
-// "less" silently sanctioned "all". ONE parser for both screens, so the two cannot drift again.
+// "less" silently sanctioned "all". ONE rule for both screens, so the two cannot drift again.
 //
-// Returns the positive amount, or null when the text is not one. Accepts: digits, an optional rupee
-// sign / "Rs" / "Rs." / "INR" in front, spaces anywhere, comma grouping that is a real grouping
-// (3,000 and 1,00,000 and 1,000,000, never "3,5" or "3,00"), and up to two decimals. When
-// `requested` is given, an amount above it is also refused (the server refuses it too; saying so
-// here keeps the row as it was instead of posting a request that cannot succeed).
-// An EMPTY box is not this function's business: the callers keep "empty = approve in full".
+// QA-2958 (Umesh, 2026-10-25, verbatim in qa/feedback-inbox.md): "daalne hi mat do, integer or float
+// allow krro bss". F1 first answered by READING commas / rupee signs ("3,000" -> 3000). That is withdrawn:
+// the box now refuses the INPUT itself and never rewrites what the approver typed. Two halves:
+//   1. TYPING - `partialAmountTypingOk(next)`: the field may only ever hold digits with at most one dot
+//      (a half-typed "3." or "." is allowed while typing). Any keystroke / paste / drop that would make
+//      the field hold anything else is not entered (the caller keeps the previous value), and
+//      `partialAmountPasteBlocked` rejects a whole paste, so "3,000" is never turned into "3000" for them.
+//   2. SUBMIT - `parsePartialAmount(raw)`: returns the positive amount, or null when the text is not a
+//      plain integer / decimal (a lone ".", "3.", ".5", "0", more than two decimals). The callers send
+//      NOTHING on null. An EMPTY box is not this function's business: the callers keep "empty = approve
+//      in full". When `requested` is given, an amount above it is also refused.
+export const partialAmountTypingOk = (next: string): boolean => /^\d*\.?\d*$/.test(next);
+export function partialAmountPasteBlocked(e: { clipboardData: { getData(f: string): string } | null; currentTarget: HTMLInputElement; preventDefault(): void }): boolean {
+  const pasted = e.clipboardData?.getData("text") ?? "";
+  const el = e.currentTarget;
+  const from = el.selectionStart ?? el.value.length;
+  const to = el.selectionEnd ?? from;
+  if (partialAmountTypingOk(el.value.slice(0, from) + pasted + el.value.slice(to))) return false;
+  e.preventDefault();
+  return true;
+}
 export function parsePartialAmount(raw: unknown, requested?: number): number | null {
   if (typeof raw !== "string") return null;
-  const text = raw.replace(/\s+/g, "").replace(/^(₹|rs\.?|inr)/i, "");
-  if (!/^(\d+|\d{1,3}(,\d{2})*,\d{3}|\d{1,3}(,\d{3})+)(\.\d{1,2})?$/.test(text)) return null;
-  const n = Number(text.replace(/,/g, ""));
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) return null;
+  const n = Number(raw);
   if (!Number.isFinite(n) || !(n > 0)) return null;
   if (requested !== undefined && Number.isFinite(requested) && n > requested) return null;
   return n;
