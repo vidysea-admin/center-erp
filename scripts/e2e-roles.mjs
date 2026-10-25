@@ -6783,6 +6783,10 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const wb = { _id: new ObjectId(), sync_source: src, tab: `ZZ2984-${S}`, row_key: "r1", column: "Name", old_value: "a", new_value: "b", change_type: "Modified", status: "New", detected_at: now, createdAt: now, updatedAt: now };
   await gdb.collection("workbookchanges").insertOne(wb);
   const wbNow = () => gdb.collection("workbookchanges").findOne({ _id: wb._id });
+  // a snapshot row with the client sheet's own identifying column, so create-location's loadRow accepts this row as a CENTRE row. Without it the
+  // door answers 400 "not a centre row" to everyone, and a missing scope line would then be invisible: the refusal below must be the SCOPE one.
+  const snap = { _id: new ObjectId(), sync_source: src, tab: wb.tab, header: ["Institution Name"], header_row: 0, rows: [{ key: wb.row_key, cells: { "Institution Name": `ZZ2984 Centre ${S}` } }], hash: "zz2984", taken_at: now };
+  await gdb.collection("workbooksnapshots").insertOne(snap);
 
   // ---------------- L1: sheet-changes LIST + COUNT ----------------
   const cmList = await req(cmQ, "GET", "/api/sheet-changes?status=all");
@@ -6801,6 +6805,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   ok("[QA-2984 L2] an UNSCOPED non-Admin login (Operations granted sheet.approve) sees the same rows as Admin", opsList.length === adminList.length && Object.keys(rows).every((k) => opsList.some((c) => String(c._id) === sid(k))), `ops=${opsList.length} admin=${adminList.length}`);
   const adminCount = await req(admin, "GET", "/api/sheet-changes?count=1");
   const adminOpen = (await req(admin, "GET", "/api/sheet-changes")).data.items ?? [];
+  // the equality above is satisfied by an unscoped count AND an unscoped list together, so it cannot tell scoped from unscoped; the seeded
+  // centre-B and no-centre Open rows make Admin's count strictly larger than a centre-A Center Manager's, and only a scoped count shows that.
+  ok("[QA-2984 L1] ...and it is strictly SMALLER than Admin's (the open centre-B and no-centre rows are not in it)", cmCountOpen.data.count < adminCount.data.count, `cm=${cmCountOpen.data.count} admin=${adminCount.data.count}`);
   ok("[QA-2984 L2] Admin's COUNT is still the whole open queue", adminCount.data.count === adminOpen.length, `count=${adminCount.data.count} list=${adminOpen.length}`);
 
   // ---------------- L1: sheet-changes [id] GET ----------------
@@ -6879,17 +6886,21 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   const wbCreate = await req(cmQ, "POST", `/api/workbook-changes/${wb._id}/create-location`, { name: `ZZ2984 Centre ${S}`, code: codeX });
   refused403("[QA-2984 L3] a Center Manager creates a centre from a workbook row", wbCreate);
   ok("[QA-2984 L3] ...no centre was created and the row is still New (read back from the database)", !(await gdb.collection("locations").findOne({ code: codeX })) && (await wbNow()).status === "New");
+  const adminPrefill = await req(admin, "GET", `/api/workbook-changes/${wb._id}/create-location`);
+  ok("[QA-2984 L2] [control] Admin opens the same create-centre prefill (200, suggests the row's centre name) - so the CM's 403 above is the scope gate, not a bad fixture", adminPrefill.status === 200 && adminPrefill.data?.suggested?.name === `ZZ2984 Centre ${S}`, `got ${adminPrefill.status} ${JSON.stringify(adminPrefill.data).slice(0, 160)}`);
   const wbPatchAdmin = await req(admin, "PATCH", `/api/workbook-changes/${wb._id}`, { status: "Seen" });
   ok("[QA-2984 L2] Admin marks the workbook change Seen (200) and it is stored", wbPatchAdmin.status === 200 && (await wbNow()).status === "Seen", `got ${wbPatchAdmin.status} ${JSON.stringify(wbPatchAdmin.data?.error)}`);
 
   // ---------------- cleanup, read back ----------------
   const delSc = await gdb.collection("sheetchanges").deleteMany({ _id: { $in: Object.values(rows).map((r) => r._id) } });
   const delWb = await gdb.collection("workbookchanges").deleteOne({ _id: wb._id });
+  await gdb.collection("workbooksnapshots").deleteOne({ _id: snap._id });
   const delInv = planted.length ? await gdb.collection("invoices").deleteMany({ _id: { $in: planted } }) : { deletedCount: 0 };
   ok("[QA-2984] cleanup: every seeded row is deleted and read back gone",
     delSc.deletedCount === Object.keys(rows).length && delWb.deletedCount === 1 && delInv.deletedCount === planted.length
       && (await gdb.collection("sheetchanges").countDocuments({ note: new RegExp(`^QA2984 ${S} `) })) === 0
       && (await gdb.collection("workbookchanges").countDocuments({ tab: wb.tab })) === 0
+      && (await gdb.collection("workbooksnapshots").countDocuments({ tab: wb.tab })) === 0
       && (await gdb.collection("invoices").countDocuments({ invoice_no: new RegExp(`^ZZ2984-${S}-`) })) === 0,
     `${delSc.deletedCount}/${delWb.deletedCount}/${delInv.deletedCount}`);
   await gmc.close();
