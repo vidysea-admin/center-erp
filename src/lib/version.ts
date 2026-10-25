@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-335";
+export const RELEASE = "2026.08.14-336";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,13 +285,28 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
+// -336 note: one clause per checked criterion, judged over what users of production receive (-335 .. this bump):
+// qa-2958 A1/A2 (approval amount box, Umesh 2026-10-25 "integer or float allow krro bss"; A3's server refusal was already
+// there and is only re-pinned, so no clause claims it as new), qa-2984 L1-L3 (centre scope on invoices, sheet changes and
+// workbook changes; workbook changes carry no centre, so a centre-limited user gets none - gate qa/gates/qa-2984-workbook-scope.md
+// default A), qa-cm-polish QA-2985 (button by the user-management right, so Operations at default rights loses it too) and
+// QA-2990 (non-object JSON body -> 400). No number is quoted.
+export const RELEASE_NOTE_CURRENT =
+  "-336 tightens the approved-amount box, limits three lists to the centres a user may see, and fixes two smaller faults. " +
+  "On the cost approval box and on Admin, Approvals, the approved-amount field now accepts only a whole number or a decimal: commas, a currency sign, letters or a second dot cannot be typed or pasted into it, and nothing is rewritten for you. If the box holds something that is not a usable number, such as a lone dot, Approve sends nothing and says why, instead of approving the full requested amount. An empty box still means approving the full amount, as before. " +
+  "Invoices, sheet changes and workbook changes now follow the same centre rule as the rest of the system: a user limited to certain centres sees and can act on only those centres' rows, and is refused a row of another centre with nothing changed. Workbook changes are not tied to any centre, so a user limited to centres now sees none of them and cannot act on them. Administrators and users not limited to centres see exactly what they saw before. " +
+  "The Create a Trainer login button on a trainer's page now appears only to users who hold the right to manage user logins; others, who were refused when they pressed it, no longer see it. " +
+  "A request whose body is not a JSON object, for example null or a list, is now answered with a plain refusal instead of a 'Something went wrong' error, and nothing is written. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -336: the -335 note moved here unchanged when -336 became current.
 // -335 note: one clause per checked criterion of qa-batch-media-zip (field ask via Umesh, 2026-10-24), judged over what
 // users of production receive (-334 .. this bump). M1 (the section shows after Active; measured on Assessment Awaited by the
 // suite, the other post-Active states share the same branch and are the live checker's to see), M2 (per-day ZIP: that day's
 // photos and videos only, under a folder named by the date), M3 (all-days ZIP: one folder per day with media, attendance
 // sheets left out), M4 (same doors as the daily logs: a Center Manager of another centre and an anonymous caller refused),
 // M5 (MISSING.txt), M6 (the Active entry form unchanged). No number is quoted.
-export const RELEASE_NOTE_CURRENT =
+const RELEASE_NOTE_ARCHIVE_335 =
   "-335 makes the photos and videos of a batch's daily logs visible after training ends, and lets them be downloaded as ZIP files, one folder per day. " +
   "Until this release the Daily Execution tab of a batch showed nothing once the batch had moved to Assessment Awaited, Completed, Closed or Cancelled, so the photos and videos trainers had uploaded could no longer be seen there; they had not been deleted. " +
   "The tab now lists, for every day that has at least one photo or video, the date, the photos and videos of that day, and a Download ZIP button for that day. A Download all days button gives one ZIP with one folder per day, each folder named by its date. " +
@@ -2212,6 +2227,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -336: ARCHIVE_335 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_335 + " " +
   // -335: ARCHIVE_334 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_334 + " " +
   // -334: ARCHIVE_333 wired in here in the SAME bump that declared it, same discipline.
