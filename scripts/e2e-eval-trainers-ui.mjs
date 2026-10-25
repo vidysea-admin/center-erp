@@ -1,8 +1,9 @@
 // Eval: Trainers list + detail (the SCREENS, not the pipeline state machine — that lives in
 // e2e-trainer-pipeline.mjs). Before 2026-08-13 this surface had ~6 assertions, all masking.
-import { ok, req, adminLogin, finish, stamp, phone, BASE } from "./e2e-lib.mjs";
+import { ok, req, login, adminLogin, finish, stamp, phone, BASE } from "./e2e-lib.mjs";
 
 const admin = await adminLogin();
+const ADMIN_PW = process.env.ADMIN_PASSWORD;
 const s = stamp("ET");
 
 const loc = (await req(admin, "POST", "/api/locations", { code: "L" + s, name: "TEST-EvalTr Loc " + s, approval_status: "Approved", city: "Basti" }, 201)).data.item;
@@ -181,5 +182,73 @@ ok("[avg] nomination can be cleared again (wrong pick is reversible)", nomCleare
 }
 
 
+
+
+// ---- QA-2985 (qa-cm-polish, Umesh 2026-10-25): the trainer page draws "Create login" only for who the server lets use it ----
+// `POST /api/trainers/[id]/create-login` is `requirePerm(user, "users.manage")` (edit level) - creating a login
+// IS user management. The page drew the button from ROLE (`isAdminOrOps`), so a Center Manager, and Operations
+// at its defaults, were shown a control the server then refused with 403. The page now asks the SAME right the
+// server asks, through usePerms().can("users.manage", "edit"). Rendered, not source-read, in a real browser.
+//
+// Every absence below is paired with a PRESENCE read from the same page, same timing, for a persona holding the
+// right: if the perms fetch had not landed, "absent" would be true for the holder too and the pair would show it
+// (an absence assertion that cannot fail is the QA-2457 shape). Each persona signs in on its OWN BrowserContext.
+{
+  const S = Date.now().toString().slice(-6);
+  const PW = "CiOnly@123";
+  const locs = (await req(admin, "GET", "/api/locations?limit=2000", undefined, 200)).data.items ?? [];
+  const jpr = locs.find((l) => l.code === "JPR03");
+  ok("QA-2985 [precondition] the seeded centre JPR03 exists (a Center Manager's own centre)", !!jpr);
+  const trn = (await req(admin, "POST", "/api/trainers", { name: "TEST-QA2985 " + S, phone: phone("97"), skills: ["QA2985"], home_location: jpr?._id }, 201)).data.item;
+  const emHolder = `zzcheck.cm2985.${S}@vidysea-test.local`;
+  const mkHolder = await req(admin, "POST", "/api/users", { name: "QA2985 CM holder", email: emHolder, password: PW, role: "Center Manager", location_scope: [jpr?._id], can_edit: true });
+  await req(admin, "PATCH", `/api/users/${mkHolder.data.item?._id}`, { extra_permissions: ["users.manage"] });
+  ok("QA-2985 [precondition] a throwaway Center Manager holding users.manage exists and signs in", !!(await login(emHolder, PW)), `create ${mkHolder.status}`);
+
+  let browser = null;
+  try { const { chromium } = await import("playwright"); browser = await chromium.launch({ headless: true }); }
+  catch (e) { ok("QA-2985 [precondition] chromium launches from the `playwright` devDependency", false, String(e.message).slice(0, 160)); }
+  if (browser) {
+    // Returns { btn, header } for one persona: whether the "Create login" button is on the rendered trainer page,
+    // read only AFTER the page header AND the permissions response have both landed.
+    const look = async (email, password) => {
+      const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      try {
+        const page = await context.newPage();
+        await page.goto(BASE, { waitUntil: "networkidle" });
+        const em = page.locator('input[type="email"], input[name="email"]').first();
+        if (await em.count()) {
+          await em.fill(email);
+          await page.locator('input[type="password"]').first().fill(password);
+          await page.locator('button[type="submit"]').first().click();
+          await page.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+        }
+        const permsLanded = page.waitForResponse((r) => /\/api\/permissions\/me/.test(r.url()) && r.status() === 200, { timeout: 30000 }).catch(() => null);
+        await page.goto(`${BASE}/trainers/${trn._id}`, { waitUntil: "domcontentloaded" });
+        const header = await page.getByRole("heading", { name: trn.name }).waitFor({ timeout: 30000 }).then(() => true).catch(() => false);
+        const landed = !!(await permsLanded);
+        await page.waitForLoadState("networkidle").catch(() => {});
+        await page.waitForTimeout(600);
+        const btn = await page.getByRole("button", { name: /^Create login$/ }).count();
+        return { btn, header, landed };
+      } finally { await context.close(); }
+    };
+    const admin_ = await look("admin@vidysea.com", ADMIN_PW);
+    ok("QA-2985: the ADMIN sees the trainer page and its Create login control (the control is not gone for everyone)", admin_.header && admin_.landed && admin_.btn === 1, JSON.stringify(admin_));
+    const holder = await look(emHolder, PW);
+    ok("QA-2985: a Center Manager who HOLDS users.manage (granted) sees the control - the page follows the right, not the role name", holder.header && holder.landed && holder.btn === 1, JSON.stringify(holder));
+    const cm = await look("cm.jpr03@vidysea.com", PW);
+    ok("QA-2985: a Center Manager at the default rights does NOT see Create login (the server refuses them)", cm.header && cm.landed && cm.btn === 0, JSON.stringify(cm));
+    const ops = await look("ops@vidysea.com", PW);
+    ok("QA-2985: Operations at the default rights does not see it either - same rule, the server refuses both", ops.header && ops.landed && ops.btn === 0, JSON.stringify(ops));
+    await browser.close();
+  }
+  // the server rule the page mirrors, asserted from the same fixture so the two cannot drift apart silently
+  const cmCookie = await login("cm.jpr03@vidysea.com", PW);
+  const cmTry = await req(cmCookie, "POST", `/api/trainers/${trn._id}/create-login`, {});
+  ok("QA-2985: ...and the server still refuses that Center Manager (403 naming the right) - the hidden button was cosmetic, the door was already shut", cmTry.status === 403 && /Create\/approve users/i.test(String(cmTry.data?.error ?? "")), `got ${cmTry.status} ${JSON.stringify(cmTry.data?.error)}`);
+  ok("QA-2985: ...and nothing was written: the trainer still has no linked login", !(await req(admin, "GET", `/api/trainers/${trn._id}`)).data.item?.user);
+  await req(admin, "PATCH", `/api/users/${mkHolder.data.item?._id}`, { active: false });
+}
 
 finish();
