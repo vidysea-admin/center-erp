@@ -22,12 +22,26 @@ export class HttpError extends Error {
 // So the classification lives HERE, at the only place that knows the string came off the wire. The
 // body is not echoed, for the same reason the CastError and ValidationError branches do not echo
 // what was submitted.
+//
+// QA-2990 (qa-cm-polish): the SECOND half of the same rule. `null`, `[]`, `5` and `"text"` are all LEGAL
+// JSON, so the parse above passes them straight through - and every caller then does `body.x`,
+// `const { a } = body` or `pick(body, fields)` on something that is not an object, which throws a
+// TypeError and reaches `apiHandler` as a 500 "Something went wrong on our side". A body that is not a
+// JSON object is the caller's mistake just as an unparseable one is, so it is refused HERE, once, for
+// every route that reads a body (93 call sites); the message names the shape, never echoes the body.
+// Callers that wrote `.catch(() => ({}))` to tolerate a missing body get the same tolerance for a null
+// one. No caller wants an array at the top level (each reads named keys off the result).
 export async function readJson(req: { json: () => Promise<unknown> }): Promise<any> {
+  let body: unknown;
   try {
-    return await req.json();
+    body = await req.json();
   } catch {
     throw new HttpError(400, "The request body is not valid JSON.");
   }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "The request body must be a JSON object.");
+  }
+  return body;
 }
 
 // QA-1887 (checker on qa-1877-1879, cycle 3): the SAME defect, on the other kind of body.

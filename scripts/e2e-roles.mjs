@@ -4169,6 +4169,44 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     }
   }
 
+  // ---- QA-2990 (qa-cm-polish, Umesh 2026-10-25): a JSON body that is not an OBJECT is the caller's mistake ----
+  // `PATCH /api/trainers/[id]` with a body of `null` answered 500 "Something went wrong on our side": the
+  // body parsed fine (`null` IS legal JSON), so `readJson` returned it, and the first thing the shared
+  // `pick(body, fields)` did was read a key off null. The cause is the shared reader, so the fix lives in
+  // `readJson` (authz.ts) and binds EVERY route that reads a body through it - not one trainers handler.
+  // One arm per READ SITE: crud.ts itemRoutes PATCH (trainers), crud.ts collectionRoutes POST
+  // (locations), and a hand-written route that destructures the body (follow-ups/[id]). Each asserts the
+  // STATUS, that the message is the plain 400 one (not the 500 wording), and that NOTHING WAS WRITTEN,
+  // read back through Admin. The 500 wording is asserted ABSENT so a different refusal cannot pass for it.
+  {
+    const S = Date.now().toString().slice(-6);
+    const raw = (cookie, method, path_, bodyText) => fetch(`${BASE}${path_}`, {
+      method, headers: { "Content-Type": "application/json", cookie }, body: bodyText,
+    }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+    const tr = (await req(admin, "POST", "/api/trainers", { name: `TEST-QA2990 ${S}`, phone: "9" + S + "321", skills: ["QA2990"] }, 201)).data.item;
+    const snap = async () => { const t = (await req(admin, "GET", `/api/trainers/${tr._id}`)).data.item; return JSON.stringify({ n: t?.name, p: t?.phone, u: t?.updatedAt, s: t?.skills }); };
+    const before = await snap();
+    for (const [label, text] of [["null", "null"], ["an array", "[]"], ["an array of objects", '[{"name":"x"}]'], ["a number", "5"], ["a string", '"hello"'], ["true", "true"]]) {
+      const r = await raw(admin, "PATCH", `/api/trainers/${tr._id}`, text);
+      ok(`QA-2990: PATCH /api/trainers/[id] with a JSON body of ${label} answers 400, not 500`, r.status === 400, `got ${r.status} ${JSON.stringify(r.data).slice(0, 120)}`);
+      ok(`QA-2990: ...with a plain sentence, not the "something went wrong on our side" 500 wording (${label})`,
+        /JSON object/i.test(String(r.data?.error ?? "")) && !/went wrong/i.test(String(r.data?.error ?? "")), JSON.stringify(r.data?.error ?? null));
+    }
+    ok("QA-2990: ...and the trainer is exactly as it was after all six refused bodies (read back through Admin)", (await snap()) === before, `before ${before} after ${await snap()}`);
+    // guard that the door still WORKS: a real object body still saves (the fix tightened a shape, it did not close the door)
+    const good = await raw(admin, "PATCH", `/api/trainers/${tr._id}`, JSON.stringify({ qualification: "QA2990 ok" }));
+    ok("QA-2990: ...while a normal object body on the same door still saves (200)", good.status === 200, `got ${good.status} ${JSON.stringify(good.data).slice(0, 100)}`);
+    ok("QA-2990: ...and the saved value reads back", (await req(admin, "GET", `/api/trainers/${tr._id}`)).data.item?.qualification === "QA2990 ok");
+    // the OTHER read sites of the same shared reader
+    const locsBefore = (await req(admin, "GET", "/api/locations?limit=2000")).data.total;
+    const nullLoc = await raw(admin, "POST", "/api/locations", "null");
+    ok("QA-2990: the shared CRUD CREATE door (POST /api/locations) answers 400 to a null body too", nullLoc.status === 400 && !/went wrong/i.test(String(nullLoc.data?.error ?? "")), `got ${nullLoc.status} ${JSON.stringify(nullLoc.data).slice(0, 100)}`);
+    ok("QA-2990: ...and no location was created by it (count read back)", (await req(admin, "GET", "/api/locations?limit=2000")).data.total === locsBefore);
+    const fu = await raw(admin, "POST", "/api/follow-ups/000000000000000000000000", "null");
+    ok("QA-2990: a hand-written route that destructures the body (POST /api/follow-ups/[id]) answers 400 to null, not 500", fu.status === 400, `got ${fu.status} ${JSON.stringify(fu.data).slice(0, 100)}`);
+    await req(admin, "DELETE", `/api/trainers/${tr._id}`);
+  }
+
   // ---- QA-1897: "is role me kaun hai, aur is account ke paas kya hai" ----
   // Umesh, 2026-09-06: the Admin screen could say what ROLE someone had and could toggle a role's
   // rights, but could not answer the question an Admin actually asks about a PERSON. The new door

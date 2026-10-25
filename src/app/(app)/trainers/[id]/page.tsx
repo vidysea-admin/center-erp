@@ -1,5 +1,5 @@
 "use client";
-import { isAdminOrOps } from "@/lib/roles";
+import { usePerms } from "@/components/shell";
 import { use, useEffect, useState } from "react";
 import { BASE_PATH } from "@/lib/base-path";
 import Link from "next/link";
@@ -88,8 +88,13 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
   };
   // QA-149: the missing bridge between a trainer and a login — one click here.
   const [loginRes, setLoginRes] = useState<any>(null);
-  const role = (session?.user as any)?.role;
-  const canCreateLogin = isAdminOrOps(role);
+  // QA-2985: the button is drawn for exactly who the door lets through. `create-login/route.ts` is
+  // `requirePerm(user, "users.manage")` - creating a login IS user management - so the page asks that same
+  // right at edit level (Admin passes via the role bypass inside can()). It used to ask the ROLE
+  // (isAdminOrOps), which showed it to a Center Manager and to Operations at the default rights, both of
+  // whom the server then refused with 403. Cosmetic only: the server is still the gate.
+  const { can } = usePerms();
+  const canCreateLogin = can("users.manage", "edit");
   async function createLogin() {
     if (busy) return;
     if (!confirm(`Create a Trainer login for ${t?.name} (${t?.email || "no email"})? Their scope will be every centre they are tied to or assigned at.`)) return;
