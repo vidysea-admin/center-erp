@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser } from "@/lib/authz";
+import { apiHandler, requireUser, locationFilter } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
 import { FollowUpAction, LocationTarget, Program, SheetChange } from "@/models";
 import { canRevert, classifyChange, maskSheetChange, sheetChangeRevealable, targetRowField } from "@/lib/sync";
@@ -10,9 +10,14 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   await requireView(user, "sheet.approve"); // QA-025 P3: seeing the queue = view; apply/ignore keep edit
   const status = req.nextUrl.searchParams.get("status") || "Open";
+  // QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38 - the same locationFilter(user) the rest of the app uses
+  // (batches, costs, plan-tracker). A scoped user (Center Manager, Location, scoped Enrollment) sees only the changes of
+  // their own centres, in the list AND in the sidebar count; a change matched to NO centre is not theirs either
+  // ($in never matches a missing field - the same answer batches/costs give). Unscoped roles get {}: unchanged.
+  const scope = locationFilter(user);
   // The sidebar badge only needs the number — fetching every row to read .length was wasteful.
   if (req.nextUrl.searchParams.get("count") === "1") {
-    return NextResponse.json({ count: await SheetChange.countDocuments(status === "all" ? {} : { status }) });
+    return NextResponse.json({ count: await SheetChange.countDocuments({ ...(status === "all" ? {} : { status }), ...scope }) });
   }
   // QA-1016 (S3, checker on qa-234 cycle 2): this route is deliberately UNBOUNDED, and the reason
   // is recorded here rather than left to be rediscovered. It is a work-to-zero review queue: the
@@ -25,7 +30,7 @@ export const GET = apiHandler(async (req: NextRequest) => {
   // follow-up count plus the memoised target-row lookup below. Both are O(rows) with a small
   // constant. If this queue is ever routinely in the hundreds, the fix is to aggregate the counts
   // in one pipeline rather than to truncate the list — a bound is the one thing it must not get.
-  const items = await SheetChange.find(status === "all" ? {} : { status })
+  const items = await SheetChange.find({ ...(status === "all" ? {} : { status }), ...scope })
     .sort({ detected_at: -1 })
     .populate("location", "name code")
     .populate("actor", "name")

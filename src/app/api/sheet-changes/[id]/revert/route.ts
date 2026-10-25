@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate, Location, LocationTarget, Program, SheetChange, Trainer } from "@/models";
 import { audit } from "@/lib/audit";
@@ -19,6 +19,9 @@ export const POST = apiHandler(async (_req: NextRequest, ctx: { params: Promise<
 
   const change = await SheetChange.findById(id);
   if (!change) throw new HttpError(404, "Change not found");
+  // QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38 - a revert writes a record, so a change of another centre is
+  // refused (403) before anything is read back or restored; no-centre fails closed (candidates/[id]/documents/route.ts:17).
+  assertLocationInScope(user, String(change.location ?? ""));
   // QA-989 (checker on qa-234 cycle 1): ONE predicate, shared with the list route that decides
   // whether to render the button at all. This used to be two guards here and a third, looser copy
   // in sync/page.tsx, so every applied tc_status:/tc_id: row showed a Revert button whose door

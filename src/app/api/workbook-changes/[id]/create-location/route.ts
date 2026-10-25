@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Location, WorkbookChange, WorkbookSnapshot } from "@/models";
 import { audit } from "@/lib/audit";
@@ -44,6 +44,7 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   await dbConnect();
   const user = await requireUser();
   await requirePerm(user, "sheet.approve");
+  assertLocationInScope(user, ""); // QA-2984 (S3, dual check): Rule 38 - a workbook row has no centre; scoped users fail closed (candidates/[id]/documents/route.ts:17)
   const { id } = await ctx.params;
   const { change, cells } = await loadRow(id);
   const suggested: Record<string, string> = {};
@@ -67,6 +68,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   const user = await requireUser();
   await requirePerm(user, "sheet.approve");
   requireEdit(user);
+  assertLocationInScope(user, ""); // QA-2984 (S3, dual check): Rule 38 - creating a centre from a workbook row is not a scoped user's act; nothing written
   const { id } = await ctx.params;
   const { change } = await loadRow(id);
   const body = await readJson(req);

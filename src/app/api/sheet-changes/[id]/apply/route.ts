@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, isScoped, assertLocationInScope, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { applySheetChange, isSecretSheetField, maskSheetChange } from "@/lib/sync";
 import { requireApproval } from "@/lib/approvals";
@@ -16,6 +16,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   requireEdit(user); // Rule 39: can_edit=false is view-only everywhere, including granted rights
   const { id } = await ctx.params;
   const { action, note } = await readJson(req);
+
+  // QA-2984 (S3, Umesh 2026-10-25, dual check): Rule 38 on the write door, BEFORE anything is parked for approval or
+  // applied. A scoped user cannot apply a change that belongs to another centre (403, nothing written); a change with
+  // no centre fails closed for them (candidates/[id]/documents/route.ts:17). Unscoped roles skip this entirely.
+  if (isScoped(user)) {
+    const scoped = await SheetChange.findById(id).select("location").lean<any>();
+    if (!scoped) throw new HttpError(404, "Change not found");
+    assertLocationInScope(user, String(scoped.location ?? ""));
+  }
 
   // 2026-08-12 audit (sync S1-4): closing or stopping a centre from the Location screen goes
   // through the approval matrix, but the identical action taken from the Sync Inbox went
