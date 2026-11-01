@@ -220,7 +220,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-336";
+export const RELEASE = "2026.08.14-337";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -285,13 +285,24 @@ const RELEASE_NOTE_ARCHIVE_321 =
   "coordinator. A candidate who does have a date of birth on file is checked exactly as before. "  +
   "No other screen, figure or permission changes in this release.";
 
-// -336 note: one clause per checked criterion, judged over what users of production receive (-335 .. this bump):
-// qa-2958 A1/A2 (approval amount box, Umesh 2026-10-25 "integer or float allow krro bss"; A3's server refusal was already
-// there and is only re-pinned, so no clause claims it as new), qa-2984 L1-L3 (centre scope on invoices, sheet changes and
-// workbook changes; workbook changes carry no centre, so a centre-limited user gets none - gate qa/gates/qa-2984-workbook-scope.md
-// default A), qa-cm-polish QA-2985 (button by the user-management right, so Operations at default rights loses it too) and
-// QA-2990 (non-object JSON body -> 400). No number is quoted.
+// -337 note: one clause per checked criterion of qa-3001-3002-trainer-clash, judged over what users of production receive
+// (-336 .. this bump): QA-3001 (a batch waiting for results no longer books its trainer), QA-3002 (saving a batch whose dates
+// only shrink, with the same trainer and slot, is not refused over an older clash; a real new overlap is still refused),
+// QA-3023 (reopening a batch waiting for results to Active is refused when the trainer or the room is taken), QA-3025 (the
+// planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
+// checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-337 fixes how a trainer is counted as busy when a batch is waiting for its results. " +
+  "A batch that is waiting for results no longer holds its trainer: the trainer can be given to another batch whose dates overlap, which was refused before. " +
+  "Saving an edit to a batch that already carries a trainer is no longer refused because of an older clash when the edit only keeps or shortens the dates and leaves the trainer and the time slot as they were. An edit that starts earlier, ends later, changes the trainer or changes the slot into a real overlap is still refused, and a refused edit saves nothing. " +
+  "Putting a batch that is waiting for results back to Active is now refused, with the reason, when its trainer or its room is already taken by another batch in those dates, and nothing is changed by the refusal. " +
+  "The planning tracker keeps batches that are waiting for results on the board, so their trainer and dates remain visible there. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -337: the -336 note moved here unchanged when -337 became current.
+// -336 note: one clause per checked criterion of qa-2958 A1/A2, qa-2984 L1-L3 and qa-cm-polish (QA-2985, QA-2990), judged over
+// what users of production receive (-335 .. the -336 bump). No number is quoted.
+const RELEASE_NOTE_ARCHIVE_336 =
   "-336 tightens the approved-amount box, limits three lists to the centres a user may see, and fixes two smaller faults. " +
   "On the cost approval box and on Admin, Approvals, the approved-amount field now accepts only a whole number or a decimal: commas, a currency sign, letters or a second dot cannot be typed or pasted into it, and nothing is rewritten for you. If the box holds something that is not a usable number, such as a lone dot, Approve sends nothing and says why, instead of approving the full requested amount. An empty box still means approving the full amount, as before. " +
   "Invoices, sheet changes and workbook changes now follow the same centre rule as the rest of the system: a user limited to certain centres sees and can act on only those centres' rows, and is refused a row of another centre with nothing changed. Workbook changes are not tied to any centre, so a user limited to centres now sees none of them and cannot act on them. Administrators and users not limited to centres see exactly what they saw before. " +
@@ -2227,6 +2238,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -337: ARCHIVE_336 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_336 + " " +
   // -336: ARCHIVE_335 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_335 + " " +
   // -335: ARCHIVE_334 wired in here in the SAME bump that declared it, same discipline.
