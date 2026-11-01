@@ -239,6 +239,19 @@ const afterClosing = await req(admin, "POST", "/api/batches", mk7({ trainer: TC.
 ok("QA-3001-A3: ...and the create door accepts the same trainer on the same dates (201)",
   afterClosing.status === 201 && String(afterClosing.data.item?.trainer) === String(TC._id), `(${afterClosing.status} ${JSON.stringify(afterClosing.data.error ?? afterClosing.data.item?.trainer)})`);
 
+// --- QA-3025 (checker, post-PASS): removing Closing from ACTIVE_BATCH_STATUSES must not also drop Result
+// Awaited batches off the plan tracker, its all-live-batches export and the rollup. The tracker answers
+// "which batches are still on the books" (four statuses), not "which batches book a trainer" (three).
+// The holder is still in Result Awaited here; unassigned7 was cancelled above (the control: Cancelled stays out).
+const trackerNow = (await req(admin, "GET", "/api/plan-tracker", undefined, 200)).data;
+const trackerRowOf = (b) => (trackerNow.rows ?? []).find((r) => String(r.batch?._id) === String(b?._id));
+ok("QA-3025-C1: fixture - the plan tracker lists the batch that is still ACTIVE-side (the afterClosing batch, Planning), so the arms below read a populated tracker",
+  !!trackerRowOf(afterClosing.data.item), `(${(trackerNow.rows ?? []).length} rows)`);
+ok("QA-3025-C2: a batch in Result Awaited (stored Closing) is STILL a row on the plan tracker - booking no trainer is not the same as leaving the books",
+  !!trackerRowOf(holder) && String(trackerRowOf(holder)?.batch?.status) === "Closing", `(row ${!!trackerRowOf(holder)} status ${JSON.stringify(trackerRowOf(holder)?.batch?.status)})`);
+ok("QA-3025-C3: control - a Cancelled batch is still NOT on the plan tracker (the list was not widened past the four live statuses)",
+  !trackerRowOf(unassigned7), `(row ${!!trackerRowOf(unassigned7)})`);
+
 // --- QA-3002: a pre-existing overlap. Cap 2 lets two overlapping batches exist; lowering the cap to 1 afterwards
 // leaves a clash that was legitimate when it was made - the shape Umesh hit.
 const TW = await mkTrainer7("TW", "69", { max_concurrent_batches: 2 });

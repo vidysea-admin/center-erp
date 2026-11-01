@@ -37,11 +37,19 @@ import { personLabel, personList, trainerLabel, trainerAvailabilityTag } from "@
 // refused every overlapping schedule save. Everything that reads this list therefore treats the two
 // post-delivery states alike: the trainer clash check (Rule 10), the room check (Rule 13), a trainer's
 // derived Assigned / Available status, the "who teaches here" lists and the earliest-start search.
-// Two deliberate exceptions still list Closing, because they answer a different question (work that
-// is still on a centre's books, not a booking): the "Trainers (ours, live)" centre column below
-// (QA-1307) and sync.ts's own private copy for centre closing. Reopening Result Awaited -> Active
+// Three deliberate exceptions still list Closing, because they answer a different question (work that
+// is still on a centre's books, not a booking): LIVE_BATCH_STATUSES below (the plan tracker, QA-3025,
+// and the "Trainers (ours, live)" centre column, QA-1307) and sync.ts's own private copy for centre closing. Reopening Result Awaited -> Active
 // (QA-2736) does not re-check the trainer; QA-3002's edit-door rule is what keeps that case editable.
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active"];
+
+// QA-3025 (checker, post-PASS of the QA-3001 unit): the batches still ON A CENTRE'S BOOKS - the four
+// statuses that are work now or work coming - is a different question from ACTIVE_BATCH_STATUSES
+// ("which batches book a trainer or a room"). Removing Closing from the latter (QA-3001) silently
+// dropped every Result Awaited batch off the plan tracker, its all-live-batches export and the rollup
+// (measured: 50 rows before, 44 after, on the same data). The tracker and the centre "Trainers (ours,
+// live)" column (QA-1307) read THIS list; nothing that decides a booking may.
+export const LIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
 
 // QA-607 (Umesh, 2026-08-27): the statuses in which a backward plan may be CREATED. Until now the
 // only answer was "Planning", and no batch that exists is in Planning — the whole plan-sharing
@@ -5179,7 +5187,7 @@ export async function trainerTiesFor(locIds: unknown[], progIds?: unknown[]) {
   // So the tie is the batches that represent work now or work coming: Planning, Ready, Active,
   // Closing. History does not make a trainer present.
   const batchMatch: Record<string, unknown> = { location: { $in: locIds }, trainer: { $ne: null },
-    status: { $in: ["Planning", "Ready", "Active", "Closing"] } };
+    status: { $in: LIVE_BATCH_STATUSES } };
   if (progIds) { nomMatch.nominated_for_program = { $in: progIds }; batchMatch.program = { $in: progIds }; }
 
   const [nominatedRows, batches] = await Promise.all([
@@ -5393,7 +5401,7 @@ export function batchManagementBlockers(
 export async function planTrackerRows(scope: Record<string, unknown> = {}) {
   // find() + populate, never an aggregation over the scope filter - authz builds its $in from
   // .map(String) and mongoose does not cast inside a pipeline (QA-302/347/350/395).
-  const batches = await Batch.find({ ...scope, status: { $in: ACTIVE_BATCH_STATUSES } })
+  const batches = await Batch.find({ ...scope, status: { $in: LIVE_BATCH_STATUSES } }) // QA-3025: four, Result Awaited stays
     .populate("location", "name code")
     .populate("program", "name code scheme")
     .populate("trainer",
