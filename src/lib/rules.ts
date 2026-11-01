@@ -31,7 +31,17 @@ import type { SessionUser } from "@/auth";
 // tooltips already use, so a REFUSAL and the tooltip that preceded it never disagree.
 import { personLabel, personList, trainerLabel, trainerAvailabilityTag } from "@/lib/person";
 
-export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active", "Closing"];
+// QA-3001 (live 2026-10-24, Basti SPIT-01 / SPIT-02): "Closing" (worded "Result Awaited") is NOT in this
+// list. Delivery is over by then, exactly as in "Assessment Awaited", which was never here; with Closing
+// listed, a batch that was only waiting for its exam results still booked its trainer and room and
+// refused every overlapping schedule save. Everything that reads this list therefore treats the two
+// post-delivery states alike: the trainer clash check (Rule 10), the room check (Rule 13), a trainer's
+// derived Assigned / Available status, the "who teaches here" lists and the earliest-start search.
+// Two deliberate exceptions still list Closing, because they answer a different question (work that
+// is still on a centre's books, not a booking): the "Trainers (ours, live)" centre column below
+// (QA-1307) and sync.ts's own private copy for centre closing. Reopening Result Awaited -> Active
+// (QA-2736) does not re-check the trainer; QA-3002's edit-door rule is what keeps that case editable.
+export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active"];
 
 // QA-607 (Umesh, 2026-08-27): the statuses in which a backward plan may be CREATED. Until now the
 // only answer was "Planning", and no batch that exists is in Planning — the whole plan-sharing

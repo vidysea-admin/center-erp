@@ -372,7 +372,19 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // about the id being typed.
   if (!closed) {
     await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
-    if (trainer) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
+    // QA-3002 (live 2026-10-24): the clash check is about a booking this edit CREATES. Re-running it on a
+    // save that leaves the trainer and the time slot alone and only shortens or keeps the date range cannot
+    // create a clash - it can only trip over one that already existed (a reopened Result Awaited batch, a
+    // lowered concurrency cap), and that blocked the very edit that shrinks the overlap. It still runs for a
+    // different trainer, a changed slot, an earlier start or a later end, so a real new overlap stays a 409.
+    // The range compared is the one the check itself uses: planned_start..planned_end, as stored vs as saved.
+    const range = (s: unknown, e: unknown): [number, number] => [new Date(s as Date).getTime(), new Date((e ?? s) as Date).getTime()];
+    const [wasStart, wasEnd] = range(batch.planned_start, batch.planned_end);
+    const [nowStart, nowEnd] = range(newStart, newEnd);
+    const sameBooking = !!batch.trainer && String(trainer) === String(batch.trainer)
+      && (slot.slot_start ?? null) === (batch.slot_start ?? null) && (slot.slot_end ?? null) === (batch.slot_end ?? null)
+      && nowStart >= wasStart && nowEnd <= wasEnd;
+    if (trainer && !sameBooking) await assertTrainerAvailableForBatch(String(trainer), id, newStart, newEnd ?? newStart, slot); // Rule 10 + slot clash
     if (room) await assertRoomFreeForBatch(String(room), id, newStart, newEnd ?? newStart, session); // Rule 13
   }
 
