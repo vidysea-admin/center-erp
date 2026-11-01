@@ -196,4 +196,78 @@ ok("R2-S2: the create drawer's room select has an Assign later option", /assign 
 ok("R2-S3: the batch detail edit form's trainer select has an Assign later option", /assign later/i.test(optionsLabelled(detailPage, "trainer") ?? ""), `(label ${JSON.stringify(optionsLabelled(detailPage, "trainer"))})`);
 ok("R2-S4: the batch detail edit form's room select has an Assign later option", /assign later/i.test(optionsLabelled(detailPage, "room") ?? ""), `(label ${JSON.stringify(optionsLabelled(detailPage, "room"))})`);
 
+// ------------------------------------------------------------ 7. QA-3001 / QA-3002 (live 2026-10-24, Basti SPIT-01 / SPIT-02)
+// QA-3001: a batch in Result Awaited (stored "Closing") has finished its delivery and no longer books its
+// trainer, exactly as Assessment Awaited never did. A batch in Active still does (the control arm).
+// QA-3002: the edit door re-ran the trainer clash on ANY schedule save, so a clash that already existed
+// blocked an edit that only SHORTENED the range. The check now runs only when the edit could create a
+// clash: another trainer, a longer range, or a changed time slot. A real new overlap is still a 409.
+const s7 = stamp("MB3");
+const prog7 = (await req(admin, "POST", "/api/programs", { code: s7, name: "ClashEdit Prog " + s7, trainer_skill: "MB3Skill" + s7 }, 201)).data.item;
+const loc7 = (await req(admin, "POST", "/api/locations", { code: "L" + s7, name: "TEST-ClashEdit " + s7, approval_status: "Approved", city: "Meerut" }, 201)).data.item;
+const mkTrainer7 = async (tag, pre, extra = {}) =>
+  (await req(admin, "POST", "/api/trainers", { name: `MB3 ${tag} ${s7}`, phone: phone(pre), skills: ["MB3Skill" + s7], ...extra }, 201)).data.item;
+const mk7 = (extra) => ({ location: loc7._id, program: prog7._id, planned_start: today(), target_size: 1, ...extra });
+
+// --- QA-3001: the holder walks Planning -> Ready -> Active -> Result Awaited (Closing)
+const TC = await mkTrainer7("TC", "68", { max_concurrent_batches: 1 });
+const RC = (await req(admin, "POST", `/api/locations/${loc7._id}/rooms`, { name: "MB3 Room C " + s7, type: "Classroom", capacity: 20 }, 201)).data.item;
+const holder = (await req(admin, "POST", "/api/batches", mk7({ trainer: TC._id, room: RC._id }), 201)).data.item;
+const holderCand = (await req(admin, "POST", "/api/candidates", { name: "MB3 Cand " + s7, phone: "9" + s7.slice(3) + "71", location: loc7._id, program: prog7._id, sidh_candidate_id: "CAN_" + s7.slice(3) + "7" }, 201)).data.item;
+const holderMem = (await req(admin, "POST", `/api/batches/${holder?._id}/members`, { candidate: holderCand?._id }, 201)).data.item;
+await req(admin, "PATCH", `/api/members/${holderMem?._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+await req(admin, "POST", `/api/batches/${holder?._id}/transition`, { target: "Ready" }, 200);
+await req(admin, "POST", `/api/batches/${holder?._id}/transition`, { target: "Active" }, 200);
+await req(admin, "PATCH", `/api/batches/${holder?._id}`, { planned_end: dayPlus(8) }, 200);
+const holderNow = (await req(admin, "GET", `/api/batches/${holder?._id}`, undefined, 200)).data.item;
+ok("QA-3001 fixture: the holder is Active, booking the trainer until its end date", holderNow?.status === "Active", `(status ${holderNow?.status})`);
+
+const whileActive = await req(admin, "POST", "/api/batches", mk7({ trainer: TC._id, planned_start: dayPlus(5) }), 409);
+ok("QA-3001-A1: while the holder is ACTIVE its trainer is still booked - the next overlapping batch is refused, naming the holder",
+  whileActive.status === 409 && names(whileActive.data.error, holderNow), `(${whileActive.status} ${JSON.stringify(whileActive.data.error)})`);
+
+const toClosing = await req(admin, "POST", `/api/batches/${holder?._id}/transition`, { target: "Closing", exam_held: true }, 200);
+ok("QA-3001 fixture: the holder is now in Result Awaited (stored Closing)", String(toClosing.data?.item?.status) === "Closing", `(${toClosing.status} ${JSON.stringify(toClosing.data?.item?.status ?? toClosing.data?.error)})`);
+
+const afterClosing = await req(admin, "POST", "/api/batches", mk7({ trainer: TC._id, planned_start: dayPlus(5) }), 201);
+ok("QA-3001-A2: once the holder is in Result Awaited its trainer is FREE - the same overlapping batch is created (201)",
+  afterClosing.status === 201 && String(afterClosing.data.item?.trainer) === String(TC._id), `(${afterClosing.status} ${JSON.stringify(afterClosing.data.error ?? afterClosing.data.item?.trainer)})`);
+const unassigned7 = (await req(admin, "POST", "/api/batches", mk7({ planned_start: dayPlus(6) }), 201)).data.item;
+const lateAssign = await req(admin, "PATCH", `/api/batches/${unassigned7?._id}`, { trainer: TC._id }, 200);
+ok("QA-3001-A3: ...and the same trainer can be assigned LATER on the edit door too (200)", lateAssign.status === 200 && String(lateAssign.data.item?.trainer) === String(TC._id), `(${lateAssign.status} ${JSON.stringify(lateAssign.data.error)})`);
+
+// --- QA-3002: a pre-existing overlap. Cap 2 lets two overlapping batches exist; lowering the cap to 1 afterwards
+// leaves a clash that was legitimate when it was made - the shape Umesh hit.
+const TW = await mkTrainer7("TW", "69", { max_concurrent_batches: 2 });
+const bA = (await req(admin, "POST", "/api/batches", mk7({ trainer: TW._id, planned_start: dayPlus(1) }), 201)).data.item;
+await req(admin, "PATCH", `/api/batches/${bA?._id}`, { planned_end: dayPlus(5) }, 200);
+const bB = (await req(admin, "POST", "/api/batches", mk7({ trainer: TW._id, planned_start: dayPlus(3) }), 201)).data.item;
+await req(admin, "PATCH", `/api/batches/${bB?._id}`, { planned_end: dayPlus(12) }, 200);
+await req(admin, "PATCH", `/api/trainers/${TW._id}`, { max_concurrent_batches: 1 }, 200);
+const endOf = async () => ((await req(admin, "GET", `/api/batches/${bB?._id}`, undefined, 200)).data.item?.planned_end ?? "").slice(0, 10);
+
+const grow = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { planned_end: dayPlus(14) }, 409);
+ok("QA-3002-B1: precondition - the overlap is real: LENGTHENING the second batch's range is refused (409), naming the first",
+  grow.status === 409 && names(grow.data.error, bA), `(${grow.status} ${JSON.stringify(grow.data.error)})`);
+const growStart = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { planned_start: dayPlus(2), planned_end: dayPlus(12) }, 409);
+ok("QA-3002-B2: starting it EARLIER (a longer range) is refused too (409)", growStart.status === 409, `(${growStart.status} ${JSON.stringify(growStart.data.error)})`);
+ok("QA-3002-B3: the refused edits wrote nothing (planned end still " + dayPlus(12) + ")", (await endOf()) === dayPlus(12), `(${await endOf()})`);
+
+const shorten = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { planned_end: dayPlus(9) }, 200);
+ok("QA-3002-B4: SHORTENING the range while the old overlap remains is accepted (200) and stored",
+  shorten.status === 200 && (await endOf()) === dayPlus(9), `(${shorten.status} ${JSON.stringify(shorten.data.error)} end ${await endOf()})`);
+const sameTrainerSent = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { trainer: TW._id, planned_end: dayPlus(8) }, 200);
+ok("QA-3002-B5: the edit form re-sends the SAME trainer with the new end date - still accepted (200)",
+  sameTrainerSent.status === 200 && (await endOf()) === dayPlus(8), `(${sameTrainerSent.status} ${JSON.stringify(sameTrainerSent.data.error)})`);
+const keepRange = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { target_size: 4, planned_end: dayPlus(8) }, 200);
+ok("QA-3002-B6: an edit that keeps the range (target size only) is accepted (200)", keepRange.status === 200 && keepRange.data.item?.target_size === 4, `(${keepRange.status} ${JSON.stringify(keepRange.data.error)})`);
+const regrow = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { planned_end: dayPlus(9) }, 409);
+ok("QA-3002-B7: after shortening, putting the end date BACK out is refused again (409) - the exemption is not sticky", regrow.status === 409, `(${regrow.status} ${JSON.stringify(regrow.data.error)})`);
+const swap = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { trainer: T1._id }, 409);
+ok("QA-3002-B8: moving the batch to a DIFFERENT trainer who is booked is refused (409), naming the holder",
+  swap.status === 409 && names(swap.data.error, heldT) && hint(swap.data.error), `(${swap.status} ${JSON.stringify(swap.data.error)})`);
+const slotChange = await req(admin, "PATCH", `/api/batches/${bB?._id}`, { slot_start: "09:00", slot_end: "13:00" }, 409);
+ok("QA-3002-B9: CHANGING the time slot re-runs the check, so the pre-existing overlap is refused then (409) - only a shorter or equal range with the same trainer and slot is exempt",
+  slotChange.status === 409 && names(slotChange.data.error, bA), `(${slotChange.status} ${JSON.stringify(slotChange.data.error)})`);
+
 finish();
