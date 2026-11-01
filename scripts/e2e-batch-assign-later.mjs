@@ -229,12 +229,15 @@ ok("QA-3001-A1: while the holder is ACTIVE its trainer is still booked - the nex
 const toClosing = await req(admin, "POST", `/api/batches/${holder?._id}/transition`, { target: "Closing", exam_held: true }, 200);
 ok("QA-3001 fixture: the holder is now in Result Awaited (stored Closing)", String(toClosing.data?.item?.status) === "Closing", `(${toClosing.status} ${JSON.stringify(toClosing.data?.item?.status ?? toClosing.data?.error)})`);
 
-const afterClosing = await req(admin, "POST", "/api/batches", mk7({ trainer: TC._id, planned_start: dayPlus(5) }), 201);
-ok("QA-3001-A2: once the holder is in Result Awaited its trainer is FREE - the same overlapping batch is created (201)",
-  afterClosing.status === 201 && String(afterClosing.data.item?.trainer) === String(TC._id), `(${afterClosing.status} ${JSON.stringify(afterClosing.data.error ?? afterClosing.data.item?.trainer)})`);
 const unassigned7 = (await req(admin, "POST", "/api/batches", mk7({ planned_start: dayPlus(6) }), 201)).data.item;
 const lateAssign = await req(admin, "PATCH", `/api/batches/${unassigned7?._id}`, { trainer: TC._id }, 200);
-ok("QA-3001-A3: ...and the same trainer can be assigned LATER on the edit door too (200)", lateAssign.status === 200 && String(lateAssign.data.item?.trainer) === String(TC._id), `(${lateAssign.status} ${JSON.stringify(lateAssign.data.error)})`);
+ok("QA-3001-A2: once the holder is in Result Awaited its trainer is FREE - the edit door assigns the same trainer to an overlapping batch (200)",
+  lateAssign.status === 200 && String(lateAssign.data.item?.trainer) === String(TC._id), `(${lateAssign.status} ${JSON.stringify(lateAssign.data.error)})`);
+// the assigned batch now books TC itself, so it is cancelled before the create door is tried on the same dates
+await req(admin, "POST", `/api/batches/${unassigned7?._id}/transition`, { target: "Cancelled", reason: "QA-3001 test: free the trainer again" }, 200);
+const afterClosing = await req(admin, "POST", "/api/batches", mk7({ trainer: TC._id, planned_start: dayPlus(5) }), 201);
+ok("QA-3001-A3: ...and the create door accepts the same trainer on the same dates (201)",
+  afterClosing.status === 201 && String(afterClosing.data.item?.trainer) === String(TC._id), `(${afterClosing.status} ${JSON.stringify(afterClosing.data.error ?? afterClosing.data.item?.trainer)})`);
 
 // --- QA-3002: a pre-existing overlap. Cap 2 lets two overlapping batches exist; lowering the cap to 1 afterwards
 // leaves a clash that was legitimate when it was made - the shape Umesh hit.
