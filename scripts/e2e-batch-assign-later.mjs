@@ -252,6 +252,61 @@ ok("QA-3025-C2: a batch in Result Awaited (stored Closing) is STILL a row on the
 ok("QA-3025-C3: control - a Cancelled batch is still NOT on the plan tracker (the list was not widened past the four live statuses)",
   !trackerRowOf(unassigned7), `(row ${!!trackerRowOf(unassigned7)})`);
 
+// --- QA-3023 (Umesh decided 2026-11-01): reopening Result Awaited -> Active books the trainer and room again,
+// so it runs the same two checks every other door runs. While the batch waited for results (QA-3001) another
+// batch may have taken the trainer or the room for the same dates; a reopen into that must be a 409 that
+// names the holder, writes nothing (the batch stays in Result Awaited), and the very same reopen works once
+// there is no clash. Each batch below walks Planning -> Ready -> Active -> Result Awaited with its OWN trainer
+// and room, so the only booking that can refuse a reopen is the one the arm creates on purpose.
+let reopenN = 0;
+const toResultAwaited = async (tag, withTrainer = true) => {
+  const n = ++reopenN;
+  const tr = withTrainer ? await mkTrainer7(tag, String(75 + n), { max_concurrent_batches: 1 }) : null;
+  const rm = (await req(admin, "POST", `/api/locations/${loc7._id}/rooms`, { name: `MB3 Room ${tag} ${s7}`, type: "Classroom", capacity: 20 }, 201)).data.item;
+  const b = (await req(admin, "POST", "/api/batches", mk7({ ...(tr ? { trainer: tr._id } : {}), room: rm._id }), 201)).data.item;
+  const cand = (await req(admin, "POST", "/api/candidates", { name: `MB3 Cand ${tag} ${s7}`, phone: "9" + s7.slice(3) + "6" + n, location: loc7._id, program: prog7._id, sidh_candidate_id: "CAN_" + s7.slice(3) + "8" + n }, 201)).data.item;
+  const mem = (await req(admin, "POST", `/api/batches/${b?._id}/members`, { candidate: cand?._id }, 201)).data.item;
+  await req(admin, "PATCH", `/api/members/${mem?._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+  await req(admin, "POST", `/api/batches/${b?._id}/transition`, { target: "Ready" }, 200);
+  await req(admin, "POST", `/api/batches/${b?._id}/transition`, { target: "Active" }, 200);
+  await req(admin, "PATCH", `/api/batches/${b?._id}`, { planned_end: dayPlus(8) }, 200);
+  const closed = await req(admin, "POST", `/api/batches/${b?._id}/transition`, { target: "Closing", exam_held: true }, 200);
+  return { b, tr, rm, atClosing: String(closed.data?.item?.status) === "Closing" };
+};
+const statusOf = async (b) => String((await req(admin, "GET", `/api/batches/${b?._id}`, undefined, 200)).data.item?.status);
+const reopenBody = { target: "Active", reason: "QA-3023 test: results not in yet" };
+
+// trainer clash
+const X1 = await toResultAwaited("X1");
+ok("QA-3023 fixture: X1 is in Result Awaited", X1.atClosing, "");
+const takeTrainer = (await req(admin, "POST", "/api/batches", mk7({ trainer: X1.tr?._id, planned_start: dayPlus(5) }), 201)).data.item;
+ok("QA-3023 fixture: while X1 waits for results another batch takes its trainer for the same dates (201)", !!takeTrainer?._id, `(${takeTrainer?.code})`);
+const reopenTrainerClash = await req(admin, "POST", `/api/batches/${X1.b?._id}/transition`, reopenBody, 409);
+ok("QA-3023-D1: reopening X1 into its now-booked TRAINER is refused (409), naming the batch that holds the trainer and the batch being reopened",
+  reopenTrainerClash.status === 409 && names(reopenTrainerClash.data.error, takeTrainer) && names(reopenTrainerClash.data.error, X1.b) && /trainer/i.test(reopenTrainerClash.data.error ?? ""),
+  `(${reopenTrainerClash.status} ${JSON.stringify(reopenTrainerClash.data.error)})`);
+ok("QA-3023-D2: ...and the refused reopen wrote nothing - X1 is still in Result Awaited (stored Closing)", (await statusOf(X1.b)) === "Closing", `(${await statusOf(X1.b)})`);
+await req(admin, "POST", `/api/batches/${takeTrainer?._id}/transition`, { target: "Cancelled", reason: "QA-3023 test: give the trainer back" }, 200);
+const reopenAfterFree = await req(admin, "POST", `/api/batches/${X1.b?._id}/transition`, reopenBody, 200);
+ok("QA-3023-D3: control - once the other booking is gone the SAME reopen succeeds (200) and X1 is Active again",
+  reopenAfterFree.status === 200 && (await statusOf(X1.b)) === "Active", `(${reopenAfterFree.status} ${JSON.stringify(reopenAfterFree.data.error)})`);
+
+// room clash (the trainer stays free, so only the room can refuse)
+const X2 = await toResultAwaited("X2");
+const takeRoom = (await req(admin, "POST", "/api/batches", mk7({ room: X2.rm?._id, planned_start: dayPlus(5) }), 201)).data.item;
+ok("QA-3023 fixture: while X2 waits for results another batch (no trainer) takes its room for the same dates (201)", !!takeRoom?._id, `(${takeRoom?.code})`);
+const reopenRoomClash = await req(admin, "POST", `/api/batches/${X2.b?._id}/transition`, reopenBody, 409);
+ok("QA-3023-D4: reopening X2 into its now-booked ROOM is refused (409), naming the batch that holds the room",
+  reopenRoomClash.status === 409 && names(reopenRoomClash.data.error, takeRoom) && /room/i.test(reopenRoomClash.data.error ?? ""),
+  `(${reopenRoomClash.status} ${JSON.stringify(reopenRoomClash.data.error)})`);
+ok("QA-3023-D5: ...and X2 is still in Result Awaited", (await statusOf(X2.b)) === "Closing", `(${await statusOf(X2.b)})`);
+
+// no clash at all
+const X3 = await toResultAwaited("X3");
+const reopenClean = await req(admin, "POST", `/api/batches/${X3.b?._id}/transition`, reopenBody, 200);
+ok("QA-3023-D6: control - a reopen with nothing booked against its trainer or room still succeeds (200) and the batch is Active",
+  reopenClean.status === 200 && (await statusOf(X3.b)) === "Active", `(${reopenClean.status} ${JSON.stringify(reopenClean.data.error)})`);
+
 // --- QA-3002: a pre-existing overlap. Cap 2 lets two overlapping batches exist; lowering the cap to 1 afterwards
 // leaves a clash that was legitimate when it was made - the shape Umesh hit.
 const TW = await mkTrainer7("TW", "69", { max_concurrent_batches: 2 });

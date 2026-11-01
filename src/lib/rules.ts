@@ -40,7 +40,8 @@ import { personLabel, personList, trainerLabel, trainerAvailabilityTag } from "@
 // Three deliberate exceptions still list Closing, because they answer a different question (work that
 // is still on a centre's books, not a booking): LIVE_BATCH_STATUSES below (the plan tracker, QA-3025,
 // and the "Trainers (ours, live)" centre column, QA-1307) and sync.ts's own private copy for centre closing. Reopening Result Awaited -> Active
-// (QA-2736) does not re-check the trainer; QA-3002's edit-door rule is what keeps that case editable.
+// (QA-2736) re-checks the trainer and room since QA-3023; QA-3002's edit-door rule is what keeps a batch
+// that already overlaps editable.
 export const ACTIVE_BATCH_STATUSES = ["Planning", "Ready", "Active"];
 
 // QA-3025 (checker, post-PASS of the QA-3001 unit): the batches still ON A CENTRE'S BOOKS - the four
@@ -1594,6 +1595,28 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       // by name, the Cancelled->Active restore arm's shape, before anything is written.
       if (opts.actual_start || opts.backdate_override === true || opts.enrollment_override === true) {
         fail("Reopening a batch puts its status back to Active and changes no dates and no enrolment check. Reopen it first, then correct anything else.");
+      }
+      // QA-3023 (checker finding on the QA-3001 unit; Umesh decided 2026-11-01): Result Awaited books no
+      // trainer or room (QA-3001), so while the batch sat there another batch could take them for the same
+      // dates. Going back to Active makes it book them again, so the reopen runs the SAME two checks every
+      // other path that puts a trainer or room on a live batch runs (POST/PATCH /api/batches) - nothing
+      // is written (no audit row, no status change) if either refuses. The range is the one the batch
+      // will book as Active (actual_start..planned_end); the batch itself is excluded from its own clash.
+      {
+        const [bookStart, bookEnd] = batchRange({ planned_start: batch.planned_start, planned_end: batch.planned_end, actual_start: batch.actual_start, status: "Active" });
+        const reopenRefusal = (e: unknown, what: "trainer" | "room") => {
+          if (!(e instanceof HttpError) || e.status !== 409) return e;
+          return new HttpError(409,
+            `Cannot reopen ${batch.code} to Active: ${e.message.replace(assignLaterHint(what), "")} Its ${what} was free while it waited for results and has since been booked for these dates - move the other booking or wait until it ends, then reopen this batch.`);
+        };
+        if (batch.trainer) {
+          try { await assertTrainerAvailableForBatch(String(batch.trainer), String(batch._id), bookStart, bookEnd, { slot_start: batch.slot_start, slot_end: batch.slot_end }); }
+          catch (e) { throw reopenRefusal(e, "trainer"); }
+        }
+        if (batch.room) {
+          try { await assertRoomFreeForBatch(String(batch.room), String(batch._id), bookStart, bookEnd, batch.session); }
+          catch (e) { throw reopenRefusal(e, "room"); }
+        }
       }
       await audit({
         entity: "Batch", entityId: batch._id, field: "reopened_from_closing",
