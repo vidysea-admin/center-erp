@@ -21,7 +21,8 @@ by that section alone on the day it was written (QA-273, QA-274, QA-275).
   reclassify it as a brand-new bug.
 - **For any multi-file change, use plan mode first**: propose which existing files/functions change,
   wait for approval, then implement.
-- **Two checkouts of this repo exist.** Work happens in `d:/erp/center-erp-audit`; `d:/erp/center-erp`
-  is a stale `master` checkout. Editing the wrong one produces changes that look saved and never ship.
+- **One checkout: `d:/erp/center-erp`** (since 2026-11-02; `center-erp-audit` is gone). `d:/erp` itself is
+  only a parent folder, not a repo - never `git init` it. Test worktrees (e.g. `d:/erp/.wt-*`) are temporary
+  and removed after use. The DB is chosen by `MONGODB_DB` in the env, never by the folder.
 - **Keep the map current.** If you add a module, a rule, or a second copy of anything, update
   `ARCHITECTURE.md` in the same change. A stale map is worse than none.
