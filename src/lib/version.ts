@@ -227,7 +227,10 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -339 note: R-339 finance-head-split - the remaining report sheets of RPL_Costing_and_Project_Reports_v2.xlsx
 // (Karunn, 2026-11-01): centre / job role / month split by cost head, a trainer-wise report, the two Dashboard
 // tiles, and the matching Excel sheets. No number is quoted.
-export const RELEASE = "2026.08.14-339";
+// -340 note: re-enrolment (Umesh, 2026-11-02, "based on the batch status hona chahiye") - a student whose batch is
+// Completed, Closed or Cancelled, or who was dropped, can join another batch of any course at any centre with the same
+// CAN ID. Ships with scripts/backfill-released-on.mjs, run on production after this build is live. No number is quoted.
+export const RELEASE = "2026.08.14-340";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -299,6 +302,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-340 lets a student join another batch once their batch is over. " +
+  "When a batch is Completed, Closed or Cancelled, its students are free to join a new batch of any course at any centre, with the same mobile number and the same Skill India CAN ID; no second candidate record is created. " +
+  "This does not depend on the result: a student who passed, failed or was never assessed is freed the same way, and a student who was dropped from a batch is free at once. " +
+  "While a batch is still waiting for results or closing, its students stay on it and cannot join another batch. " +
+  "The finished batch keeps its roster, results, certificates and reports unchanged, and its students are not counted as dropouts. " +
+  "A student who rejoins takes the course and centre of the new batch, and the change is recorded in the audit trail. " +
+  "Reopening a finished batch, or restoring a cancelled one, is refused while any of its students is already in another batch, and the refusal names them. " +
+  "The six-month gap between batches remains a warning only. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -340: the -339 note moved here unchanged when -340 became current.
+const RELEASE_NOTE_ARCHIVE_339 =
   "-339 adds the remaining cost reports to the Finance page. " +
   "Spend by centre, Spend by job role and Monthly spend now show each row split by cost head, with a grand total, in the same way as the batch table. " +
   "A new Spend by trainer table shows the costs tagged to each trainer, split by cost head; costs with no trainer are shown as Unassigned. " +
@@ -2264,6 +2279,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -340: ARCHIVE_339 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_339 + " " +
   // -339: ARCHIVE_338 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_338 + " " +
   // -338: ARCHIVE_337 wired in here in the SAME bump that declared it, same discipline.
