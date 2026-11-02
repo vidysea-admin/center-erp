@@ -4283,6 +4283,103 @@ for (const variant of ["ordinary", "mark_paid"]) {
   }
 }
 
+// R-339 (finance-head-split): the rest of Manish sir's RPL_Costing_and_Project_Reports_v2.xlsx, which
+// Karunn sir asked to see on 2026-11-01. The workbook has a "Report - X wise" sheet per dimension, each a
+// cross-tab of X by cost head with a Total; the product had that only for the batch. It also has a
+// Dashboard with Trainees Enrolled and Cost/Enrolled tiles. Every expected figure below comes from the
+// four entries this block posts, read back through a BATCH filter so no other suite's data can move them.
+{
+  await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+  const s9 = `r339${stamp}`;
+  const template = await rawBatches.findOne({ location: { $exists: true }, program: { $exists: true } });
+  const heads = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .filter((c) => !c.parent && !c.pre_approved && c.active !== false);
+  const trainers = template
+    ? [...((await req(admin, "GET", `/api/trainers?home_location=${template.location}&limit=2000`)).data?.items ?? []),
+       ...((await req(admin, "GET", "/api/trainers?limit=2000")).data?.items ?? [])]
+    : [];
+  const [T1, T2] = [...new Map(trainers.map((t) => [String(t._id), t])).values()];
+  ok("R-339 [precondition] a template batch, two ordinary cost heads and two trainers exist to build the fixture on",
+    !!template && heads.length >= 2 && !!T1 && !!T2, JSON.stringify({ template: !!template, heads: heads.length, T1: !!T1, T2: !!T2 }));
+
+  if (template && heads.length >= 2 && T1 && T2) {
+    const [H1, H2] = heads;
+    const X = { _id: new ObjectId(), code: `ZZ-R339-X-${stamp}` };
+    await rawBatches.insertOne({ ...X, status: "Active", location: template.location, program: template.program, target_size: 20,
+      planned_start: new Date("2026-10-01"), planned_end: new Date("2026-11-30"), createdAt: new Date(), updatedAt: new Date() });
+    await rawDb.collection("batchmembers").insertMany(Array.from({ length: 5 }, () => ({
+      batch: X._id, candidate: new ObjectId(), left_on: null, createdAt: new Date(), updatedAt: new Date(),
+    })));
+    const post = (head, trainer, amount, date, tag) => req(admin, "POST", "/api/costs", {
+      entry_date: date, location: template.location, batch: String(X._id), category: head._id, amount, note: `${s9}-${tag}`,
+      ...(trainer ? { trainer: trainer._id } : {}),
+    });
+    const made = [
+      await post(H1, T1, 1000, "2026-10-05", "a"), await post(H2, T1, 2000, "2026-10-20", "b"),
+      await post(H1, T2, 500, "2026-11-03", "c"), await post(H2, null, 250, "2026-11-04", "d"),
+    ];
+    ok("R-339 [precondition] four costs (1000 + 2000 + 500 + 250) were posted through the real door",
+      made.every((m) => m.status === 201), JSON.stringify(made.map((m) => [m.status, m.data?.error])));
+
+    const res = await req(admin, "GET", `/api/reports/costs?batch=${X._id}`);
+    const d = res.data ?? {};
+    const hs = d.head_split ?? {};
+    const k1 = String(H1._id), k2 = String(H2._id);
+    const cellsOf = (rows, label) => (rows ?? []).find((r) => r.label === label);
+    const t1 = cellsOf(hs.trainer, T1.name), t2 = cellsOf(hs.trainer, T2.name), tn = cellsOf(hs.trainer, "Unassigned");
+    ok("R-339 a: trainer-wise - each trainer's row is split by head exactly as posted, and the trainer-less cost sits under Unassigned",
+      t1?.cells?.[k1] === 1000 && t1?.cells?.[k2] === 2000 && t1?.total === 3000 && t1?.entries === 2
+        && t2?.cells?.[k1] === 500 && (t2?.cells?.[k2] ?? 0) === 0 && t2?.total === 500
+        && tn?.cells?.[k2] === 250 && tn?.total === 250,
+      JSON.stringify({ t1, t2, tn }));
+    const bt = (d.by_trainer ?? []).find((r) => r.label === T1.name);
+    ok("R-339 a: by_trainer carries the same total and share as the split (3000 of 3750 = 80%)",
+      bt?.amount === 3000 && bt?.entries === 2 && bt?.pct_of_total === 80, JSON.stringify(d.by_trainer));
+    const oct = cellsOf(hs.month, "2026-10"), nov = cellsOf(hs.month, "2026-11");
+    ok("R-339 b: monthly - October and November are split by head (IST months)",
+      oct?.cells?.[k1] === 1000 && oct?.cells?.[k2] === 2000 && oct?.total === 3000
+        && nov?.cells?.[k1] === 500 && nov?.cells?.[k2] === 250 && nov?.total === 750,
+      JSON.stringify({ oct, nov }));
+    const loc = (hs.location ?? [])[0], role = (hs.job_role ?? [])[0];
+    ok("R-339 c: location- and job-role-wise - one row each, 1500 on the first head and 2250 on the second",
+      hs.location?.length === 1 && loc?.cells?.[k1] === 1500 && loc?.cells?.[k2] === 2250 && loc?.total === 3750
+        && hs.job_role?.length === 1 && role?.cells?.[k1] === 1500 && role?.cells?.[k2] === 2250 && role?.total === 3750,
+      JSON.stringify({ loc, role }));
+    const tieOut = ["location", "job_role", "month", "trainer"].map((dim) => {
+      const rows = hs[dim] ?? [];
+      const sumTotals = rows.reduce((s, r) => s + r.total, 0);
+      const rowsTie = rows.every((r) => Object.values(r.cells ?? {}).reduce((s, v) => s + v, 0) === r.total);
+      return { dim, sumTotals, rowsTie };
+    });
+    ok("R-339 d: every split's rows sum to the grand total, and every row's head cells sum to that row's total",
+      d.totals?.actual === 3750 && tieOut.every((t) => t.sumTotals === 3750 && t.rowsTie)
+        && JSON.stringify((hs.heads ?? []).map((h) => h.key)) === JSON.stringify((d.cross_tab?.heads ?? []).map((h) => h.key)),
+      JSON.stringify({ actual: d.totals?.actual, tieOut }));
+    ok("R-339 e: the dashboard tiles - 5 trainees enrolled and 3750 / 5 = 750 per enrolled",
+      d.totals?.enrolled === 5 && d.totals?.cost_per_enrolled === 750, JSON.stringify(d.totals));
+
+    const xl = await reqBuffer(admin, `/api/reports/costs/export?batch=${X._id}`);
+    const wb = xl.status === 200 ? XLSX.read(xl.data, { type: "buffer" }) : null;
+    const rowsOf = (name) => (wb?.Sheets?.[name] ? XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: null }) : null);
+    const xTr = rowsOf("by trainer"), xMo = rowsOf("monthly"), xLo = rowsOf("by location"), xRo = rowsOf("by job role");
+    const xt1 = xTr?.find((r) => r.Trainer === T1.name), xOct = xMo?.find((r) => r.Month === "2026-10");
+    ok("R-339 f: the workbook carries the same splits - a 'by trainer' sheet and head columns on monthly, location and job role",
+      xt1?.[H1.name] === 1000 && xt1?.[H2.name] === 2000 && xt1?.["Grand Total"] === 3000
+        && xOct?.[H1.name] === 1000 && xOct?.[H2.name] === 2000 && xOct?.["Grand Total"] === 3000
+        && xLo?.[0]?.[H2.name] === 2250 && xRo?.[0]?.[H1.name] === 1500,
+      JSON.stringify({ xt1, xOct, lo: xLo?.[0], ro: xRo?.[0] }));
+
+    const mine = await rawDb.collection("costentries").find({ note: { $regex: `^${s9}-` } }).project({ _id: 1 }).toArray();
+    await rawDb.collection("costentries").deleteMany({ _id: { $in: mine.map((m) => m._id) } });
+    await rawDb.collection("batchmembers").deleteMany({ batch: X._id });
+    await rawBatches.deleteOne({ _id: X._id });
+    ok("R-339 [cleanup] the fixture batch, its roster and its four costs are gone",
+      (await rawBatches.countDocuments({ _id: X._id })) === 0
+        && (await rawDb.collection("costentries").countDocuments({ note: { $regex: `^${s9}-` } })) === 0,
+      "left behind");
+  }
+}
+
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });

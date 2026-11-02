@@ -224,7 +224,10 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // receive (-337 .. this bump): C1 budget on a batch, settable only with finance rights; C2/C3 the Project Report columns and
 // the dash for an undefined ratio; C4 the Excel sheet; C5 who sees the Budget field and the masked audit values. The filter
 // clause states the shipped behaviour (whole budget against filtered spend) rather than a fix; no number is quoted.
-export const RELEASE = "2026.08.14-338";
+// -339 note: R-339 finance-head-split - the remaining report sheets of RPL_Costing_and_Project_Reports_v2.xlsx
+// (Karunn, 2026-11-01): centre / job role / month split by cost head, a trainer-wise report, the two Dashboard
+// tiles, and the matching Excel sheets. No number is quoted.
+export const RELEASE = "2026.08.14-339";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -296,6 +299,15 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-339 adds the remaining cost reports to the Finance page. " +
+  "Spend by centre, Spend by job role and Monthly spend now show each row split by cost head, with a grand total, in the same way as the batch table. " +
+  "A new Spend by trainer table shows the costs tagged to each trainer, split by cost head; costs with no trainer are shown as Unassigned. " +
+  "Two new tiles at the top show the number of trainees enrolled on the batches with spend, and the cost per enrolled trainee. " +
+  "The Excel download has the same splits on its location, job role and monthly sheets, and a new trainer sheet. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -339: the -338 note moved here unchanged when -339 became current.
+const RELEASE_NOTE_ARCHIVE_338 =
   "-338 completes the Project Report on the Finance page. " +
   "A batch can now carry its own budget, entered on the batch page. Only someone with finance rights can see or change it; anyone else who tries to change it is refused and nothing is saved, and the audit trail hides the amounts from them. " +
   "The per-batch table on the Finance page is now called Project Report and shows, for each batch with spend, its location, job role, start and end dates, status, duration, target seats, enrolled, certified, fill rate, certification rate, budget, actual spend, variance, percentage of budget used, and cost per enrolled and per certified. " +
@@ -2252,6 +2264,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -339: ARCHIVE_338 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_338 + " " +
   // -338: ARCHIVE_337 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_337 + " " +
   // -337: ARCHIVE_336 wired in here in the SAME bump that declared it, same discipline.

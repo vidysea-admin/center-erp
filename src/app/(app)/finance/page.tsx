@@ -181,6 +181,9 @@ function FinanceInner() {
       columns: [["batch", "Batch"], ["location", "Centre"], ["job_role", "Job role"], ["amount", "Actual spend"],
                 ["enrolled", "Enrolled"], ["certified", "Certified"], ["cost_per_enrolled", "Cost / enrolled"]] },
   };
+  // R-339: the two Dashboard tiles open the same per-batch rows their figures are summed from.
+  CARD_TABLES.enrolled = { ...CARD_TABLES.batches, label: "Trainees enrolled" };
+  CARD_TABLES.cost_per_enrolled = { ...CARD_TABLES.batches, label: "Cost per enrolled" };
   const shown = openKey ? CARD_TABLES[openKey] : null;
   const MONEY_COLS = new Set(["amount", "budget", "variance", "cost_per_enrolled", "cost_per_certified"]);
   const cell = (r: any, k: string) => {
@@ -192,11 +195,18 @@ function FinanceInner() {
     return String(v);
   };
 
-  const simple = (nameLabel: string) => [
-    { key: "label", label: nameLabel, sortable: true, filterable: true, minWidth: 200, render: (r: any) => r.label },
-    { key: "amount", label: L.actual ?? "Actual spend", sortable: true, sortValue: (r: any) => r.amount, render: (r: any) => rupee(r.amount), total: sumCol((r) => r.amount) },
+  // R-339: the workbook's "Report - X wise" shape - one row per centre / job role / month / trainer, a
+  // column per cost head (the live master, like "Batch × cost head"), then the Grand Total.
+  const headCross = (nameLabel: string) => [
+    { key: "label", label: nameLabel, sortable: true, filterable: true, minWidth: 180, render: (r: any) => r.label },
+    ...((data?.head_split?.heads ?? []).map((h: any) => ({
+      key: `h_${h.key}`, label: h.head, sortable: true,
+      sortValue: (r: any) => r.cells?.[h.key] ?? 0,
+      render: (r: any) => (r.cells?.[h.key] ? `₹${Number(r.cells[h.key]).toLocaleString("en-IN")}` : <span className="text-gray-300">·</span>),
+      total: sumCol((r: any) => r.cells?.[h.key] ?? 0),
+    }))),
+    { key: "total", label: "Grand Total", sortable: true, sortValue: (r: any) => r.total, render: (r: any) => <b>{`₹${Number(r.total).toLocaleString("en-IN")}`}</b>, total: sumCol((r) => r.total) },
     { key: "entries", label: L.entries ?? "Entries", sortable: true, render: (r: any) => r.entries },
-    { key: "pct", label: L.pct_of_total ?? "% of total", sortable: true, sortValue: (r: any) => r.pct_of_total, render: (r: any) => `${r.pct_of_total ?? 0}%` },
   ];
 
   return (
@@ -356,11 +366,13 @@ function FinanceInner() {
         {qs && <Btn kind="ghost" onClick={() => router.push("/finance", { scroll: false })}>Clear</Btn>}
       </div>
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         {tile("actual", L.actual ?? "Actual spend", `₹${Number(t.actual ?? 0).toLocaleString("en-IN")}`, `${t.entries ?? 0} entries · ${t.heads ?? 0} heads`)}
         {tile("budget", L.budget ?? "Budget", t.budget ? `₹${Number(t.budget).toLocaleString("en-IN")}` : "—", t.budget ? "from the cost head master" : "no budgets set yet")}
         {tile("variance", L.variance ?? "Variance", t.variance === null || t.variance === undefined ? "—" : `₹${Number(t.variance).toLocaleString("en-IN")}`, t.pct_used === null || t.pct_used === undefined ? "" : `${t.pct_used}% of budget used`)}
         {tile("batches", "Batches with spend", String(t.batches ?? 0), "untagged costs sit in Unassigned")}
+        {tile("enrolled", "Trainees enrolled", String(t.enrolled ?? 0), "on the batches with spend")}
+        {tile("cost_per_enrolled", "Cost per enrolled", t.cost_per_enrolled === null || t.cost_per_enrolled === undefined ? "—" : `₹${Number(t.cost_per_enrolled).toLocaleString("en-IN")}`, "all spend ÷ trainees enrolled")}
       </div>
 
       {shown && (
@@ -411,7 +423,7 @@ function FinanceInner() {
       <details className="rounded-xl border border-gray-200 bg-white p-3 text-xs text-gray-500">
         <summary className="cursor-pointer font-semibold text-gray-600">Where these numbers come from</summary>
         <ul className="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
-          <li><b>Every figure is one query.</b> Spend by head, by centre, by job role, by month, the batch × head grid and the register are all filled from the same pass over the same entries, so they sum to the same grand total by construction.</li>
+          <li><b>Every figure is one query.</b> Spend by head, by centre, by job role, by trainer, by month, the batch × head grid and the register are all filled from the same pass over the same entries, so they sum to the same grand total by construction.</li>
           <li><b>Untagged costs are counted, not dropped.</b> An entry with no batch or no centre appears under <b>Unassigned</b> — that is what keeps the grand total tied to the register.</li>
           <li><b>Certified means billable.</b> A Pass minus the dropped-but-passed, which is the number the invoice bills on. Cost per certified and revenue therefore share one denominator.</li>
           <li><b>A ratio with no denominator shows “—”.</b> A batch with nobody enrolled has no cost per trainee; it does not have a cost per trainee of zero.</li>
@@ -456,25 +468,22 @@ function FinanceInner() {
           ]} />
       </Section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Section title="Spend by centre">
-          <DataTable storageKey="finance-by-location" rows={data?.by_location ?? []} loading={loading}
-            defaultSort={{ key: "amount", dir: "desc" }} cardTitle={(r: any) => r.label} columns={simple("Centre")} />
-        </Section>
-        <Section title="Spend by job role">
-          <DataTable storageKey="finance-by-role" rows={data?.by_job_role ?? []} loading={loading}
-            defaultSort={{ key: "amount", dir: "desc" }} cardTitle={(r: any) => r.label} columns={simple("Job role")} />
-        </Section>
-      </div>
+      <Section title="Spend by centre" hint="Each centre split by cost head.">
+        <DataTable storageKey="finance-by-location" rows={data?.head_split?.location ?? []} loading={loading} freeze={1}
+          defaultSort={{ key: "total", dir: "desc" }} cardTitle={(r: any) => r.label} columns={headCross("Centre")} />
+      </Section>
+      <Section title="Spend by job role" hint="Each job role split by cost head.">
+        <DataTable storageKey="finance-by-role" rows={data?.head_split?.job_role ?? []} loading={loading} freeze={1}
+          defaultSort={{ key: "total", dir: "desc" }} cardTitle={(r: any) => r.label} columns={headCross("Job role")} />
+      </Section>
+      <Section title="Spend by trainer" hint="Costs tagged to a trainer, split by cost head. Untagged costs sit in Unassigned.">
+        <DataTable storageKey="finance-by-trainer" rows={data?.head_split?.trainer ?? []} loading={loading} searchable freeze={1}
+          defaultSort={{ key: "total", dir: "desc" }} cardTitle={(r: any) => r.label} columns={headCross("Trainer")} />
+      </Section>
 
-      <Section title="Monthly spend" hint="Months are bucketed in IST, not in the server's timezone.">
-        <DataTable storageKey="finance-monthly" rows={data?.by_month ?? []} loading={loading}
-          defaultSort={{ key: "label", dir: "asc" }} cardTitle={(r: any) => r.label}
-          columns={[
-            { key: "label", label: "Month", sortable: true, render: (r: any) => r.label },
-            { key: "amount", label: L.actual ?? "Actual", sortable: true, sortValue: (r: any) => r.amount, render: (r: any) => rupee(r.amount), total: sumCol((r) => r.amount) },
-            { key: "entries", label: L.entries ?? "Entries", sortable: true, render: (r: any) => r.entries },
-          ]} />
+      <Section title="Monthly spend" hint="Each month split by cost head. Months are bucketed in IST, not in the server's timezone.">
+        <DataTable storageKey="finance-monthly" rows={data?.head_split?.month ?? []} loading={loading} freeze={1}
+          defaultSort={{ key: "label", dir: "asc" }} cardTitle={(r: any) => r.label} columns={headCross("Month")} />
       </Section>
 
       {/* The cross-tab. Its columns ARE the live master — add a head in Admin and it is a column

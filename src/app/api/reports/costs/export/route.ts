@@ -46,15 +46,21 @@ export const GET = apiHandler(async (req: NextRequest) => {
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(headSheet), "by head");
 
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-    data.by_location.map((r) => ({ Location: r.label, [L.actual]: r.amount, [L.entries]: r.entries, [L.pct_of_total]: r.pct_of_total })),
-  ), "by location");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-    data.by_job_role.map((r) => ({ "Job role": r.label, [L.actual]: r.amount, [L.entries]: r.entries, [L.pct_of_total]: r.pct_of_total })),
-  ), "by job role");
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-    data.by_month.map((r) => ({ Month: r.label, [L.actual]: r.amount, [L.entries]: r.entries })),
-  ), "monthly");
+  // R-339: the workbook's "Report - X wise" sheets - one row per centre / job role / month / trainer, a
+  // column per cost head from the live master, then the Grand Total. Same `head_split` rows as the screen.
+  const hs = data.head_split;
+  for (const [dim, first, sheet] of [
+    ["location", "Location", "by location"], ["job_role", "Job role", "by job role"],
+    ["month", "Month", "monthly"], ["trainer", "Trainer", "by trainer"],
+  ] as const) {
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+      hs[dim].map((r) => ({
+        [first]: r.label,
+        ...Object.fromEntries(hs.heads.map((h) => [h.head, r.cells[h.key] ?? 0])),
+        "Grand Total": r.total, [L.entries]: r.entries,
+      })),
+    ), sheet);
+  }
 
   // The cross-tab's columns come from the live master, so a head added this morning is a column in
   // this file this afternoon with no deployment (developer note #1).

@@ -7234,9 +7234,13 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   const byLocation = new Map<string, Bucket>();
   const byRole = new Map<string, Bucket>();
   const byMonth = new Map<string, Bucket>();
+  const byTrainer = new Map<string, Bucket>();
   const byBatch = new Map<string, Bucket & { centres?: Set<string>; programs?: Set<string> }>();
   const batchDocs = new Map<string, any>();
   const cross = new Map<string, number>();
+  // R-339: the workbook's "Report - X wise" sheets are each X by cost head. Filled in the same loop as
+  // the buckets above, keyed `dimension::row::head`, so each split sums to its bucket and to `total`.
+  const split = new Map<string, number>();
   const register: any[] = [];
   let total = 0;
 
@@ -7252,13 +7256,17 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     bump(byHead, headKey, headLabel, amt);
     if (cat && cat.parent) bump(bySub, String(cat._id), cat.name, amt).head = headLabel;
 
-    bump(byLocation, e.location?._id ? String(e.location._id) : "none", e.location?.name ?? COST_UNASSIGNED, amt);
-
     const prog = e.batch?.program;
-    bump(byRole, prog?._id ? String(prog._id) : "none", prog?.name ?? COST_UNASSIGNED, amt);
-
     const m = monthOf.get(String(e._id)) ?? null;
-    bump(byMonth, m ?? "undated", m ?? "Undated", amt);
+    for (const [dim, map, key, label] of [
+      ["location", byLocation, e.location?._id ? String(e.location._id) : "none", e.location?.name ?? COST_UNASSIGNED],
+      ["job_role", byRole, prog?._id ? String(prog._id) : "none", prog?.name ?? COST_UNASSIGNED],
+      ["month", byMonth, m ?? "undated", m ?? "Undated"],
+      ["trainer", byTrainer, e.trainer?._id ? String(e.trainer._id) : "none", e.trainer?.name ?? COST_UNASSIGNED],
+    ] as const) {
+      bump(map, key, label, amt);
+      split.set(`${dim}::${key}::${headKey}`, (split.get(`${dim}::${key}::${headKey}`) ?? 0) + amt);
+    }
 
     const batchKey = e.batch?._id ? String(e.batch._id) : "none";
     const bb = bump(byBatch, batchKey, e.batch?.code ?? COST_UNASSIGNED, amt);
@@ -7415,6 +7423,15 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   }).sort((a, b) => b.amount - a.amount);
 
   const budgetTotal = headRows.reduce((s, h) => s + (h.budget ?? 0), 0);
+  // R-339: the workbook Dashboard's "Trainees Enrolled" and "Cost/Enrolled". Enrolled is summed over the
+  // batches that carry spend in this selection; cost per enrolled is ALL of that spend (Unassigned too, as
+  // the workbook divides Total Spend) over it, and "—" when nobody is enrolled.
+  const enrolledTotal = batchRows.reduce((s, b) => s + (b.enrolled ?? 0), 0);
+  const splitRows = (dim: string, m: Map<string, Bucket>) => [...m.values()].map((b) => ({
+    key: b.key, label: b.label, entries: b.entries, total: b.amount,
+    cells: Object.fromEntries(headRows.map((h) => [h.key, split.get(`${dim}::${b.key}::${h.key}`) ?? 0])),
+  }));
+  const byAmount = <T extends { total: number }>(rows: T[]) => rows.sort((a, b) => b.total - a.total);
 
   return {
     measured_at,
@@ -7432,11 +7449,22 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       budget_note: budgetNote,
       heads: headRows.filter((h) => h.amount > 0).length,
       batches: batchRows.filter((b) => b.key !== "none").length,
+      enrolled: enrolledTotal,
+      cost_per_enrolled: perHead(total, enrolledTotal),
     },
     by_head: headRows,
     by_location: [...byLocation.values()].map((b) => ({ ...b, pct_of_total: pct(b.amount) })).sort((a, b) => b.amount - a.amount),
     by_job_role: [...byRole.values()].map((b) => ({ ...b, pct_of_total: pct(b.amount) })).sort((a, b) => b.amount - a.amount),
     by_month: [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key)),
+    by_trainer: [...byTrainer.values()].map((b) => ({ ...b, pct_of_total: pct(b.amount) })).sort((a, b) => b.amount - a.amount),
+    // R-339: centre / job role / month / trainer, each by cost head. Same live-master columns as `cross_tab`.
+    head_split: {
+      heads: headRows.map((h) => ({ key: h.key, head: h.head })),
+      location: byAmount(splitRows("location", byLocation)),
+      job_role: byAmount(splitRows("job_role", byRole)),
+      month: splitRows("month", byMonth).sort((a, b) => a.key.localeCompare(b.key)),
+      trainer: byAmount(splitRows("trainer", byTrainer)),
+    },
     // The cross-tab's COLUMNS are the live master (note #1) — a new head becomes a new column with
     // no deployment, and a head with no spend in the window is still a column, so the table's shape
     // does not change under the reader as they move the date filter.
