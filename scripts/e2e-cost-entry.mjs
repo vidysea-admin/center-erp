@@ -4292,8 +4292,14 @@ for (const variant of ["ordinary", "mark_paid"]) {
   await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
   const s9 = `r339${stamp}`;
   const template = await rawBatches.findOne({ location: { $exists: true }, program: { $exists: true } });
-  const heads = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
-    .filter((c) => !c.parent && !c.pre_approved && c.active !== false);
+  // Two heads of its OWN, signed off. Borrowing the master's first two failed the full wall: by the time
+  // this block runs an earlier suite has left an approval rule on one of them, two posts parked (202) and
+  // the report correctly counted only the other two.
+  const heads = [];
+  for (const n of ["H1", "H2"]) {
+    const r = await mkSignedHead({ name: `ZZ R339 ${n} ${stamp}`, active: true });
+    if (r.data?.item?._id) heads.push(r.data.item);
+  }
   const trainers = template
     ? [...((await req(admin, "GET", `/api/trainers?home_location=${template.location}&limit=2000`)).data?.items ?? []),
        ...((await req(admin, "GET", "/api/trainers?limit=2000")).data?.items ?? [])]
