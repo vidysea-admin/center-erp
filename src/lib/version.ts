@@ -220,7 +220,11 @@ const RELEASE_NOTE_ARCHIVE_283 =
 //     records a DIFFERENT bulk-enroll defect that this release does not fix - completing enrollment
 //     in bulk still leaves a member marked Failed after all four steps are ticked.
 // No clause describes the test-harness work: a user receives nothing from it.
-export const RELEASE = "2026.08.14-337";
+// -338 note: one clause per checked criterion of qa-3034-project-report (C1-C5), judged over what users of production
+// receive (-337 .. this bump): C1 budget on a batch, settable only with finance rights; C2/C3 the Project Report columns and
+// the dash for an undefined ratio; C4 the Excel sheet; C5 who sees the Budget field and the masked audit values. The filter
+// clause states the shipped behaviour (whole budget against filtered spend) rather than a fix; no number is quoted.
+export const RELEASE = "2026.08.14-338";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -292,6 +296,16 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-338 completes the Project Report on the Finance page. " +
+  "A batch can now carry its own budget, entered on the batch page. Only someone with finance rights can see or change it; anyone else who tries to change it is refused and nothing is saved, and the audit trail hides the amounts from them. " +
+  "The per-batch table on the Finance page is now called Project Report and shows, for each batch with spend, its location, job role, start and end dates, status, duration, target seats, enrolled, certified, fill rate, certification rate, budget, actual spend, variance, percentage of budget used, and cost per enrolled and per certified. " +
+  "Where a figure cannot be worked out, for example no target seats, nobody enrolled yet or no budget entered, the cell shows a dash. " +
+  "With a date or cost-head filter on, the actual spend covers only the filtered entries while the budget stays the whole budget of the batch. " +
+  "The Excel download from the Finance page has a Project Report sheet with the same columns. " +
+  "No other screen, figure or permission changes in this release.";
+
+// -338: the -337 note moved here unchanged when -338 became current.
+const RELEASE_NOTE_ARCHIVE_337 =
   "-337 fixes how a trainer is counted as busy when a batch is waiting for its results. " +
   "A batch that is waiting for results no longer holds its trainer: the trainer can be given to another batch whose dates overlap, which was refused before. " +
   "Saving an edit to a batch that already carries a trainer is no longer refused because of an older clash when the edit only keeps or shortens the dates and leaves the trainer and the time slot as they were. An edit that starts earlier, ends later, changes the trainer or changes the slot into a real overlap is still refused, and a refused edit saves nothing. " +
@@ -2238,6 +2252,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -338: ARCHIVE_337 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_337 + " " +
   // -337: ARCHIVE_336 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_336 + " " +
   // -336: ARCHIVE_335 wired in here in the SAME bump that declared it, same discipline.
