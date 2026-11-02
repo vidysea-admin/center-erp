@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson, assertLocationInScope, isScoped } from "@/lib/authz";
-import { requirePerm, requireFinance } from "@/lib/permissions";
+import { requirePerm, requireFinance, hasPermission, FINANCE_VIEW } from "@/lib/permissions";
 import { ApprovalRequest, AuditLog, Batch, BatchMember, CandidateResult, Closure, CostEntry, DailyLog, GovtAttendanceRow, Invoice, Program, Trainer } from "@/models";
 import { assertBatchInScope, assertLocationOperational, assertRoomInScope, assertTrainerInScope, mergePlan, earliestPossibleStart, earliestStartNote, assertRoomFreeForBatch, assertSlotWithinGuidelines, assertTrainerAvailableForBatch, batchHealth, computePlannedEnd, deriveTrainerStatus, batchReadiness, govtBatchIdConflict, planBatchBackward, settlementStage, trainerBookingWarnings } from "@/lib/rules";
 import { canonicalGovtBatchId } from "@/lib/validate";
@@ -35,7 +35,12 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   const status_label = batchStatusLabel(readiness.batch.status, readiness.batch.status === "Closing"
     ? await Closure.findOne({ batch: id }).select("assessment_status exam_held").lean<any>()
     : null);
-  return NextResponse.json({ item: readiness.batch, readiness, health, settlement_stage: st, status_label });
+  // QA-3034: the batch budget is a money figure on a document many roles read. `budget` is select:false
+  // on the schema, so it reaches this payload only through this line, and only for finance.view.
+  const item = (await hasPermission(user, FINANCE_VIEW))
+    ? { ...readiness.batch, budget: (await Batch.findById(id).select("+budget").lean<any>())?.budget }
+    : readiness.batch;
+  return NextResponse.json({ item, readiness, health, settlement_stage: st, status_label });
 });
 
 // 2026-08-14 (Umesh): "agar data ka koi source nahi hai toh remove that." The 13/08 seed
@@ -278,9 +283,23 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   await requirePerm(user, "batches.manage"); // togglable (2026-08-11)
   const { id } = await ctx.params;
   await assertBatchInScope(user, id); // Rule 38
-  const batch = await Batch.findById(id);
+  const batch = await Batch.findById(id).select("+budget"); // QA-3034: `before` must carry the budget so the audit diff has an old value
   if (!batch) throw new HttpError(404, "Batch not found");
   const body = await readJson(req);
+  // QA-3034: the batch BUDGET is a finance figure - writing it needs finance.view, on top of
+  // batches.manage, and the answer is a 403 BEFORE anything else is read or written (no audit row, no
+  // partial save of the other fields in the same body). Blank/null clears it; 0 is a real budget;
+  // anything else that is not a finite number >= 0 is a 400. The head budget on a cost category
+  // (master-lists) is a different concept - ARCHITECTURE.md section 3.
+  const wantsBudget = body.budget !== undefined;
+  if (wantsBudget) await requireFinance(user, "view");
+  let budgetPatch: number | null | undefined;
+  if (wantsBudget) {
+    const raw = body.budget;
+    if (raw === null || (typeof raw === "string" && raw.trim() === "")) budgetPatch = null;
+    else if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) budgetPatch = raw;
+    else throw new HttpError(400, "Budget must be a number, zero or more. Leave it blank to clear it.");
+  }
   // Rule 38, the DESTINATION half (center-manager-role review, finding 1): assertBatchInScope above only
   // asks where the batch IS. This door also writes where it is GOING - location, room, trainer - and a
   // scoped login (Location, Center Manager) could send any id and move its batch, or hang a foreign
@@ -311,7 +330,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const closed = ["Completed", "Cancelled"].includes(batch.status);
   const asked = [...PATCHABLE, "location", "program"].filter((f) => body[f] !== undefined);
   const idOnly = asked.length > 0 && asked.every((f) => f === "govt_batch_id");
-  if (closed && !(idOnly && user.role === "Admin")) {
+  // QA-3034: a budget on its own is a finance annotation, not a change to the batch, so it is still
+  // recordable on a closed batch (the figure is usually reviewed after delivery). Budget plus any other
+  // field keeps the freeze.
+  const budgetOnly = wantsBudget && asked.length === 0;
+  if (closed && !budgetOnly && !(idOnly && user.role === "Admin")) {
     throw new HttpError(409, idOnly
       ? "Batch is closed - only an Admin can still record its SIDH batch ID."
       : "Batch is closed.");
@@ -319,6 +342,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   const before = batch.toObject();
 
   const patch: Record<string, unknown> = {};
+  if (budgetPatch !== undefined) patch.budget = budgetPatch;
   // govt_batch_id and drive_folder_url were added to the schema but never to this list, so both
   // were unreachable through the API — written nowhere, readable nowhere. The SIDH batch id is
   // the key that links our row to the portal's, and the Drive folder is the evidence backup
@@ -370,7 +394,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   // whose stored slot is not exactly 4h or 8h answers 400 (slot-rules.ts), and a trainer who has
   // since been given a LIVE batch at the same hour answers 409 (Rule 10). Neither is a statement
   // about the id being typed.
-  if (!closed) {
+  if (!closed && !budgetOnly) { // QA-3034: a budget-only save moves no schedule, so the schedule refusals are not its business
     await assertSlotWithinGuidelines(slot); // slot-rules.ts: 09:00–18:00 window, exactly 4h or 8h
     // QA-3002 (live 2026-10-24): the clash check is about a booking this edit CREATES. Re-running it on a
     // save that leaves the trainer and the time slot alone and only shortens or keeps the date range cannot
@@ -407,6 +431,7 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
 
   const oldTrainer = batch.trainer ? String(batch.trainer) : null;
   Object.assign(batch, patch);
+  if (patch.budget === null) batch.set("budget", undefined); // QA-3034: clearing UNSETS the field - null is not "no budget", absent is
   await batch.save();
   await auditDiff("Batch", batch._id, before, patch, user.id);
   if (oldTrainer && oldTrainer !== String(batch.trainer ?? "")) await deriveTrainerStatus(oldTrainer);
@@ -428,5 +453,8 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
       warnings.push(`Planned start ${new Date(batch.planned_start).toLocaleDateString("en-IN")} is before the earliest possible start ${eps.date.toLocaleDateString("en-IN")} (${earliestStartNote(eps)}).`);
     }
   }
-  return NextResponse.json({ item: batch, ...(warnings.length ? { warning: warnings.join(" ") } : {}) });
+  // QA-3034: the echo of the saved document carries the budget only for a caller who may see it.
+  const echo: Record<string, unknown> = batch.toJSON(); // same serialiser NextResponse.json applied to the document before
+  if (!(await hasPermission(user, FINANCE_VIEW))) delete echo.budget;
+  return NextResponse.json({ item: echo, ...(warnings.length ? { warning: warnings.join(" ") } : {}) });
 });

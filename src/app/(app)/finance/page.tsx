@@ -496,19 +496,30 @@ function FinanceInner() {
           ]} />
       </Section>
 
-      <Section title="Batch delivery and unit economics" hint="Physical progress against money spent, per batch.">
-        <DataTable storageKey="finance-unit-econ" rows={data?.unit_economics ?? []} loading={loading} searchable
+      {/* QA-3034: the Project Report - one row per batch, the 18 columns of the workbook. The column list
+          (keys, labels, order, kind) comes from the rollup payload so the screen and the Excel sheet are
+          drawn from one definition; an absent value is an em dash, never NaN or 0. */}
+      <Section title="Project Report" hint="One row per batch: dates, seats, rates and money against its own budget.">
+        <DataTable storageKey="finance-project-report" rows={data?.unit_economics ?? []} loading={loading} searchable
           defaultSort={{ key: "amount", dir: "desc" }} cardTitle={(r: any) => r.batch}
-          columns={[
-            { key: "batch", label: "Batch", sortable: true, filterable: true, minWidth: 150, render: (r: any) => r.batch },
-            { key: "location", label: "Centre", sortable: true, filterable: true, render: (r: any) => r.location },
-            { key: "job_role", label: "Job role", sortable: true, filterable: true, render: (r: any) => r.job_role },
-            { key: "amount", label: L.actual ?? "Actual", sortable: true, sortValue: (r: any) => r.amount, render: (r: any) => rupee(r.amount), total: sumCol((r) => r.amount) },
-            { key: "enrolled", label: L.enrolled ?? "Enrolled", sortable: true, sortValue: (r: any) => r.enrolled ?? -1, render: (r: any) => (r.enrolled === null ? <span className="text-gray-300">—</span> : r.enrolled) },
-            { key: "certified", label: L.certified ?? "Certified", sortable: true, sortValue: (r: any) => r.certified ?? -1, render: (r: any) => (r.certified === null ? <span className="text-gray-300">—</span> : r.certified) },
-            { key: "cpe", label: L.cost_per_enrolled ?? "Cost per enrolled", sortable: true, sortValue: (r: any) => r.cost_per_enrolled ?? -1, render: (r: any) => rupee(r.cost_per_enrolled) },
-            { key: "cpc", label: L.cost_per_certified ?? "Cost per certified", sortable: true, sortValue: (r: any) => r.cost_per_certified ?? -1, render: (r: any) => rupee(r.cost_per_certified) },
-          ]} />
+          columns={((data?.project_report_columns ?? []) as { key: string; label: string; kind: string }[]).map((c) => {
+            const dash = <span className="text-gray-300">—</span>;
+            const text = c.kind === "text";
+            return {
+              key: c.key, label: c.label, sortable: true, filterable: text ? true : undefined,
+              minWidth: c.key === "batch" ? 150 : undefined,
+              sortValue: (r: any) => (text || c.kind === "date" ? String(r[c.key] ?? "") : r[c.key] ?? -1),
+              render: (r: any) => {
+                const v = r[c.key];
+                if (v === null || v === undefined) return dash;
+                if (c.kind === "money") return rupee(v);
+                if (c.kind === "pct") return pctCell(v);
+                if (c.kind === "date") return String(v).slice(0, 10);
+                return v;
+              },
+              total: c.key === "amount" ? sumCol((r: any) => r.amount) : undefined,
+            };
+          })} />
       </Section>
 
       {own.modal}

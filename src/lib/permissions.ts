@@ -633,6 +633,10 @@ export function maskMoneyInAuditRow<T extends Record<string, any>>(row: T, canSe
   const MONEY = new Set<string>([...INVOICE_MONEY_FIELDS, ...DECISION_MONEY_FIELDS] as readonly string[]);
   const scrub = (v: unknown, field: string): unknown => {
     if (MONEY.has(field)) return undefined;                       // the field ITSELF is money
+    // QA-3034: a batch's budget is audited as one per-field row (auditDiff) on the Batch entity, which
+    // is NOT a money entity - so neither the name set above nor the money-entity rules reach it. Named
+    // here, exactly, rather than by widening MONEY_ENTITIES (that would redact every date on a Batch).
+    if (row.entity === "Batch" && field === "budget") return undefined;
     if (v && typeof v === "object" && !Array.isArray(v)) {
       // QA-1850 (checker, cycle 4): the EIGHTH door. `requireApproval` computed a redacted summary
       // for the notification and the mail and then audited the RAW one seven lines below — three

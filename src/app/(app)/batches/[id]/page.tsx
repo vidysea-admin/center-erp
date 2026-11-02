@@ -1116,6 +1116,8 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
                 ["Planned start", fmtDate(b.planned_start)], ["Planned end", fmtDate(b.planned_end)],
                 ["Session", b.session ?? "—"], ["Target size", String(b.target_size ?? "—")],
                 ["Time slot", b.slot_start ? `${b.slot_start}–${b.slot_end}` : "—"],
+                // QA-3034: the batch budget is a money figure - the line exists only for finance.view.
+                ...(canBatchOv("finance.view") ? [["Budget", b.budget != null ? `₹${Number(b.budget).toLocaleString("en-IN")}` : "—"]] : []),
                 ["Government batch ID", b.govt_batch_id ?? "—"]].map(([k, v]) => (
                 <div key={k as string}><span className="text-xs text-gray-400">{k}: </span><span className="font-medium">{v}</span></div>
               ))}
@@ -1202,6 +1204,7 @@ function Overview({ data, role, onChanged, error, setError, onGo }: any) {
 }
 
 function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
+  const { can: canFin } = usePerms(); // QA-3034: the Budget field below exists only for finance.view
   const [trainers, setTrainers] = useState<any[]>([]);
   const [rooms, setRooms] = useState<any[]>([]);
   const [allLocations, setAllLocations] = useState<any[]>([]);
@@ -1214,6 +1217,7 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
   const formFrom = (x: any) => ({
     trainer: refOf(x.trainer), room: refOf(x.room), session: x.session,
     planned_start: toInputDate(x.planned_start), planned_end: toInputDate(x.planned_end), target_size: x.target_size,
+    budget: x.budget == null ? "" : String(x.budget), // QA-3034: absent for anyone without finance.view, so "" and never sent
     slot_start: x.slot_start ?? "", slot_end: x.slot_end ?? "",
     relevant_skills: x.relevant_skills ?? [],
     // QA-749: `drive_folder_url` deliberately NOT carried on this form any more. PATCH is partial,
@@ -1252,6 +1256,12 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
         : { ...form, trainer: form.trainer || null, room: form.room || null };
       // location/program travel only when actually changed — otherwise every ordinary save on a
       // Planning batch with a roster would trip the empty-roster guard on the API.
+      // QA-3034: the budget travels only when a finance user actually changed it. The form holds it as text;
+      // blank clears it. Everyone else never sends the key, so the finance gate on the door is never tripped.
+      delete json.budget;
+      if (canFin("finance.view") && String(b.budget ?? "") !== String(form.budget ?? "").trim()) {
+        json.budget = String(form.budget ?? "").trim() === "" ? null : Number(form.budget);
+      }
       if (json.location === String(b.location?._id ?? b.location ?? "")) delete json.location;
       if (json.program === String(b.program?._id ?? b.program ?? "")) delete json.program;
       const res = await api(`/api/batches/${b._id}`, { method: "PATCH", json });
@@ -1353,6 +1363,10 @@ function EditDetails({ b, closed = false, onChanged, error, setError }: any) {
           </select>
         </Field>
         <Field label="Target size"><input type="number" className={inputCls} value={form.target_size} onChange={(e) => setForm({ ...form, target_size: +e.target.value })} /></Field>
+        {/* QA-3034: this batch's budget - finance.view only; blank means not set. */}
+        {canFin("finance.view") && !closed && (
+          <Field label="Budget (₹)"><input type="number" min={0} className={inputCls} value={form.budget ?? ""} onChange={(e) => setForm({ ...form, budget: e.target.value })} /></Field>
+        )}
         <Field label="Time slot start"><input type="time" className={inputCls} value={form.slot_start} onChange={(e) => setForm({ ...form, slot_start: e.target.value })} /></Field>
         <Field label="Time slot end"><input type="time" className={inputCls} value={form.slot_end} onChange={(e) => setForm({ ...form, slot_end: e.target.value })} /></Field>
       </div>

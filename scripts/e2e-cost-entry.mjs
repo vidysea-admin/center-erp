@@ -3950,6 +3950,339 @@ for (const variant of ["ordinary", "mark_paid"]) {
   await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 }
 
+// ---------------------------------------------------------------------------------------------
+// QA-3034 (qa-3034-project-report): a per-batch BUDGET and the "Project Report" table.
+//
+// Umesh's workbook has one row per batch with 18 columns - Batch, Location, Job Role, Start, End, Status,
+// Duration, Target Seats, Enrolled, Certified, Fill Rate, Certification Rate, Budget, Actual, Variance,
+// % Utilised, Cost/Enrolled, Cost/Certified. The product had the money half (Actual, Cost/...) but no
+// budget on the batch (the only budget lived on the cost HEAD, for the whole project).
+//
+// Every arm is derived from the INPUTS the fixture is built from, never from the output it checks. The
+// fixture is raw-inserted batches + members + results (so the counts are known exactly) and costs posted
+// through the real door. Arm names a..f follow the unit's spec:
+//   a  exact fill / certification / variance / % utilised for a seeded batch
+//   b  zero target, zero enrolled, no budget, budget 0 -> null (never NaN / Infinity), rendered as an em dash
+//   c  a caller without finance.view cannot write budget: 403, value unchanged, NO audit row
+//   d  finance writes it (audited), a negative or non-number is 400, blank clears it
+//   e  the Excel "Project Report" sheet carries the SAME numbers as the screen's rollup row
+//   f  a per-batch variance survives a batch / date filter (the head variance is the one that hides)
+{
+  await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
+  const s3 = `p3034${stamp}`;
+  const COLS = [
+    ["batch", "Batch"], ["location", "Location"], ["job_role", "Job Role"], ["planned_start", "Start"],
+    ["planned_end", "End"], ["status", "Status"], ["duration_days", "Duration"], ["target_size", "Target Seats"],
+    ["enrolled", "Enrolled"], ["certified", "Certified"], ["fill_rate", "Fill Rate"],
+    ["cert_rate", "Certification Rate"], ["budget", "Budget"], ["amount", "Actual"], ["variance", "Variance"],
+    ["pct_utilised", "% Utilised"], ["cost_per_enrolled", "Cost/Enrolled"], ["cost_per_certified", "Cost/Certified"],
+  ];
+  const template = await rawBatches.findOne({ location: { $exists: true }, program: { $exists: true } });
+  const progDoc = template ? await rawDb.collection("programs").findOne({ _id: template.program }) : null;
+  const head = ((await req(admin, "GET", "/api/master-lists/cost-categories")).data?.items ?? [])
+    .find((c) => !c.pre_approved && c.active !== false);
+  ok("QA-3034 [precondition] a template batch and an ordinary cost head exist to build the fixture on",
+    !!template && !!head?._id, JSON.stringify({ template: !!template, head: !!head }));
+
+  if (template && head?._id) {
+    const mkBatch = async (tag, over = {}) => {
+      const _id = new ObjectId();
+      const code = `ZZ-P3034-${tag}-${stamp}`;
+      const doc = {
+        _id, code, status: "Active", location: template.location, program: template.program, target_size: 40,
+        planned_start: new Date("2026-10-01"), planned_end: new Date("2026-10-31"),
+        createdAt: new Date(), updatedAt: new Date(), ...over,
+      };
+      for (const k of Object.keys(doc)) if (doc[k] === undefined) delete doc[k];
+      await rawBatches.insertOne(doc);
+      return { _id, id: String(_id), code };
+    };
+    const A = await mkBatch("A");                                              // the exact-numbers batch
+    const Z = await mkBatch("Z", { target_size: 0, planned_end: undefined });  // zero target, no end date, no budget
+    const B = await mkBatch("B", { target_size: 10 });                         // budget 0, nobody enrolled
+    const C = await mkBatch("C", { status: "Completed" });                     // a closed batch
+    // 30 on A's roster, 15 of them certified (Pass).
+    const memberIds = Array.from({ length: 30 }, () => new ObjectId());
+    await rawDb.collection("batchmembers").insertMany(memberIds.map((_id) => ({
+      _id, batch: A._id, candidate: new ObjectId(), left_on: null, createdAt: new Date(), updatedAt: new Date(),
+    })));
+    await rawDb.collection("candidateresults").insertMany(memberIds.slice(0, 15).map((m) => ({
+      batch: A._id, batch_member: m, candidate: new ObjectId(), result: "Pass", createdAt: new Date(), updatedAt: new Date(),
+    })));
+    const postCost = (batch, amount, date, note) => req(admin, "POST", "/api/costs", {
+      entry_date: date, location: template.location, batch, category: head._id, amount, note: `${s3}-${note}`,
+    });
+    const costs = [
+      await postCost(A.id, 10000, "2026-10-05", "a1"), await postCost(A.id, 15000, "2026-11-05", "a2"),
+      await postCost(Z.id, 700, "2026-10-06", "z1"), await postCost(B.id, 400, "2026-10-07", "b1"),
+    ];
+    const loose = await req(admin, "POST", "/api/costs", { entry_date: "2026-10-08", location: template.location, category: head._id, amount: 300, note: `${s3}-loose` });
+    ok("QA-3034 [precondition] four batches (25000 / 700 / 400 spend) and one batch-less cost were created through the real doors",
+      costs.every((c) => c.status === 201) && loose.status === 201, JSON.stringify(costs.map((c) => c.status)) + loose.status);
+
+    const nonFin = await (async () => {
+      const email = `zz.p3034.${stamp}@vidysea-test.local`;
+      const made = await req(admin, "POST", "/api/users", { name: `P3034 ops ${stamp}`, email, password: PW, role: "Operations", can_edit: true, location_scope: [] });
+      return { id: made.data?.item?._id, email, cookie: await login(email, PW), status: made.status };
+    })();
+    const noMoney = nonFin.cookie ? await req(nonFin.cookie, "GET", "/api/reports/costs") : { status: 0 };
+    const reachDoor = nonFin.cookie ? await req(nonFin.cookie, "PATCH", `/api/batches/${A.id}`, { relevant_skills: [] }) : { status: 0 };
+    ok("QA-3034 [precondition] the unprivileged persona is signed in, holds NO finance.view (403 on the report) and DOES reach the batch PATCH door (200 on an ordinary field)",
+      nonFin.status === 201 && !!nonFin.cookie && noMoney.status === 403 && reachDoor.status === 200,
+      JSON.stringify({ made: nonFin.status, signedIn: !!nonFin.cookie, report: noMoney.status, door: reachDoor.status }));
+
+    const rowOf = async (qs, code) => {
+      const r = await req(admin, "GET", `/api/reports/costs${qs ? "?" + qs : ""}`);
+      return { res: r, row: (r.data?.unit_economics ?? []).find((x) => x.batch === code) };
+    };
+    const budgetOf = async (b) => (await rawBatches.findOne({ _id: b._id }))?.budget;
+    const budgetAudits = async (b) => rawAudits.find({ entity: "Batch", entity_id: b._id, field: "budget" }).sort({ _id: 1 }).toArray();
+
+    // ---- d: the write door -------------------------------------------------------------------
+    const noAuditYet = (await budgetAudits(A)).length;
+    const set1 = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: 100000 });
+    const audits1 = await budgetAudits(A);
+    ok("QA-3034 d: finance sets a batch budget (200), it is stored as a number, and one audit row records old -> new",
+      set1.status === 200 && (await budgetOf(A)) === 100000 && audits1.length === noAuditYet + 1
+        && audits1.at(-1)?.new_value === 100000 && (audits1.at(-1)?.old_value ?? null) === null,
+      JSON.stringify({ status: set1.status, stored: await budgetOf(A), audits: audits1.length, last: audits1.at(-1) }));
+    const set2 = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: 120000 });
+    const audits2 = await budgetAudits(A);
+    ok("QA-3034 d: changing it again records the OLD value too (100000 -> 120000)",
+      set2.status === 200 && audits2.length === audits1.length + 1 && audits2.at(-1)?.old_value === 100000 && audits2.at(-1)?.new_value === 120000,
+      JSON.stringify({ status: set2.status, last: audits2.at(-1) }));
+    const neg = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: -1 });
+    const nan = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: "lots" });
+    const obj = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: { v: 5 } });
+    ok("QA-3034 d: a negative, a word and an object are each refused with 400, and the stored budget is untouched",
+      neg.status === 400 && nan.status === 400 && obj.status === 400 && (await budgetOf(A)) === 120000 && (await budgetAudits(A)).length === audits2.length,
+      JSON.stringify({ neg: neg.status, nan: nan.status, obj: obj.status, stored: await budgetOf(A) }));
+    const clr = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: null });
+    const afterClr = await budgetOf(A);
+    const setBack = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: 100000 });
+    const blank = await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: "" });
+    const afterBlank = await budgetOf(A);
+    await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: 100000 }); // back to the figure the exact-numbers arm uses
+    ok("QA-3034 d: null and a blank string both CLEAR the budget (field gone, not 0), and it can be set again",
+      clr.status === 200 && (afterClr === undefined || afterClr === null) && setBack.status === 200 && blank.status === 200
+        && (afterBlank === undefined || afterBlank === null) && (await budgetOf(A)) === 100000,
+      JSON.stringify({ clr: clr.status, afterClr, blank: blank.status, afterBlank, now: await budgetOf(A) }));
+    const zero = await req(admin, "PATCH", `/api/batches/${B.id}`, { budget: 0 });
+    ok("QA-3034 d: zero is a real budget (stored as 0, not cleared)", zero.status === 200 && (await budgetOf(B)) === 0, JSON.stringify({ s: zero.status, v: await budgetOf(B) }));
+    const closedOk = await req(admin, "PATCH", `/api/batches/${C.id}`, { budget: 5000 });
+    const closedMixed = await req(admin, "PATCH", `/api/batches/${C.id}`, { budget: 6000, target_size: 99 });
+    const cRaw = await rawBatches.findOne({ _id: C._id });
+    ok("QA-3034 d: a CLOSED batch still takes a budget on its own (a finance annotation), but budget plus any other field gets the usual closed-batch refusal and neither is written",
+      closedOk.status === 200 && closedMixed.status >= 400 && cRaw?.budget === 5000 && cRaw?.target_size === 40,
+      JSON.stringify({ own: closedOk.status, mixed: closedMixed.status, budget: cRaw?.budget, target: cRaw?.target_size }));
+
+    // ---- c: the gate ---------------------------------------------------------------------------
+    if (nonFin.cookie) {
+      const auditsBefore = (await budgetAudits(A)).length;
+      const stored = await budgetOf(A);
+      const denied = await req(nonFin.cookie, "PATCH", `/api/batches/${A.id}`, { budget: 777 });
+      const deniedMixed = await req(nonFin.cookie, "PATCH", `/api/batches/${A.id}`, { budget: 888, target_size: 41 });
+      const deniedClear = await req(nonFin.cookie, "PATCH", `/api/batches/${A.id}`, { budget: null });
+      const aRaw = await rawBatches.findOne({ _id: A._id });
+      ok("QA-3034 c: a caller WITHOUT finance.view is refused 403 on budget - alone, bundled with another field, and as a clear - and nothing is written",
+        denied.status === 403 && deniedMixed.status === 403 && deniedClear.status === 403
+          && aRaw?.budget === stored && aRaw?.target_size === 40,
+        JSON.stringify({ a: denied.status, b: deniedMixed.status, c: deniedClear.status, budget: aRaw?.budget, target: aRaw?.target_size }));
+      ok("QA-3034 c: ...and the refusals wrote NO audit row (the trail is not a side channel for a refused edit)",
+        (await budgetAudits(A)).length === auditsBefore, `before=${auditsBefore} after=${(await budgetAudits(A)).length}`);
+    }
+
+    // ---- a / b / f: the rollup row -------------------------------------------------------------
+    const a = await rowOf("", A.code);
+    const aLabel = a.row?.status;
+    const r = a.row;
+    ok("QA-3034 a: the rollup row for the seeded batch carries every Project Report field with exactly the figures the fixture implies",
+      !!r && String(r.planned_start).slice(0, 10) === "2026-10-01" && String(r.planned_end).slice(0, 10) === "2026-10-31"
+        && typeof aLabel === "string" && aLabel.length > 0 && r.duration_days === 30 && r.target_size === 40
+        && r.enrolled === 30 && r.certified === 15 && r.amount === 25000
+        && r.fill_rate === 75 && r.cert_rate === 50 && r.budget === 100000 && r.variance === 75000 && r.pct_utilised === 25
+        && r.cost_per_enrolled === 833.33 && r.cost_per_certified === 1666.67,
+      JSON.stringify(r));
+    const z = (await rowOf("", Z.code)).row;
+    const progDays = typeof progDoc?.duration_days === "number" ? progDoc.duration_days : null;
+    ok("QA-3034 b: zero target / no budget -> fill rate, budget, variance and % utilised are null (not 0, not NaN); no end date -> the duration falls back to the programme's",
+      !!z && z.target_size === 0 && z.fill_rate === null && z.budget === null && z.variance === null && z.pct_utilised === null
+        && (z.planned_end ?? null) === null && (z.duration_days ?? null) === progDays,
+      JSON.stringify({ z, progDays }));
+    ok("QA-3034 b: zero enrolled -> certification rate is null and the unit costs stay null, while the money column is still real",
+      !!z && z.enrolled === 0 && z.cert_rate === null && z.cost_per_enrolled === null && z.amount === 700, JSON.stringify(z));
+    const bRow = (await rowOf("", B.code)).row;
+    ok("QA-3034 b: a budget of 0 is a budget - variance is the (negative) overspend, % utilised is null because the denominator is zero, and a real 0% fill rate stays 0 (not null)",
+      !!bRow && bRow.budget === 0 && bRow.variance === -400 && bRow.pct_utilised === null && bRow.fill_rate === 0 && bRow.cert_rate === null,
+      JSON.stringify(bRow));
+    const none = ((await req(admin, "GET", "/api/reports/costs")).data?.unit_economics ?? []).find((x) => x.key === "none");
+    ok("QA-3034 b: the batch-less 'Unassigned' row exists and carries nulls for every batch-only field (no crash, no invented dates)",
+      !!none && none.planned_start == null && none.planned_end == null && none.status == null && none.duration_days == null
+        && none.target_size == null && none.fill_rate == null && none.cert_rate == null && none.budget == null
+        && none.variance == null && none.pct_utilised == null, JSON.stringify(none));
+
+    // f: filters. The head-level variance is the one that must still hide (budget_comparable false) - that
+    // contrast proves the filter was really ON when the per-batch variance is read.
+    const fb = await rowOf(`batch=${A.id}`, A.code);
+    ok("QA-3034 f: with a BATCH filter on (head variance hidden: budget_comparable=false) the per-batch row still carries budget, variance and % utilised",
+      fb.res.data?.totals?.budget_comparable === false && fb.res.data?.totals?.variance === null
+        && fb.row?.budget === 100000 && fb.row?.variance === 75000 && fb.row?.pct_utilised === 25,
+      JSON.stringify({ comparable: fb.res.data?.totals?.budget_comparable, headVar: fb.res.data?.totals?.variance, row: fb.row }));
+    const fw = await rowOf(`from=2026-10-01&to=2026-10-31`, A.code);
+    ok("QA-3034 f: with a DATE window that selects only the 10000 entry, the row's variance is budget minus THAT slice (90000) and % utilised 10 - not hidden",
+      fw.res.data?.totals?.budget_comparable === false && fw.row?.amount === 10000 && fw.row?.variance === 90000 && fw.row?.pct_utilised === 10,
+      JSON.stringify({ comparable: fw.res.data?.totals?.budget_comparable, row: fw.row }));
+
+    // ---- e: the Excel sheet --------------------------------------------------------------------
+    const xl = await reqBuffer(admin, "/api/reports/costs/export");
+    const wb = xl.status === 200 ? XLSX.read(xl.data, { type: "buffer" }) : null;
+    const ws = wb?.Sheets?.["Project Report"];
+    const header = ws ? XLSX.utils.sheet_to_json(ws, { header: 1 })[0] : [];
+    ok("QA-3034 e: the workbook has a 'Project Report' sheet whose header is the 18 columns in the workbook's order",
+      !!ws && JSON.stringify(header) === JSON.stringify(COLS.map((c) => c[1])), JSON.stringify(header));
+    const sheetRows = ws ? XLSX.utils.sheet_to_json(ws, { defval: null }) : [];
+    const sameAsScreen = (screen, sheet) => COLS.every(([k, label]) => {
+      // a date is a full timestamp in the rollup and the IST day in the sheet; compare the day
+      const want = screen[k] === null || screen[k] === undefined ? "—" : (k === "planned_start" || k === "planned_end") ? String(screen[k]).slice(0, 10) : screen[k];
+      return String(sheet[label]) === String(want);
+    });
+    const screenRows = (await req(admin, "GET", "/api/reports/costs")).data?.unit_economics ?? [];
+    const diffs = [A.code, Z.code, B.code].map((code) => {
+      const sc = screenRows.find((x) => x.batch === code), sh = sheetRows.find((x) => x.Batch === code);
+      return sc && sh ? (sameAsScreen(sc, sh) ? null : { code, sc, sh }) : { code, missing: { sc: !!sc, sh: !!sh } };
+    }).filter(Boolean);
+    ok("QA-3034 e: for the seeded, the zero-target and the budget-0 batch, EVERY one of the 18 cells equals the screen's rollup value (null as an em dash)",
+      diffs.length === 0, JSON.stringify(diffs).slice(0, 700));
+    const aSheet = sheetRows.find((x) => x.Batch === A.code);
+    ok("QA-3034 e: ...and the seeded batch's cells equal the fixture-derived figures, not merely the rollup's (Fill 75, Cert 50, Budget 100000, Actual 25000, Variance 75000, Utilised 25)",
+      aSheet?.["Fill Rate"] === 75 && aSheet?.["Certification Rate"] === 50 && aSheet?.Budget === 100000 && aSheet?.Actual === 25000
+        && aSheet?.Variance === 75000 && aSheet?.["% Utilised"] === 25 && aSheet?.["Target Seats"] === 40 && aSheet?.Duration === 30,
+      JSON.stringify(aSheet));
+    const zSheet = sheetRows.find((x) => x.Batch === Z.code);
+    ok("QA-3034 e: ...and the zero-target batch's blank cells are the em dash text, never NaN / Infinity / #NUM!",
+      zSheet?.["Fill Rate"] === "—" && zSheet?.Budget === "—" && zSheet?.Variance === "—" && zSheet?.["% Utilised"] === "—"
+        && zSheet?.["Certification Rate"] === "—" && !/NaN|Infinity|#/.test(JSON.stringify(zSheet)),
+      JSON.stringify(zSheet));
+    const nonFinXl = nonFin.cookie ? await reqBuffer(nonFin.cookie, "/api/reports/costs/export") : { status: 0 };
+    ok("QA-3034 e: the export stays behind the finance door (403 for the unprivileged persona)", nonFinXl.status === 403, `status=${nonFinXl.status}`);
+
+    // ---- c5 (API half): the money never reaches a caller without finance.view ----------------------
+    const getA = await req(admin, "GET", `/api/batches/${A.id}`);
+    const getAnf = nonFin.cookie ? await req(nonFin.cookie, "GET", `/api/batches/${A.id}`) : { data: {} };
+    const listNf = nonFin.cookie ? await req(nonFin.cookie, "GET", "/api/batches?limit=2000") : { data: {} };
+    const listRow = (listNf.data?.items ?? []).find((x) => x.code === A.code);
+    const patchNf = nonFin.cookie ? await req(nonFin.cookie, "PATCH", `/api/batches/${A.id}`, { relevant_skills: [] }) : { data: {} };
+    ok("QA-3034 c5: the batch detail payload carries the budget for finance.view (100000) and OMITS the key for a caller without it - also on the list row and on the PATCH echo",
+      getA.data?.item?.budget === 100000 && !!getAnf.data?.item && !("budget" in getAnf.data.item)
+        && !!listRow && !("budget" in listRow) && !!patchNf.data?.item && !("budget" in patchNf.data.item),
+      JSON.stringify({ fin: getA.data?.item?.budget, nf: getAnf.data?.item?.budget, list: listRow ? listRow.budget : "no row", patch: patchNf.data?.item?.budget }));
+    const trailAdmin = await req(admin, "GET", `/api/audit/Batch/${A.id}`);
+    const trailNf = nonFin.cookie ? await req(nonFin.cookie, "GET", `/api/audit/Batch/${A.id}`) : { data: {} };
+    const budgetRows = (x) => (x.data?.items ?? []).filter((i) => i.field === "budget");
+    ok("QA-3034 c5: the audit trail shows the budget values to finance.view and withholds them from a caller without it",
+      budgetRows(trailAdmin).some((i) => i.new_value === 100000)
+        && budgetRows(trailNf).every((i) => i.old_value == null && i.new_value == null) && !/100000|120000/.test(JSON.stringify(trailNf.data ?? {})),
+      JSON.stringify({ admin: budgetRows(trailAdmin).length, nf: budgetRows(trailNf) }));
+
+    // ---- c3 / c5 in a real browser --------------------------------------------------------------
+    let pb;
+    try {
+      const { chromium } = await import("playwright");
+      pb = await chromium.launch({ headless: true });
+      const signInAs = async (email, pw) => {
+        const ctx = await pb.newContext({ viewport: { width: 1600, height: 1000 } });
+        const p = await ctx.newPage();
+        await p.goto(BASE, { waitUntil: "networkidle" });
+        const box = p.locator('input[type="email"], input[name="email"]').first();
+        if (await box.count()) {
+          await box.fill(email);
+          await p.locator('input[type="password"]').first().fill(pw);
+          await p.locator('button[type="submit"]').first().click();
+          await p.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+        }
+        return { ctx, p };
+      };
+      const adminPw = process.env.ADMIN_PASSWORD;
+      const adm = await signInAs("admin@vidysea.com", adminPw);
+      ok("QA-3034 [precondition] the finance browser is signed in", !/login/i.test(adm.p.url()), adm.p.url());
+      await adm.p.goto(`${BASE}/finance`, { waitUntil: "networkidle" });
+      const heading = adm.p.getByRole("heading", { name: "Project Report", exact: true });
+      const seen = await heading.first().waitFor({ timeout: 45000 }).then(() => true).catch(() => false);
+      ok("QA-3034 c3: /finance renders a section titled 'Project Report'", seen, "no heading 'Project Report' on /finance");
+      if (seen) {
+        const section = adm.p.locator("section, div").filter({ has: heading }).filter({ has: adm.p.locator("table") }).last();
+        const search = section.locator('input[placeholder^="Search"]');
+        if (await search.count()) await search.first().fill(`-${stamp}`);
+        await adm.p.waitForTimeout(500);
+        const heads = await section.locator("thead th").evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim()));
+        const wantHeads = COLS.map((c) => c[1]);
+        ok("QA-3034 c3: the table's headers are the 18 workbook columns in order",
+          wantHeads.every((h, i) => (heads[i] ?? "").startsWith(h)) && heads.filter(Boolean).length === 18, JSON.stringify(heads));
+        const cellsFor = async (code) => {
+          const tr = section.locator("tbody tr").filter({ hasText: code }).first();
+          return (await tr.count()) ? await tr.locator("td").evaluateAll((els) => els.map((e) => (e.textContent ?? "").trim())) : null;
+        };
+        const idx = (label) => wantHeads.indexOf(label);
+        const ac = await cellsFor(A.code), zc = await cellsFor(Z.code);
+        ok("QA-3034 c3: the seeded batch's row reads Fill 75%, Cert 50%, Budget 1,00,000, Actual 25,000, Variance 75,000, Utilised 25%",
+          !!ac && /75\s*%/.test(ac[idx("Fill Rate")]) && /50\s*%/.test(ac[idx("Certification Rate")]) && /1,00,000/.test(ac[idx("Budget")])
+            && /25,000/.test(ac[idx("Actual")]) && /75,000/.test(ac[idx("Variance")]) && /25\s*%/.test(ac[idx("% Utilised")]),
+          JSON.stringify(ac));
+        ok("QA-3034 c3: the zero-target / no-budget batch renders an em dash (never NaN, Infinity or 0%) in Fill Rate, Certification Rate, Budget, Variance and % Utilised",
+          !!zc && ["Fill Rate", "Certification Rate", "Budget", "Variance", "% Utilised"].every((l) => zc[idx(l)] === "—") && !/NaN|Infinity/.test(zc.join("|")),
+          JSON.stringify(zc));
+      }
+      await adm.ctx.close();
+
+      // c5: the batch page's Budget field
+      const finPage = await signInAs("admin@vidysea.com", adminPw);
+      await finPage.p.goto(`${BASE}/batches/${A.id}`, { waitUntil: "networkidle" });
+      const bf = finPage.p.locator("label", { hasText: /^Budget/ }).locator("input");
+      const bfSeen = await bf.first().waitFor({ timeout: 45000 }).then(() => true).catch(() => false);
+      ok("QA-3034 c5: the batch page shows finance a Budget input holding the stored value", bfSeen && (await bf.first().inputValue()) === "100000",
+        bfSeen ? await bf.first().inputValue() : "no Budget input");
+      if (bfSeen) {
+        await bf.first().fill("130000");
+        await finPage.p.getByRole("button", { name: /^Save details$/ }).click();
+        await finPage.p.waitForTimeout(2500);
+        ok("QA-3034 c5: ...and saving it from the page writes the new figure", (await budgetOf(A)) === 130000, `stored=${await budgetOf(A)}`);
+        await req(admin, "PATCH", `/api/batches/${A.id}`, { budget: 100000 });
+      }
+      await finPage.ctx.close();
+      if (nonFin.cookie) {
+        const nf = await signInAs(nonFin.email, PW);
+        await nf.p.goto(`${BASE}/batches/${A.id}`, { waitUntil: "networkidle" });
+        await nf.p.getByRole("button", { name: /^Save details$/ }).waitFor({ timeout: 45000 }).catch(() => {});
+        const body = await nf.p.locator("body").innerText();
+        ok("QA-3034 c5: a user WITHOUT finance.view gets the details form but no Budget field and no budget figure anywhere on the page",
+          (await nf.p.getByRole("button", { name: /^Save details$/ }).count()) === 1
+            && (await nf.p.locator("label", { hasText: /^Budget/ }).count()) === 0 && !/1,00,000|100000|100,000/.test(body),
+          body.slice(0, 200));
+        await nf.ctx.close();
+      }
+    } catch (e) {
+      ok("QA-3034 [browser] the Project Report / batch page browser block ran without throwing", false, String(e?.message ?? e).slice(0, 300));
+    } finally {
+      if (pb) await pb.close().catch(() => {});
+    }
+
+    // ---- cleanup: deactivate the persona, remove the fixtures --------------------------------------
+    if (nonFin.id) await req(admin, "PATCH", `/api/users/${nonFin.id}`, { active: false });
+    const looseId = loose.data?.item?._id;
+    if (looseId) await req(admin, "DELETE", `/api/costs/${looseId}`, { reason: DEL_REASON });
+    for (const e of costs) { const id = e.data?.item?._id; if (id) await req(admin, "DELETE", `/api/costs/${id}`, { reason: DEL_REASON }); }
+    for (const b of [A, Z, B, C]) {
+      await rawBatches.deleteOne({ _id: b._id });
+    }
+    await rawDb.collection("batchmembers").deleteMany({ batch: A._id });
+    await rawDb.collection("candidateresults").deleteMany({ batch: A._id });
+    ok("QA-3034 [cleanup] the four fixture batches, their roster and results are gone",
+      (await rawBatches.countDocuments({ _id: { $in: [A._id, Z._id, B._id, C._id] } })) === 0
+        && (await rawDb.collection("batchmembers").countDocuments({ batch: A._id })) === 0,
+      JSON.stringify({ left: await rawBatches.countDocuments({ _id: { $in: [A._id, Z._id, B._id, C._id] } }) }));
+  }
+}
+
 // leave the rule as we found it, so the next suite is not measuring ours
 await req(admin, "PUT", "/api/approvals", { action: "cost.post", enabled: false, approver_role: "Admin" });
 await req(admin, "PUT", "/api/approvals", { action: "costcategory.create", enabled: false, approver_role: "Admin" });

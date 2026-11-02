@@ -923,6 +923,13 @@ const BatchSchema = new Schema({
   // same-time overlap for one trainer is hard-blocked.
   slot_start: String, slot_end: String,
   target_size: { type: Number, required: true },
+  // QA-3034: the BATCH's budget - what this one batch is allowed to cost. Not the cost HEAD's
+  // `budget` (a whole-project figure per category; ARCHITECTURE.md section 3, "two budgets"). Optional
+  // with no default on purpose: an absent budget is "not set", which the Project Report shows as an
+  // em dash, and 0 is a real budget. `select: false` is the structural no-leak: this is a money figure
+  // on a document that dozens of routes emit to people without finance.view, so no read returns it
+  // unless the caller names `+budget` AFTER passing a finance gate (the deletion_state precedent below).
+  budget: { type: Number, min: 0, select: false },
   planned_start: { type: Date, required: true },
   planned_end: Date,
   actual_start: Date, actual_end: Date,

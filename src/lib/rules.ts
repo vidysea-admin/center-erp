@@ -7079,6 +7079,37 @@ export function costApproverOptions(entries: any[]): { value: string; label: str
 
 const COST_UNASSIGNED = "Unassigned";
 
+// QA-3034: the "Project Report" - one row per batch, the 18 columns of the workbook Umesh works from.
+// ONE list, shipped in the costRollup payload as `project_report_columns`, because the screen (a client
+// component that cannot import this file) and the Excel export both render FROM it: two hand-written
+// copies of "what the columns are called and in what order" is how the sheet and the screen come to
+// disagree. `key` is the field on the `unit_economics` row; `kind` tells a renderer how to print it.
+export const PROJECT_REPORT_COLUMNS = [
+  { key: "batch", label: "Batch", kind: "text" },
+  { key: "location", label: "Location", kind: "text" },
+  { key: "job_role", label: "Job Role", kind: "text" },
+  { key: "planned_start", label: "Start", kind: "date" },
+  { key: "planned_end", label: "End", kind: "date" },
+  { key: "status", label: "Status", kind: "text" },
+  { key: "duration_days", label: "Duration", kind: "int" },
+  { key: "target_size", label: "Target Seats", kind: "int" },
+  { key: "enrolled", label: "Enrolled", kind: "int" },
+  { key: "certified", label: "Certified", kind: "int" },
+  { key: "fill_rate", label: "Fill Rate", kind: "pct" },
+  { key: "cert_rate", label: "Certification Rate", kind: "pct" },
+  { key: "budget", label: "Budget", kind: "money" },
+  { key: "amount", label: "Actual", kind: "money" },
+  { key: "variance", label: "Variance", kind: "money" },
+  { key: "pct_utilised", label: "% Utilised", kind: "pct" },
+  { key: "cost_per_enrolled", label: "Cost/Enrolled", kind: "money" },
+  { key: "cost_per_certified", label: "Cost/Certified", kind: "money" },
+] as const;
+
+// A percentage to one decimal, or null when the denominator is zero/absent. Same rule and same
+// rounding as `pct_used` on the head rows; never NaN, never Infinity, and never a confident 0 for "unknown".
+const ratePct = (num: number | null, den: number | null): number | null =>
+  num === null || den === null || !(den > 0) ? null : Math.round((num / den) * 1000) / 10;
+
 // Guard every ratio (developer note #6). A batch with zero enrolled shows "—", not an error and not
 // a zero — a confident 0 is the same failure the money masker already refuses for the same reason.
 const perHead = (amount: number, n: number): number | null => (n > 0 ? Math.round((amount / n) * 100) / 100 : null);
@@ -7136,7 +7167,10 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   // receive ObjectIds taken off documents loaded here.
   let entries = await CostEntry.find(q)
     .populate("location", "name code")
-    .populate({ path: "batch", select: "code program location", populate: { path: "program", select: "name code scheme" } })
+    // QA-3034: the Project Report reads dates, status, seats and the budget off the same populated batch.
+    // `+budget` is a select:false field - the rollup is finance-gated, and the budget leaves it only inside
+    // a `unit_economics` row. Program carries duration_days for the batch with no end date.
+    .populate({ path: "batch", select: "code program location planned_start planned_end status target_size +budget", populate: { path: "program", select: "name code scheme duration_days" } })
     .populate("trainer", "name")
     .populate("category", "name code parent head_type")
     .populate("entered_by", "name")
@@ -7201,6 +7235,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
   const byRole = new Map<string, Bucket>();
   const byMonth = new Map<string, Bucket>();
   const byBatch = new Map<string, Bucket & { centres?: Set<string>; programs?: Set<string> }>();
+  const batchDocs = new Map<string, any>();
   const cross = new Map<string, number>();
   const register: any[] = [];
   let total = 0;
@@ -7227,6 +7262,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
 
     const batchKey = e.batch?._id ? String(e.batch._id) : "none";
     const bb = bump(byBatch, batchKey, e.batch?.code ?? COST_UNASSIGNED, amt);
+    if (e.batch?._id) batchDocs.set(batchKey, e.batch); // QA-3034: the Project Report's per-batch facts
     // QA-1928 (live checker, on production). This line used to ASSIGN, so the bucket kept whichever
     // centre the LAST entry happened to carry. For a real batch that is invisible - every entry has
     // the same centre - but the `Unassigned` bucket holds untagged spend from EVERY centre, so it
@@ -7335,14 +7371,44 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
     const v = [...(set ?? [])];
     return v.length === 1 ? v[0] : v.length === 0 ? COST_UNASSIGNED : `${v.length} ${noun}`;
   };
+  // QA-3034: a Closing batch's status WORD depends on its closure (sign-off pending vs not), the same
+  // input `batchStatusLabel` takes on the batch page, so it is read once here for those batches only.
+  const closingIds = [...batchDocs.values()].filter((d) => d.status === "Closing").map((d) => d._id);
+  const closureBy = new Map<string, any>(
+    closingIds.length
+      ? (await Closure.find({ batch: { $in: closingIds } }).select("batch assessment_status exam_held").lean<any[]>()).map((c) => [String(c.batch), c] as [string, any])
+      : [],
+  );
+  const dayMs = 24 * 60 * 60 * 1000;
   const batchRows = [...byBatch.values()].map((b) => {
     const enrolled = b.key === "none" ? null : enrolledBy.get(b.key) ?? 0;
     const certified = b.key === "none" ? null : certifiedBy.get(b.key) ?? 0;
+    const d = b.key === "none" ? null : batchDocs.get(b.key) ?? null;
+    const start = d?.planned_start ? new Date(d.planned_start) : null;
+    const end = d?.planned_end ? new Date(d.planned_end) : null;
+    // Duration: the planned span when both ends exist (end minus start, whole days, not inclusive), else the
+    // programme's own length, else null - never a guess.
+    const spanDays = start && end ? Math.round((end.getTime() - start.getTime()) / dayMs) : null;
+    const progDays = typeof d?.program?.duration_days === "number" ? d.program.duration_days : null;
+    const target = d && typeof d.target_size === "number" ? d.target_size : null;
+    const budget = d && typeof d.budget === "number" && Number.isFinite(d.budget) && d.budget >= 0 ? d.budget : null;
     return {
       key: b.key, batch: b.label,
       location: oneOf(b.centres, "centres"), job_role: oneOf(b.programs, "job roles"),
+      planned_start: start, planned_end: end,
+      status: d ? batchStatusLabel(d.status, closureBy.get(String(d._id)) ?? null) : null,
+      duration_days: d ? (spanDays ?? progDays) : null,
+      target_size: target,
       amount: b.amount, entries: b.entries,
       enrolled, certified,
+      fill_rate: ratePct(enrolled, target),
+      cert_rate: ratePct(certified, enrolled),
+      budget,
+      // Per-batch variance is NOT hidden by the filters the head variance hides on: a batch budget is
+      // that batch's own whole figure, so it is comparable with whatever slice of its spend the filter
+      // selects (the head budget is whole-project, which is why only that one goes null on a filter).
+      variance: budget === null ? null : budget - b.amount,
+      pct_utilised: ratePct(budget === null ? null : b.amount, budget),
       cost_per_enrolled: enrolled === null ? null : perHead(b.amount, enrolled),
       cost_per_certified: certified === null ? null : perHead(b.amount, certified),
     };
@@ -7383,6 +7449,7 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       })),
     },
     unit_economics: batchRows,
+    project_report_columns: PROJECT_REPORT_COLUMNS, // QA-3034: the 18 columns, in order, for the screen and the sheet
     register,
     approver_options: approverOptions,
   };

@@ -66,13 +66,15 @@ export const GET = apiHandler(async (req: NextRequest) => {
     })),
   ), "batch x head");
 
+  // QA-3034: the "Project Report" - the same 18 columns, in the same order, from the same `unit_economics`
+  // rows the screen renders. The column list comes from the rollup payload (`project_report_columns`), not
+  // from a copy here, and an absent value is the em dash exactly as on the screen (never NaN / Infinity).
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
-    data.unit_economics.map((r) => ({
-      Batch: r.batch, Location: r.location, "Job role": r.job_role,
-      [L.actual]: r.amount, [L.enrolled]: r.enrolled ?? "—", [L.certified]: r.certified ?? "—",
-      [L.cost_per_enrolled]: money(r.cost_per_enrolled), [L.cost_per_certified]: money(r.cost_per_certified),
-    })),
-  ), "unit economics");
+    data.unit_economics.map((r) => Object.fromEntries(data.project_report_columns.map((c) => {
+      const v = (r as Record<string, unknown>)[c.key];
+      return [c.label, v === null || v === undefined ? "—" : c.kind === "date" ? istDayOf(new Date(v as Date)) : v];
+    }))),
+  ), "Project Report");
 
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
     data.register.map((r) => ({

@@ -1394,6 +1394,31 @@ an Admin-editable master list, not static data — and exposes `drop()`) and `Dr
 JSX, taking the hook's return values plus the caller's own `error` string) — now shared by both.
 Do not re-inline a third copy for a new caller; import this one.
 
+### 3.18 Two things called "budget" — a cost HEAD's and a BATCH's (QA-3034, 2026-11-02)
+
+The word now names two different figures, stored in two places, and they are never added together or
+compared with each other.
+
+| | Head budget | Batch budget |
+|---|---|---|
+| Lives on | `CostCategory.budget` (`models/index.ts`, the cost-category master) | `Batch.budget` (`models/index.ts`, `BatchSchema`, optional, no default, `select: false`) |
+| Means | whole-project allowance for one cost head (or the sum of its subheads) | the allowance for ONE batch |
+| Written by | `PUT /api/master-lists/cost-categories` | `PATCH /api/batches/[id]`, only for callers that pass `requireFinance(user, "view")`; others get 403 before anything is read or written |
+| Read in | `costRollup` `by_head` rows: `budget`, `variance`, `pct_used` | `costRollup` `unit_economics` rows: `budget`, `variance`, `pct_utilised` |
+| Filters | variance and `% used` go to `null` once any filter narrows the spend (`budget_comparable`), because a slice of spend against a whole-project budget lies | per-batch variance is NOT hidden by filters: the batch budget is that batch's own whole figure, so it is compared with whatever slice of its spend is selected |
+
+Rules that follow:
+- `Batch.budget` is `select: false` so the many routes that emit a Batch to people without
+  `finance.view` cannot leak it by accident (the `deletion_state` precedent). The only readers are the
+  finance-gated batch GET / PATCH echo and `costRollup` (itself finance-gated). A new route that emits
+  batches stays safe by doing nothing; a new route that wants the figure must name `+budget` AFTER a finance check.
+- The audit trail stores `Batch` `budget` rows raw and masks them on read: `maskMoneyInAuditRow` withholds both
+  values for a caller without `finance.view` (named by entity + field, not by widening `MONEY_ENTITIES`).
+- The "Project Report" (finance screen table and the `Project Report` sheet of the costs export) is ONE
+  definition: `PROJECT_REPORT_COLUMNS` in `lib/rules.ts`, shipped in the rollup payload as
+  `project_report_columns`; both render from it and from the same `unit_economics` rows. Do not
+  hand-write the 18 columns a second time.
+
 ---
 
 ## 4. Key entry points
