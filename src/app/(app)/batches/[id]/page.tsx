@@ -12,7 +12,7 @@ import { personLabel, personList, personPhone } from "@/lib/person";
 import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
 // QA-1198: the settled-certificate predicate, from the PURE module — this screen cannot reach
 // rules.ts (mongoose), which is exactly why the definition lives in lib/candidate-journey.ts.
-import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, showsAfterLeaving } from "@/lib/candidate-journey";
+import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, isFreeToJoin, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
@@ -1501,9 +1501,9 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     // 2026-08-13 (Manish hit this live — Prem Kumar/Lalit from another job role in the pool):
     // the pool is this location AND this job role. Program-less candidates (bulk imports)
     // stay eligible — they inherit the batch's programme on enrol; the server enforces both.
+    // Re-enrolment (2026-11-02): pass-outs and cancelled-batch students are offered too - isFreeToJoin.
     api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=2000`).then((d) =>
-      setPool(d.items.filter((c: any) => ["Unassigned", "Dropped"].includes(c.lifecycle_status)
-        && (!c.program || String(c.program?._id ?? c.program) === String(batch.program?._id ?? batch.program))))),
+      setPool(d.items.filter((c: any) => isFreeToJoin(c, batch.program)))),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 

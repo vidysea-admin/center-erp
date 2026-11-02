@@ -8,7 +8,7 @@ import {
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest, User,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, isCertificateSettled, isFreshCandidate, journeyOf } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate, journeyOf } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -815,7 +815,9 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   // rather than becoming a third spelling of "things to check before someone joins a batch".
 
   // ---- 1. preconditions: everything that can REFUSE the join ----
-  const existing = await BatchMember.findOne({ candidate: candidateId, left_on: null }).populate("batch", "code").lean<any>();
+  // HOLDS_PERSON, not `left_on: null` alone: a seat in a Completed/Cancelled batch is released and no longer
+  // holds the person (re-enrolment, 2026-11-02).
+  const existing = await BatchMember.findOne({ candidate: candidateId, ...HOLDS_PERSON }).populate("batch", "code").lean<any>();
   if (existing) {
     throw new HttpError(409, `Rule 20: ${rule20Sentence(existing.batch?.code ?? existing.batch)}`);
   }
@@ -1039,19 +1041,34 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
 // three routes now call these. `addMemberChecked` above stays the join authority (Rule 20, QA-2794
 // revive, QA-945, joined-on rules, target warning) and is not changed.
 
+/** Which of these candidates have EVER held a batch seat (any row: completed, dropped or current). One query. */
+export async function hasBatchHistory(candidateIds: unknown[]): Promise<Set<string>> {
+  if (!candidateIds.length) return new Set();
+  const ids = await BatchMember.distinct("candidate", { candidate: { $in: candidateIds } });
+  return new Set(ids.map(String));
+}
+
 /** Pure and sync: the SAME sentences the two routes used before. null = joinable. */
 export function joinRefusalFor(
   cand: { name?: string | null; phone?: string | null; sidh_candidate_id?: string | null; location?: unknown; program?: unknown; batch_interest?: unknown; archived_at?: unknown },
   batch: { location?: unknown; program?: unknown },
+  opts: { returning?: boolean } = {},
 ): string | null {
   const who = (cand.name as string | undefined) ?? "Candidate";
-  // -124 / -130 (QA-273): the leading `cand.location &&` is the walk-in exemption - a candidate with no
-  // centre is unplaced, not "at another centre"; they ADOPT the batch's centre on joining.
-  if (cand.location && String(cand.location) !== String(batch.location)) {
-    return `${who} belongs to another centre — move them to this location first.`;
-  }
-  if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
-    return `${who} is registered under a different job role/scheme than this batch.`;
+  // Re-enrolment (Umesh 2026-11-02, "koi bhi course/centre"): a RETURNING student - one with batch history -
+  // may join any course at any centre and adopts the new batch's on joining (assignCandidateToBatch). The
+  // two refusals below keep protecting fresh leads. Whether they are still active somewhere is Rule 20's
+  // question, asked by addMemberChecked; `returning` is computed by the caller (hasBatchHistory) so this
+  // stays sync for the importer preview.
+  if (!opts.returning) {
+    // -124 / -130 (QA-273): the leading `cand.location &&` is the walk-in exemption - a candidate with no
+    // centre is unplaced, not "at another centre"; they ADOPT the batch's centre on joining.
+    if (cand.location && String(cand.location) !== String(batch.location)) {
+      return `${who} belongs to another centre — move them to this location first.`;
+    }
+    if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
+      return `${who} is registered under a different job role/scheme than this batch.`;
+    }
   }
   if (cand.archived_at) return `${who} is archived — restore them before adding them to a batch.`;
   if (cand.batch_interest === "Future") return upcomingInterestRefusal(cand);
@@ -1065,7 +1082,8 @@ export async function assertBatchJoinable(user: SessionUser, batchId: string) {
     : null;
   if (!batch) throw new HttpError(404, "Batch not found");
   assertLocationInScope(user, String(batch.location)); // Rule 38
-  if (["Completed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
+  // Closed too (2026-11-02): a seat added there would never be released, so it would hold the person for ever.
+  if (["Completed", "Closed", "Cancelled"].includes(batch.status)) throw new HttpError(409, "Batch is closed.");
   await assertLocationOperational(batch.location, "Adding a candidate"); // Rule 1
   return batch as { _id: any; code?: string; status: string; location: any; program: any; target_size?: number };
 }
@@ -1083,7 +1101,8 @@ export async function assignCandidateToBatch(a: {
   defaults?: { min_age: number; max_age: number; training_cooldown_months: number };
 }) {
   const { batch, candidate: c } = a;
-  const refusal = joinRefusalFor(c, batch);
+  const returning = (await hasBatchHistory([c._id])).has(String(c._id));
+  const refusal = joinRefusalFor(c, batch, { returning });
   if (refusal) throw new HttpError(409, refusal);
   // QA-892: `undefined`, not `new Date()` - the default belongs to addMemberChecked, which knows whether
   // this batch already began.
@@ -1091,6 +1110,19 @@ export async function assignCandidateToBatch(a: {
   // Import convention: programme-less candidates inherit the batch's programme on enrolment.
   if (!c.program && batch.program) {
     await Candidate.updateOne({ _id: c._id }, { $set: { program: batch.program } });
+  }
+  // Re-enrolment (2026-11-02): a returning student joining another course or centre now belongs to it - the
+  // candidate list, Rule 38 scoping and the next batch's pool all read these two fields. The earlier batch
+  // keeps its own program/location on the Batch, so nothing about that history changes. Audited by name.
+  if (returning) {
+    for (const field of ["program", "location"] as const) {
+      const was = c[field], now = batch[field];
+      if (was && now && String(was) !== String(now)) {
+        await Candidate.updateOne({ _id: c._id }, { $set: { [field]: now } });
+        await audit({ entity: "Candidate", entityId: c._id, field,
+          oldValue: String(was), newValue: `set to this batch's ${field === "program" ? "job role" : "centre"} on re-enrolment (${batch.code ?? batch._id})`, actor: a.actorId });
+      }
+    }
   }
   // -124 (M4-04) / -130 (QA-273): a candidate with no centre ADOPTS this one. Audited by name, because it
   // changes who can see the record from that moment on (Rule 38 scoping keys on exactly this field).
@@ -1222,6 +1254,12 @@ export async function dropMemberChecked(memberId: string, left_on: Date, drop_re
   // QA-081: the future check compares CALENDAR dates on the IST footing (dayKey space);
   // storage below stays in the historical dayStart encoding untouched.
   if (dayKey(left_on).getTime() > istToday().getTime()) throw new HttpError(400, "Rule 25: left_on cannot be a future date.");
+  // Re-enrolment (2026-11-02): dropping a finished batch's seat would stamp the person "Dropped" while they
+  // sit in their next batch, which then shows a dropout on its roster.
+  if (m.released_on) {
+    const now = await BatchMember.findOne({ candidate: m.candidate, ...HOLDS_PERSON }).populate("batch", "code").lean<any>();
+    if (now) throw new HttpError(409, `This batch has finished and the student is now in batch ${now.batch?.code ?? "another batch"}. Drop them there instead.`);
+  }
   m.left_on = lo;
   m.drop_reason = drop_reason;
   await m.save();
@@ -1363,6 +1401,20 @@ export async function activateFromEvidence(batchId: string, opts: { actor?: stri
   });
   if (batch.trainer) await deriveTrainerStatus(String(batch.trainer)); // Rule 12
   return { activated: true };
+}
+
+// Re-enrolment (2026-11-02): reopening a Completed batch or restoring a Cancelled one puts its released
+// roster back on it - and a student who joined another batch meanwhile cannot be in two at once (the
+// HOLDS_PERSON unique index would throw a raw duplicate-key error halfway through). So the move is
+// refused up front, naming each person, and nothing is changed.
+async function assertReleasedRosterFree(batchId: string, verb: "reopened" | "restored") {
+  const released = await BatchMember.find({ batch: batchId, left_on: null, released_on: { $ne: null } }).select("candidate").lean<any[]>();
+  if (!released.length) return;
+  const elsewhere = await BatchMember.find({ candidate: { $in: released.map((m) => m.candidate) }, ...HOLDS_PERSON })
+    .populate("candidate", "name phone sidh_candidate_id").populate("batch", "code").lean<any[]>();
+  if (!elsewhere.length) return;
+  const who = elsewhere.map((m) => `${personLabel(m.candidate) || "a candidate"} (now in ${m.batch?.code ?? "another batch"})`).join(", ");
+  throw new HttpError(409, `This batch cannot be ${verb} while some of its students are in another batch: ${who}. Remove them from that batch first, or leave this one as it is.`);
 }
 
 export async function transitionBatch(batchId: string, target: string, opts: {
@@ -1567,6 +1619,7 @@ export async function transitionBatch(batchId: string, target: string, opts: {
     case "Completed->Closing": {
       if (!opts.isAdmin) fail("Only an Admin can reopen a completed batch.");
       if (!opts.reason) fail("Reopening a completed batch needs a reason — it is audited.");
+      await assertReleasedRosterFree(batchId, "reopened");
       // Completing stamped an end date on the batch; reopening takes it off again, or Rule 32 goes on
       // refusing attendance for every day after an end that no longer applies.
       batch.set("actual_end", undefined);
@@ -1745,6 +1798,8 @@ export async function transitionBatch(batchId: string, target: string, opts: {
       if (target === "Active" && !batch.actual_start) {
         fail("This batch never started, so there is no Active state to restore — restore it to Planning or Ready and start it with its real date.");
       }
+      // Last of the refusals and before the audit row, so a refused restore records nothing.
+      await assertReleasedRosterFree(batchId, "restored");
       // Same shape as -226's row: the audit trail IS the record. The cancel reason is quoted INTO it
       // because clearing the field on the next line is the only thing that erases it.
       await audit({
@@ -1761,6 +1816,18 @@ export async function transitionBatch(batchId: string, target: string, opts: {
 
   batch.status = target as any;
   await batch.save();
+  // Re-enrolment (Umesh 2026-11-02): "free" = Completed, Closed or Cancelled; Assessment Awaited and Closing
+  // keep the roster. Written AFTER the save so a refused or failed move never releases anyone. Completed->
+  // Closed only re-runs the idempotent release; the reopen arms above already refused if
+  // a released student has since joined another batch (assertReleasedRosterFree).
+  const FREEING = ["Completed", "Closed", "Cancelled"];
+  // Every move INTO a freeing state releases (HOLDS_PERSON makes it idempotent), so Completed -> Closed also
+  // heals seats a crash between save() and this line left holding.
+  if (FREEING.includes(target)) {
+    await BatchMember.updateMany({ batch: batchId, ...HOLDS_PERSON }, { $set: { released_on: new Date() } });
+  } else if (FREEING.includes(from) && !FREEING.includes(target)) {
+    await BatchMember.updateMany({ batch: batchId, left_on: null, released_on: { $ne: null } }, { $set: { released_on: null } });
+  }
   // QA-2492 (S2, filed by a checker root-causing Manish's 2026-09-12 mail - a batch that appeared to
   // change state on its own). Until this line, a Batch status move was audited at ONE CALLER,
   // transition/route.ts:124, and the three other call sites into this same function wrote nothing:
@@ -3598,7 +3665,7 @@ export function candidateEligibility(
 // the screen and its export read ONE function). Both doors now call this.
 export async function enrichCandidateRows(items: any[]): Promise<any[]> {
   const defaults = await getDefaults();
-  const members = await BatchMember.find({ candidate: { $in: items.map((c) => c._id) }, left_on: null })
+  const members = await BatchMember.find({ candidate: { $in: items.map((c) => c._id) }, ...HOLDS_PERSON })
     .select("candidate batch")
     .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
     .lean();
@@ -3607,9 +3674,16 @@ export async function enrichCandidateRows(items: any[]): Promise<any[]> {
   // the journey trusted lifecycle_status, which historical imports never caught up. The recorded
   // assessment is the truth; it rides on every row as latest_result and the journey derives from it.
   const results = await CandidateResult.find({ candidate: { $in: items.map((c) => c._id) }, result: { $ne: "Pending" } })
-    .select("candidate result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
+    .select("candidate batch result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
+  // Re-enrolment (Umesh 2026-11-02, "based on the batch status hona chahiye"): a person held by a batch NOW
+  // reads only THAT batch's result - a Pass (or Fail) from a finished batch must not label them Certified
+  // (or Failed) while they train in the next one. Not held anywhere: the latest result overall, as before.
   const resByCand = new Map<string, string>();
-  for (const r of results) if (!resByCand.has(String(r.candidate))) resByCand.set(String(r.candidate), r.result);
+  for (const r of results) {
+    const k = String(r.candidate), held = byCand.get(k) as any;
+    if (held && String(r.batch) !== String(held._id)) continue;
+    if (!resByCand.has(k)) resByCand.set(k, r.result);
+  }
   return items.map((c) => {
     const b: any = byCand.get(String(c._id));
     return {

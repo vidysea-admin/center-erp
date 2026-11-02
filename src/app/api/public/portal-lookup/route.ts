@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { BatchMember, Candidate, Notification, PublicToken } from "@/models";
+import { HOLDS_PERSON } from "@/lib/candidate-journey";
 import { clientKey, rateLimit, phoneChallengeGate, emailChallengeGate } from "@/lib/rate-limit";
 import { sendSms, smsTemplateFor } from "@/lib/sms";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -50,8 +51,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Reached by the DOB single-step path AND by the DOB-less path only AFTER its OTP is verified —
   // this is the ONLY place a purpose:"attendance" PublicToken is minted on this route.
   const completeLookup = async (cand: any) => {
-    // At most one active membership (partial-unique index on {candidate, left_on: null}).
-    const member = await BatchMember.findOne({ candidate: cand._id, left_on: null }).select("_id batch").lean<any>();
+    // At most one seat HOLDS the person (partial-unique index on HOLDS_PERSON). A pass-out with no current
+    // seat still gets their latest finished batch (re-enrolment, 2026-11-02: finished seats are released,
+    // not left), so My Training does not go blank the day their batch completes.
+    const member = await BatchMember.findOne({ candidate: cand._id, ...HOLDS_PERSON }).select("_id batch").lean<any>()
+      ?? await BatchMember.findOne({ candidate: cand._id, left_on: null }).sort({ joined_on: -1 }).select("_id batch").lean<any>();
     if (!member) {
       // Real candidate, no batch yet — say where they stand instead of a dead end.
       return NextResponse.json({

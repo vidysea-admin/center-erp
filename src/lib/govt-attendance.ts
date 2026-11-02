@@ -514,8 +514,12 @@ export async function matchGovtRows(
   } else if (scope.locationId) {
     const cands = await Candidate.find({ location: scope.locationId }).select("_id name phone sidh_candidate_id").lean<any[]>();
     const ids = cands.map((c) => c._id);
-    const mem = await BatchMember.find({ candidate: { $in: ids } }).select("_id batch candidate").lean<any[]>();
-    const byCand = new Map(mem.map((m) => [String(m.candidate), m]));
+    const mem = await BatchMember.find({ candidate: { $in: ids } }).select("_id batch candidate left_on released_on").sort({ joined_on: 1 }).lean<any[]>();
+    // Re-enrolment (2026-11-02): a person can have several seats. The seat holding them NOW wins, else the
+    // latest joined - never whichever row the driver happened to return last.
+    const holds = (m: any) => !m.left_on && !m.released_on;
+    const byCand = new Map<string, any>();
+    for (const m of mem) { const k = String(m.candidate), cur = byCand.get(k); if (!cur || holds(m) || !holds(cur)) byCand.set(k, m); }
     members = cands.map((c) => ({ ...(byCand.get(String(c._id)) ?? {}), candidate: c }));
   }
 

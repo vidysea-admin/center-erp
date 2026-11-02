@@ -2131,6 +2131,9 @@ ok("removal is real", (await req(admin, "GET", `/api/sync-sources/${srcId}`)).st
     // unreachable state and pinned a shape that runs the guarded path; there is no such step here,
     // because the step short of "two live memberships" is one, and one is the ordinary case pinned
     // on the next line. So this is a presence check and says so, rather than borrowing -144's credit.
+    // Re-enrolment (2026-11-02) makes the state REACHABLE: a finished batch's seat keeps left_on null
+    // (released_on set) beside the new batch's seat, so two live-roster seats now exist for one person.
+    // Rule 20 above still refuses two HOLDING seats; a test that drives this group is owed.
     ok("-156 (QA-453): the plan carries the ambiguous_batch group even while nothing can land in it (presence only - see the note above)",
       Array.isArray(planTwo.ambiguous_batch),
       JSON.stringify({ present: Array.isArray(planTwo.ambiguous_batch), held: (planTwo.ambiguous_batch ?? []).length }));

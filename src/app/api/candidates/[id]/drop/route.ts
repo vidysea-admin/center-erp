@@ -4,7 +4,7 @@ import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } f
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, CandidateResult } from "@/models";
 import { dropMemberChecked } from "@/lib/rules";
-import { currentStageOf } from "@/lib/candidate-journey";
+import { currentStageOf, HOLDS_PERSON } from "@/lib/candidate-journey";
 import { audit } from "@/lib/audit";
 
 // QA-021 (-68) — the CEO's loudest repeated ask: Dropout as a real candidate stage, reachable
@@ -36,7 +36,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
 
   if (body.undo === true) {
     if (cand.lifecycle_status !== "Dropped") throw new HttpError(400, `${cand.name} is not dropped.`);
-    const active = await BatchMember.findOne({ candidate: cand._id, left_on: null }).lean();
+    const active = await BatchMember.findOne({ candidate: cand._id, ...HOLDS_PERSON }).lean();
     if (active) throw new HttpError(409, "They are on a batch roster — the drop was already undone by assignment.");
     cand.lifecycle_status = "Unassigned";
     cand.dropped_reason = undefined;
@@ -52,7 +52,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (cand.lifecycle_status === "Dropped") throw new HttpError(409, `${cand.name} is already dropped.`);
   const when = body.date ? new Date(body.date) : new Date();
 
-  const activeMember = await BatchMember.findOne({ candidate: cand._id, left_on: null }).select("_id").lean<any>();
+  // HOLDS_PERSON: a seat in a finished batch is not one to drop them from (re-enrolment, 2026-11-02).
+  const activeMember = await BatchMember.findOne({ candidate: cand._id, ...HOLDS_PERSON }).select("_id").lean<any>();
   if (activeMember) {
     // QA-1364: this branch is a ROSTER drop by another name — it calls the exact same
     // dropMemberChecked() that POST /api/members/[id]/drop calls, and until this line it did so

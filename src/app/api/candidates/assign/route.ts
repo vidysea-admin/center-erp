@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, readJson, translateError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
 import { assertBatchJoinable, assignCandidateToBatch } from "@/lib/rules";
@@ -40,6 +40,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     try {
       const c0 = byId.get(String(cid));
       if (!c0) throw new HttpError(404, "Candidate not found");
+      // Re-enrolment (2026-11-02): a returning student skips joinRefusalFor's centre test, which was the
+      // only thing keeping a scoped user to their own centres on this door. Rule 38 on the candidate, as
+      // the members door does it (walk-ins have no centre yet).
+      if (c0.location) assertLocationInScope(user, String(c0.location));
       // qa-import-into-batch (-325): everything between "found the candidate" and "joined" - the centre
       // test (with the -130 walk-in exemption), the job-role test, addMemberChecked, programme and centre
       // adoption and their audit rows - is assignCandidateToBatch now (rules.ts). It was a verbatim copy

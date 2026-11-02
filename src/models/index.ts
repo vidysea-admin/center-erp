@@ -986,6 +986,9 @@ const BatchMemberSchema = new Schema({
   joined_on: { type: Date, required: true },
   left_on: { type: Date, default: null },
   drop_reason: String,
+  // Re-enrolment (2026-11-02): the batch finished (Completed or Cancelled), so this seat no longer holds
+  // the person - NOT a drop, which is left_on. See HOLDS_PERSON in lib/candidate-journey.ts.
+  released_on: { type: Date, default: null },
   enrollment_status: { type: String, enum: ENROLLMENT_STATUS, required: true, default: "Not Started" },
   reg_done: { type: Boolean, default: false }, reg_done_at: Date,
   kyc_done: { type: Boolean, default: false }, kyc_done_at: Date,
@@ -1001,8 +1004,10 @@ const BatchMemberSchema = new Schema({
   source: { type: String, enum: MEMBER_SOURCE, required: true, default: "Manual" },
 }, { timestamps: true });
 BatchMemberSchema.index({ batch: 1, candidate: 1 }, { unique: true });
-// Rule 20 support: one active membership per candidate (partial unique on left_on null)
-BatchMemberSchema.index({ candidate: 1 }, { unique: true, partialFilterExpression: { left_on: null } });
+// Rule 20 support: one active membership per candidate (partial unique on HOLDS_PERSON). The name is
+// explicit because the filter changed: an existing `candidate_1` built on `{left_on: null}` alone has to
+// be dropped by scripts/backfill-released-on.mjs, and a fresh name cannot collide with it meanwhile.
+BatchMemberSchema.index({ candidate: 1 }, { name: "candidate_holds_person", unique: true, partialFilterExpression: { left_on: null, released_on: null } });
 
 // ---------- DailyLog ----------
 const DailyLogSchema = new Schema({

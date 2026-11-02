@@ -1696,6 +1696,100 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
       !!mixed.data?.errors?.[0]?.member && !!mixed.data?.errors?.[0]?.error,
       JSON.stringify(mixed.data?.errors?.[0]));
   }
+
+  // ---- re-enrolment (Umesh 2026-11-02): a finished or dropped student joins ANOTHER batch ----
+  // Skill India gives one CAN id per person, so the same Candidate row comes back for a second course.
+  // Completing a batch never set `left_on`, so Rule 20 read every pass-out as "active" in that batch for
+  // ever. Decided: free on Completed/Closed/Cancelled (not Assessment Awaited/Closing), any course, any
+  // centre; a fresh lead from another centre is still refused.
+  {
+    const mkPlain = async (tag, l, p) => {
+      const room = (await req("POST", `/api/locations/${l._id}/rooms`, { name: `RE-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
+      const tr = (await req("POST", "/api/trainers", { name: `TEST-RE${tag} ${stamp}`, phone: `83${tag}${stamp}9`.slice(0, 10), skills: [p.trainer_skill] }, 201)).data.item;
+      return (await req("POST", "/api/batches", { location: l._id, program: p._id, trainer: tr._id, room: room._id, planned_start: today, target_size: 5 }, 201)).data.item;
+    };
+    const mkCand = async (tag) => (await req("POST", "/api/candidates", {
+      name: `RE ${tag} ${stamp}`, phone: `82${tag}${stamp}000`.slice(0, 10), location: loc._id, program: prog._id, sidh_candidate_id: `CAN_95${stamp}${tag}`, // not `${stamp}7${tag}`: mkBatch's tag-7 ids own that
+    }, 201)).data.item;
+    const join = (b, c) => req("POST", `/api/batches/${b._id}/members`, { candidate: c._id });
+    const prog2 = (await req("POST", "/api/programs", { code: "PRRE" + stamp, name: "Re-enrol Program " + stamp, trainer_skill: "ReSkill" + stamp, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 }, 201)).data.item;
+    const loc2 = (await req("POST", "/api/locations", { code: "LRE" + stamp, name: "Re-enrol Location " + stamp, external_id: "ERE" + stamp, approval_status: "Approved", spoc_name: "Test SPOC", principal_name: "Test Principal" }, 201)).data.item;
+
+    const { b: rA, cands: rc } = await mkBatch(2, 14);
+    const rB = await mkPlain(1, loc, prog);    // same course, same centre
+    const rC = await mkPlain(2, loc2, prog2);  // other course, other centre
+
+    ok("re-enrol: while batch A is still running, joining batch B is refused",
+      (await join(rB, rc[0])).status === 409);
+    await req("POST", `/api/batches/${rA._id}/complete`, { reason: "re-enrol pin: batch finished", force: true }, 200);
+    ok("re-enrol: batch A is Completed", (await statusOf(rA._id)) === "Completed", await statusOf(rA._id));
+
+    const j1 = await join(rB, rc[0]);
+    ok("re-enrol: a student of the COMPLETED batch joins batch B of the same course", j1.status === 201, JSON.stringify(j1.data).slice(0, 200));
+    const aRoster = (await req("GET", `/api/batches/${rA._id}/members`)).data.items ?? [];
+    ok("re-enrol: …and batch A still lists both students, neither marked as having left",
+      aRoster.length === 2 && aRoster.every((m) => !m.left_on), JSON.stringify(aRoster.map((m) => m.left_on)));
+    ok("re-enrol: …and batch A's results are untouched", (await rowsOf(rA._id)).filter((i) => i.result).length === 2);
+
+    const j2 = await join(rC, rc[1]);
+    ok("re-enrol: a student of the completed batch joins a batch of ANOTHER course at ANOTHER centre", j2.status === 201, JSON.stringify(j2.data).slice(0, 200));
+    const moved = (await req("GET", `/api/candidates/${rc[1]._id}`)).data.item;
+    ok("re-enrol: …and they adopt the new batch's course and centre",
+      String(moved?.program?._id ?? moved?.program) === String(prog2._id) && String(moved?.location?._id ?? moved?.location) === String(loc2._id),
+      JSON.stringify({ p: moved?.program, l: moved?.location }));
+
+    const pool = (await req("GET", `/api/candidates?location=${loc._id}&limit=2000`)).data.items ?? [];
+    ok("re-enrol: the candidate list shows the student's CURRENT batch, not the finished one",
+      pool.find((c) => String(c._id) === String(rc[0]._id))?.active_batch?.code === rB.code,
+      JSON.stringify(pool.find((c) => String(c._id) === String(rc[0]._id))?.active_batch));
+    ok("re-enrol: …and their journey reads the CURRENT batch - the finished batch's Pass does not label them Certified",
+      (pool.find((c) => String(c._id) === String(rc[0]._id))?.latest_result ?? null) === null,
+      String(pool.find((c) => String(c._id) === String(rc[0]._id))?.latest_result));
+
+    // Freedom follows the BATCH status, not the result (Umesh 2026-11-02): a student who FAILED a completed batch joins too.
+    const { b: rK, mems: rkm, cands: rk } = await mkBatch(1, 17);
+    await req("PUT", `/api/batches/${rK._id}/results`, { rows: [{ member: String(rkm[0]._id), result: "Fail", failure_reason: "re-enrol pin", assessed_on: today }] }, 200);
+    await req("POST", `/api/batches/${rK._id}/complete`, { reason: "re-enrol pin: failed student", force: true }, 200);
+    ok("re-enrol: a student who FAILED a completed batch joins another batch", (await join(rB, rk[0])).status === 201);
+
+    const reopen = await req("POST", `/api/batches/${rA._id}/transition`, { target: "Closing", reason: "re-enrol pin: reopen" });
+    ok("re-enrol: reopening batch A is refused while its students sit in other batches, and names them",
+      reopen.status === 409 && String(reopen.data?.error ?? "").includes(rc[0].name), JSON.stringify(reopen.data).slice(0, 240));
+    ok("re-enrol: …and nothing moved", (await statusOf(rA._id)) === "Completed");
+
+    // Cancelled frees the roster; restoring the batch is then refused for the same reason.
+    const { b: rE, cands: re } = await mkBatch(1, 15);
+    await req("POST", `/api/batches/${rE._id}/transition`, { target: "Cancelled", reason: "re-enrol pin: cancelled" }, 200);
+    const rF = await mkPlain(3, loc, prog);
+    ok("re-enrol: a student of a CANCELLED batch joins another batch", (await join(rF, re[0])).status === 201);
+    const restore = await req("POST", `/api/batches/${rE._id}/transition`, { target: "Active", reason: "re-enrol pin: restore" });
+    ok("re-enrol: restoring the cancelled batch is refused while that student sits elsewhere, and names them",
+      restore.status === 409 && String(restore.data?.error ?? "").includes(re[0].name), JSON.stringify(restore.data).slice(0, 240));
+    ok("re-enrol: …and the batch stays Cancelled", (await statusOf(rE._id)) === "Cancelled");
+
+    // Dropping the FINISHED seat would mark the student a dropout in the batch they now sit in.
+    const eSeat = ((await req("GET", `/api/batches/${rE._id}/members`)).data.items ?? []).find((m) => String(m.candidate?._id ?? m.candidate) === String(re[0]._id));
+    ok("re-enrol: dropping a finished batch's seat is refused while the student sits in another batch",
+      (await req("POST", `/api/members/${eSeat?._id}/drop`, { left_on: today, drop_reason: "re-enrol pin" })).status === 409);
+    ok("re-enrol: a Closed/Completed batch takes no new students", (await join(rA, await mkCand(3))).status === 409);
+
+    // A batch with no conflict reopens, its roster holds the person again, and Rule 20 is back.
+    const { b: rH, cands: rh } = await mkBatch(1, 16);
+    await req("POST", `/api/batches/${rH._id}/transition`, { target: "Cancelled", reason: "re-enrol pin: cancel H" }, 200);
+    await req("POST", `/api/batches/${rH._id}/transition`, { target: "Active", reason: "re-enrol pin: restore H" }, 200);
+    ok("re-enrol: a restored batch holds its students again (Rule 20)", (await join(rF, rh[0])).status === 409);
+
+    // Dropped from a batch: free for another course and centre too.
+    const rG = await mkPlain(4, loc, prog);
+    const x = await mkCand(1);
+    const xm = (await join(rG, x)).data.item;
+    await req("POST", `/api/members/${xm._id}/drop`, { left_on: today, drop_reason: "re-enrol pin" }, 200);
+    ok("re-enrol: a DROPPED student joins a batch of another course at another centre", (await join(rC, x)).status === 201);
+
+    // The centre/course refusal still protects fresh leads.
+    const fresh = await mkCand(2);
+    ok("re-enrol: a fresh lead from another centre is still refused", (await join(rC, fresh)).status === 409);
+  }
 }
 
 // ---- -102 (Manish 17/08): a roster row that should never have existed can be REMOVED ----

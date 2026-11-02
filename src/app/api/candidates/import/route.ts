@@ -5,7 +5,7 @@ import { Types } from "mongoose";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, isScoped, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
-import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
+import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, hasBatchHistory, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { plain } from "@/lib/user-copy";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
@@ -14,7 +14,7 @@ import { audit } from "@/lib/audit";
 import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalAadhaar, canonicalApaar, canonicalPhone, sameGovtNumber } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
-import { coerceBatchInterest } from "@/lib/candidate-journey";
+import { coerceBatchInterest, HOLDS_PERSON } from "@/lib/candidate-journey";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 
 // -154 (QA-424, REQ-385): the SET of importable fields comes from the catalog; the HANDLING stays
@@ -525,15 +525,18 @@ export const POST = apiHandler(async (req: NextRequest) => {
     toInsert = candidates.filter((c) => !held.has(c));
 
     // holder state: scope, join rules, Rule 20 (one query for all holders), eligibility
+    // Re-enrolment (2026-11-02): a holder with batch history is a returning student - the same `returning`
+    // assignCandidateToBatch computes at commit, so the preview says what the commit will do.
+    const returningHolders = await hasBatchHistory(holderRows.map((h) => h.holder._id));
     for (const h of holderRows) {
       if (h.refusal) continue;
       if (!h.inScope) { h.refusal = "This ID already belongs to a candidate at a centre you cannot see. Ask an Admin to add them."; continue; }
-      const r = joinRefusalFor(h.holder, jb);
+      const r = joinRefusalFor(h.holder, jb, { returning: returningHolders.has(h.holderId) });
       if (r) h.refusal = r;
     }
     const probe = holderRows.filter((h) => !h.refusal).map((h) => h.holder._id);
     if (probe.length) {
-      const active = await BatchMember.find({ candidate: { $in: probe }, left_on: null }).select("candidate batch").populate("batch", "code").lean<any[]>();
+      const active = await BatchMember.find({ candidate: { $in: probe }, ...HOLDS_PERSON }).select("candidate batch").populate("batch", "code").lean<any[]>();
       const byCand = new Map(active.map((m) => [String(m.candidate), m]));
       for (const h of holderRows) {
         if (h.refusal) continue;

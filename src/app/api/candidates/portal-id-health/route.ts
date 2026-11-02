@@ -6,6 +6,7 @@ import { Batch, BatchMember, Candidate, GovtAttendanceImport, GovtAttendanceRow 
 import { normalizeCan, shiftSignature, storedCanIsUnreadable } from "@/lib/govt-attendance";
 import { audit } from "@/lib/audit";
 import { assertBatchInScope } from "@/lib/rules";
+import { HOLDS_PERSON } from "@/lib/candidate-journey";
 
 // -155 (QA-427, and the door for QA-414's recovery): the portal-ID health screen.
 //
@@ -239,8 +240,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
     if (!r) { results.refused.push(`rematch ${id}: row no longer attachable by exact ID (resolved meanwhile, owner count changed, or its import is shift-suspected)`); continue; }
     const row = await GovtAttendanceRow.findById(id).select("batch candidate match_status").lean<any>();
     if (!row || row.match_status === "Matched") { results.refused.push(`rematch ${id}: already matched`); continue; }
-    const member = await BatchMember.findOne({ candidate: r.candidate, ...(row.batch ? { batch: row.batch } : { left_on: null }) })
-      .select("_id batch").lean<any>();
+    // Re-enrolment (2026-11-02): without a batch on the row, the seat holding the person now, else their
+    // latest roster seat - not an arbitrary one of several.
+    const member = row.batch
+      ? await BatchMember.findOne({ candidate: r.candidate, batch: row.batch }).select("_id batch").lean<any>()
+      : (await BatchMember.findOne({ candidate: r.candidate, ...HOLDS_PERSON }).select("_id batch").lean<any>())
+        ?? await BatchMember.findOne({ candidate: r.candidate, left_on: null }).sort({ joined_on: -1 }).select("_id batch").lean<any>();
     await GovtAttendanceRow.updateOne({ _id: id, match_status: { $ne: "Matched" } }, {
       $set: {
         candidate: r.candidate, batch_member: member?._id ?? null, batch: row.batch ?? member?.batch ?? null,

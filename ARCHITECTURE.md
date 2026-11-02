@@ -1275,6 +1275,28 @@ only writer. Two server helpers — `rosterOnDate` (Rule 26) and `activeRoster` 
 `left_on: null` query literals** across `rules.ts` and nine routes. Those literals are Mongo query
 fragments, not a predicate, and are deliberately NOT collapsed here; that is its own unit.
 
+**"Has left THIS batch" vs "is held by a batch NOW": two questions since re-enrolment (Umesh 2026-11-02).**
+A seat stops holding the person two ways: `left_on` (a dropout; ~30 reports and billing read it as exactly
+that) and `released_on` (the batch reached Completed/Closed/Cancelled; written ONLY by `transitionBatch`
+after its save, and cleared again on a reopen/restore). Batch-keyed roster reads stay
+`{ batch, left_on: null }`: a completed batch still lists its students. Person-keyed reads ("where is this
+candidate now") spread **`HOLDS_PERSON`** (`lib/candidate-journey.ts`) beside `candidate`: Rule 20 in
+`addMemberChecked`, `enrichCandidateRows` (`active_batch`), the candidate drop route, the importer's
+holder probe and `public/portal-lookup` (held seat first, then the latest released one). **A new
+person-keyed read that writes `left_on: null` alone brings back the bug where a pass-out could never
+join another batch.** Deliberately NOT changed: `candidates/portal-id-health` counts every `left_on: null`
+seat, because a finished batch's seat still receives government attendance rows, and two seats is the
+"ambiguous, do not choose" answer it wants. Where one seat must still be PICKED (its re-match fallback,
+`govt-attendance.ts matchGovtRows` on the location path) the holding seat wins, else the latest joined.
+A returning student (`hasBatchHistory`) also skips
+`joinRefusalFor`'s centre/job-role refusal and adopts the new batch's, audited; `isFreeToJoin` is the
+picker's twin of that rule. That centre test was the bulk `candidates/assign` door's only Rule 38 check
+on the candidate, so that door now calls `assertLocationInScope` itself, like the members door.
+Reopen and restore refuse up front if a released student now sits in another
+batch (`assertReleasedRosterFree`); `dropMemberChecked` refuses a released seat while the person sits
+elsewhere; `assertBatchJoinable` refuses Closed as well (a seat there would never be released).
+Existing databases need `scripts/backfill-released-on.mjs`.
+
 **What WAS collapsed in -250: the CLIENT side, which had zero shared definitions and SIX
 hand-written copies**, all inside `batches/[id]/page.tsx` (roster, enrollment, daily execution,
 attendance, and the closure `active`/`left` pair). A grep for a shared name found nothing, because
@@ -1469,7 +1491,8 @@ curl https://www.vidysea.com/erp/api/public/version
     transition, because the batch ladder is one-way.
 11. **Unique indexes that will 409 you:** `Trainer.phone`, `Trainer.tr_id` (partial),
     `Location.institution_id` (sparse), `BatchMember{batch,candidate}` and the partial-unique
-    `{candidate}` on `left_on:null` (Rule 20), `CandidateResult{batch,candidate}` + partial-unique
+    `{candidate}` on `HOLDS_PERSON` = `left_on:null, released_on:null` (Rule 20, index
+    `candidate_holds_person`; see 3.14), `CandidateResult{batch,candidate}` + partial-unique
     `certificate_no`, `Closure.batch`, `Invoice.batch`, `Feedback.batch_member`, `StoredFile.name`,
     `User.email`. `apiHandler` turns E11000 into a readable 409 — don't add your own.
 12. **Timezone.** Business dates are stored at **UTC midnight** via `dayKey()`; "today" is `istToday()`

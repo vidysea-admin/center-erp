@@ -215,6 +215,33 @@ export function activeOnly<T extends { left_on?: unknown }>(xs: T[] | null | und
   return (xs ?? []).filter((x) => !hasLeft(x));
 }
 
+// Re-enrolment (Umesh 2026-11-02): "ek batch complete hai ya ek batch se bachcha drop hai to dusra join
+// kar paaye." A seat stops holding the PERSON two ways - they left it (`left_on`, a dropout) or the batch
+// finished (`released_on`, stamped by transitionBatch on Completed/Cancelled). Only the first is a drop,
+// and ~30 reports read `left_on` as exactly that, which is why finishing a batch does not touch it.
+//
+// Two questions, two filters. "Who is on THIS batch" stays `{ batch, left_on: null }` - a completed batch
+// still lists its students. "Where is this PERSON now" (Rule 20, the candidate list's active batch) spreads
+// this beside `candidate`. Before it, completing a batch held every pass-out in it for ever.
+/** Mongo filter for the one seat that currently holds a person. Spread beside `candidate`. */
+export const HOLDS_PERSON = { left_on: null, released_on: null } as const;
+
+// The batch pool picker's question, for a candidate row from /api/candidates (enrichCandidateRows supplies
+// `active_batch` from HOLDS_PERSON). It used to be `lifecycle_status` in Unassigned/Dropped, which hid every
+// pass-out ("Completed"/"Failed") and every student of a cancelled batch. The server still decides through
+// addMemberChecked; this only decides who is offered.
+/** True when no seat holds this candidate now and the batch's job role does not rule them out. */
+export function isFreeToJoin(
+  c: { active_batch?: unknown; archived_at?: unknown; program?: any; lifecycle_status?: string | null; enrolled_at?: unknown },
+  batchProgram: unknown,
+): boolean {
+  if (c.active_batch || c.archived_at) return false;
+  // A returning student may take any job role (joinRefusalFor `returning`); a fresh lead only this one, or
+  // none yet - programme-less imports inherit the batch's on joining.
+  const returning = ["Completed", "Failed"].includes(String(c.lifecycle_status)) || !!c.enrolled_at;
+  return returning || !c.program || String(c.program?._id ?? c.program) === String((batchProgram as any)?._id ?? batchProgram);
+}
+
 // "Pending" is NOT a record. It is the absence of one — the row exists because somebody opened the
 // screen, not because anybody decided anything. Treating it as a record would keep exactly the
 // cards Umesh asked to disappear, since an unmarked departed member is the common case.
