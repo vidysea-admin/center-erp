@@ -1435,6 +1435,7 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [refsPicker, setRefsPicker] = useState<{ rowId: string; importId: string }[] | null>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
+  const [poolTotal, setPoolTotal] = useState(0);
   const [showPool, setShowPool] = useState(false);
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
   // A-03
@@ -1503,10 +1504,17 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     // asks the server for every free, unarchived student the user may see (Rule 38 still limits a scoped
     // user to their own centres; a student of any other centre is found by exact mobile / CAN below). This
     // batch's own centre is listed first. Supersedes 2026-08-13's "this location AND this job role".
-    api(`/api/candidates?pool=1&limit=2000`).then((d) => {
-      const here = String(batch.location?._id ?? batch.location);
-      const rank = (c: any) => (String(c.location?._id ?? c.location) === here ? 0 : 1);
-      setPool(d.items.filter((c: any) => isFreeToJoin(c)).sort((a: any, b: any) => rank(a) - rank(b)));
+    // This centre is fetched on its own first, so the 2000-row cap on the all-centres list can never push this
+    // batch's own students out; the rest are merged behind it and `poolTotal` says when the list is cut (review
+    // 2026-11-03).
+    Promise.all([
+      api(`/api/candidates?pool=1&location=${String(batch.location?._id ?? batch.location)}&limit=2000`),
+      api(`/api/candidates?pool=1&limit=2000`),
+    ]).then(([own, all]) => {
+      const seen = new Set((own.items ?? []).map((c: any) => String(c._id)));
+      const merged = [...(own.items ?? []), ...(all.items ?? []).filter((c: any) => !seen.has(String(c._id)))];
+      setPool(merged.filter((c: any) => isFreeToJoin(c)));
+      setPoolTotal(Math.max(Number(all.total ?? 0), merged.length));
     }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
@@ -1754,6 +1762,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
             </div>
           ))}
           {pool.length === 0 && <p className="text-sm text-gray-400">No free students listed. Use Find above for a student of another centre.</p>}
+          {poolTotal > pool.length && <p className="text-xs text-gray-500">Showing {pool.length} of {poolTotal} free students (this centre first). Use Find above for anyone not listed.</p>}
         </div>
       </Drawer>
 

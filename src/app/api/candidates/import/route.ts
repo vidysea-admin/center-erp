@@ -11,7 +11,7 @@ import { plain } from "@/lib/user-copy";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
 import { readUploadedWorkbook } from "@/lib/workbook";
 import { audit } from "@/lib/audit";
-import { findDuplicateCandidates, maskPhone, normalizePhone } from "@/lib/duplicates";
+import { findDuplicateCandidates, normalizePhone } from "@/lib/duplicates";
 import { canonicalAadhaar, canonicalApaar, canonicalPhone, sameGovtNumber } from "@/lib/validate";
 import { personLabel } from "@/lib/person";
 import { coerceBatchInterest, HOLDS_PERSON } from "@/lib/candidate-journey";
@@ -524,7 +524,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
       // gate on the whole import - is the only one that applies; they are `inScope` wherever they last studied.
       // A held holder keeps the old test. `ownScope` is the old meaning, kept for what the preview may show.
       const ownScope = !isScoped(user) || (user.location_scope ?? []).map(String).includes(String(hit.holder.location ?? ""));
-      const inScope = ownScope || !heldBy.has(holderId);
+      // An archived or Future-interest holder of another centre is NOT joinable, so it stays out of scope: the
+      // refusal is then the generic one a held holder gets, never "<name> is archived" (review 2026-11-03).
+      const joinableElsewhere = !heldBy.has(holderId) && !hit.holder.archived_at && hit.holder.batch_interest !== "Future";
+      const inScope = ownScope || joinableElsewhere;
       const row: HolderRow = { row: rowNo, label, value: hit.value, matched_on: hit.matched_on, holderId, holder: hit.holder, ownScope, inScope, refusal: null };
       if (claimedBy.has(holderId)) {
         row.dupOfRow = claimedBy.get(holderId);
@@ -547,7 +550,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
       if (m) h.refusal = rule20Sentence((m.batch as any)?.code ?? m.batch);
       else {
         const el = candidateEligibility(h.holder, joinDefaults);
-        if (!el.eligible) h.warning = `${h.holder.name ?? "Candidate"}: ${el.reasons.join("; ")}`;
+        // another centre's student: the reasons can disclose age (dob), so they are not shown to this user
+        if (!el.eligible && h.ownScope) h.warning = `${h.holder.name ?? "Candidate"}: ${el.reasons.join("; ")}`;
       }
     }
     // new rows: the join rules that can be known before they exist, and the eligibility notes
@@ -577,9 +581,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
         row: h.row, label: h.label, matched_on: h.matched_on, value: h.value,
         // out of scope: the holder is described by NOTHING that identifies them (no id, name, phone, link)
         holder_id: h.inScope ? h.holderId : null,
-        // a free holder from a centre the user cannot see is shown by name and the last four digits only
-        candidate: h.inScope ? { _id: h.holderId, name: h.holder.name, phone: h.ownScope ? (h.holder.phone ?? null) : maskPhone(h.holder.phone) } : null,
-        link: h.inScope ? `/candidates?q=${encodeURIComponent(String(h.holder.name ?? ""))}` : null,
+        // a free holder from a centre the user cannot see is attachable (holder_id) but NOT identified: no name,
+        // phone or link, so this preview cannot be used as an unthrottled CAN/APAAR -> name lookup (review
+        // 2026-11-03); finding a student by name stays with the rate-limited, audited free-lookup
+        candidate: h.ownScope ? { _id: h.holderId, name: h.holder.name, phone: h.holder.phone ?? null } : null,
+        link: h.ownScope ? `/candidates?q=${encodeURIComponent(String(h.holder.name ?? ""))}` : null,
         can_assign: !h.refusal, refusal: h.refusal, warning: h.warning ?? null,
       })),
       ambiguous: ambiguousRows, new_refused: newRefused, new_warnings: newWarnings,

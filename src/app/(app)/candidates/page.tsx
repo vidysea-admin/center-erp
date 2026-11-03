@@ -1292,7 +1292,9 @@ Archive anyway?`)) return;
                                         <div>Row {h.row}: sheet says <b>{h.label}</b> ({h.matched_on === "apaar" ? "APAAR" : "portal Candidate ID"} {h.value})</div>
                                         {h.candidate
                                           ? <div>Already in the system as <a className="font-medium text-blue-700 hover:underline" href={`${BASE_PATH}${h.link}`} target="_blank" rel="noreferrer">{h.candidate.name}</a></div>
-                                          : <div className="text-gray-500">Belongs to a candidate at a centre you cannot see.</div>}
+                                          : h.holder_id && h.can_assign
+                                            ? <div className="text-gray-700">A free student from another centre. Ticking adds their existing record to this batch; no new candidate is created.</div>
+                                            : <div className="text-gray-500">Belongs to a candidate at a centre you cannot see.</div>}
                                         {h.refusal && <div className="text-red-700">Cannot be added: {h.refusal}</div>}
                                         {!h.refusal && h.warning && <div className="text-amber-800">{h.warning}</div>}
                                       </td>

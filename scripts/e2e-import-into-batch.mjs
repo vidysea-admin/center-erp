@@ -264,8 +264,17 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
   const freeY = await mkCand({ apaar_id: mkApaar(), location: locY._id });
   const pvF = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S4 ${S}`, { APAAR: freeY.apaar_id })], batch: BX8 });
   const HF = holdersOf(pvF.data)[0];
-  ok("IIB-8g: a FREE holder at Y, seen by a user at X, can be assigned and is shown by name with a masked phone",
-    pvF.status === 200 && HF?.can_assign === true && HF?.candidate?.name === freeY.name && HF?.candidate?.phone !== freeY.phone && String(HF?.candidate?.phone).endsWith(freeY.phone.slice(-4)), JSON.stringify(HF));
+  // review 2026-11-03: the preview is not a CAN/APAAR -> name lookup, so the free Y holder is attachable but NOT identified
+  ok("IIB-8g: a FREE holder at Y, seen by a user at X, can be assigned (holder_id) but is not named, phoned or linked",
+    pvF.status === 200 && HF?.can_assign === true && HF?.holder_id === String(freeY._id) && HF?.candidate === null && HF?.link === null &&
+    !JSON.stringify(pvF.data).includes(freeY.name) && !JSON.stringify(pvF.data).includes(freeY.phone), JSON.stringify(HF));
+  // an ARCHIVED holder of another centre gets the same generic refusal as a held one, never "<name> is archived"
+  const archY = await mkCand({ apaar_id: mkApaar(), location: locY._id });
+  await req(admin, "DELETE", `/api/candidates/${archY._id}`, { reason: "ZZIMP archived cross-centre holder" }, 200);
+  const pvA = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S5 ${S}`, { APAAR: archY.apaar_id })], batch: BX8 });
+  const HA = holdersOf(pvA.data)[0];
+  ok("IIB-8g2: an archived holder at Y is refused generically and not named", pvA.status === 200 && HA?.can_assign === false && HA?.holder_id === null &&
+    !JSON.stringify(pvA.data).includes(archY.name), JSON.stringify(HA));
   const cmF = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S4 ${S}`, { APAAR: freeY.apaar_id })], batch: BX8, assign_holders: [freeY._id], confirm: true });
   ok("IIB-8h: ticking the free holder attaches the EXISTING record (no second candidate) and it takes the batch's centre",
     cmF.status === 201 && cmF.data.batch_result?.assigned_existing === 1 && (await byName(`ZZIMP-S4 ${S}`)).length === 0

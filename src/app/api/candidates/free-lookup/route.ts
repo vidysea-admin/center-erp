@@ -71,7 +71,8 @@ export const POST = apiHandler(async (req: NextRequest) => {
     _id: String(c._id),
     name: c.name,
     phone_masked: maskPhone(c.phone),
-    can: c.sidh_candidate_id ?? null,
+    // a mobile search does not hand back another centre's government ID; a CAN search only echoes what was typed
+    can: canon ? (c.sidh_candidate_id ?? null) : null,
     centre: c.location?.name ?? null,
     course: c.program?.name ?? null,
   }));
