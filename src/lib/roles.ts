@@ -19,6 +19,10 @@ export const OPS_TEAM = ["Operations", "Center Manager"] as const;
 /** Admin plus the Operations team - what the old `["Admin","Operations"]` literals meant. */
 export const ADMIN_OPS = ["Admin", ...OPS_TEAM] as const;
 
+/** Who may READ a candidate record (QA-060/095: not the Trainer's lens). The candidate item route and the candidate
+ *  History (candidates/[id]/results, -342) both read this - one list, so the History never opens a door the record shut. */
+export const CANDIDATE_READ_ROLES = [...ADMIN_OPS, "Location", "Enrollment"] as const;
+
 /** Roles confined to `location_scope` whatever its length (an empty scope sees nothing). */
 export const ALWAYS_SCOPED_ROLES = ["Location", "Trainer", "Center Manager"] as const;
 

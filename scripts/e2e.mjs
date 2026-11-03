@@ -6479,5 +6479,187 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
     JSON.stringify(ldAudit.map((a) => a.field)));
 }
 
+// ================= history (release -342, Umesh 2026-11-03) =================
+// "Student ko dikhna chahiye ki wo kaun kaun se batch me rahe" - a student now has SEVERAL batches over
+// time, and neither the portal nor the staff drawer showed more than one. Four things pinned here:
+//   1. /p/me returns every seat (dropped included), each with its OWN attendance token;
+//   2. the govt-portal figure belongs to ITS batch (it used to be keyed by candidate alone, so an old
+//      batch's hours showed up under the new batch);
+//   3. admin History (GET /api/candidates/:id/results) is driven by the seats, with explicit fields only;
+//   4. "Certified" needs a recorded Pass - a finished batch with no result is "Training Completed", and
+//      latest_result reads the person's LATEST seat only.
+// Own helpers and a distinct prefix (HX / phone 78 / CAN_96): the -112 block's mkBatch is block-scoped.
+{
+  const { MongoClient: HxMongo, ObjectId: HxOid } = await import("mongodb");
+  const hxMc = new HxMongo(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await hxMc.connect();
+  const hxDb = hxMc.db(process.env.MONGODB_DB || "center_erp_ci");
+  const hxRoom = async (tag) => (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `HX-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
+  const hxTrainer = async (tag) => (await req("POST", "/api/trainers", { name: `TEST-HX${tag} ${stamp}`, phone: `77${tag}${stamp}9`.slice(0, 10), skills: [prog.trainer_skill] }, 201)).data.item;
+  const hxPlain = async (tag, size = 5) => (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: (await hxTrainer(tag))._id, room: (await hxRoom(tag))._id, planned_start: today, target_size: size }, 201)).data.item;
+  const hxCand = async (tag, extra = {}) => (await req("POST", "/api/candidates", {
+    name: `HX ${tag} ${stamp}`, phone: `78${stamp}0${tag}`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN_96${stamp}${tag}`, ...extra,
+  }, 201)).data.item;
+  // A batch that is Active with the given candidates on its roster (enrolment steps done).
+  const hxRunning = async (tag, cands) => {
+    const b = await hxPlain(tag, cands.length);   // target = roster size, or Ready fails the 80% roster check
+    const mems = [];
+    for (const c of cands) {
+      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
+      await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+      mems.push(m);
+    }
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Active" }, 200);
+    return { b, mems };
+  };
+  const hxStatus = async (b) => (await req("GET", `/api/batches/${b._id}`)).data.item.status;
+  // Marking the last result can derive the batch to Completed by itself; only force it if it has not.
+  const hxFinish = async (b) => {
+    if ((await hxStatus(b)) !== "Completed") await req("POST", `/api/batches/${b._id}/complete`, { reason: "history pin: batch finished", force: true });
+    ok(`history fixture: ${b.code} is Completed`, (await hxStatus(b)) === "Completed", await hxStatus(b));
+  };
+  const hxPass = async (b, mem, certNo) => {
+    await req("PUT", `/api/batches/${b._id}/results`, { rows: [{ member: String(mem._id), result: "Pass", assessed_on: today }] }, 200);
+    const row = ((await req("GET", `/api/batches/${b._id}/results`)).data.items ?? []).find((i) => String(i.member) === String(mem._id));
+    // a file on a Pass row IS the certificate (-112); the number is a separate touch
+    const fd = new FormData();
+    fd.append("file", new File([new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10])], `hx-${certNo}.pdf`, { type: "application/pdf" }));
+    fd.append("folder_centre", "_e2e"); fd.append("folder_kind", "certificates");
+    const up = (await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fd }).then((r) => r.json())).url;
+    await req("PATCH", `/api/results/${row?.result?._id}`, { certificate_file: up }, 200);
+    await req("PATCH", `/api/results/${row?.result?._id}`, { certificate_no: certNo }, 200);
+  };
+  const hxLookup = (ip, json) => fetch(`${BASE}/api/public/portal-lookup`, { method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify(json) })
+    .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const hxPublic = (tok) => fetch(`${BASE}/api/public/attendance/${tok}`).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const hxOid = (x) => new HxOid(String(x));
+
+  // ---- S: passed batch A (completed), then B (dropped), now C (running) ----
+  const S = await hxCand(1, { dob: "1999-03-04" });
+  const { b: bA, mems: mA } = await hxRunning(1, [S]);
+  await hxPass(bA, mA[0], `CERT-HX-${stamp}`);
+  await hxFinish(bA);
+  const bB = await hxPlain(2);
+  const sB = await req("POST", `/api/batches/${bB._id}/members`, { candidate: S._id });
+  ok("history fixture: S joins B after finishing A", sB.status === 201, JSON.stringify(sB.data).slice(0, 160));
+  await req("POST", `/api/members/${sB.data.item?._id}/drop`, { left_on: today, drop_reason: "history pin: left B" }, 200);
+  const { b: bC } = await hxRunning(3, [S]);
+
+  // ---- govt-portal rows: one for A, and a NO-batch row that must not leak into C ----
+  const nowMs = Date.now();
+  await hxDb.collection("govtattendancerows").insertMany([
+    { candidate: hxOid(S._id), batch: hxOid(bA._id), match_status: "Matched", name: S.name, total_days_present: 5, total_working_days: 6, total_hours_minutes: 300, createdAt: new Date(nowMs - 60000), updatedAt: new Date(nowMs - 60000) },
+    { candidate: hxOid(S._id), batch: null, match_status: "Matched", name: S.name, total_days_present: 99, total_working_days: 99, total_hours_minutes: 5940, createdAt: new Date(nowMs), updatedAt: new Date(nowMs) },
+  ]);
+
+  // ---- 1. portal: every seat, each with its own token ----
+  const lk = await hxLookup("10.78.0.1", { phone: S.phone, dob: "1999-03-04" });
+  const courses = lk.data.courses ?? [];
+  ok("history portal: a student with 3 seats gets 3 entries from the lookup", lk.status === 200 && courses.length === 3, JSON.stringify(lk.data).slice(0, 300));
+  const toks = courses.map((c) => String(c.url ?? "").split("/").pop());
+  ok("history portal: …each with its OWN attendance link", new Set(toks).size === 3 && toks.every((t) => /^[0-9a-f]{32}$/.test(t)), JSON.stringify(toks));
+  ok("history portal: …newest first (C, B, A)", courses.map((c) => c.batch).join(",") === [bC.code, bB.code, bA.code].join(","), JSON.stringify(courses.map((c) => c.batch)));
+  ok("history portal: …labelled Running / Dropped / Completed", courses.map((c) => c.status).join(",") === "Running,Dropped,Completed", JSON.stringify(courses.map((c) => c.status)));
+  const cardA = courses.find((c) => c.batch === bA.code) ?? {};
+  ok("history portal: …the finished card carries result and certificate number", cardA.result === "Pass" && cardA.certificate_no === `CERT-HX-${stamp}`, JSON.stringify(cardA));
+  ok("history portal: …every card says course, centre and days attended",
+    courses.length > 0 && courses.every((c) => c.program && c.centre && typeof c.days_present === "number" && typeof c.days_held === "number"), JSON.stringify(courses[0]));
+  const pubs = await Promise.all(toks.map(hxPublic));
+  ok("history portal: each link opens ITS OWN batch", pubs.length === 3 && pubs.every((p, i) => p.status === 200 && p.data.batch === courses[i].batch), JSON.stringify(pubs.map((p) => p.data.batch)));
+  const pubA = pubs[2]?.data ?? {};
+  const pubC = pubs[0]?.data ?? {};
+  ok("history govt figure: A's link shows A's own portal row (5 days), not the newer no-batch row", pubA.govt?.days_present === 5, JSON.stringify(pubA.govt));
+  ok("history govt figure: C's link shows NO figure - A's hours do not leak into the new batch", pubC.batch === bC.code && pubC.govt === null, JSON.stringify({ b: pubC.batch, g: pubC.govt }));
+  ok("history portal: the dropped seat's link still answers, as 'left', with no live verdict", !!pubs[1]?.data.left_on && pubs[1].data.eligible === undefined, JSON.stringify(pubs[1]?.data ?? null));
+  const rosterOf = async (b) => (await req("GET", `/api/batches/${b._id}/members`)).data.items ?? [];
+  const gA = (await rosterOf(bA)).find((m) => String(m.candidate?._id) === String(S._id))?.govt_attendance;
+  const gC = (await rosterOf(bC)).find((m) => String(m.candidate?._id) === String(S._id))?.govt_attendance;
+  ok("history govt figure: batch A's roster shows A's figure", gA?.days_present === 5, JSON.stringify(gA));
+  ok("history govt figure: batch C's roster shows none", gC == null, JSON.stringify(gC));
+  const attOf = async (b) => ((await req("GET", `/api/batches/${b._id}/attendance`)).data.members ?? []).find((m) => String(m.candidate_id) === String(S._id));
+  ok("history govt figure: batch A's Attendance tab shows A's figure, C's shows none",
+    (await attOf(bA))?.govt?.days_present === 5 && (await attOf(bC))?.govt === null, JSON.stringify({ a: (await attOf(bA))?.govt, c: (await attOf(bC))?.govt }));
+
+  // single-seat student: the no-batch row is the only evidence there is, so it still counts
+  const T = await hxCand(4, { dob: "1998-02-03" });
+  await hxRunning(4, [T]);
+  await hxDb.collection("govtattendancerows").insertOne({ candidate: hxOid(T._id), batch: null, match_status: "Matched", name: T.name, total_days_present: 3, total_working_days: 4, total_hours_minutes: 180, createdAt: new Date(), updatedAt: new Date() });
+  const lkT = await hxLookup("10.78.0.2", { phone: T.phone, dob: "1998-02-03" });
+  const pubT = await hxPublic(String(lkT.data.url ?? "").split("/").pop());
+  ok("history govt figure: a one-batch student keeps a no-batch portal row (fallback)", pubT.data.govt?.days_present === 3, JSON.stringify(pubT.data.govt));
+  ok("history portal: a one-batch student still gets the single link (My Training as before)", lkT.data.enrolled === true && /\/p\/attendance\//.test(lkT.data.url ?? "") && (lkT.data.courses ?? []).length === 1, JSON.stringify(lkT.data).slice(0, 200));
+
+  // ---- 3. admin History ----
+  const hist = await req("GET", `/api/candidates/${S._id}/results`);
+  const hItems = hist.data.items ?? [];
+  ok("history admin: lists the passed, the dropped and the running seat", hist.status === 200 && hItems.length === 3, JSON.stringify(hist.data).slice(0, 300));
+  const hBy = (code) => hItems.find((i) => i.batch?.code === code) ?? {};
+  ok("history admin: …newest first", hItems.map((i) => i.batch?.code).join(",") === [bC.code, bB.code, bA.code].join(","), JSON.stringify(hItems.map((i) => i.batch?.code)));
+  ok("history admin: …the passed seat carries result and certificate", hBy(bA.code).result === "Pass" && hBy(bA.code).certificate_no === `CERT-HX-${stamp}` && hBy(bA.code).status === "Completed", JSON.stringify(hBy(bA.code)));
+  ok("history admin: …the dropped seat shows with no result", hBy(bB.code).status === "Dropped" && !!hBy(bB.code).left_on && hBy(bB.code).result == null, JSON.stringify(hBy(bB.code)));
+  ok("history admin: …the running seat reads Running", hBy(bC.code).status === "Running", JSON.stringify(hBy(bC.code)));
+  ok("history admin: …each row has course, centre and an attendance summary",
+    hItems.length > 0 && hItems.every((i) => i.program && i.centre && typeof i.attendance?.days_held === "number" && typeof i.attendance?.days_present === "number"), JSON.stringify(hItems[0]));
+  const HX_ALLOWED = new Set(["member", "batch", "program", "centre", "start_date", "end_date", "status", "joined_on", "left_on", "released_on", "attendance", "result", "score", "certificate_status", "certificate_no", "certificate_date"]);
+  const hStray = [...new Set(hItems.flatMap((i) => Object.keys(i)).filter((k) => !HX_ALLOWED.has(k)))];
+  ok("history admin: explicit fields only - no evidence file, assessor or attempts go out", hItems.length > 0 && hStray.length === 0 && !/evidence_file|assessor|attempts|eligibility_override/.test(JSON.stringify(hist.data)), JSON.stringify(hStray));
+  const hTr = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("trainer.jpr03@vidysea.com", "CiOnly@123") } });
+  ok("history admin: a Trainer is refused, like the candidate record itself (403)", hTr.status === 403, String(hTr.status));
+  const hEn = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("enroll@vidysea.com", "CiOnly@123") } });
+  ok("history admin: Enrollment may read it (200)", hEn.status === 200, String(hEn.status));
+  ok("history admin: anonymous is refused (401)", (await fetch(`${BASE}/api/candidates/${S._id}/results`)).status === 401);
+
+  // ---- 4. Certified needs a recorded Pass ----
+  const { createRequire: hxRequire } = await import("node:module");
+  const hxPath = await import("node:path");
+  const hxRoot = hxPath.resolve(hxPath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+  const hxJm = hxRequire(import.meta.url)(hxPath.join(hxRoot, "node_modules/jiti"));
+  const HJ = (hxJm.createJiti ?? hxJm)(hxPath.join(hxRoot, "scripts/e2e.mjs"), { interopDefault: true })(hxPath.join(hxRoot, "src/lib/candidate-journey.ts"));
+  const listRow = async (c) => ((await req("GET", `/api/candidates?location=${loc._id}&q=${encodeURIComponent(c.name)}&limit=50`)).data.items ?? []).find((r) => String(r._id) === String(c._id)) ?? {};
+  const journeyOfRow = (r) => HJ.journeyOf({ ...r, active_batch_status: r.active_batch?.status });
+
+  // U: batch completed, nobody got a result
+  const U = await hxCand(5);
+  const { b: bU } = await hxRunning(5, [U]);
+  await hxFinish(bU);
+  // Completing a batch writes a Fail for anyone unmarked (complete route), so "Completed with no result" is legacy
+  // data only; recreate it directly: no result row, lifecycle Completed, as the old records are.
+  await hxDb.collection("candidateresults").deleteMany({ candidate: hxOid(U._id) });
+  await hxDb.collection("candidates").updateOne({ _id: hxOid(U._id) }, { $set: { lifecycle_status: "Completed" } }); // what the legacy blanket close (Rule 21) left
+  const rowU = await listRow(U);
+  ok("history certified: U finished a batch with no result - lifecycle is Completed, latest_result is null", rowU.lifecycle_status === "Completed" && rowU.latest_result == null, JSON.stringify({ l: rowU.lifecycle_status, r: rowU.latest_result }));
+  ok("history certified: …and reads 'Training Completed', not Certified", journeyOfRow(rowU) === "Training Completed", journeyOfRow(rowU));
+  ok("history certified: a recorded Pass still reads Certified", HJ.journeyOf({ lifecycle_status: "Completed", latest_result: "Pass" }) === "Certified");
+  ok("history certified: Completed + a Fail reads Failed (unchanged)", HJ.journeyOf({ lifecycle_status: "Completed", latest_result: "Fail" }) === "Failed");
+  const dropU = await req("POST", `/api/candidates/${U._id}/drop`, { reason: "history pin: drop from Training Completed" }, 200);
+  ok("history certified: dropping U stamps the stage they were at - Training Completed, not Certified", dropU.data.item?.dropped_from_stage === "Training Completed", String(dropU.data.item?.dropped_from_stage));
+
+  // V: passed and finished, no later seat - the positive control
+  const V = await hxCand(6);
+  const { b: bV, mems: mV } = await hxRunning(6, [V]);
+  await hxPass(bV, mV[0], `CERT-HXV-${stamp}`);
+  await hxFinish(bV);
+  const rowV = await listRow(V);
+  ok("history certified: V passed and finished - latest_result Pass, journey Certified", rowV.latest_result === "Pass" && journeyOfRow(rowV) === "Certified", JSON.stringify({ r: rowV.latest_result, j: journeyOfRow(rowV) }));
+
+  // S again: A (Pass) -> B (dropped) -> C (running): held by C, whose result is none
+  const rowS = await listRow(S);
+  ok("history certified: S holds C now - A's Pass does not label them Certified", rowS.latest_result == null && rowS.active_batch?.code === bC.code, JSON.stringify({ r: rowS.latest_result, b: rowS.active_batch?.code }));
+
+  // W: passed E (finished), joined F and was dropped. Latest seat = F, which has no result.
+  const W = await hxCand(7);
+  const { b: bE, mems: mE } = await hxRunning(8, [W]);
+  await hxPass(bE, mE[0], `CERT-HXW-${stamp}`);
+  await hxFinish(bE);
+  const bF = await hxPlain(9);
+  const wm = await req("POST", `/api/batches/${bF._id}/members`, { candidate: W._id });
+  await req("POST", `/api/members/${wm.data.item?._id}/drop`, { left_on: today, drop_reason: "history pin: W left F" }, 200);
+  const rowW = await listRow(W);
+  ok("history certified: W passed E but LEFT their latest seat F - latest_result is that seat's (none), not E's Pass", rowW.latest_result == null, String(rowW.latest_result));
+
+  await hxMc.close();
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
