@@ -5367,7 +5367,9 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         ok("QA-1973 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
           [200, 201].includes(raised.status), `got ${raised.status}`);
 
-        const readyAll = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
+        // -344: ask for Ready batches by status. The newest 100 of ALL batches stopped reaching the seed's Ready ones
+        // once e2e.mjs's history block (more batches, earlier in the wall) ran in full.
+        const readyAll = ((await req(admin, "GET", "/api/batches?status=Ready&limit=100")).data?.items ?? [])
           .filter((b) => String(b.status) === "Ready");
         const withChecks = [];
         for (const b of readyAll.slice(0, 6)) {
