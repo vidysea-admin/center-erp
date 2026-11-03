@@ -4,18 +4,48 @@ import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, requireRole, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireView } from "@/lib/permissions";
-import { User } from "@/models";
-import { linkTrainerLoginByEmail, centerManagerUnknownCentre } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
+import { AuditLog, User } from "@/models";
+import { linkTrainerLoginByEmail, centerManagerUnknownCentre, assertDigestDay, istStart, istEnd } from "@/lib/rules"; // QA-1578: one email-link rule, two callers
 import { audit } from "@/lib/audit";
 import { emailError, canonicalPhone, phoneError } from "@/lib/validate";
 import { renderMail, sendMail, staffSignInUrl } from "@/lib/mailer";
 
-export const GET = apiHandler(async () => {
+export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
   const user = await requireUser();
   await requireView(user, "users.manage"); // QA-025 P3: reading the user list = view level
-  const items = await User.find({}, "-password_hash").populate("location_scope", "name code").lean();
-  return NextResponse.json({ items });
+  // last_login_at is part of the activity tracker, which is Admin-only (below), so other viewers do not get it.
+  const items = await User.find({}, user.role === "Admin" ? "-password_hash" : "-password_hash -last_login_at").populate("location_scope", "name code").lean();
+  // Activity tracker (Karunn sir, 2026-11-02): ?activity=YYYY-MM-DD adds, per account, that IST day's sign-ins and
+  // the work they did (AuditLog rows by actor, grouped by what was touched). ADMIN-ONLY, the same rule as
+  // audit/by-user (QA-137): a person's trail spans every centre, so a scoped role must not read it through here.
+  const day = req.nextUrl.searchParams.get("activity");
+  if (!day) return NextResponse.json({ items });
+  if (user.role !== "Admin") throw new HttpError(403, "Only an Admin may read the activity of every account.");
+  assertDigestDay(day);
+  const rows = await AuditLog.aggregate([
+    { $match: { actor: { $ne: null }, created_at: { $gte: istStart(day), $lte: istEnd(day) } } },
+    { $group: {
+      _id: { actor: "$actor", login: { $and: [{ $eq: ["$entity", "User"] }, { $eq: ["$field", "login"] }] }, entity: "$entity" },
+      n: { $sum: 1 }, first: { $min: "$created_at" }, last: { $max: "$created_at" },
+    } },
+  ]);
+  const by: Record<string, { logins: number; first_login: Date | null; last_login: Date | null; actions: number; first_action: Date | null; last_action: Date | null; touched: Record<string, number> }> = {};
+  for (const r of rows) {
+    const k = String(r._id.actor);
+    const a = (by[k] ??= { logins: 0, first_login: null, last_login: null, actions: 0, first_action: null, last_action: null, touched: {} });
+    if (r._id.login) {
+      a.logins += r.n;
+      a.first_login = !a.first_login || r.first < a.first_login ? r.first : a.first_login;
+      a.last_login = !a.last_login || r.last > a.last_login ? r.last : a.last_login;
+    } else {
+      a.actions += r.n;
+      a.touched[r._id.entity] = (a.touched[r._id.entity] ?? 0) + r.n;
+      a.first_action = !a.first_action || r.first < a.first_action ? r.first : a.first_action;
+      a.last_action = !a.last_action || r.last > a.last_action ? r.last : a.last_action;
+    }
+  }
+  return NextResponse.json({ items, activity: { day, by_user: by } });
 });
 
 export const POST = apiHandler(async (req: NextRequest) => {

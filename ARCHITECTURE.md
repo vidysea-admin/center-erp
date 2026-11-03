@@ -402,6 +402,36 @@ the cap (trade-off, stated: a send that was only slow, not dead, and finishes af
 the alternative is a crash losing the whole day). The claim key is the NORMALISED LOWERCASE EMAIL, so a person
 listed as an ERP user and as a typed address with the same email is one claim and one mail.
 
+**Tables, periods, targets (Karunn sir's review, 2026-11-02: "tabular, stage-wise, against target +/−").**
+`dailyDigest` also returns `tables` (`DigestTable[]`: every cell already worded) and the mail (`renderMail`'s
+`tables` option in `lib/mailer.ts`: inline-styled HTML plus a fixed-width plain-text twin) and the screen
+(`DigestTableView` in `reports/daily/page.tsx`, testid `digest-cell-<table>-<row>-<col>`) only draw them, so they
+cannot disagree (e2e arms K6 and S1 hold mail = API = screen cell for cell). The tables are Trainers, Candidates,
+Against target (unscoped viewers only: targets are organisation-wide, so a centre login gets `targets: null`) and
+Costs (the `finance.view` rule above, unchanged). Columns are Now / On the day / This week / Cumulative. The week is
+Monday to Sunday IST (`istWeekOf` in `rules.ts`), and the cumulative column starts at the first `WeeklyTarget` week, or at all time
+when there is none (always all time for a centre login). A trainer ENTERS a stage at its AuditLog row
+`{entity:"Trainer", field:"pipeline_status" | "pipeline_bypass"}` (written by `api/trainers/[id]/transition`;
+a bypass is `"BYPASS → <stage>"`), mapped through `STAGE_BUCKETS`. A candidate is certified by
+`CandidateResult{certificate_status:"Issued", certificate_date}`. **In training** (Umesh, 2026-11-03) = an
+enrolled, unarchived candidate whose held seat is in an `Active` batch with `actual_start` set; NOT the
+journey tag "Training Ongoing", which also covers an enrolled person with no seat or a seat in a Planning batch.
+"Payment pending" cuts off at `istEnd(day)`, since `entry_date` can be an instant. **Trained, not available** = Certified-tag
+trainers whose status is Unavailable, plus Dropped trainers with `dropped_from_stage: "Certified"`, split by
+`Trainer.unavailable_reason`. The ONE list is `TRAINER_UNAVAILABLE_REASON` in `lib/person.ts` (client-safe,
+re-exported by `models`). It is required when `status` becomes Unavailable (`applyTrainerUnavailableReason` in `rules.ts`,
+called by both trainer write doors) and when a Certified trainer is dropped (`transitionTrainer`, bypass
+included); rows from before 2026-11-02 count as "Reason not set". **Weekly targets** are the `WeeklyTarget` model
+(`week_start` = a Monday, stored as a business date), written only through `PUT /api/targets/weekly`
+(`defaults.manage` + `requireEdit`). That route validates the whole list before writing anything (Monday, no duplicate,
+whole number 0–100000 or blank); an all-blank week is removed, every changed figure is audited, and a week the list
+does not mention is left as it is. Entry is Admin → Targets: a grid, or a paste from Excel that the screen only parses.
+
+**Activity tracker (same review).** A successful sign-in writes an AuditLog row `{entity:"User", field:"login"}`
+and `User.last_login_at` (`authorize` in `src/auth.ts`; it can never fail a sign-in). `GET /api/users?activity=<day>`
+(Admin only) groups that IST day's AuditLog by actor (sign-ins, changes, entities touched), and Admin → Users shows
+it in `ActivityOverview`. "Log" opens `GET /api/audit/by-user/<id>?day=<day>`. Sign-ins are recorded from 2026-11-02 onwards.
+
 **Recipients are a custom list (cycle 2, Umesh 2026-10-07: "select it or add custom mail").** They are still
 the one Defaults string `digest_recipients`, but each entry is tagged: `u:<24-hex ERP user id>` is a picked
 account (so a renamed or re-emailed user keeps receiving it) and anything else is a typed address; a legacy

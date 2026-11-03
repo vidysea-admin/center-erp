@@ -1,10 +1,14 @@
 import mongoose, { Schema, model, models, Types } from "mongoose";
+import { TRAINER_UNAVAILABLE_REASON } from "../lib/person";
 
 // Enums (locked v1 — center-erp-data-model-rules.md §2)
 export const APPROVAL_STATUS = ["Pending", "Approved", "Rejected"] as const;
 export const OPERATIONAL_STATUS = ["Not Started", "Active", "On Hold", "Stopped", "Closed"] as const;
 export const ROOM_TYPE = ["Classroom", "Lab"] as const;
 export const TRAINER_STATUS = ["Available", "Assigned", "Unavailable"] as const;
+// Why a trainer is out of the pool (Karunn sir, 2026-11-02). Defined in lib/person.ts, which has no imports,
+// so the trainer screens read the same list without pulling mongoose into a client component.
+export { TRAINER_UNAVAILABLE_REASON };
 // 2026-08-11 meeting: "application pool से चालू होगा… ready to train वाला status आना चाहिए" —
 // the hiring journey, separate from the derived operational status above (Rule 12).
 //
@@ -598,6 +602,7 @@ const TrainerSchema = new Schema({
   // usually NOT one of our centres. Free text used when home_location is unset.
   home_location_other: String,
   status: { type: String, enum: TRAINER_STATUS, required: true, default: "Available" },
+  unavailable_reason: { type: String, enum: [...TRAINER_UNAVAILABLE_REASON, null], default: null },
   // Hiring pipeline (2026-08-11; renamed to the CEO's vocabulary 2026-08-14).
   // Default is the START of the journey — a new trainer is a fresh lead.
   pipeline_status: { type: String, enum: TRAINER_PIPELINE, default: "Fresh Lead" },
@@ -1815,6 +1820,9 @@ const UserSchema = new Schema({
   mail_enabled: { type: Boolean, default: true },
   dropped: { type: Boolean, default: false },
   dropped_email: String,
+  // Activity tracker (Karunn sir, 2026-11-02: "who logged in how many times, what work"). Stamped by the
+  // sign-in in auth.ts, which also writes an AuditLog row {entity:"User", field:"login"} per sign-in.
+  last_login_at: Date,
 }, { timestamps: true });
 
 // ---------- RolePermission (2026-08-11, CEO: AWS-style group toggles) ----------
@@ -1838,6 +1846,20 @@ const AuditLogSchema = new Schema({
 AuditLogSchema.index({ entity: 1, entity_id: 1, created_at: -1 });
 // QA-137: the per-user activity view queries by actor — without this it is a collection scan.
 AuditLogSchema.index({ actor: 1, created_at: -1 });
+
+// ---------- WeeklyTarget (Karunn sir, review 2026-11-02) ----------
+// "target against which we write plus or minus - the week's target and the cumulative target, both".
+// One row per IST week, keyed by its MONDAY (a business date: UTC midnight of the IST date, like
+// joined_on). Organisation-wide figures that Manish ji holds; cumulative = the sum of the weekly rows
+// up to the week (for in-training, a level, the week's own row). Written only through
+// /api/targets/weekly; read by dailyDigest.
+const WeeklyTargetSchema = new Schema({
+  week_start: { type: Date, required: true, unique: true },
+  trainers_trained: { type: Number, default: null, min: 0 },
+  candidates_in_training: { type: Number, default: null, min: 0 },
+  candidates_certified: { type: Number, default: null, min: 0 },
+  updated_by: oid("User"),
+}, { timestamps: true });
 
 // ---------- Master lists ----------
 const NamedActiveSchema = new Schema({
@@ -2062,5 +2084,6 @@ export const JobRole = models.JobRole || model("JobRole", JobRoleSchema);
 export const CandidateDocument = models.CandidateDocument || model("CandidateDocument", CandidateDocumentSchema);
 export const BatchDocument = models.BatchDocument || model("BatchDocument", BatchDocumentSchema);
 export const Defaults = models.Defaults || model("Defaults", DefaultsSchema);
+export const WeeklyTarget = models.WeeklyTarget || model("WeeklyTarget", WeeklyTargetSchema);
 
 export { mongoose };

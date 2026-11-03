@@ -3,7 +3,7 @@ import { collectionRoutes } from "@/lib/crud";
 import { Batch, Location, Trainer } from "@/models";
 import { renderMail, sendMail } from "@/lib/mailer";
 import { hasPermission } from "@/lib/permissions";
-import { ACTIVE_BATCH_STATUSES, assertLocationOperational, trainerLocationFilter } from "@/lib/rules";
+import { ACTIVE_BATCH_STATUSES, applyTrainerUnavailableReason, assertLocationOperational, trainerLocationFilter } from "@/lib/rules";
 import { HttpError, isScoped } from "@/lib/authz";
 import { emailError, canonicalEmail, canonicalPhone, phoneError } from "@/lib/validate";
 
@@ -55,7 +55,7 @@ export const { GET, POST } = collectionRoutes({
     const withBatches = items.map((t: any) => ({ ...t, live_batches: byTrainer.get(String(t._id)) ?? [] }));
     return maskTrainerSecrets(withBatches, await hasPermission(user, "trainers.manage"));
   },
-  fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
+  fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "unavailable_reason", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "pipeline_status", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     // 2026-08-12 hiring pipeline (Manish's RPL walkthrough)
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
@@ -72,6 +72,7 @@ export const { GET, POST } = collectionRoutes({
   permission: "trainers.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // F-B5 (Manish): a halted centre must stop hiring — no nominating trainers for it.
   async beforeCreate(body, user) {
+    applyTrainerUnavailableReason(body);
     // QA-141 (Umesh): manual entry is strict — normalize the phone to the bare 10 digits
     // (one person, one row under the unique index) and refuse junk outright.
     const pErr = phoneError(body.phone);

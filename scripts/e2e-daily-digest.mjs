@@ -39,6 +39,9 @@
 //   G2  Publish now: refused without defaults.manage, allowed with it, cooldown, empty list
 //   W   the scheduler wiring
 //   S   the real screen, in Chromium
+//   K   Karunn sir's review 2026-11-02: the digest as TABLES (trainers, candidates, costs), stage entries per period
+//       (on the day / this week Mon-Sun IST / cumulative), trained-but-not-available counted by reason, weekly targets
+//       with +/- (Admin, Targets: validated before any write), and the activity tracker (sign-ins + work per day)
 //
 // Every identity is derived from the run stamp. The shared wall DB holds other suites' data, so the EXACT
 // numbers are asserted through scoped personas on a day (2031-03-14) no other suite writes to.
@@ -100,6 +103,13 @@ const D = "2031-03-14", PREV = "2031-03-13", NEXT = "2031-03-15", D2 = "2031-03-
 const istAt = (day, hh, mm, ss = 0) => new Date(`${day}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}+05:30`);
 const bizDay = (day) => new Date(`${day}T00:00:00Z`);          // a business date: UTC midnight of the IST date (dayKey)
 const mailSubject = (day) => `Daily digest ${day}`;
+// The mail's plain-text twin draws each table as fixed-width columns (label, then cells, 2+ spaces apart; a
+// sub-row starts "- "). Returns the cells of the row with exactly that label, or null.
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const mailRow = (text, label) => {
+  const line = String(text).split("\n").find((l) => new RegExp(`^\\s*(- )?${reEsc(label)}\\s{2,}`).test(l));
+  return line ? line.trim().replace(/^- /, "").split(/\s{2,}/).slice(1) : null;
+};
 
 // ---- clean slate for the shared documents this suite touches ---------------------------------------------
 const jobLocks = db.collection("job_locks");
@@ -426,12 +436,13 @@ ok("NAV: enrolled candidate returns its actual batch id, while a candidate witho
   String(linkedLearner?.active_batch?._id) === String(learnerBatches.edge) && !!unlinkedLearner && unlinkedLearner.active_batch === null,
   JSON.stringify({ linked: linkedLearner?.active_batch, unlinked: unlinkedLearner?.active_batch }));
 // Independent case oracle for these fixtures: Assigned counts enrolled, completed and enrolled-dropout
-// count enrolled, Fresh/archived do not; only the two Enrolled rows without a recorded result are ongoing.
+// count enrolled, Fresh/archived do not. In training (Umesh 2026-11-03) = a held seat in an Active, actually-started batch:
+// of the two Enrolled rows without a recorded result only learner-1 holds one (edge); learner-0 has no seat, so 1.
 ok("D7: current totals agree with the exact Candidates rows, including dropout, Fresh, archived and recorded-result precedence",
-  currentRows.length === 13 && learnersD?.candidates?.current?.enrolled === 10 && learnersD?.candidates?.current?.training_ongoing === 2,
+  currentRows.length === 13 && learnersD?.candidates?.current?.enrolled === 10 && learnersD?.candidates?.current?.training_ongoing === 1,
   JSON.stringify({ rows: currentRows.length, current: learnersD?.candidates?.current }));
 ok("D7: choosing another report day leaves current learner totals current, while daily enrolments retain their selected-day meaning",
-  learnersNext?.candidates?.current?.enrolled === 10 && learnersNext?.candidates?.current?.training_ongoing === 2
+  learnersNext?.candidates?.current?.enrolled === 10 && learnersNext?.candidates?.current?.training_ongoing === 1
   && learnersD?.candidates?.enrolled?.total === 2 && learnersNext?.candidates?.enrolled?.total === 1,
   JSON.stringify({ day: learnersD?.candidates, next: learnersNext?.candidates }));
 const learnersB = (await digest(uB.cookie, D)).data;
@@ -442,6 +453,190 @@ await db.collection("batchmembers").deleteMany({ batch: { $in: Object.values(lea
 await db.collection("batches").deleteMany({ _id: { $in: Object.values(learnerBatches).map(oid) } });
 await db.collection("candidates").deleteMany({ _id: { $in: learnerCandidateIds } });
 await db.collection("candidateresults").deleteOne({ _id: resultId });
+
+// =================================================================================================
+// K - Karunn sir's review 2026-11-02: tables, stage entries per period, trained-not-available, targets, activity
+// =================================================================================================
+const tblOf = (d, key) => (d?.tables ?? []).find((t) => t.key === key);
+const cellsAt = (d, key, label) => tblOf(d, key)?.rows.find((r) => r.label === label)?.cells ?? null;
+const bucketLabel = (k) => (dA?.trainers?.pipeline?.buckets ?? []).find((b) => b.key === k)?.label;
+const dash3 = ["—", "—", "—"];
+ok("K1: a centre login without money gets two tables, Trainers and Candidates (no target table: targets are organisation-wide; no Costs)",
+  eq((dA?.tables ?? []).map((t) => t.key), ["trainers", "candidates"]) && dA?.targets === null, JSON.stringify((dA?.tables ?? []).map((t) => t.key)));
+ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
+  eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved on the day"), ["Rs 1,250", "2"])
+  && eq(cellsAt(rAF.data, "costs", "Payment pending"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which raised on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+ok("K1: the week runs Monday to Sunday: 2031-03-14 (a Friday) sits in 2031-03-10 to 2031-03-16, and the column says so",
+  eq(dA?.week, { from: "2031-03-10", to: "2031-03-16" }) && tblOf(dA, "candidates")?.head?.[3] === "This week (2031-03-10 to 2031-03-14)", JSON.stringify([dA?.week, tblOf(dA, "candidates")?.head]));
+// Candidates, centre A, day D. Columns: Now, on the day, this week, cumulative (a centre login: all time).
+const candExpect = {
+  "Joined into batches": ["—", "4", "5", "16"],            // week adds the day before (j4); all time adds the 11 base rows; the day after is out
+  "Enrolled": ["5", "2", "3", "3"],                       // week adds 23:59 IST the day before; 00:01 the day after is out
+  "In training (started Active batch)": ["0", ...dash3],
+  "Certified (certificate issued)": ["—", "0", "0", "0"],
+  "Batches created": ["—", "2", "3", "3"],                // week adds the batch created 23:59 IST the day before
+  "Batches started": ["—", "2", "3", "3"],                // week adds the Closed batch started the day before
+  "Mobilised (planning batches)": ["12 of 30 (gap 18)", ...dash3],
+};
+const candBad = Object.entries(candExpect).filter(([l, c]) => !eq(cellsAt(dA, "candidates", l), c)).map(([l, c]) => `${l}: got ${JSON.stringify(cellsAt(dA, "candidates", l))} want ${JSON.stringify(c)}`);
+ok("K2: the Candidates table, cell for cell: on the day / this week / cumulative each count the same thing over their own range", candBad.length === 0, candBad.join(" | "));
+const ts = cellsAt(dA, "candidates", "Training started");
+ok("K2: training started: on the day 7, and a wider range never counts fewer", ts?.[1] === "7" && Number(ts?.[2]) >= 7 && Number(ts?.[3]) >= Number(ts?.[2]), JSON.stringify(ts));
+ok("K2: the on-the-day column IS the day's figures (one definition each): joined, enrolled, started, batches created and started",
+  cellsAt(dA, "candidates", "Joined into batches")?.[1] === String(dA?.candidates?.joined?.total) && cellsAt(dA, "candidates", "Enrolled")?.[1] === String(dA?.candidates?.enrolled?.total)
+  && ts?.[1] === String(dA?.candidates?.training_started?.total) && cellsAt(dA, "candidates", "Batches created")?.[1] === String(dA?.candidates?.batches_created?.length)
+  && cellsAt(dA, "candidates", "Batches started")?.[1] === String(dA?.candidates?.batches_started?.length), "");
+// Trainers, centre A: the fixtures were inserted, not moved, so no trainer ENTERED a stage through the door here.
+const trExpect = {
+  [bucketLabel("fresh")]: ["2", "2", "2", "15"],           // Now = fresh leads; the period columns = trainers ADDED (t2, t3 on the day; all 15 by then)
+  [bucketLabel("certified")]: ["7", "0", "0", "0"],        // Now = assigned 2 + free 4 + marked unavailable 1
+  "Assigned to a live batch": ["2", ...dash3],
+  "Free to assign": ["4", ...dash3],
+  "Marked unavailable": ["1", ...dash3],
+  "Trained, not available (incl. dropped after Certified)": ["1", ...dash3],
+  "Reason not set": ["1", ...dash3],                       // t4 was marked Unavailable before the reason existed
+  "Backed out": ["0", ...dash3],
+  "Rejected / dropped": ["2", "0", "0", "0"],
+  "Total trainers": ["15", ...dash3],
+};
+const trBad = Object.entries(trExpect).filter(([l, c]) => !eq(cellsAt(dA, "trainers", l), c)).map(([l, c]) => `${l}: got ${JSON.stringify(cellsAt(dA, "trainers", l))} want ${JSON.stringify(c)}`);
+ok("K2: the Trainers table, cell for cell (Certified now = assigned + free + unavailable; an old Unavailable shows 'Reason not set')", trBad.length === 0, trBad.join(" | "));
+ok("K2: the stage rows plus rejected/dropped add up to Total trainers",
+  [...(dA?.trainers?.pipeline?.buckets ?? []).map((b) => Number(cellsAt(dA, "trainers", b.label)?.[0])), Number(cellsAt(dA, "trainers", "Rejected / dropped")?.[0])].reduce((a, b) => a + b, 0) === 15, "");
+
+// K3 - the Monday boundary: Sunday 2031-03-16 closes the week, Monday 2031-03-17 opens the next one
+const dSun = (await digest(uA.cookie, "2031-03-16")).data, dMon = (await digest(uA.cookie, "2031-03-17")).data;
+ok("K3: on Sunday 2031-03-16 the week is still 03-10..03-16 and holds all four enrolments (the Saturday 00:01 one too)",
+  eq(dSun?.week, { from: "2031-03-10", to: "2031-03-16" }) && eq(cellsAt(dSun, "candidates", "Enrolled")?.slice(1), ["0", "4", "4"]), JSON.stringify([dSun?.week, cellsAt(dSun, "candidates", "Enrolled")]));
+ok("K3: on Monday 2031-03-17 a new week starts (03-17..03-23): the week column drops to 0, the cumulative keeps 4",
+  eq(dMon?.week, { from: "2031-03-17", to: "2031-03-23" }) && eq(cellsAt(dMon, "candidates", "Enrolled")?.slice(1), ["0", "0", "4"])
+  && eq(cellsAt(dMon, "candidates", "Joined into batches")?.slice(1, 3), ["0", "0"]), JSON.stringify([dMon?.week, cellsAt(dMon, "candidates", "Enrolled")]));
+
+// K5 - stage entries through the REAL door, and the reason for a trained trainer who is not available.
+// Its own centre C, so the counts are exact; the moves happen now, so the digest asked is today's.
+const locC = await mkLoc("C");
+const uC = await mkUser("Location", [locC._id], "c");
+const nomC = { nominated_for_location: oid(locC._id) };
+const kIds = {};
+for (const k of ["k1", "k2", "k3", "k4"]) kIds[k] = String((await db.collection("trainers").insertOne(TR(`${k} stage`, { ...nomC, createdAt: new Date() }))).insertedId);
+const move = (k, target, extra = {}) => req(admin, "POST", `/api/trainers/${kIds[k]}/transition`, { target, bypass: true, reason: "mc1 " + k, ...extra });
+const mv = [await move("k1", "Certified"), await move("k2", "Certified"), await move("k3", "Shortlisted"), await move("k4", "NSDC Rejected")];
+ok("[precondition] K5: four trainers moved through the transition door (two to Certified, one to Shortlisted, one NSDC Rejected)", mv.every((r) => r.status === 200), mv.map((r) => r.status).join(","));
+const dropNo = await move("k2", "Dropped");
+const dropBad = await move("k2", "Dropped", { payload: { unavailable_reason: "Went home" } });
+ok("K5: dropping a trained (Certified) trainer without a reason is refused 400 and names the three reasons, even on a bypass",
+  dropNo.status === 400 && /Backed out/.test(dropNo.data?.error ?? "") && dropBad.status === 400 && (await db.collection("trainers").findOne({ _id: oid(kIds.k2) }))?.pipeline_status === "Certified", `${dropNo.status} ${dropBad.status} ${dropNo.data?.error}`);
+const dropOk = await move("k2", "Dropped", { payload: { unavailable_reason: "Absconding" } });
+const k2 = await db.collection("trainers").findOne({ _id: oid(kIds.k2) });
+ok("K5: with a reason the drop goes through and the trainer carries it (Absconding, dropped from Certified)",
+  dropOk.status === 200 && k2?.pipeline_status === "Dropped" && k2?.unavailable_reason === "Absconding" && k2?.dropped_from_stage === "Certified", JSON.stringify({ st: dropOk.status, r: k2?.unavailable_reason, from: k2?.dropped_from_stage }));
+const unNo = await req(uC.cookie, "PATCH", `/api/trainers/${kIds.k1}`, { status: "Unavailable" });
+const unBad = await req(uC.cookie, "PATCH", `/api/trainers/${kIds.k1}`, { status: "Unavailable", unavailable_reason: "Busy" });
+ok("K5: marking a trainer Unavailable without one of the three reasons is refused 400 (the centre's own edit door)", unNo.status === 400 && unBad.status === 400 && (await db.collection("trainers").findOne({ _id: oid(kIds.k1) }))?.status !== "Unavailable", `${unNo.status} ${unBad.status} ${JSON.stringify(unNo.data).slice(0, 120)}`);
+const unOk = await req(uC.cookie, "PATCH", `/api/trainers/${kIds.k1}`, { status: "Unavailable", unavailable_reason: "Backed out" });
+const backAv = await req(uC.cookie, "PATCH", `/api/trainers/${kIds.k1}`, { status: "Available" });
+const k1Back = await db.collection("trainers").findOne({ _id: oid(kIds.k1) });
+ok("K5: with a reason it is saved; set Available again and the reason is cleared (a stale reason would be counted)", unOk.status === 200 && backAv.status === 200 && k1Back?.status === "Available" && !k1Back?.unavailable_reason, JSON.stringify({ a: unOk.status, b: backAv.status, r: k1Back?.unavailable_reason }));
+await req(uC.cookie, "PATCH", `/api/trainers/${kIds.k1}`, { status: "Unavailable", unavailable_reason: "Backed out" });
+const dC = (await digest(uC.cookie, today())).data;
+const cExpect = {
+  [bucketLabel("fresh")]: ["0", "4", "4", "4"],            // added today: all four
+  [bucketLabel("shortlisted")]: ["1", "1", "1", "1"],      // k3 entered Shortlisted today
+  [bucketLabel("certified")]: ["1", "2", "2", "2"],        // k1 holds it (marked unavailable); k1 and k2 both ENTERED it today
+  "Trained, not available (incl. dropped after Certified)": ["2", ...dash3],
+  "Backed out": ["1", ...dash3], "Absconding": ["1", ...dash3], "Temporarily unavailable": ["0", ...dash3], "Reason not set": ["0", ...dash3],
+  "Rejected / dropped": ["2", "2", "2", "2"],              // k2 entered Dropped and k4 NSDC Rejected today: both counted where Now counts them
+  [bucketLabel("sent")]: ["0", "0", "0", "0"],             // an NSDC rejection is not an entry into Sent to NSDC
+  "Total trainers": ["4", ...dash3],
+};
+const cBad = Object.entries(cExpect).filter(([l, c]) => !eq(cellsAt(dC, "trainers", l), c)).map(([l, c]) => `${l}: got ${JSON.stringify(cellsAt(dC, "trainers", l))} want ${JSON.stringify(c)}`);
+ok("K5: stage ENTRIES are counted from the transition record per period, and trained-not-available is split by reason", cBad.length === 0, cBad.join(" | "));
+ok("K5: ...and the same in the data: not_available 2 = 1 marked unavailable + 1 dropped after Certified",
+  dC?.trainers?.not_available?.total === 2 && dC?.trainers?.not_available?.dropped_after_trained === 1 && dC?.trainers?.not_available?.by_reason?.["Backed out"] === 1 && dC?.trainers?.not_available?.by_reason?.["Absconding"] === 1,
+  JSON.stringify(dC?.trainers?.not_available));
+ok("K5: centre A's digest for today does not see centre C's moves", !(dA?.tables ?? []).length || cellsAt((await digest(uA.cookie, today())).data, "trainers", bucketLabel("certified"))?.[1] === "0", "");
+
+// K4 - weekly targets: who may write, validation before any write, the +/- cells
+const TW = db.collection("weeklytargets");
+await TW.deleteMany({ week_start: { $in: [bizDay("2031-03-03"), bizDay("2031-03-10")] } });   // a crashed earlier run
+const putT = (cookie, rows) => req(cookie, "PUT", "/api/targets/weekly", { rows });
+ok("K4: a centre login without defaults.manage may not write targets (403)", (await putT(uA.cookie, [{ week_start: "2031-03-10", trainers_trained: 1 }])).status === 403, "");
+ok("K4: a defaults.manage holder who may only VIEW may not write targets (403)", (await putT(uAdv.cookie, [{ week_start: "2031-03-10", trainers_trained: 1 }])).status === 403, "");
+const badCases = [
+  ["a date that is not a Monday (the message names the Monday)", [{ week_start: "2031-03-12", trainers_trained: 1 }], /not a Monday[\s\S]*2031-03-10/],
+  ["the same week twice", [{ week_start: "2031-03-10", trainers_trained: 1 }, { week_start: "2031-03-10", trainers_trained: 2 }], /twice/],
+  ["a negative figure", [{ week_start: "2031-03-10", trainers_trained: "-3" }], /whole number/],
+  ["a fraction", [{ week_start: "2031-03-10", candidates_certified: 2.5 }], /whole number/],
+  ["a word", [{ week_start: "2031-03-10", candidates_in_training: "ten" }], /whole number/],
+  ["a figure above 1,00,000", [{ week_start: "2031-03-10", trainers_trained: 100001 }], /whole number/],
+  ["a date that does not exist", [{ week_start: "2031-02-30", trainers_trained: 1 }], /real date/],
+  ["a good row followed by a bad one (nothing half-written)", [{ week_start: "2031-03-03", trainers_trained: 4 }, { week_start: "2031-03-11", trainers_trained: 1 }], /Row 2/],
+];
+for (const [what, rows, rx] of badCases) {
+  const r = await putT(admin, rows);
+  ok(`K4: refused 400 with a reason: ${what}`, r.status === 400 && rx.test(String(r.data?.error ?? "")), `${r.status} ${JSON.stringify(r.data).slice(0, 160)}`);
+}
+ok("K4: ...and none of those refusals wrote anything", (await TW.countDocuments({ week_start: { $in: [bizDay("2031-03-03"), bizDay("2031-03-10")] } })) === 0, "");
+ok("K4: a body that is not a list of weeks is refused 400", (await req(admin, "PUT", "/api/targets/weekly", { rows: "2031-03-10" })).status === 400, "");
+const auditsBefore = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
+const goodRows = [
+  { week_start: "2031-03-03", trainers_trained: "4", candidates_in_training: "", candidates_certified: 2 },
+  { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: "1,200", candidates_certified: "5" },
+];
+const saveT = await putT(admin, goodRows);
+const gotT = Object.fromEntries(((await req(admin, "GET", "/api/targets/weekly")).data?.items ?? []).map((r) => [r.week_start, r]));
+ok("K4: a valid paste is saved (commas read as thousands, blank kept blank) and read back exactly",
+  saveT.status === 200 && saveT.data?.saved === 2 && eq(gotT["2031-03-03"], { week_start: "2031-03-03", trainers_trained: 4, candidates_in_training: null, candidates_certified: 2 })
+  && eq(gotT["2031-03-10"], { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: 1200, candidates_certified: 5 }), JSON.stringify([saveT.data, gotT["2031-03-03"], gotT["2031-03-10"]]));
+const auditsAfter = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
+await putT(admin, goodRows);
+const auditsAgain = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
+ok("K4: every figure set is on the audit record (5), and saving the same figures again records nothing new", auditsAfter - auditsBefore === 5 && auditsAgain === auditsAfter, `${auditsAfter - auditsBefore} then +${auditsAgain - auditsAfter}`);
+// the +/- arithmetic, recomputed here from the row's own actual and target
+const fmt = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
+const varOf = (a, t) => (a === null || t === null ? "—" : `${a - t >= 0 ? "+" : "−"}${fmt(Math.abs(a - t))}`);
+const toneOf = (a, t) => (a === null || t === null ? "" : a >= t ? "pos" : "neg");
+const allT = await TW.find({ week_start: { $lte: bizDay("2031-03-10") } }).sort({ week_start: 1 }).toArray();
+const sumF = (f) => (allT.some((r) => r[f] !== null && r[f] !== undefined) ? allT.reduce((s2, r) => s2 + (Number(r[f]) || 0), 0) : null);
+const dAdmT = (await digest(uAdm.cookie, D)).data;
+const tr0 = dAdmT?.targets?.rows ?? [];
+const byKey = Object.fromEntries(tr0.map((r) => [r.key, r]));
+ok("K4: an unscoped viewer gets the target rows: week 2031-03-10 targets 10 / 1,200 / 5; cumulative = every target week up to it",
+  dAdmT?.targets?.week_from === "2031-03-10" && dAdmT?.targets?.cumulative_from === allT[0]?.week_start?.toISOString().slice(0, 10)
+  && byKey.trainers_trained?.week_target === 10 && byKey.candidates_in_training?.week_target === 1200 && byKey.candidates_certified?.week_target === 5
+  && byKey.trainers_trained?.cum_target === sumF("trainers_trained") && byKey.candidates_certified?.cum_target === sumF("candidates_certified")
+  && byKey.candidates_in_training?.cum_target === null, JSON.stringify(dAdmT?.targets).slice(0, 300));
+const tt = tblOf(dAdmT, "targets");
+const tBad = (tt?.rows ?? []).flatMap((row, i) => {
+  const r = tr0[i];
+  const want = [fmt(r.week_target), fmt(r.week_actual), varOf(r.week_actual, r.week_target), fmt(r.cum_target), fmt(r.cum_actual), varOf(r.cum_actual, r.cum_target)];
+  const tones = ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)];
+  return eq(row.cells, want) && eq(row.tones, tones) ? [] : [`${row.label}: ${JSON.stringify(row.cells)} ${JSON.stringify(row.tones)} want ${JSON.stringify(want)} ${JSON.stringify(tones)}`];
+});
+ok("K4: the target table's +/- cells are actual minus target, signed and coloured (green at or above target, red below)", tt?.rows?.length === 3 && tBad.length === 0, tBad.join(" | ").slice(0, 300));
+ok("K4: in this fixture week nobody reached Certified, so trainers trained reads 0 against 10: −10, red", byKey.trainers_trained?.week_actual === 0 && tt?.rows?.[0]?.cells?.[2] === "−10" && tt?.rows?.[0]?.tones?.[2] === "neg", JSON.stringify(tt?.rows?.[0]));
+ok("K4: a centre login asking the same day gets no target figures at all", (await digest(uA.cookie, D)).data?.targets === null, "");
+const rm = await putT(admin, [{ week_start: "2031-03-03", trainers_trained: "", candidates_in_training: null }]);
+ok("K4: sending a week with every figure blank removes that week, and only that week",
+  rm.status === 200 && rm.data?.removed === 1 && (await TW.countDocuments({ week_start: bizDay("2031-03-03") })) === 0 && (await TW.countDocuments({ week_start: bizDay("2031-03-10") })) === 1, JSON.stringify(rm.data));
+
+// K7 - the activity tracker: sign-ins and work per person per IST day (Admin only)
+const istRange = (day) => ({ $gte: new Date(`${day}T00:00:00+05:30`), $lte: new Date(`${day}T23:59:59.999+05:30`) });
+const uCAgain = await login(uC.email, PW);
+const loginRows = await db.collection("auditlogs").countDocuments({ entity: "User", entity_id: oid(uC.id), field: "login", created_at: istRange(today()) });
+ok("K7: each successful sign-in is recorded (the persona signed in twice today)", !!uCAgain && loginRows === 2, String(loginRows));
+const workRows = await db.collection("auditlogs").countDocuments({ actor: oid(uC.id), field: { $ne: "login" }, created_at: istRange(today()) });
+const act = await req(admin, "GET", `/api/users?activity=${today()}`);
+const aC = act.data?.activity?.by_user?.[String(uC.id)];
+ok("K7: the Admin's activity view for today counts that person's 2 sign-ins and exactly their recorded changes, grouped by what was touched",
+  act.status === 200 && act.data?.activity?.day === today() && aC?.logins === 2 && aC?.actions === workRows && workRows > 0 && (aC?.touched?.Trainer ?? 0) > 0, JSON.stringify({ aC, workRows }));
+ok("K7: a day with nothing on it shows nobody for that person", (await req(admin, "GET", "/api/users?activity=2031-01-01")).data?.activity?.by_user?.[String(uC.id)] === undefined, "");
+ok("K7: anyone but an Admin is refused the activity view (403)", (await req(uOps.cookie, "GET", `/api/users?activity=${today()}`)).status === 403 && (await req(uA.cookie, "GET", `/api/users?activity=${today()}`)).status === 403, "");
+const logDay = await req(admin, "GET", `/api/audit/by-user/${uC.id}?day=${today()}&limit=200`);
+ok("K7: the per-person log for that day is exactly the sign-ins plus the changes", logDay.status === 200 && logDay.data?.total === 2 + workRows, `${logDay.status} ${logDay.data?.total} vs ${2 + workRows}`);
+ok("K7: ...and for a day without activity it is empty", (await req(admin, "GET", `/api/audit/by-user/${uC.id}?day=2031-01-01`)).data?.total === 0, "");
+const uCRow = ((await req(admin, "GET", "/api/users")).data?.items ?? []).find((u) => String(u._id) === String(uC.id));
+ok("K7: the account list carries the last sign-in time", uCRow?.last_login_at && Date.now() - Date.parse(uCRow.last_login_at) < 15 * 60_000, String(uCRow?.last_login_at));
 
 const zeroD = "2031-07-01";
 const zero = (await digest(uA.cookie, zeroD)).data;
@@ -468,8 +663,8 @@ const zeroTick = await tick(istAt(zeroD, 21, 0), "zero-" + s);
 const zeroText = String(zeroTick.data?.results?.find((r) => r.to === uA.email.toLowerCase())?.text ?? "");
 ok("D8: a zero-activity scheduled report still attempts the recipient list and explicitly mails zero daily figures plus current totals",
   zeroTick.data?.fired === true && (await digestRows(zeroD, recipients)).length === 5
-  && zeroText.includes("Joined into batches: 0") && zeroText.includes("Enrolled: 0")
-  && zeroText.includes("Training started on the day: 0") && zeroText.includes("5 enrolled, 0 Training Ongoing"),
+  && mailRow(zeroText, "Joined into batches")?.[1] === "0" && eq(mailRow(zeroText, "Enrolled")?.slice(0, 2), ["5", "0"])
+  && mailRow(zeroText, "Training started")?.[1] === "0" && mailRow(zeroText, "In training (started Active batch)")?.[0] === "0",
   JSON.stringify({ fired: zeroTick.data?.fired, text: zeroText.slice(0, 400) }));
 
 // =================================================================================================
@@ -495,19 +690,30 @@ ok("T6: the ineligible one is ON THE RECORD with a reason, not silent", rowsD.fi
   JSON.stringify(rowsD.filter((r) => /tr\./.test(r.to)).map((r) => [r.to, r.status, r.reason])));
 const txtF = String(mailed(uAF.email)?.text ?? ""), txtN = String(mailed(uA.email)?.text ?? ""), txtAdm = String(mailed(uAdm.email)?.text ?? "");
 ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, month Rs 5,750, pending Rs 1,100, payment pending Rs 14,249)",
-  /Costs/.test(txtF) && txtF.includes("Rs 1,250") && txtF.includes("Rs 5,750") && txtF.includes("Rs 1,100") && txtF.includes("Rs 14,249"), txtF.replace(/\s+/g, " ").slice(0, 400));
-ok("T5: ...and its other sections carry the same exact numbers as the screen (Joined into batches: 4, Enrolled: 2, Mobilised 12 of 30)",
-  txtF.includes("Joined into batches: 4") && txtF.includes("Enrolled: 2") && /Mobilised[^\n]*12 of 30/.test(txtF), txtF.replace(/\s+/g, " ").slice(0, 400));
-ok("T5: mail uses the same daily learner start and separately measured current totals as the screen; historical totals are never implied",
-  txtF.includes("Training started on the day: 7") && txtF.includes("5 enrolled, 0 Training Ongoing")
-  && /Current learners \(measured/.test(txtF) && txtF.includes("not historical snapshots"), txtF.replace(/\s+/g, " ").slice(0, 400));
+  /^COSTS$/m.test(txtF) && eq(mailRow(txtF, "Approved on the day"), ["Rs 1,250", "2"]) && eq(mailRow(txtF, "Month to date"), ["Rs 5,750", "4"])
+  && eq(mailRow(txtF, "Pending approval"), ["Rs 1,100", "2"]) && eq(mailRow(txtF, "Payment pending"), ["Rs 14,249", "3"]), txtF.replace(/\s+/g, " ").slice(0, 400));
+ok("T5: ...and its other sections carry the same exact numbers as the screen (joined 4, enrolled 2, mobilised 12 of 30)",
+  mailRow(txtF, "Joined into batches")?.[1] === "4" && mailRow(txtF, "Enrolled")?.[1] === "2" && mailRow(txtF, "Mobilised (planning batches)")?.[0] === "12 of 30 (gap 18)", txtF.replace(/\s+/g, " ").slice(0, 400));
+ok("T5: mail uses the same daily learner start and the current totals as the screen, and says the Now column is current, not historical",
+  mailRow(txtF, "Training started")?.[1] === "7" && mailRow(txtF, "Enrolled")?.[0] === "5" && mailRow(txtF, "In training (started Active batch)")?.[0] === "0"
+  && /current totals, also when an earlier day is chosen/.test(txtF), txtF.replace(/\s+/g, " ").slice(0, 400));
+// K: the mail draws the SAME cells as the API (one function): every row of every table, cell for cell
+const apiAF = (await digest(uAF.cookie, D)).data;
+const mailMismatch = (apiAF?.tables ?? []).flatMap((t) => t.rows.filter((r) => !eq(mailRow(txtF, r.label), r.cells)).map((r) => `${t.key}/${r.label}: mail ${JSON.stringify(mailRow(txtF, r.label))} api ${JSON.stringify(r.cells)}`));
+ok("K6: mail = API: every row of every table in the finance viewer's mail carries exactly the API's cells", (apiAF?.tables ?? []).length === 3 && mailMismatch.length === 0, mailMismatch.join(" | ").slice(0, 300));
 ok("T5: the SAME digest for a recipient WITHOUT finance.view has no Costs section and no cost figure at all",
-  txtN.length > 0 && !/Costs|Rs \d|spend|Payment pending/i.test(txtN) && txtN.includes("Joined into batches: 4"), txtN.replace(/\s+/g, " ").slice(0, 300));
+  txtN.length > 0 && !/Costs|Rs \d|spend|Payment pending/i.test(txtN) && mailRow(txtN, "Joined into batches")?.[1] === "4", txtN.replace(/\s+/g, " ").slice(0, 300));
+ok("K4: the Admin's mail carries the target table (week of 2031-03-10: trainers trained target 10); a centre login's mail does not",
+  /^AGAINST TARGET$/m.test(txtAdm) && mailRow(txtAdm, "Trainers trained (reached Certified)")?.[0] === "10" && !/AGAINST TARGET/.test(txtN), txtAdm.replace(/\s+/g, " ").slice(0, 300));
 ok("T5: an Admin recipient gets no Costs section either (no finance.view)", txtAdm.length > 0 && !/Costs|Rs \d/i.test(txtAdm), txtAdm.replace(/\s+/g, " ").slice(0, 200));
 const txtTyped = String(mailed(unknownEmail)?.text ?? "");
 ok("T5: the typed address (no ERP account) gets the FULL report: both centres' batches and the cost section with both centres' money (today Rs 1,550 = 1,250 + 300, month Rs 6,050)",
-  /Costs/.test(txtTyped) && txtTyped.includes("Rs 1,550") && txtTyped.includes("Rs 6,050") && txtTyped.includes(fx.pa1.code) && txtTyped.includes(fx.pb1.code), txtTyped.replace(/\s+/g, " ").slice(0, 400));
+  /^COSTS$/m.test(txtTyped) && txtTyped.includes("Rs 1,550") && txtTyped.includes("Rs 6,050") && txtTyped.includes(fx.pa1.code) && txtTyped.includes(fx.pb1.code), txtTyped.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: a scoped recipient's mail names only its own centre's batches", !txtN.includes(fx.pb1.code) && txtN.includes(fx.pa1.code), "");
+{
+  const gone = await req(admin, "PUT", "/api/targets/weekly", { rows: [{ week_start: "2031-03-10" }] });
+  ok("K4: a week sent with all three figures blank is removed (cleanup of this suite's target week)", gone.status === 200 && gone.data?.removed === 1 && (await db.collection("weeklytargets").countDocuments({ week_start: bizDay("2031-03-10") })) === 0, JSON.stringify(gone.data));
+}
 
 // =================================================================================================
 // T2 - two concurrent ticks, one mail
@@ -660,7 +866,7 @@ await db.collection("users").updateOne({ _id: oid(uAF.id) }, { $set: { email: uA
 const typedTxt = String(r2m[typedFull]?.text ?? "");
 ok("U2: a typed address that is no ERP account is mailed (outcome mailed, kind address, full view)", r2m[typedFull]?.outcome === "mailed" && r2m[typedFull]?.kind === "address" && r2m[typedFull]?.full === true, JSON.stringify(r2m[typedFull] && { o: r2m[typedFull].outcome, k: r2m[typedFull].kind, f: r2m[typedFull].full }));
 ok("U2: ...and its report is the FULL one: both centres' batches and the cost section with both centres' money (today Rs 1,550, month Rs 6,050)",
-  /Costs/.test(typedTxt) && typedTxt.includes("Rs 1,550") && typedTxt.includes("Rs 6,050") && typedTxt.includes(fx.pa1.code) && typedTxt.includes(fx.pb1.code), typedTxt.replace(/\s+/g, " ").slice(0, 300));
+  /^COSTS$/m.test(typedTxt) && typedTxt.includes("Rs 1,550") && typedTxt.includes("Rs 6,050") && typedTxt.includes(fx.pa1.code) && typedTxt.includes(fx.pb1.code), typedTxt.replace(/\s+/g, " ").slice(0, 300));
 ok("U2: ...the typed address's claim key is its normalised lowercase email", !!(await jobLocks.findOne({ _id: `digest-sent:${UD2}:${typedFull}` })), "");
 
 // ---- U3 the same person listed twice (ERP user + typed address with the same email): ONE mail, in the account's own view
@@ -1015,18 +1221,27 @@ const shot = async (page, name) => { if (shotDir) { try { mkdirSync(shotDir, { r
 await arm("S1 digest screen (Location A with finance.view)", async () => {
   const { ctx, page } = await newPage(uAF.email, PW);
   await page.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
-  await page.locator('[data-testid="digest-costs"]').waitFor();
+  await page.locator('[data-testid="digest-table-costs"]').waitFor();
+  // screen = API, cell for cell, in every table (the screen only lays out what dailyDigest worded)
+  const api = (await digest(uAF.cookie, D)).data;
+  const screenBad = [];
+  for (const t of api?.tables ?? []) for (const [ri, r] of t.rows.entries()) for (const [ci, c] of r.cells.entries()) {
+    const got = await txt(page, `digest-cell-${t.key}-${ri}-${ci}`).catch(() => "<missing>");
+    if (got !== c) screenBad.push(`${t.key}/${r.label}/${ci}: screen ${got} api ${c}`);
+  }
+  ok("S1: the screen draws every cell of every table exactly as the API words it (Trainers, Candidates, Costs)", (api?.tables ?? []).length === 3 && screenBad.length === 0, screenBad.join(" | ").slice(0, 300));
+  const cell = async (key, label, ci) => txt(page, `digest-cell-${key}-${(api?.tables ?? []).find((t) => t.key === key)?.rows.findIndex((r) => r.label === label)}-${ci}`);
   const got = {
-    joined: await txt(page, "digest-joined"), enrolled: await txt(page, "digest-enrolled"), mobilised: await txt(page, "digest-mobilised"),
-    assigned: await txt(page, "digest-assigned"), idle: await txt(page, "digest-idle"), pipeline: await txt(page, "digest-pipeline"),
-    today: await txt(page, "digest-cost-today"), month: await txt(page, "digest-cost-month"), pending: await txt(page, "digest-cost-pending"),
+    joined: await cell("candidates", "Joined into batches", 1), enrolled: await cell("candidates", "Enrolled", 1), mobilised: await cell("candidates", "Mobilised (planning batches)", 0),
+    assigned: await cell("trainers", "Assigned to a live batch", 0), idle: await cell("trainers", "Free to assign", 0),
+    today: await cell("costs", "Approved on the day", 0), month: await cell("costs", "Month to date", 0), pending: await cell("costs", "Pending approval", 0),
   };
-  ok("S1: the tiles read joined 4, enrolled 2, mobilised 12, assigned 2, free 4, pipeline 6", got.joined === "4" && got.enrolled === "2" && got.mobilised === "12" && got.assigned === "2" && got.idle === "4" && got.pipeline === "6", JSON.stringify(got));
-  ok("S1: learner tiles separately show 7 training starts, 5 current enrolled and 0 current Training Ongoing, with a current measurement time",
-    await txt(page, "digest-training-started") === "7" && await txt(page, "digest-current-enrolled") === "5"
-    && await txt(page, "digest-current-training") === "0" && /measured.*IST/.test(await txt(page, "digest-current-measured")),
-    await txt(page, "digest-current-learners"));
-  ok("S1: the money tiles read 1,250 today, 5,750 this month, 1,100 pending", /1,250/.test(got.today) && /5,750/.test(got.month) && /1,100/.test(got.pending), JSON.stringify(got));
+  ok("S1: the cells read joined 4, enrolled 2, mobilised 12 of 30, assigned 2, free 4", got.joined === "4" && got.enrolled === "2" && got.mobilised === "12 of 30 (gap 18)" && got.assigned === "2" && got.idle === "4", JSON.stringify(got));
+  ok("S1: learner cells show 7 training starts on the day, 5 enrolled and 0 Training Ongoing now, with a current measurement time",
+    await cell("candidates", "Training started", 1) === "7" && await cell("candidates", "Enrolled", 0) === "5"
+    && await cell("candidates", "In training (started Active batch)", 0) === "0" && /measured.*IST/.test(await txt(page, "digest-current-measured")), "");
+  ok("S1: the money cells read Rs 1,250 today, Rs 5,750 this month, Rs 1,100 pending", got.today === "Rs 1,250" && got.month === "Rs 5,750" && got.pending === "Rs 1,100", JSON.stringify(got));
+  ok("S1: the week is named on the screen (Monday to Sunday)", /Week 2031-03-10 to 2031-03-16/.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");
   await shot(page, "S1-digest-finance-viewer.png");
@@ -1035,8 +1250,8 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
 await arm("S2 digest screen (Location A, no finance)", async () => {
   const { ctx, page } = await newPage(uA.email, PW);
   await page.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
-  await page.locator('[data-testid="digest-joined"]').waitFor();
-  ok("S2: the costs section is not in the page at all, and no cost figure is", (await page.locator('[data-testid="digest-costs"]').count()) === 0 && !/1,250|5,750|14,249/.test(await page.locator("body").innerText()), "");
+  await page.locator('[data-testid="digest-table-candidates"]').waitFor();
+  ok("S2: the costs section is not in the page at all, and no cost figure is", (await page.locator('[data-testid="digest-table-costs"]').count()) === 0 && !/1,250|5,750|14,249/.test(await page.locator("body").innerText()), "");
   ok("S2: no centre-B batch is on Location A's screen", (await page.locator(`text=${fx.pb1.code}`).count()) === 0, "");
   await shot(page, "S2-digest-no-finance.png");
   await ctx.close();
@@ -1056,7 +1271,7 @@ await arm("S3 digest screen (Admin: Publish now)", async () => {
   ok("S3: pressing Publish now shows the outcome in words (5 recipients attempted)", /5/.test(res) && /recipient/i.test(res), res);
   ok("S3: ...and says truthfully that nothing was sent (test env suppresses mail): '0 sent', '5 skipped', the reason, and never 'handed to the mail service'", /(^|[^0-9])0 sent/.test(res) && /5 skipped/.test(res) && /Reason/.test(res) && !/handed to the mail service/i.test(res), res);
   ok("S3: ...and it really mailed through the one door: 5 new rows for that day", (await digestRows(PUBDAY, recipients)).length === before + 5, String((await digestRows(PUBDAY, recipients)).length - before));
-  ok("S3: the Admin's screen has no costs section (no finance.view)", (await page.locator('[data-testid="digest-costs"]').count()) === 0, "");
+  ok("S3: the Admin's screen has no costs section (no finance.view)", (await page.locator('[data-testid="digest-table-costs"]').count()) === 0, "");
   await shot(page, "S3-digest-admin-publish.png");
   await ctx.close();
   await setDefaults({ digest_recipients: "" });
@@ -1066,7 +1281,7 @@ await arm("S4 digest screen (Trainer is kept out)", async () => {
   const { ctx, page } = await newPage(uTr.email, PW);
   await page.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(2500);
-  ok("S4: a Trainer login does not get the digest tiles", (await page.locator('[data-testid="digest-joined"]').count()) === 0, "");
+  ok("S4: a Trainer login does not get the digest tables", (await page.locator('[data-testid^="digest-table-"]').count()) === 0, "");
   await ctx.close();
 });
 
@@ -1139,7 +1354,7 @@ await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the diges
   await ctx.close();
   const { ctx: ctx2, page: page2 } = await newPage(uOps.email, PW);
   await page2.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
-  await page2.locator('[data-testid="digest-joined"]').waitFor();
+  await page2.locator('[data-testid="digest-table-candidates"]').waitFor();
   ok("S6: a viewer who cannot publish or edit the list does not get the warning", (await page2.locator('[data-testid="digest-only-nobody-warning"]').count()) === 0, "");
   await ctx2.close();
   await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: true } });

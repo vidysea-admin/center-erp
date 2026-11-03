@@ -8,6 +8,7 @@ import { api, fmtDate, istTodayInput, pipelineLabel, offerable } from "@/lib/cli
 import { BackLink, Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls } from "@/components/ui";
 import { Activity } from "@/components/activity";
 import { uploadWithRetry } from "@/lib/upload";
+import { TRAINER_UNAVAILABLE_REASON } from "@/lib/person";
 
 // Trainer detail (2026-08-12). The list + drawer had nowhere to show the hiring journey Manish
 // described, so this is the host surface for it: where the stage is moved, documents are
@@ -186,7 +187,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           reason: move.reason || undefined,
           remarks: move.remarks || undefined,
           date: move.date || undefined,
-          payload: { tr_id: move.tr_id || undefined, tot_certificate_no: move.tot_certificate_no || undefined, payment_reference: move.payment_reference || undefined },
+          payload: { tr_id: move.tr_id || undefined, tot_certificate_no: move.tot_certificate_no || undefined, payment_reference: move.payment_reference || undefined, unavailable_reason: move.unavailable_reason || undefined },
         },
       });
       setMove(null); await load();
@@ -240,6 +241,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
         <BackLink fallback="/trainers" label="Trainers" />
         <h1 className="font-serif text-2xl font-semibold">{t.name}</h1>
         <Chip value={t.status} />
+        {t.unavailable_reason && <span data-testid="trainer-reason" className="text-xs text-gray-600">({t.unavailable_reason})</span>}
         <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${
           stage === "Certified" ? "border-green-200 bg-green-50 text-green-700"
             : isOff ? "border-red-200 bg-red-50 text-red-700"
@@ -327,6 +329,13 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                     if (!window.confirm(`Are you sure? You are BYPASSING the pipeline steps — the document, NSDC and TOT gates will NOT run. ${t.name} will be set to "${target}" directly.`)) return;
                     const reason = target === "Dropped" ? (window.prompt("Reason for dropping (required):") ?? "") : undefined;
                     if (target === "Dropped" && !reason) return;
+                    // Karunn sir, 2026-11-02: a TRAINED trainer leaving is counted by why (the server refuses without it).
+                    let leave = "";
+                    if (target === "Dropped" && t.pipeline_status === "Certified") {
+                      const pick = (window.prompt(`Why is this trained trainer leaving? Type the number: ${TRAINER_UNAVAILABLE_REASON.map((r, i) => `${i + 1} = ${r}`).join(", ")}`) ?? "").trim();
+                      leave = TRAINER_UNAVAILABLE_REASON[Number(pick) - 1] ?? "";
+                      if (!leave) { setErr(`Choose 1 to ${TRAINER_UNAVAILABLE_REASON.length} for why a trained trainer is leaving.`); return; }
+                    }
                     // QA-135: the bypass skips the very gate that collects the TR ID, so ask for
                     // the fact right here. Optional on purpose — NSDC may not have issued it yet;
                     // the profile stays flagged (banner + list chip) until it is recorded.
@@ -344,7 +353,7 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
                       if (m) totDate = m[1].length === 4 ? `${m[1]}-${m[2]}-${m[3]}` : `${m[3]}-${m[2]}-${m[1]}`;
                     }
                     try {
-                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason, ...(totDate ? { date: totDate } : {}), ...(trId.trim() ? { payload: { tr_id: trId.trim() } } : {}) } });
+                      await api(`/api/trainers/${id}/transition`, { method: "POST", json: { target, bypass: true, reason, ...(totDate ? { date: totDate } : {}), ...(trId.trim() || leave ? { payload: { ...(trId.trim() ? { tr_id: trId.trim() } : {}), ...(leave ? { unavailable_reason: leave } : {}) } } : {}) } });
                       await load();
                     } catch (er: any) { setErr(er.message); }
                   }}>
@@ -549,6 +558,15 @@ export default function TrainerDetail({ params }: { params: Promise<{ id: string
           )}
           {move.target === "Dropped" && (
             <Field label="Reason" required><input className={inputCls} value={move.reason ?? ""} onChange={(e) => setMove({ ...move, reason: e.target.value })} /></Field>
+          )}
+          {/* Karunn sir, 2026-11-02: a TRAINED trainer who leaves is counted by why, in the daily digest. */}
+          {move.target === "Dropped" && t.pipeline_status === "Certified" && (
+            <Field label="Why is this trained trainer leaving?" required>
+              <select data-testid="trainer-leave-reason" className={inputCls} value={move.unavailable_reason ?? ""} onChange={(e) => setMove({ ...move, unavailable_reason: e.target.value })}>
+                <option value="">Choose…</option>
+                {TRAINER_UNAVAILABLE_REASON.map((r) => <option key={r}>{r}</option>)}
+              </select>
+            </Field>
           )}
           {/* 2026-08-13 parity: the API always accepted a stage date (for entering history that
               happened on paper first); the UI never offered it. Blank = today. */}

@@ -3,6 +3,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, HttpError } from "@/lib/authz";
 import { AuditLog } from "@/models";
 import { hasPermission, maskMoneyInAuditRow, FINANCE_VIEW } from "@/lib/permissions";
+import { assertDigestDay, istStart, istEnd } from "@/lib/rules";
 
 // QA-137 (Umesh, 15/08: "poora per-user activity view" — "Divya ne aaj kya kiya" ka jawab).
 // Admin-only ON PURPOSE, v1: a person's trail spans every centre, so handing it to a scoped
@@ -18,6 +19,9 @@ export const GET = apiHandler(async (req: NextRequest, ctx: { params: Promise<{ 
   const filter: Record<string, unknown> = { actor: id };
   const entity = sp.get("entity");
   if (entity) filter.entity = entity;
+  // ?day=YYYY-MM-DD: one IST day's trail (the Activity overview's "Log" for that day; 2026-11-02).
+  const day = sp.get("day");
+  if (day) filter.created_at = { $gte: istStart(assertDigestDay(day)), $lte: istEnd(day) };
   const page = Math.max(1, parseInt(sp.get("page") || "1", 10) || 1);
   const asked = Number(sp.get("limit") ?? "");
   const limit = Number.isFinite(asked) && asked >= 1 ? Math.min(500, Math.ceil(asked)) : 100;

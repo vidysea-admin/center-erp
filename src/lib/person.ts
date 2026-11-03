@@ -91,6 +91,13 @@ export function trainerLabel(t?: {
   });
 }
 
+// Karunn sir, review 2026-11-02: "trained but backed out, absconding or unavailable - there should be a flag,
+// so we know these many are not available though they are in our count". WHY a trainer is out of the pool:
+// required when `status` is Unavailable, and when a trainer who reached Certified is Dropped. The daily digest
+// splits its "Trained, not available" row by this word (Umesh, AskUserQuestion: a reason dropdown). The ONE
+// list: models/index.ts re-exports it and the trainer screens import it from here.
+export const TRAINER_UNAVAILABLE_REASON = ["Backed out", "Absconding", "Temporarily unavailable"] as const;
+
 // mtg-c1 (R4): a trainer's availability TAG - one function, read by the Trainers screen (its tabs and its
 // chips) and by the daily digest. It lived inside trainers/page.tsx as `availabilityTag`; the digest
 // needs the same answer on the server, and a second copy of "who is free" is exactly the disagreement

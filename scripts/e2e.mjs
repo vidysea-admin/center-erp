@@ -4396,7 +4396,7 @@ ok("regenerate keeps ticked milestones done", !!regen.milestones.find((m) => m.k
   // correct product behaviour, not an obstacle: it is why the reopened-trainer route is a real
   // route rather than a trick.
   await req("POST", `/api/batches/${dateBatch._id}/transition`, { target: "Cancelled", reason: "-164 c2: free the trainer for the QA-507 pin" }, 200);
-  const reopened = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Dropped", reason: "-164 c2: QA-507 pin" }, 200)).data.item;
+  const reopened = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Dropped", reason: "-164 c2: QA-507 pin", payload: { unavailable_reason: "Backed out" } }, 200)).data.item;
   const back = (await req("POST", `/api/trainers/${pipeTrainer2._id}/transition`, { target: "Fresh Lead" }, 200)).data.item;
   ok("QA-507 (-164 c2) fixture guard: the reopened trainer really is out of Certified and STILL carries tot_done_on",
     back.pipeline_status === "Fresh Lead" && !!back.tot_done_on,

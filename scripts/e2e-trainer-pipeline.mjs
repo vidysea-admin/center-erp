@@ -350,7 +350,7 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
   await req("POST", BT, { target: "Wizard", bypass: true }, 400);
   // Dropped still demands its reason even under bypass (T6 survives).
   await req("POST", BT, { target: "Dropped", bypass: true }, 400);
-  const drop = await req("POST", BT, { target: "Dropped", bypass: true, reason: "left the org" }, 200);
+  const drop = await req("POST", BT, { target: "Dropped", bypass: true, reason: "left the org", payload: { unavailable_reason: "Backed out" } }, 200);
   ok("bypass-drop records the reason and deactivates", drop.data.item?.dropped_reason === "left the org" && drop.data.item?.active === false, JSON.stringify({ r: drop.data.item?.dropped_reason, a: drop.data.item?.active }));
   // Ops HAS trainers.manage but NOT pipeline.bypass — the 403 below is the bypass check
   // itself firing, not a generic write denial.
@@ -500,7 +500,7 @@ ok("a dropped trainer can be re-opened if they come back", reopened.data.item.pi
   // rank-based guard I designed and dropped: the NSDC round-trip (Rejected → Shortlisted) and the
   // Dropped → Fresh Lead re-open both leave a trainer standing BEHIND dates that are correctly on
   // their record, and a rank test would have refused to fix exactly those.
-  await req("POST", CT, { target: "Dropped", bypass: true, reason: "test reopen" }, 200);
+  await req("POST", CT, { target: "Dropped", bypass: true, reason: "test reopen", payload: { unavailable_reason: "Backed out" } }, 200);
   await req("POST", CT, { target: "Fresh Lead", bypass: true }, 200);
   const reopened = (await req("GET", `/api/trainers/${ct._id}`, undefined, 200)).data.item;
   ok("-202: re-opening a dropped trainer leaves the TOT date on the record",

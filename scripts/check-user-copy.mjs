@@ -665,11 +665,14 @@ for (const file of walk(root)) {
 //   perCandidate                   — a DELIBERATE one-way switch: you do not un-start
 //                                    per-candidate marking and go back to the legacy count
 //   p/enrol email+phone, p/register submitted, wizard `src` — form state and wizard steps
+//   admin actDay, admin activity `day` (2026-11-02, activity tracker) — a date printed as text in the
+//                                    user-log drawer, and a date <input>'s value; `day` matches only
+//                                    because a template literal holds `${day ? …}`. Neither is a panel.
 //
 // So of the 22 v3 would have flagged, THREE were real and all three are fixed. The ceiling stays
 // as a guard against the next one, not as a claim that 15 things are broken.
 {
-  const CEILING = 15;
+  const CEILING = 17;
   const argOf = (src, i) => {
     let depth = 0, out = "";
     for (; i < src.length; i++) {
@@ -3208,6 +3211,9 @@ for (const file of walk(root)) {
   // appear in EXEMPT below WITH a written reason. Adding a route that reads money now fails closed,
   // and an exemption has to be argued in a diff rather than achieved by silence.
   const EXEMPT = {
+    // 2026-11-02, activity tracker (Karunn sir): the ?activity= branch is Admin-only and $groups AuditLog
+    // rows into COUNTS and first/last timestamps per actor and entity name. No old_value/new_value leaves it.
+    "app/api/users/route.ts": "Admin-only ?activity= aggregate: counts and timestamps grouped by actor and entity name; no audit values are read or returned",
     // Umesh, 2026-09-05: *"sirf paisa chhupao, status sabko rehne do."* These two ship
     // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
     "app/api/batches/route.ts": "status only via settlementStage, no money field (Umesh's field ruling 2026-09-05); its AuditLog read is .select('entity_id') — ids, never values",

@@ -16,16 +16,33 @@ export default function DailyDigestPage() {
   return <Suspense><DailyDigestInner /></Suspense>;
 }
 
-const n = (v: unknown) => Number(v ?? 0).toLocaleString("en-IN", { maximumFractionDigits: 2 });
-const rs = (v: unknown) => `Rs ${n(v)}`;
-
-function Tile({ label, value, tid, sub }: { label: string; value: string | number; tid: string; sub?: string }) {
+// Karunn sir, 2026-11-02: "tabular form - text and visuals are not understood". The tables arrive finished
+// from dailyDigest (every cell already worded, the same cells the 21:00 mail draws); this only lays them out.
+// Cell testid: digest-cell-<table>-<row>-<col>, so the suite can hold screen = API = mail cell by cell.
+function DigestTableView({ t }: { t: any }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-3">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold" data-testid={tid}>{value}</div>
-      {sub && <div className="mt-0.5 text-xs text-gray-500">{sub}</div>}
-    </div>
+    <section className="space-y-1" data-testid={`digest-table-${t.key}`}>
+      <h2 className="text-base font-semibold">{t.title}</h2>
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50 text-xs text-gray-600">
+            <tr>{t.head.map((h: string, i: number) => <th key={i} className={`px-3 py-2 font-semibold ${i === 0 ? "text-left" : "text-right"}`}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {t.rows.map((r: any, ri: number) => (
+              <tr key={ri} className={`border-t border-gray-100 ${r.strong ? "font-semibold" : ""}`}>
+                <td className={`px-3 py-1.5 ${r.sub ? "pl-8 text-gray-600" : ""}`}>{r.label}</td>
+                {r.cells.map((c: string, ci: number) => (
+                  <td key={ci} data-testid={`digest-cell-${t.key}-${ri}-${ci}`}
+                    className={`px-3 py-1.5 text-right tabular-nums ${r.tones?.[ci] === "pos" ? "font-semibold text-emerald-700" : r.tones?.[ci] === "neg" ? "font-semibold text-red-700" : ""}`}>{c}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {t.note && <p className="text-xs text-gray-500">{t.note}</p>}
+    </section>
   );
 }
 
@@ -75,8 +92,6 @@ function DailyDigestInner() {
   };
 
   const c = data?.candidates;
-  const t = data?.trainers;
-  const costs = data?.costs;
   const meta = data?.meta;
   const mayPublish = can("defaults.manage", "edit");
   // Never publish while the figures on screen are for a different day than the chosen one (a load in flight)
@@ -123,31 +138,23 @@ function DailyDigestInner() {
 
       {data && (
         <>
-          <p className="text-xs text-gray-500" data-testid="digest-note">{data.live_note}</p>
+          <p className="text-xs text-gray-500" data-testid="digest-note">
+            Week {data.week.from} to {data.week.to} (Monday to Sunday). {data.live_note}
+          </p>
 
-          <section className="space-y-2">
-            <h2 className="text-base font-semibold">Candidates</h2>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Tile label="Joined into batches" value={c.joined.total} tid="digest-joined" />
-              <Tile label="New enrolments on the day" value={c.enrolled.total} tid="digest-enrolled" />
-              <Tile label="Training started on the day" value={c.training_started.total} tid="digest-training-started" />
-              <Tile label="Batches created / started" value={`${c.batches_created.length} / ${c.batches_started.length}`} tid="digest-batches" />
-              <Tile label="Mobilised (planning batches)" value={c.mobilised.mobilised} tid="digest-mobilised"
-                sub={`of ${n(c.mobilised.target)} target, gap ${n(c.mobilised.gap)}, ${c.mobilised.batches} batch${c.mobilised.batches === 1 ? "" : "es"}`} />
-            </div>
-            <div className="grid grid-cols-2 gap-3" data-testid="digest-current-learners">
-              <Tile label="Current enrolled" value={c.current.enrolled} tid="digest-current-enrolled" />
-              <Tile label="Current Training Ongoing" value={c.current.training_ongoing} tid="digest-current-training" />
-            </div>
-            <p className="text-xs text-gray-500" data-testid="digest-current-measured">
-              Current learner totals measured {fmtDT(c.current.measured_at)} IST. These show the position now, including when an earlier report day is chosen.
+          {data.tables.map((t: any) => <DigestTableView key={t.key} t={t} />)}
+
+          <p className="text-xs text-gray-500" data-testid="digest-current-measured">
+            Current learner totals measured {fmtDT(c.current.measured_at)} IST. These show the position now, including when an earlier report day is chosen.
+          </p>
+          {(c.training_started.exceptions.missing_actual_start > 0 || c.training_started.exceptions.missing_join_date > 0) && (
+            <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="digest-training-exceptions">
+              Training-date exceptions (position now): {c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start; {c.training_started.exceptions.missing_join_date} missing a roster joining date. A roster row contributes a training start only when both dates are recorded.
             </p>
-            {(c.training_started.exceptions.missing_actual_start > 0 || c.training_started.exceptions.missing_join_date > 0) && (
-              <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="digest-training-exceptions">
-                Training-date exceptions (position now): {c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start; {c.training_started.exceptions.missing_join_date} missing a roster joining date. A roster row contributes a daily training start only when both dates are recorded.
-              </p>
-            )}
-            {c.joined.by_batch.length > 0 && (
+          )}
+          {c.joined.by_batch.length > 0 && (
+            <section className="space-y-1">
+              <h2 className="text-sm font-semibold">Joined on the day, by batch</h2>
               <ul className="rounded-lg border border-gray-200 bg-white text-sm" data-testid="digest-by-batch">
                 {c.joined.by_batch.map((b: any) => (
                   <li key={b.batch_id} className="flex justify-between border-b border-gray-100 px-3 py-1.5 last:border-0">
@@ -156,46 +163,19 @@ function DailyDigestInner() {
                   </li>
                 ))}
               </ul>
-            )}
-            {(c.batches_created.length > 0 || c.batches_started.length > 0) && (
-              <div className="grid gap-3 md:grid-cols-2 text-sm">
-                {([["Batches created", c.batches_created], ["Batches started", c.batches_started]] as const).map(([label, rows]) => (
-                  <div key={label} className="rounded-lg border border-gray-200 bg-white p-3">
-                    <div className="mb-1 text-xs text-gray-500">{label}</div>
-                    {(rows as any[]).length === 0 ? <div className="text-gray-400">None</div> : (rows as any[]).map((b) => (
-                      <div key={b.batch_id}><Link href={`/batches/${b.batch_id}`} className="text-blue-700 underline">{b.code}</Link> <span className="text-gray-500">{b.location ?? ""} ({b.status})</span></div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-2">
-            <h2 className="text-base font-semibold">Trainers</h2>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-              <Tile label="Assigned to a live batch" value={t.assigned} tid="digest-assigned" />
-              <Tile label="Free to assign" value={t.idle} tid="digest-idle" />
-              <Tile label="Unavailable" value={t.unavailable} tid="digest-unavailable" />
-              <Tile label="In the pipeline" value={t.pipeline.total} tid="digest-pipeline" sub={`${t.added} added on the day`} />
-            </div>
-            <div className="flex flex-wrap gap-2 text-sm" data-testid="digest-buckets">
-              {t.pipeline.buckets.map((b: any) => (
-                <span key={b.key} className="rounded-full border border-gray-200 bg-white px-3 py-1">{b.label}: <b>{b.count}</b></span>
+            </section>
+          )}
+          {(c.batches_created.length > 0 || c.batches_started.length > 0) && (
+            <div className="grid gap-3 md:grid-cols-2 text-sm">
+              {([["Batches created on the day", c.batches_created], ["Batches started on the day", c.batches_started]] as const).map(([label, rows]) => (
+                <div key={label} className="rounded-lg border border-gray-200 bg-white p-3">
+                  <div className="mb-1 text-xs text-gray-500">{label}</div>
+                  {(rows as any[]).length === 0 ? <div className="text-gray-400">None</div> : (rows as any[]).map((b) => (
+                    <div key={b.batch_id}><Link href={`/batches/${b.batch_id}`} className="text-blue-700 underline">{b.code}</Link> <span className="text-gray-500">{b.location ?? ""} ({b.status})</span></div>
+                  ))}
+                </div>
               ))}
             </div>
-          </section>
-
-          {costs && (
-            <section className="space-y-2" data-testid="digest-costs">
-              <h2 className="text-base font-semibold">Costs</h2>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <Tile label="Approved today" value={rs(costs.today.amount)} tid="digest-cost-today" sub={`${costs.today.entries} entr${costs.today.entries === 1 ? "y" : "ies"}`} />
-                <Tile label="Month to date" value={rs(costs.month.amount)} tid="digest-cost-month" sub={`${costs.month.entries} entr${costs.month.entries === 1 ? "y" : "ies"}`} />
-                <Tile label="Pending approval" value={rs(costs.pending.amount)} tid="digest-cost-pending" sub={`${costs.pending.count} request${costs.pending.count === 1 ? "" : "s"}, ${rs(costs.pending.raised_today.amount)} raised on the day`} />
-                <Tile label="Payment pending" value={rs(costs.payment_pending.amount)} tid="digest-cost-payment" sub={`${costs.payment_pending.count} entr${costs.payment_pending.count === 1 ? "y" : "ies"}`} />
-              </div>
-            </section>
           )}
         </>
       )}

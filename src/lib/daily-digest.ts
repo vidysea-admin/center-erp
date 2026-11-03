@@ -186,47 +186,24 @@ export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
 }
 
 const digestSubject = (day: string) => `Daily digest ${day}`;
-const rs = (n: number) => `Rs ${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
-const plural = (n: number, one: string, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 
-// The mail body for ONE recipient. The Costs block is written only when the digest itself carries one
-// (`costs` is null unless the viewer holds finance.view), so a recipient without the right gets a mail
-// with no cost word and no cost figure in it at all.
+// The mail body for ONE recipient. Karunn sir, 2026-11-02: "tabular form - trainers, candidates, cost". The
+// TABLES are dailyDigest's own (rules.ts builds and words every cell), so the mail and the screen draw the same
+// cells. The Costs table exists only when the digest carries costs (finance.view, or a typed full-view
+// address), so a recipient without the right gets a mail with no cost word and no cost figure in it at all.
 export function digestMailContent(d: DailyDigest) {
-  const c = d.candidates, t = d.trainers;
+  const c = d.candidates;
   const lines: string[] = [
-    `Position for ${d.day} (IST).`,
-    "Candidates",
-    `Joined into batches: ${c.joined.total}`,
-    ...c.joined.by_batch.map((b) => `  ${b.code}${b.location ? ` (${b.location})` : ""}: ${b.count}`),
-    `Enrolled: ${c.enrolled.total} (new enrolments on the day)`,
-    `Training started on the day: ${c.training_started.total}`,
-    `Current learners (measured ${c.current.measured_at}): ${c.current.enrolled} enrolled, ${c.current.training_ongoing} Training Ongoing. These are current totals, not historical snapshots.`,
+    `Position for ${d.day} (IST). Week ${d.week.from} to ${d.week.to} (Monday to Sunday).`,
+    ...(c.joined.by_batch.length ? [`Joined on the day, by batch: ${c.joined.by_batch.map((b) => `${b.code}${b.location ? ` (${b.location})` : ""} ${b.count}`).join(", ")}`] : []),
     ...(c.training_started.exceptions.missing_actual_start || c.training_started.exceptions.missing_join_date
       ? [`Training-date exceptions (position now): ${c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start, ${c.training_started.exceptions.missing_join_date} missing a roster joining date.`]
       : []),
-    `Batches created: ${c.batches_created.length} | started: ${c.batches_started.length}`,
-    ...(c.batches_created.length ? [`  Created: ${c.batches_created.map((b) => b.code).join(", ")}`] : []),
-    ...(c.batches_started.length ? [`  Started: ${c.batches_started.map((b) => b.code).join(", ")}`] : []),
-    `Mobilised (planning batches): ${c.mobilised.mobilised} of ${c.mobilised.target}, gap ${c.mobilised.gap}, across ${plural(c.mobilised.batches, "batch", "batches")}`,
-    "Trainers",
-    `${t.assigned} assigned to a live batch, ${t.idle} free to assign, ${t.unavailable} unavailable`,
-    `Pipeline: ${t.pipeline.total} (${t.pipeline.buckets.map((b) => `${b.label} ${b.count}`).join(", ")})`,
-    `Added on the day: ${t.added}`,
-    ...(d.costs
-      ? [
-          "Costs",
-          `Approved today: ${rs(d.costs.today.amount)} in ${plural(d.costs.today.entries, "entry", "entries")}`,
-          `Month to date: ${rs(d.costs.month.amount)} in ${plural(d.costs.month.entries, "entry", "entries")}`,
-          `Pending approval: ${rs(d.costs.pending.amount)} in ${plural(d.costs.pending.count, "request")}, of which ${rs(d.costs.pending.raised_today.amount)} was raised on the day`,
-          `Payment pending: ${rs(d.costs.payment_pending.amount)} in ${plural(d.costs.payment_pending.count, "entry", "entries")}`,
-        ]
-      : []),
-    d.live_note,
   ];
   return renderMail({
     title: `Daily digest, ${d.day}`,
     lines,
+    tables: d.tables,
     cta: { label: "Open the daily digest", url: `https://www.vidysea.com/erp/reports/daily?date=${d.day}` },
   });
 }

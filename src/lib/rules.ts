@@ -5,10 +5,10 @@ import crypto from "crypto";
 import { Types } from "mongoose";
 import {
   ApprovalRequest, AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceImport, GovtAttendanceRow, Invoice, Location,
-  LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, Trainer, TrainerDocument, TrainerRequest, User,
+  LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate, journeyOf } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -4414,6 +4414,13 @@ export async function transitionTrainer(
   // Computed once, before the bypass branch, so the bypass cannot skip the check the way it skips
   // the gates. Skipping GATES is what a bypass is for; writing a date from next year is not.
   const when = stampDate(opts.date);
+  // Karunn sir, 2026-11-02: a trainer who was TRAINED (Certified) and leaves is "backed out" or "absconding",
+  // and the daily digest counts them by that word. The free-text reason stays; this is the category beside it.
+  // Required on the bypass path too: a bypass skips gates, not the record of why a trained person left.
+  const leaveReason = opts.payload?.unavailable_reason as string | undefined;
+  if (target === "Dropped" && from === "Certified" && !(TRAINER_UNAVAILABLE_REASON as readonly string[]).includes(String(leaveReason ?? ""))) {
+    throw new HttpError(400, `${tName} is a trained (Certified) trainer. Say why they are leaving: ${TRAINER_UNAVAILABLE_REASON.join(", ")}.`);
+  }
 
   // Rule T8 (Umesh 15/08): a pipeline.bypass holder may set ANY status directly — the
   // use-case is a trainer who already works with us (batch live or done) whose paperwork
@@ -4431,8 +4438,8 @@ export async function transitionTrainer(
       t.tot_done_on = when;
       if (!t.available_from) t.available_from = t.tot_done_on;
     }
-    if (target === "Dropped") { t.dropped_from_stage = from; t.dropped_reason = opts.reason; t.active = false; }
-    if (from === "Dropped") { t.dropped_reason = undefined; t.active = true; }
+    if (target === "Dropped") { t.dropped_from_stage = from; t.dropped_reason = opts.reason; t.active = false; if (from === "Certified") t.unavailable_reason = leaveReason; }
+    if (from === "Dropped") { t.dropped_reason = undefined; t.active = true; t.unavailable_reason = null; }
     t.pipeline_status = target as any;
     t.pipeline_note = `BYPASS by ${opts.actorName ?? "admin"}: ${from} → ${target}${opts.reason ? ` (${opts.reason})` : ""}`;
     await t.save();
@@ -4534,12 +4541,14 @@ export async function transitionTrainer(
       }
       t.dropped_reason = opts.reason;
       t.active = false;
+      if (from === "Certified") t.unavailable_reason = leaveReason;
       break;
     }
     case "Fresh Lead":
       // Re-opening someone previously dropped.
       t.dropped_reason = undefined;
       t.active = true;
+      t.unavailable_reason = null;
       break;
   }
 
@@ -5822,6 +5831,51 @@ export function assertDigestDay(dayIST: unknown): string {
   return s;
 }
 
+// Karunn sir, 2026-11-02 (Umesh: a reason dropdown): a trainer marked Unavailable must say WHY - Backed out,
+// Absconding or Temporarily unavailable - so the digest can count the trained-but-not-available apart. ONE check for
+// both trainer doors (POST create, PATCH edit). Judged only when the write touches `status` or the reason, so a
+// partial PATCH of another field never trips on a legacy row; leaving Unavailable clears the reason, except on a
+// trainer Dropped after Certified, whose reason was recorded by the transition and stays.
+export function applyTrainerUnavailableReason(body: Record<string, any>, existing?: { status?: string | null; unavailable_reason?: string | null; pipeline_status?: string | null }) {
+  if (!("status" in body) && !("unavailable_reason" in body)) return;
+  const status = "status" in body ? body.status : existing?.status;
+  if (body.unavailable_reason === "") body.unavailable_reason = null;
+  const reason = "unavailable_reason" in body ? body.unavailable_reason : existing?.unavailable_reason;
+  if (status === "Unavailable") {
+    // Asked when a trainer is MOVED to Unavailable, or when a reason that is not one of the three is sent. A row
+    // already Unavailable from before the reason existed can still be saved as it is (it counts as "Reason not set").
+    const moving = existing?.status !== "Unavailable";
+    const sentBad = "unavailable_reason" in body && body.unavailable_reason !== null;
+    if (!(TRAINER_UNAVAILABLE_REASON as readonly string[]).includes(String(reason ?? "")) && (moving || sentBad)) {
+      throw new HttpError(400, `A trainer marked Unavailable needs a reason: ${TRAINER_UNAVAILABLE_REASON.join(", ")}.`);
+    }
+  } else if (existing?.pipeline_status !== "Dropped") {
+    body.unavailable_reason = null;
+  } else {
+    delete body.unavailable_reason;
+  }
+}
+
+// The IST week a digest day falls in: MONDAY to Sunday (Umesh, AskUserQuestion 2026-11-02). Pure calendar
+// arithmetic on the YYYY-MM-DD string, so no process timezone can move it. `to` is the Sunday; the digest's
+// "this week" column runs Monday..the chosen day (week to date), and a WeeklyTarget row is keyed by `from`.
+export function istWeekOf(dayIST: string): { from: string; to: string } {
+  const d = new Date(`${assertDigestDay(dayIST)}T00:00:00Z`);
+  const mon = new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000);
+  return { from: mon.toISOString().slice(0, 10), to: new Date(mon.getTime() + 6 * 86_400_000).toISOString().slice(0, 10) };
+}
+
+// A digest table, already worded and formatted: the screen and the mail both draw THIS, so neither can
+// format a number differently from the other. `tones` marks a +/- cell (pos = at or above target).
+export type DigestTable = {
+  key: string; title: string; head: string[]; note?: string;
+  rows: { label: string; cells: string[]; sub?: boolean; strong?: boolean; tones?: ("pos" | "neg" | "")[] }[];
+};
+const fmtN = (v: number | null | undefined) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
+const fmtRs = (v: number) => `Rs ${fmtN(v)}`;
+const fmtVar = (actual: number | null, target: number | null) => (actual === null || target === null ? "—" : `${actual - target >= 0 ? "+" : "−"}${fmtN(Math.abs(actual - target))}`);
+const toneOf = (actual: number | null, target: number | null): "pos" | "neg" | "" => (actual === null || target === null ? "" : actual >= target ? "pos" : "neg");
+
 // `opts.fullView` (mtg-c1 cycle 2, Umesh 2026-10-07: a typed, non-ERP digest address "receives the full report
 // incl. money"): builds the Costs block without asking the viewer's finance right, because such an address has
 // no account to ask. It is passed ONLY by lib/daily-digest.ts, for a typed address that matches no ERP account.
@@ -5866,9 +5920,12 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       : Promise.resolve([] as any[]),
   ]);
   const currentEnrolled = currentRows.filter((r) => !isFreshCandidate(r) && !r.archived_at);
-  const currentOngoing = currentEnrolled.filter((r) => journeyOf({ ...r, active_batch_status: r.active_batch?.status }) === "Training Ongoing");
   const trainingById = new Map(trainingBatches.map((b) => [String(b._id), b]));
+  // In training (Umesh, 2026-11-03): held by an ACTIVE batch that has really started (actual_start set). Not the
+  // journey tag, which also says "Training Ongoing" for an enrolled person with no seat or a seat in a Planning batch.
+  const currentOngoing = currentEnrolled.filter((r) => r.active_batch?.status === "Active" && !!trainingById.get(String(r.active_batch._id))?.actual_start);
   const trainingStarted = new Set<string>(), missingActualStart = new Set<string>(), missingJoinDate = new Set<string>();
+  const startedOn = new Map<string, string>();   // candidate -> the earliest IST day their training started, for the week / cumulative columns
   for (const m of trainingMembers) {
     const candidate = String(m.candidate ?? "");
     if (!candidate) continue;
@@ -5887,22 +5944,33 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     const left = m.left_on ? new Date(m.left_on) : null;
     if (left && Number.isFinite(left.getTime()) && left.toISOString().slice(0, 10) < startedDay) continue;
     if (startedDay === dayIST) trainingStarted.add(candidate);
+    if (startedDay <= dayIST && (!startedOn.has(candidate) || startedDay < startedOn.get(candidate)!)) startedOn.set(candidate, startedDay);
   }
   const learnerMeasuredAt = new Date().toISOString();
 
   // ---- trainers ------------------------------------------------------------------------------------
-  const trainers = await Trainer.find(trainerScope).select("pipeline_status status createdAt").lean<any[]>();
+  const trainers = await Trainer.find(trainerScope).select("pipeline_status status createdAt unavailable_reason dropped_from_stage").lean<any[]>();
   const liveLinks = trainers.length
     ? await Batch.find({ trainer: { $in: trainers.map((t) => t._id) }, status: { $in: ACTIVE_BATCH_STATUSES } }).select("trainer").lean<any[]>()
     : [];
   const hasLive = new Set(liveLinks.map((b) => String(b.trainer)));
   const buckets = new Map<string, number>(BUCKET_KEYS.map((k) => [k, 0]));
   let assigned = 0, idle = 0, unavailable = 0, rejected_dropped = 0, pipelineTotal = 0, added = 0;
+  // Karunn sir, 2026-11-02: a TRAINED trainer who backed out, absconded or is unavailable is counted apart, by
+  // reason, so the headcount never reads them as available: Certified + status Unavailable, and Dropped after
+  // reaching Certified. A row with no reason recorded says so ("Reason not set") instead of guessing one.
+  const NOT_SET = "Reason not set";
+  const notAvailable = new Map<string, number>([...TRAINER_UNAVAILABLE_REASON, NOT_SET].map((k) => [k, 0]));
+  let droppedAfterTrained = 0;
+  const reasonOf = (t: any): string => ((TRAINER_UNAVAILABLE_REASON as readonly string[]).includes(t.unavailable_reason) ? t.unavailable_reason : NOT_SET);
   for (const t of trainers) {
     const tag = trainerAvailabilityTag({ pipeline_status: t.pipeline_status, status: t.status, live_batches: hasLive.has(String(t._id)) ? [t._id] : [] });
     if (tag === "Assigned") assigned++;
     else if (tag === "Certified") idle++;
-    else if (tag === "Unavailable") unavailable++;
+    else if (tag === "Unavailable") { unavailable++; notAvailable.set(reasonOf(t), notAvailable.get(reasonOf(t))! + 1); }
+    else if (tag === "Rejected/Dropped" && t.pipeline_status === "Dropped" && t.dropped_from_stage === "Certified") {
+      rejected_dropped++; droppedAfterTrained++; notAvailable.set(reasonOf(t), notAvailable.get(reasonOf(t))! + 1);
+    }
     else if (tag === "Rejected/Dropped") rejected_dropped++;
     else {
       pipelineTotal++;
@@ -5926,7 +5994,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       costRollup(scope, { from: dayIST, to: dayIST }),
       costRollup(scope, { from: monthFrom, to: dayIST }),
       ApprovalRequest.find({ action: "cost.post", status: "Pending", createdAt: { $lte: instants.$lte }, ...scope }).select("payload createdAt").lean<any[]>(),
-      CostEntry.find({ payment_status: "Payment Pending", entry_date: { $lte: dayKey(dayIST) }, ...scope }).select("amount").lean<any[]>(),
+      CostEntry.find({ payment_status: "Payment Pending", entry_date: { $lte: istEnd(dayIST) }, ...scope }).select("amount").lean<any[]>(),
     ]);
     const sum = (rows: any[], pick: (r: any) => number) => ({ count: rows.length, amount: round2(rows.reduce((s, r) => s + (pick(r) || 0), 0)) });
     const raised = pendingRows.filter((r) => new Date(r.createdAt).getTime() >= instants.$gte.getTime());
@@ -5938,9 +6006,152 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     };
   }
 
+  // ---- periods: on the day, this week (Monday..the day), cumulative (since the first target week) ---------
+  // Karunn sir, 2026-11-02: "tabular form, stage-wise, against the target plus or minus - the week's target
+  // and the cumulative target, both". Every period column is the SAME reading over a different range, and
+  // the "on the day" column must equal the day's figure above it (the e2e pins that): one definition each.
+  const week = istWeekOf(dayIST);
+  const targetRows = isScoped(viewer) ? [] : await WeeklyTarget.find({ week_start: { $lte: dayKey(week.from) } }).sort({ week_start: 1 }).lean<any[]>();
+  const cumFrom: string | null = targetRows.length ? new Date(targetRows[0].week_start).toISOString().slice(0, 10) : null;
+  const periods: { key: "day" | "week" | "cum"; from: string | null }[] = [
+    { key: "day", from: dayIST },
+    { key: "week", from: week.from },
+    { key: "cum", from: cumFrom },
+  ];
+  // Both encodings in one range, as for actual_start above: UTC-midnight of an IST date is 05:30 IST that day.
+  const inst = (from: string | null) => ({ ...(from ? { $gte: istStart(from) } : {}), $lte: istEnd(dayIST) });
+  const scopedBatchIds = isScoped(viewer) ? (await Batch.find(scope).select("_id").lean<any[]>()).map((b) => b._id) : null;
+  const inScopeBatches = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
+  const stageMoves = await AuditLog.find({
+    entity: "Trainer", field: { $in: ["pipeline_status", "pipeline_bypass"] }, created_at: inst(cumFrom),
+    entity_id: { $in: trainers.map((t) => t._id) },
+  }).select("entity_id new_value created_at").lean<any[]>();
+  // The transition door audits the target stage; a bypass writes "BYPASS → <stage>".
+  const moveStage = (v: unknown) => String(v ?? "").replace(/^BYPASS → /, "");
+  const entered = (stageKey: string, from: string | null) => {
+    const lo = from ? istStart(from).getTime() : -Infinity;
+    const who = new Set<string>();
+    for (const m of stageMoves) {
+      const st = moveStage(m.new_value);
+      // NSDC Rejected sits under "Rejected / dropped" in the Now column (trainerAvailabilityTag), so it enters there too.
+      const k = st === "Dropped" || st === "NSDC Rejected" ? "dropped" : STAGE_BUCKETS[st];
+      if (k === stageKey && new Date(m.created_at).getTime() >= lo) who.add(String(m.entity_id));
+    }
+    return who.size;
+  };
+  const trainersAdded = (from: string | null) => {
+    const lo = from ? istStart(from).getTime() : -Infinity, hi = istEnd(dayIST).getTime();
+    return trainers.filter((t) => { const at = t.createdAt ? new Date(t.createdAt).getTime() : NaN; return at >= lo && at <= hi; }).length;
+  };
+  // Same reading as `joined` above (a roster row whose batch exists and is in scope), over a range.
+  const countJoined = async (from: string | null) => {
+    const rows = await BatchMember.find({ joined_on: { ...(from ? { $gte: dayKey(from) } : {}), $lt: new Date(dayKey(dayIST).getTime() + 86_400_000) } }).select("batch").lean<any[]>();
+    if (!rows.length) return 0;
+    const live = new Set((await Batch.find({ _id: { $in: [...new Set(rows.map((r) => String(r.batch)))] }, ...scope }).select("_id").lean<any[]>()).map((b) => String(b._id)));
+    return rows.filter((r) => live.has(String(r.batch))).length;
+  };
+  type Per = Record<"day" | "week" | "cum", number>;
+  const per = async (fn: (from: string | null) => Promise<number> | number): Promise<Per> =>
+    Object.fromEntries(await Promise.all(periods.map(async (p) => [p.key, await fn(p.from)]))) as Per;
+  const [fJoined, fEnrolled, fCertified, fCreated, fStarted] = await Promise.all([
+    per(countJoined),
+    per((from) => Candidate.countDocuments({ enrolled_at: inst(from), ...scope })),
+    per((from) => CandidateResult.countDocuments({ certificate_status: "Issued", certificate_date: inst(from), ...inScopeBatches })),
+    per((from) => Batch.countDocuments({ createdAt: inst(from), ...scope })),
+    per((from) => Batch.countDocuments({ actual_start: inst(from), ...scope })),
+  ]);
+  const flows = {
+    joined: fJoined, enrolled: fEnrolled, certified: fCertified, batches_created: fCreated, batches_started: fStarted,
+    training_started: await per((from) => [...startedOn.values()].filter((d) => !from || d >= from).length),
+    trainers_added: await per(trainersAdded),
+    trainers_entered: Object.fromEntries([...BUCKET_KEYS, "dropped"].map((k) => [k, Object.fromEntries(periods.map((p) => [p.key, entered(k, p.from)])) as Per])) as Record<string, Per>,
+  };
+
+  // ---- targets: organisation-wide, so only for an unscoped viewer (a centre login would read the whole
+  // company's target against its own centre's actual and see a false gap) -----------------------------------
+  const weekRow = targetRows.find((r) => new Date(r.week_start).toISOString().slice(0, 10) === week.from) ?? null;
+  const has = (v: unknown) => v !== null && v !== undefined;
+  const sumTo = (f: string) => (targetRows.some((r) => has(r[f])) ? targetRows.reduce((s, r) => s + (Number(r[f]) || 0), 0) : null);
+  const tgt = (f: string) => (weekRow && has(weekRow[f]) ? Number(weekRow[f]) : null);
+  const targets = isScoped(viewer) ? null : {
+    week_from: week.from, cumulative_from: cumFrom, rows: [
+      { key: "trainers_trained", label: "Trainers trained (reached Certified)", week_target: tgt("trainers_trained"), week_actual: flows.trainers_entered.certified.week, cum_target: sumTo("trainers_trained"), cum_actual: flows.trainers_entered.certified.cum as number | null },
+      { key: "candidates_in_training", label: "Candidates in training (started Active batch, now)", week_target: tgt("candidates_in_training"), week_actual: currentOngoing.length, cum_target: null as number | null, cum_actual: null as number | null },
+      { key: "candidates_certified", label: "Candidates certified (certificate issued)", week_target: tgt("candidates_certified"), week_actual: flows.certified.week, cum_target: sumTo("candidates_certified"), cum_actual: flows.certified.cum as number | null },
+    ],
+  };
+
+  // ---- the tables: what the screen and the mail both draw ----------------------------------------------
+  const weekHead = `This week (${week.from} to ${dayIST})`;
+  const cumHead = cumFrom ? `Cumulative (since ${cumFrom})` : "Cumulative (all time)";
+  const flowCells = (f: Per) => [fmtN(f.day), fmtN(f.week), fmtN(f.cum)];
+  const dash3 = ["—", "—", "—"];
+  const mob = planTrackerSummary(planRows).total;
+  const trainerRows: DigestTable["rows"] = [
+    ...BUCKET_KEYS.map((k) => ({
+      label: BUCKET_LABEL[k],
+      // Certified NOW is every trainer holding the stage: assigned + free + marked unavailable.
+      cells: [fmtN(k === "certified" ? assigned + idle + unavailable : (buckets.get(k) ?? 0)), ...flowCells(k === "fresh" ? flows.trainers_added : flows.trainers_entered[k])],
+      strong: k === "certified",
+    })),
+    { label: "Assigned to a live batch", sub: true, cells: [fmtN(assigned), ...dash3] },
+    { label: "Free to assign", sub: true, cells: [fmtN(idle), ...dash3] },
+    { label: "Marked unavailable", sub: true, cells: [fmtN(unavailable), ...dash3] },
+    { label: "Trained, not available (incl. dropped after Certified)", strong: true, cells: [fmtN(unavailable + droppedAfterTrained), ...dash3] },
+    ...[...notAvailable.entries()].map(([r, c]) => ({ label: r, sub: true, cells: [fmtN(c), ...dash3] })),
+    { label: "Rejected / dropped", cells: [fmtN(rejected_dropped), ...flowCells(flows.trainers_entered.dropped)] },
+    { label: "Total trainers", strong: true, cells: [fmtN(trainers.length), ...dash3] },
+  ];
+  const tables: DigestTable[] = [
+    {
+      key: "trainers", title: "Trainers", head: ["Stage", "Now", "On the day", weekHead, cumHead], rows: trainerRows,
+      note: "Now = trainers at that stage today. The other columns count trainers who ENTERED the stage in the period, from the recorded stage moves (Fresh lead = added; a trainer entered directly at a later stage, or moved before moves were recorded, is in Now only). Total trainers = the six stage rows plus rejected / dropped.",
+    },
+    {
+      key: "candidates", title: "Candidates", head: ["Measure", "Now", "On the day", weekHead, cumHead],
+      rows: [
+        { label: "Joined into batches", cells: ["—", ...flowCells(flows.joined)] },
+        { label: "Enrolled", cells: [fmtN(currentEnrolled.length), ...flowCells(flows.enrolled)] },
+        { label: "Training started", cells: ["—", ...flowCells(flows.training_started)] },
+        { label: "In training (started Active batch)", strong: true, cells: [fmtN(currentOngoing.length), ...dash3] },
+        { label: "Certified (certificate issued)", strong: true, cells: ["—", ...flowCells(flows.certified)] },
+        { label: "Batches created", cells: ["—", ...flowCells(flows.batches_created)] },
+        { label: "Batches started", cells: ["—", ...flowCells(flows.batches_started)] },
+        { label: "Mobilised (planning batches)", cells: [`${fmtN(mob.mobilised)} of ${fmtN(mob.target)} (gap ${fmtN(mob.gap)})`, ...dash3] },
+      ],
+      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period.",
+    },
+  ];
+  if (targets) tables.push({
+    key: "targets", title: "Against target", head: ["Measure", "Week target", "Week actual", "+/−", "Cumulative target", "Cumulative actual", "+/−"],
+    rows: targets.rows.map((r) => ({
+      label: r.label,
+      cells: [fmtN(r.week_target), fmtN(r.week_actual), fmtVar(r.week_actual, r.week_target), fmtN(r.cum_target), fmtN(r.cum_actual), fmtVar(r.cum_actual, r.cum_target)],
+      tones: ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)],
+    })),
+    note: weekRow
+      ? `Week of ${week.from}. The targets are for the WHOLE week (and cumulative includes this whole week); the actuals are up to ${dayIST}, so early in the week the +/− shows what is still to do. Cumulative = every weekly target since ${cumFrom}. In training is a headcount, not a running total, so it has no cumulative figure.`
+      : `No target is set for the week of ${week.from} (Admin, Targets).`,
+  });
+  if (costs) tables.push({
+    key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
+    note: "Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
+    rows: [
+      { label: "Approved on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
+      { label: "Month to date", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
+      { label: "Pending approval", cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
+      { label: "of which raised on the day", sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] },
+      { label: "Payment pending", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
+    ],
+  });
+
   return {
     day: dayIST,
     generated_at: new Date().toISOString(),
+    week,
+    flows,
+    targets,
+    tables,
     finance,
     live_note: "Current learner totals, training-date exceptions, mobilisation and trainer availability show the position now, whichever day is chosen. They are not historical snapshots. Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
     candidates: {
@@ -5956,7 +6167,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       mobilised: planTrackerSummary(planRows).total,
     },
     trainers: {
-      assigned, idle, unavailable, rejected_dropped, added,
+      assigned, idle, unavailable, rejected_dropped, added, total: trainers.length,
+      not_available: { total: unavailable + droppedAfterTrained, dropped_after_trained: droppedAfterTrained, by_reason: Object.fromEntries(notAvailable) },
       pipeline: { total: pipelineTotal, buckets: BUCKET_KEYS.map((k) => ({ key: k, label: BUCKET_LABEL[k], count: buckets.get(k) ?? 0 })) },
     },
     costs,
@@ -7191,8 +7403,8 @@ const perHead = (amount: number, n: number): number | null => (n > 0 ? Math.roun
 // An IST day boundary, stated explicitly rather than built from a node Date's local getters. Same
 // reasoning as `planTrackerRows`' `timezone: "+05:30"`: node's getters read the PROCESS zone, so the
 // identical filter would select different rows under TZ=UTC and TZ=IST (QA-1065).
-const istStart = (d: string) => new Date(`${d}T00:00:00.000+05:30`);
-const istEnd = (d: string) => new Date(`${d}T23:59:59.999+05:30`);
+export const istStart = (d: string) => new Date(`${d}T00:00:00.000+05:30`);
+export const istEnd = (d: string) => new Date(`${d}T23:59:59.999+05:30`);
 
 export async function costRollup(scope: Record<string, unknown> = {}, filters: CostFilters = {}) {
   const measured_at = new Date();

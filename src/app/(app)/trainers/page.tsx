@@ -5,7 +5,7 @@ import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDate, pipelineLabel, toInputDate, offerable } from "@/lib/client";
 import { usePerms } from "@/components/shell";
-import { personLabel, trainerAvailabilityTag } from "@/lib/person";
+import { personLabel, trainerAvailabilityTag, TRAINER_UNAVAILABLE_REASON } from "@/lib/person";
 import { emailError, phoneError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, FilterPills, NameCell, ShareLinkPanel, SourceCell, Tabs, inputCls } from "@/components/ui";
 import { BASE_PATH } from "@/lib/base-path";
@@ -794,6 +794,15 @@ function TrainersInner() {
                 {["Available", "Assigned", "Unavailable"].map((s) => <option key={s}>{s}</option>)}
               </select>
             </Field>
+            {/* Karunn sir, 2026-11-02: an unavailable trainer says WHY, so the daily digest can count them apart. */}
+            {form.status === "Unavailable" && (
+              <Field label="Why unavailable" required>
+                <select data-testid="trainer-unavailable-reason" className={inputCls} value={form.unavailable_reason ?? ""} onChange={(e) => set("unavailable_reason", e.target.value)}>
+                  <option value="">Choose…</option>
+                  {TRAINER_UNAVAILABLE_REASON.map((r) => <option key={r}>{r}</option>)}
+                </select>
+              </Field>
+            )}
             <Field label="Available from"><input type="date" className={inputCls} value={form.available_from?.slice?.(0, 10) ?? ""} onChange={(e) => set("available_from", e.target.value)} /></Field>
           </div>
           {/* 2026-08-11: batch-wise or monthly, fixed + performance incentive */}

@@ -1,12 +1,12 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { api, fmtAuditValue, fmtDT, fmtDate, offerable, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
+import { api, fmtAuditValue, fmtDT, fmtDate, offerable, istTodayInput, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
-const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults"];
+const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults", "Targets"];
 
 // QA-1896 (found in the browser on production, 2026-09-06, minutes after the release went live):
 // six of the eight actions had a human label and the two the CEO's own rule is about — `cost.post`
@@ -52,6 +52,7 @@ export default function AdminPage() {
       {tab === "Approvals" && <Approvals error={error} setError={setError} />}
       {tab === "Master Lists" && <MasterLists error={error} setError={setError} />}
       {tab === "Defaults" && <DefaultsTab error={error} setError={setError} />}
+      {tab === "Targets" && <WeeklyTargets setError={setError} />}
     </div>
   );
 }
@@ -445,12 +446,14 @@ function Users({ error, setError }: any) {
   const [act, setAct] = useState<any>(null);
   const [actRows, setActRows] = useState<any[]>([]);
   const [actTotal, setActTotal] = useState(0);
-  async function openActivity(u: any) {
+  const [actDay, setActDay] = useState("");
+  async function openActivity(u: any, day?: string) {
     try {
-      const d = await api(`/api/audit/by-user/${u._id}?limit=200`);
-      setActRows(d.items ?? []); setActTotal(d.total ?? 0); setAct(u);
+      const d = await api(`/api/audit/by-user/${u._id}?limit=200${day ? `&day=${day}` : ""}`);
+      setActRows(d.items ?? []); setActTotal(d.total ?? 0); setActDay(day ?? ""); setAct(u);
     } catch (e: any) { setError(e.message); }
   }
+  const isAdmin = (_session?.user as any)?.role === "Admin";
 
   // 15/08 (Umesh): DROP — soft delete. History and created-data stay; login dies; the email
   // frees up so a new account can be made. Hidden by default behind a "Show dropped" toggle.
@@ -493,6 +496,7 @@ function Users({ error, setError }: any) {
           person's role but never answers "who is in this role", which is the question an Admin
           asks before granting anything. This is that answer, above the list rather than instead of
           it: the list stays for editing one person, this is for seeing the shape of access. */}
+      {isAdmin && <ActivityOverview users={items} onLog={openActivity} setError={setError} />}
       <RolesOverview items={items.filter((u) => !u.dropped && u.approval_status !== "Pending")} onOpen={open} setError={setError} myId={myId} />
       {droppedCount > 0 && (
         <label className="mb-2 flex items-center gap-2 text-sm text-gray-600">
@@ -547,6 +551,7 @@ function Users({ error, setError }: any) {
               );
             },
           },
+          { key: "last_login_at", label: "Last sign-in", sortable: true, mobile: false, render: (r: any) => (r.last_login_at ? fmtDT(r.last_login_at) : "—") },
           { key: "active", label: "Active", filterText: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No"), render: (r: any) => (r.active ? "Yes" : r.approval_status === "Rejected" ? "Rejected" : "No") },
           {
             // CEO 14/08 [35:13]: "we should be able to stop access to certain people if need
@@ -595,7 +600,7 @@ function Users({ error, setError }: any) {
       {/* QA-137: "what did this person do" — read-only, Admin-only, latest 200 actions. */}
       <Drawer error={error} open={!!act} onClose={() => setAct(null)} title={act ? `Activity — ${act.name}` : ""}>
         <p className="mb-2 text-xs text-gray-500">
-          {actTotal} recorded action{actTotal === 1 ? "" : "s"} in the audit log{actTotal > 200 ? " (latest 200 shown)" : ""}.
+          {actTotal} recorded action{actTotal === 1 ? "" : "s"}{actDay ? ` on ${actDay}` : ""} in the audit log, sign-ins included{actTotal > 200 ? " (latest 200 shown)" : ""}.
         </p>
         {actRows.length === 0 ? <p className="text-sm text-gray-400">No activity recorded for this account.</p> : (
           <ul className="divide-y text-sm">
@@ -1953,6 +1958,220 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
         </div>)}
         {!canType && <div className="text-xs text-gray-600" data-testid="digest-typed-admin-only">Adding an outside email address is for Admins only, because it receives the cost figures. You can pick any ERP user, and keep or remove an address that is already listed.</div>}
       </div>
+    </div>
+  );
+}
+
+// Karunn sir, review 2026-11-02: the daily digest shows actual against "the week's target and the cumulative
+// target, both", and "the targets are with Manish ji". Entered here, typed into the grid or pasted straight
+// from his Excel (Umesh: both). A week runs Monday to Sunday (IST) and is keyed by its Monday. The SERVER
+// (/api/targets/weekly) is the validator: every row is checked before anything is written, and a bad row
+// is refused by number. This screen only reads the paste and shows what will be sent.
+const TARGET_COLS = [
+  ["trainers_trained", "Trainers trained"],
+  ["candidates_in_training", "Candidates in training"],
+  ["candidates_certified", "Candidates certified"],
+] as const;
+const MONTHS: Record<string, string> = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
+// Excel hands dates over as 2026-11-02, 02-11-2026, 02/11/2026 or 2-Nov-2026 / 2 Nov 26 (day first, India).
+function pastedDay(raw: string): string | null {
+  const day = pastedDayRaw(raw);
+  // 31-02-2026 would roll over to 3 March: a date that does not exist is not a date (same test as assertDigestDay).
+  return day && !Number.isNaN(Date.parse(`${day}T00:00:00Z`)) && new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day ? day : null;
+}
+function pastedDayRaw(raw: string): string | null {
+  const t = raw.trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(t);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(t);
+  if (m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  m = /^(\d{1,2})[-\s]([A-Za-z]{3})[A-Za-z]*[-\s,]+(\d{2,4})$/.exec(t);
+  if (m && MONTHS[m[2].toLowerCase()]) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${MONTHS[m[2].toLowerCase()]}-${m[1].padStart(2, "0")}`;
+  return null;
+}
+function mondayOf(day: string): string {
+  const d = new Date(`${day}T00:00:00Z`);
+  return new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000).toISOString().slice(0, 10);
+}
+
+function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
+  const { can } = usePerms();
+  const mayEdit = can("defaults.manage", "edit");
+  const [rows, setRows] = useState<any[]>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [paste, setPaste] = useState("");
+  const [pasteNote, setPasteNote] = useState("");
+  const [saved, setSaved] = useState("");
+  const [busy, setBusy] = useState(false);
+  const load = () => api("/api/targets/weekly").then((d) => { setRows(d.items ?? []); setRemoved([]); }).catch((e: any) => setError(e.message));
+  useEffect(() => { load(); }, []);
+
+  const setCell = (i: number, k: string, v: string) => {
+    // Moving a saved row to another week must remove the old week on save, or both would stand.
+    if (k === "week_start" && rows[i]?.week_start) setRemoved((rm) => [...rm, rows[i].week_start]);
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  };
+  const sorted = (rs: any[]) => [...rs].sort((a, b) => String(a.week_start).localeCompare(String(b.week_start)));
+  function addWeek() {
+    const last = sorted(rows).at(-1)?.week_start;
+    const next = last ? new Date(new Date(`${last}T00:00:00Z`).getTime() + 7 * 86_400_000).toISOString().slice(0, 10) : mondayOf(istTodayInput());
+    setRows((rs) => [...rs, { week_start: next, trainers_trained: "", candidates_in_training: "", candidates_certified: "" }]);
+  }
+  function readPaste() {
+    const notes: string[] = [];
+    const byWeek = new Map(rows.map((r) => [r.week_start, r]));
+    let read = 0;
+    paste.split(/\r?\n/).forEach((line, i) => {
+      if (!line.trim()) return;
+      // Excel copies tab-separated, with figures as DISPLAYED ("1,200"): a tab line splits on tabs only and the
+      // thousands commas go; only a line with no tab is read as comma-separated (where a comma cannot be both).
+      const cells = (line.includes("\t") ? line.split("\t") : line.split(",")).map((c, j) => (j === 0 ? c.trim() : c.trim().replace(/,/g, "")));
+      const day = pastedDay(cells[0] ?? "");
+      if (!day) { if (i > 0 || /\d/.test(cells[0] ?? "")) notes.push(`Line ${i + 1} skipped: "${(cells[0] ?? "").slice(0, 20)}" is not a date.`); return; }
+      const mon = mondayOf(day);
+      if (mon !== day) notes.push(`Line ${i + 1}: ${day} moved to the Monday of its week, ${mon}.`);
+      byWeek.set(mon, { week_start: mon, trainers_trained: cells[1] ?? "", candidates_in_training: cells[2] ?? "", candidates_certified: cells[3] ?? "" });
+      read++;
+    });
+    setRows([...byWeek.values()]);
+    setRemoved((rm) => rm.filter((w) => !byWeek.has(w)));
+    setPasteNote(`${read} week${read === 1 ? "" : "s"} read from the paste. Check the grid, then Save.${notes.length ? " " + notes.join(" ") : ""}`);
+  }
+  async function save() {
+    setBusy(true); setSaved("");
+    try {
+      const body = [...rows.map((r) => ({ week_start: r.week_start, ...Object.fromEntries(TARGET_COLS.map(([k]) => [k, r[k] ?? ""])) })),
+        ...removed.filter((w) => !rows.some((r) => r.week_start === w)).map((w) => ({ week_start: w }))];
+      const r = await api("/api/targets/weekly", { method: "PUT", json: { rows: body } });
+      setSaved(`Saved ${r.saved} week${r.saved === 1 ? "" : "s"}${r.removed ? `, removed ${r.removed}` : ""}. The daily digest uses them from now.`);
+      setPaste(""); setPasteNote(""); load();
+    } catch (e: any) { setError(e.message); } finally { setBusy(false); }
+  }
+
+  // Display only: the running total the digest calls "cumulative target" (the digest computes its own).
+  const view = sorted(rows);
+  const running: Record<string, number> = {};
+  return (
+    <Section title="Weekly targets" actions={mayEdit ? <Btn small onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn> : undefined}>
+      <p className="mb-3 text-sm text-gray-600">
+        The daily digest (21:00 mail and Reports, Daily digest) shows each week&apos;s actual against these, and the cumulative actual against the
+        running total. A week runs Monday to Sunday. Leave a figure blank if there is no target for it.
+      </p>
+      {saved && <div data-testid="targets-saved" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{saved}</div>}
+      {mayEdit && (
+        <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <div className="text-sm font-medium">Paste from Excel</div>
+          <p className="mb-2 text-xs text-gray-500">Copy the rows from Manish ji&apos;s sheet: week date, trainers trained, candidates in training, candidates certified, in that order. A header row is skipped.</p>
+          <textarea data-testid="targets-paste" className={inputCls + " h-24 font-mono text-xs"} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"2026-11-02\t5\t120\t40\n2026-11-09\t5\t140\t45"} />
+          <div className="mt-2 flex items-center gap-3">
+            <Btn small kind="ghost" onClick={readPaste} disabled={!paste.trim()}>Read paste into the grid</Btn>
+            {pasteNote && <span data-testid="targets-paste-note" className="text-xs text-gray-700">{pasteNote}</span>}
+          </div>
+        </div>
+      )}
+      <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+        <table className="min-w-full text-sm" data-testid="targets-grid">
+          <thead className="bg-gray-50 text-xs text-gray-600">
+            <tr>
+              <th className="px-3 py-2 text-left">Week (Monday)</th>
+              {TARGET_COLS.map(([k, l]) => <th key={k} className="px-3 py-2 text-right">{l}</th>)}
+              <th className="px-3 py-2 text-right">Cumulative trainers / certified</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {view.length === 0 && <tr><td colSpan={6} className="px-3 py-3 text-gray-400">No targets yet.</td></tr>}
+            {view.map((r) => {
+              const i = rows.indexOf(r);
+              for (const k of ["trainers_trained", "candidates_certified"]) running[k] = (running[k] ?? 0) + (Number(r[k]) || 0);
+              const notMonday = r.week_start && mondayOf(r.week_start) !== r.week_start;
+              return (
+                <tr key={i} className="border-t border-gray-100">
+                  <td className="px-3 py-1">
+                    <input type="date" className={inputCls + (notMonday ? " border-red-400" : "")} value={r.week_start ?? ""} disabled={!mayEdit} onChange={(e) => setCell(i, "week_start", e.target.value)} />
+                    {notMonday && <div className="text-xs text-red-600">Not a Monday: the week starts {mondayOf(r.week_start)}.</div>}
+                  </td>
+                  {TARGET_COLS.map(([k]) => (
+                    <td key={k} className="px-3 py-1"><input inputMode="numeric" className={inputCls + " text-right"} value={r[k] ?? ""} disabled={!mayEdit} onChange={(e) => setCell(i, k, e.target.value)} /></td>
+                  ))}
+                  <td className="px-3 py-1 text-right tabular-nums text-gray-600">{running.trainers_trained} / {running.candidates_certified}</td>
+                  <td className="px-3 py-1">{mayEdit && <Btn small kind="ghost" onClick={() => { setRemoved((rm) => [...rm, r.week_start]); setRows((rs) => rs.filter((_, j) => j !== i)); }}>Remove</Btn>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {mayEdit && <div className="mt-2"><Btn small kind="ghost" onClick={addWeek}>Add a week</Btn></div>}
+    </Section>
+  );
+}
+
+// Activity tracker (Karunn sir, review 2026-11-02: "how will we know who logged in how many times, what work
+// was done - put an activity tracker"; Umesh: a daily summary overview plus the log per user). One row per
+// account for the chosen IST day: sign-ins (recorded at sign-in since 2026-11-02), first and last, and the work
+// done = audit rows by that person, grouped by what was touched. "Log" opens that person's trail for the day.
+// Admin-only, like the per-person trail it summarises.
+function ActivityOverview({ users, onLog, setError }: { users: any[]; onLog: (u: any, day?: string) => void; setError: (m: string) => void }) {
+  const [today] = useState(istTodayInput);
+  const [day, setDay] = useState(today);
+  // The answer is kept with the day it is for, so a new day shows "Loading…" until its own answer lands.
+  const [res, setRes] = useState<{ day: string; by: Record<string, any> } | null>(null);
+  const by = res?.day === day ? res.by : null;
+  const [showIdle, setShowIdle] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api(`/api/users?activity=${day}`).then((d) => { if (live) setRes({ day, by: d.activity?.by_user ?? {} }); }).catch((e: any) => setError(e.message));
+    return () => { live = false; };
+  }, [day, setError]);
+  const known = users.filter((u) => u.approval_status !== "Pending");
+  const rows = known
+    .map((u) => ({ u, a: by?.[String(u._id)] ?? { logins: 0, actions: 0, touched: {} } }))
+    .filter((r) => showIdle ? !r.u.dropped : r.a.logins > 0 || r.a.actions > 0)
+    .sort((x, y) => (y.a.actions + y.a.logins) - (x.a.actions + x.a.logins) || String(x.u.name).localeCompare(String(y.u.name)));
+  const activeCount = known.filter((u) => (by?.[String(u._id)]?.logins ?? 0) + (by?.[String(u._id)]?.actions ?? 0) > 0).length;
+  // Summed over the same accounts the rows come from, so the line and the table add up.
+  const sum = (k: "logins" | "actions") => known.reduce((t: number, u) => t + (by?.[String(u._id)]?.[k] ?? 0), 0);
+  const time = (d?: string | null) => (d ? fmtDT(d).split(" ").slice(-2).join(" ") : "—");
+  return (
+    <div className="mb-5 rounded-lg border border-gray-200 bg-white p-3" data-testid="activity-overview">
+      <div className="mb-2 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">Activity</div>
+          <div className="text-xs text-gray-500" data-testid="activity-summary">
+            {by === null ? "Loading…" : `${activeCount} of ${known.filter((u) => !u.dropped).length} accounts active on ${day}: ${sum("logins")} sign-ins, ${sum("actions")} recorded changes.`}
+          </div>
+        </div>
+        <div className="flex items-end gap-3">
+          <label className="flex items-center gap-1 text-xs text-gray-600"><input type="checkbox" checked={showIdle} onChange={(e) => setShowIdle(e.target.checked)} /> Show accounts with no activity</label>
+          <label className="text-sm"><span className="block text-xs text-gray-500">Day (IST)</span>
+            <input data-testid="activity-day" type="date" className="rounded border border-gray-300 px-2 py-1" value={day} max={today} onChange={(e) => e.target.value && setDay(e.target.value)} />
+          </label>
+        </div>
+      </div>
+      {by !== null && rows.length === 0 ? <p className="text-sm text-gray-400">Nobody signed in or changed anything on {day}.</p> : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50 text-xs text-gray-600">
+              <tr><th className="px-3 py-1.5 text-left">Person</th><th className="px-3 py-1.5 text-left">Role</th><th className="px-3 py-1.5 text-right">Sign-ins</th><th className="px-3 py-1.5 text-right">First / last sign-in</th><th className="px-3 py-1.5 text-right">Changes</th><th className="px-3 py-1.5 text-left">What they worked on</th><th /></tr>
+            </thead>
+            <tbody>
+              {rows.map(({ u, a }) => (
+                <tr key={u._id} className="border-t border-gray-100" data-testid={`activity-row-${u._id}`}>
+                  <td className="px-3 py-1.5">{u.name}</td>
+                  <td className="px-3 py-1.5"><Chip value={u.role} /></td>
+                  <td className="px-3 py-1.5 text-right tabular-nums" data-testid="activity-logins">{a.logins}</td>
+                  <td className="px-3 py-1.5 text-right text-xs text-gray-600">{a.logins ? `${time(a.first_login)} / ${time(a.last_login)}` : "—"}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums" data-testid="activity-actions">{a.actions}</td>
+                  <td className="px-3 py-1.5 text-xs text-gray-700">{Object.entries(a.touched ?? {}).sort((x: any, y: any) => y[1] - x[1]).map(([e, n]) => `${e} ${n}`).join(", ") || "—"}</td>
+                  <td className="px-3 py-1.5"><Btn small kind="ghost" onClick={() => onLog(u, day)}>Log</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-1 text-[11px] text-gray-400">Sign-ins are recorded from 2 Nov 2026. Changes are recorded field changes by that person (one save that changes five fields counts five).</p>
     </div>
   );
 }

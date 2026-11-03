@@ -99,9 +99,11 @@ console.log("\n--- BS1: a certified trainer running a live batch ---");
   }, 201)).data.item;
 
   // The trainer is booked. Dropping them now leaves the batch pointing at someone who has left.
-  const dropped = await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Dropped", reason: "Resigned" });
+  // The leaving reason is sent (2026-11-02: a Certified trainer cannot be dropped without one), so the refusal
+  // below is the live-batch rule's own, not the missing reason's.
+  const dropped = await req(admin, "POST", `/api/trainers/${t._id}/transition`, { target: "Dropped", reason: "Resigned", payload: { unavailable_reason: "Backed out" } });
   ok("BS1: dropping a trainer who is assigned to a live batch is refused, or the batch is flagged",
-    dropped.status >= 400 || (await req(admin, "GET", `/api/batches/${b._id}`)).data.item.trainer == null,
+    (dropped.status >= 400 && !/Say why they are leaving/.test(String(dropped.data?.error ?? ""))) || (await req(admin, "GET", `/api/batches/${b._id}`)).data.item.trainer == null,
     `drop returned ${dropped.status}; batch still points at the dropped trainer`);
 }
 

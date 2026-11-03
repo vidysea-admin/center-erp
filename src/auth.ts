@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { dbConnect } from "@/lib/db";
 import { User } from "@/models";
+import { audit } from "@/lib/audit";
 
 export type SessionUser = {
   id: string;
@@ -52,6 +53,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Password is checked FIRST so this message never leaks account state to guessers.
         if (user.approval_status === "Pending") throw new Error("Your account is awaiting Admin approval.");
         if (user.approval_status === "Rejected" || !user.active) throw new Error("This account is not active. Contact an Admin.");
+        // Activity tracker (Karunn sir, 2026-11-02: "who logged in how many times, what work did they do"): one
+        // AuditLog row per SUCCESSFUL sign-in (field "login"; the edits are already in the same log by actor) and the
+        // last-login stamp on the account. Never allowed to fail a sign-in: a log write that throws is swallowed.
+        await Promise.all([
+          audit({ entity: "User", entityId: user._id, field: "login", newValue: "signed in", actor: String(user._id) }),
+          User.updateOne({ _id: user._id }, { $set: { last_login_at: new Date() } }),
+        ]).catch(() => {});
         return {
           id: String(user._id),
           name: user.name,

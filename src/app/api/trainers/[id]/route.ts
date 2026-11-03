@@ -5,7 +5,7 @@ import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, isScoped } from "@/lib/authz";
 import { Batch, Trainer, TrainerDocument } from "@/models";
 import { hasPermission, requirePerm } from "@/lib/permissions";
-import { assertLocationOperational, assertTrainerDocDeleteInScope, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
+import { applyTrainerUnavailableReason, assertLocationOperational, assertTrainerDocDeleteInScope, assertTrainerDocInScope, TRAINER_FLOW } from "@/lib/rules";
 import { audit } from "@/lib/audit";
 import { emailError, canonicalEmail, canonicalPhone, phoneError } from "@/lib/validate";
 import { maskTrainerSecrets } from "../route";
@@ -29,7 +29,7 @@ export const { GET, PATCH } = itemRoutes({
   // deliberately NOT here (2026-08-13 eval sweep): a plain PATCH could jump a trainer straight
   // to "Certified", skipping every TRAINER_FLOW guard — document gates, the NSDC round-trip,
   // Rule T7. Stages move only through /transition; creation may still set an initial stage.
-  fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
+  fields: ["name", "phone", "email", "skills", "home_location", "home_location_other", "status", "unavailable_reason", "available_from", "day_rate", "incentive_note", "max_concurrent_batches", "active", "tr_id", "capable_locations", "programs_applied", "compensation_type", "compensation_fixed", "govt_candidate_id",
     "nominated_for_location", "nominated_for_program", "source", "qualification",
     "industry_experience_years", "teaching_experience_years", "nsdc_remarks",
     "eligibility_payment_amount", "payment_reference", "tot_certificate_no", "pipeline_note",
@@ -74,6 +74,7 @@ export const { GET, PATCH } = itemRoutes({
         for (const oldTie of ((existing as any).capable_locations ?? []).map(was)) if (oldTie && !keep.has(oldTie)) assertLocationInScope(user, oldTie);
       }
     }
+    applyTrainerUnavailableReason(body, existing as any);
     // QA-141 (Umesh): edits are as strict as creates — a fixed-up phone lands as the bare 10.
     if (body.phone !== undefined) {
       const pErr = phoneError(body.phone);

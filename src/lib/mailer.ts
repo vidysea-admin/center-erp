@@ -69,20 +69,44 @@ export function getTransporter(): Transporter | null {
   return transporter;
 }
 
+// A table in a mail (the daily digest, Karunn sir 2026-11-02: "tabular form, text is not understood").
+// Cells arrive already worded; `tones` colours a +/- cell. Same shape as rules.ts DigestTable.
+export type MailTable = {
+  title: string; head: string[]; note?: string;
+  rows: { label: string; cells: string[]; sub?: boolean; strong?: boolean; tones?: ("pos" | "neg" | "")[] }[];
+};
+
 // Small server-built HTML wrapper — English copy, ERP blue, no client input ever lands
 // here unescaped beyond names the server already stores.
-export function renderMail(opts: { title: string; lines: string[]; cta?: { label: string; url: string } }): { html: string; text: string } {
+export function renderMail(opts: { title: string; lines: string[]; tables?: MailTable[]; cta?: { label: string; url: string } }): { html: string; text: string } {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">
+  const tables = opts.tables ?? [];
+  // Inline styles only: mail clients drop <style> blocks. A wide table scrolls inside its own box on a phone.
+  const td = "padding:5px 8px;border-bottom:1px solid #e5e7eb;text-align:right;white-space:nowrap";
+  const tone = (t?: string) => (t === "pos" ? "color:#047857;font-weight:bold;" : t === "neg" ? "color:#b91c1c;font-weight:bold;" : "");
+  const tableHtml = (t: MailTable) => `<p style="font-size:14px;font-weight:bold;margin:18px 0 6px">${esc(t.title)}</p>
+    <div style="overflow-x:auto"><table cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:13px;width:100%">
+      <tr>${t.head.map((h, i) => `<th style="${td};background:#f3f4f6;font-weight:bold;white-space:normal;vertical-align:bottom;${i === 0 ? "text-align:left" : ""}">${esc(h)}</th>`).join("")}</tr>
+      ${t.rows.map((r) => `<tr><td style="${td};text-align:left;white-space:normal;${r.sub ? "padding-left:22px;color:#4b5563;" : ""}${r.strong ? "font-weight:bold;" : ""}">${esc(r.label)}</td>${r.cells.map((c, i) => `<td style="${td};${r.strong ? "font-weight:bold;" : ""}${tone(r.tones?.[i])}">${esc(c)}</td>`).join("")}</tr>`).join("\n      ")}
+    </table></div>
+    ${t.note ? `<p style="margin:4px 0 0;color:#6b7280;font-size:11px">${esc(t.note)}</p>` : ""}`;
+  // Plain-text twin: fixed-width columns, so a text-only client still reads a table.
+  const tableText = (t: MailTable) => {
+    const grid = [t.head, ...t.rows.map((r) => [(r.sub ? "  - " : "") + r.label, ...r.cells])];
+    const w = t.head.map((_, i) => Math.max(...grid.map((row) => String(row[i] ?? "").length)));
+    return [t.title.toUpperCase(), ...grid.map((row) => row.map((c, i) => (i === 0 ? String(c).padEnd(w[i]) : String(c).padStart(w[i]))).join("  ")), ...(t.note ? [t.note] : []), ""].join("\n");
+  };
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:${tables.length ? 760 : 560}px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">
   <div style="background:#1d4ed8;color:#ffffff;padding:14px 20px;font-size:16px;font-weight:bold">Vidysea Center ERP</div>
   <div style="padding:20px;color:#111827;font-size:14px;line-height:1.6">
     <p style="font-size:15px;font-weight:bold;margin:0 0 10px">${esc(opts.title)}</p>
     ${opts.lines.map((l) => `<p style="margin:0 0 8px">${esc(l)}</p>`).join("\n    ")}
+    ${tables.map(tableHtml).join("\n    ")}
     ${opts.cta ? `<p style="margin:16px 0 4px"><a href="${opts.cta.url}" style="background:#1d4ed8;color:#ffffff;text-decoration:none;padding:9px 18px;border-radius:6px;display:inline-block">${esc(opts.cta.label)}</a></p>` : ""}
   </div>
   <div style="padding:10px 20px;background:#f9fafb;color:#6b7280;font-size:11px">This is an automated message from the Vidysea Center ERP. Please do not reply to this email.</div>
 </div>`;
-  const text = [opts.title, "", ...opts.lines, ...(opts.cta ? ["", `${opts.cta.label}: ${opts.cta.url}`] : [])].join("\n");
+  const text = [opts.title, "", ...opts.lines, ...(tables.length ? ["", ...tables.map(tableText)] : []), ...(opts.cta ? ["", `${opts.cta.label}: ${opts.cta.url}`] : [])].join("\n");
   return { html, text };
 }
 

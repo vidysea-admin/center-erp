@@ -230,7 +230,9 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -340 note: re-enrolment (Umesh, 2026-11-02, "based on the batch status hona chahiye") - a student whose batch is
 // Completed, Closed or Cancelled, or who was dropped, can join another batch of any course at any centre with the same
 // CAN ID. Ships with scripts/backfill-released-on.mjs, run on production after this build is live. No number is quoted.
-export const RELEASE = "2026.08.14-340";
+// -341 note: digest-tables (Karunn sir review 2026-11-02) - tabular digest, weekly targets, trainer unavailable
+// reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
+export const RELEASE = "2026.08.14-341";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -302,6 +304,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-341 turns the daily digest into tables, and adds weekly targets, a reason for trainers who are not available, and a record of who signed in. " +
+  "The 21:00 mail and Reports, Daily digest now show the same tables: Trainers by stage, Candidates, Against target and Costs, each with the position now, the day, the week (Monday to Sunday) and the total since the first target week. " +
+  "Against target shows trainers trained, candidates in training and candidates certified for the week and in total, with the difference marked plus or minus. " +
+  "Weekly targets are entered by an Admin under Admin, Targets, typed into the grid or pasted from a spreadsheet; every value is checked before anything is saved. " +
+  "In training now counts only candidates whose batch is Active and has really started. " +
+  "A trainer marked Unavailable, or dropped after being certified, now needs a reason: Backed out, Absconding or Temporarily unavailable; the digest counts them separately. " +
+  "Every sign-in is recorded. Admin, Users and Access shows each person's last sign-in, and a day's activity shows who signed in, how often and what they changed, with a full log per person. " +
+  "Payment pending in the digest now includes cost entries made later in the day; before, entries after 05:30 IST were left out. " +
+  "No other screen or permission changes in this release.";
+
+// -341: the -340 note moved here unchanged when -341 became current.
+const RELEASE_NOTE_ARCHIVE_340 =
   "-340 lets a student join another batch once their batch is over. " +
   "When a batch is Completed, Closed or Cancelled, its students are free to join a new batch of any course at any centre, with the same mobile number and the same Skill India CAN ID; no second candidate record is created. " +
   "This does not depend on the result: a student who passed, failed or was never assessed is freed the same way, and a student who was dropped from a batch is free at once. " +
@@ -311,6 +325,7 @@ export const RELEASE_NOTE_CURRENT =
   "Reopening a finished batch, or restoring a cancelled one, is refused while any of its students is already in another batch, and the refusal names them. " +
   "The six-month gap between batches remains a warning only. " +
   "No other screen, figure or permission changes in this release.";
+
 
 // -340: the -339 note moved here unchanged when -340 became current.
 const RELEASE_NOTE_ARCHIVE_339 =
@@ -2279,6 +2294,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -341: ARCHIVE_340 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_340 + " " +
   // -340: ARCHIVE_339 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_339 + " " +
   // -339: ARCHIVE_338 wired in here in the SAME bump that declared it, same discipline.
