@@ -230,16 +230,13 @@ export const HOLDS_PERSON = { left_on: null, released_on: null } as const;
 // `active_batch` from HOLDS_PERSON). It used to be `lifecycle_status` in Unassigned/Dropped, which hid every
 // pass-out ("Completed"/"Failed") and every student of a cancelled batch. The server still decides through
 // addMemberChecked; this only decides who is offered.
-/** True when no seat holds this candidate now and the batch's job role does not rule them out. */
+// -342 (Umesh 2026-11-03): a free student belongs to no centre and may take any course, so neither the
+// student's centre nor job role matters here any more - the batch they join gives them its own.
+/** True when no seat holds this candidate now and they are not archived. */
 export function isFreeToJoin(
-  c: { active_batch?: unknown; archived_at?: unknown; program?: any; lifecycle_status?: string | null; enrolled_at?: unknown },
-  batchProgram: unknown,
+  c: { active_batch?: unknown; archived_at?: unknown },
 ): boolean {
-  if (c.active_batch || c.archived_at) return false;
-  // A returning student may take any job role (joinRefusalFor `returning`); a fresh lead only this one, or
-  // none yet - programme-less imports inherit the batch's on joining.
-  const returning = ["Completed", "Failed"].includes(String(c.lifecycle_status)) || !!c.enrolled_at;
-  return returning || !c.program || String(c.program?._id ?? c.program) === String((batchProgram as any)?._id ?? batchProgram);
+  return !c.active_batch && !c.archived_at;
 }
 
 // "Pending" is NOT a record. It is the absence of one — the row exists because somebody opened the

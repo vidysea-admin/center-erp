@@ -1605,13 +1605,19 @@ const foreignCand = (await req(admin, "POST", "/api/candidates", {
   name: `${NAME} Foreign`, phone: `9${STAMP.slice(1)}2001`, location: otherLoc._id, program: program._id,
 })).data.item;
 const crossLoc = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: foreignCand._id });
-ok("another centre's candidate refused even for Admin (Prem Kumar/Lalit fix)", crossLoc.status === 409 && /another centre/.test(crossLoc.data.error ?? ""), JSON.stringify(crossLoc.data).slice(0, 160));
+// -342 (Umesh 2026-11-03) reverses the 2026-08-13 FIX-1: a free student belongs to no centre and may take any
+// course, so another centre's candidate and a different job role JOIN and the batch's centre / course are adopted.
+ok("another centre's free candidate joins and takes this batch's centre (-342; was refused, Prem Kumar/Lalit fix)", crossLoc.status === 201
+  && String((await req(admin, "GET", `/api/candidates/${foreignCand._id}`)).data.item?.location?._id) === String(loc._id), JSON.stringify(crossLoc.data).slice(0, 160));
 const otherProg = (await req(admin, "POST", "/api/programs", { code: `GP${STAMP}`, name: `${NAME} Other Prog`, trainer_skill: "OtherSkill" + STAMP })).data.item;
 const wrongProgCand = (await req(admin, "POST", "/api/candidates", {
   name: `${NAME} WrongRole`, phone: `9${STAMP.slice(1)}2002`, location: loc._id, program: otherProg._id,
 })).data.item;
 const crossProg = await req(admin, "POST", `/api/batches/${batch._id}/members`, { candidate: wrongProgCand._id });
-ok("a different job role/scheme refused (the scheme-twin trap)", crossProg.status === 409 && /job role/.test(crossProg.data.error ?? ""), JSON.stringify(crossProg.data).slice(0, 160));
+ok("a different job role/scheme joins and takes this batch's job role (-342; was refused, the scheme-twin trap)", crossProg.status === 201
+  && String((await req(admin, "GET", `/api/candidates/${wrongProgCand._id}`)).data.item?.program?._id) === String(program._id), JSON.stringify(crossProg.data).slice(0, 160));
+// the fixture batch's roster is what everything below counts - put it back as it was
+for (const r of [crossLoc, crossProg]) if (r.status === 201) await req(admin, "DELETE", `/api/members/${r.data.item._id}`, { reason: "-342 pin: roster put back as it was" }, 200);
 // (The program-less-candidate path can't be built over HTTP — the create API requires a
 // programme; only bulk imports produce such rows. That case is pinned in e2e-eval-data.mjs,
 // the one suite allowed to plant raw shapes.)

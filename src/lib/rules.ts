@@ -1041,38 +1041,38 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
 // three routes now call these. `addMemberChecked` above stays the join authority (Rule 20, QA-2794
 // revive, QA-945, joined-on rules, target warning) and is not changed.
 
-/** Which of these candidates have EVER held a batch seat (any row: completed, dropped or current). One query. */
-export async function hasBatchHistory(candidateIds: unknown[]): Promise<Set<string>> {
-  if (!candidateIds.length) return new Set();
-  const ids = await BatchMember.distinct("candidate", { candidate: { $in: candidateIds } });
-  return new Set(ids.map(String));
-}
-
-/** Pure and sync: the SAME sentences the two routes used before. null = joinable. */
+/**
+ * Pure and sync: the SAME sentences the two routes used before. null = joinable.
+ *
+ * -342 (Umesh 2026-11-03): "a free student belongs to no centre" - their centre is only where they last
+ * studied, and a fresh lead is free like everyone else. So there is no centre test and no job-role test
+ * here any more, for anyone: the student ADOPTS the batch's centre and course on joining
+ * (assignCandidateToBatch, audited old -> new). "Free" itself - no running batch holds the person - is Rule
+ * 20, asked by addMemberChecked, and Rule 38 on the NEW batch's centre is assertBatchJoinable; what is left
+ * here is the two things that are about the person, not the place.
+ */
 export function joinRefusalFor(
   cand: { name?: string | null; phone?: string | null; sidh_candidate_id?: string | null; location?: unknown; program?: unknown; batch_interest?: unknown; archived_at?: unknown },
-  batch: { location?: unknown; program?: unknown },
-  opts: { returning?: boolean } = {},
 ): string | null {
   const who = (cand.name as string | undefined) ?? "Candidate";
-  // Re-enrolment (Umesh 2026-11-02, "koi bhi course/centre"): a RETURNING student - one with batch history -
-  // may join any course at any centre and adopts the new batch's on joining (assignCandidateToBatch). The
-  // two refusals below keep protecting fresh leads. Whether they are still active somewhere is Rule 20's
-  // question, asked by addMemberChecked; `returning` is computed by the caller (hasBatchHistory) so this
-  // stays sync for the importer preview.
-  if (!opts.returning) {
-    // -124 / -130 (QA-273): the leading `cand.location &&` is the walk-in exemption - a candidate with no
-    // centre is unplaced, not "at another centre"; they ADOPT the batch's centre on joining.
-    if (cand.location && String(cand.location) !== String(batch.location)) {
-      return `${who} belongs to another centre — move them to this location first.`;
-    }
-    if (cand.program && batch.program && String(cand.program) !== String(batch.program)) {
-      return `${who} is registered under a different job role/scheme than this batch.`;
-    }
-  }
   if (cand.archived_at) return `${who} is archived — restore them before adding them to a batch.`;
   if (cand.batch_interest === "Future") return upcomingInterestRefusal(cand);
   return null;
+}
+
+/**
+ * Rule 38 on the CANDIDATE when somebody adds them to a batch (-342). A FREE student - no seat holds them
+ * now - may be added by anyone who may add to the batch, from whichever centre they last studied at: the
+ * scope that matters is the NEW batch's, and assertBatchJoinable already checked it. A student a running
+ * batch holds keeps the old test (the caller must be able to see their centre), so a scoped user cannot
+ * probe other centres' running students: the refusal is 403, never the Rule 20 sentence that names the
+ * holding batch. Unscoped users (Admin, Operations) pass without a query.
+ */
+export async function assertCandidateJoinScope(user: SessionUser, c: { _id: unknown; location?: unknown }) {
+  if (!isScoped(user)) return;
+  const held = await BatchMember.exists({ candidate: c._id, ...HOLDS_PERSON });
+  if (!held) return;
+  assertLocationInScope(user, String(c.location));
 }
 
 /** Load and gate a batch for joins: 404, Rule 38 scope, closed, Rule 1. Returns the lean batch. */
@@ -1089,7 +1089,7 @@ export async function assertBatchJoinable(user: SessionUser, batchId: string) {
 }
 
 /**
- * The whole per-candidate join: joinRefusalFor -> addMemberChecked -> programme adoption -> centre
+ * The whole per-candidate join: joinRefusalFor -> addMemberChecked -> programme + centre
  * adoption (+ audit) -> BatchMember audit. Throws HttpError exactly as the routes did. The eligibility
  * text is returned SEPARATELY so each caller composes exactly what it returned before.
  */
@@ -1101,8 +1101,7 @@ export async function assignCandidateToBatch(a: {
   defaults?: { min_age: number; max_age: number; training_cooldown_months: number };
 }) {
   const { batch, candidate: c } = a;
-  const returning = (await hasBatchHistory([c._id])).has(String(c._id));
-  const refusal = joinRefusalFor(c, batch, { returning });
+  const refusal = joinRefusalFor(c);
   if (refusal) throw new HttpError(409, refusal);
   // QA-892: `undefined`, not `new Date()` - the default belongs to addMemberChecked, which knows whether
   // this batch already began.
@@ -1111,17 +1110,16 @@ export async function assignCandidateToBatch(a: {
   if (!c.program && batch.program) {
     await Candidate.updateOne({ _id: c._id }, { $set: { program: batch.program } });
   }
-  // Re-enrolment (2026-11-02): a returning student joining another course or centre now belongs to it - the
-  // candidate list, Rule 38 scoping and the next batch's pool all read these two fields. The earlier batch
-  // keeps its own program/location on the Batch, so nothing about that history changes. Audited by name.
-  if (returning) {
-    for (const field of ["program", "location"] as const) {
-      const was = c[field], now = batch[field];
-      if (was && now && String(was) !== String(now)) {
-        await Candidate.updateOne({ _id: c._id }, { $set: { [field]: now } });
-        await audit({ entity: "Candidate", entityId: c._id, field,
-          oldValue: String(was), newValue: `set to this batch's ${field === "program" ? "job role" : "centre"} on re-enrolment (${batch.code ?? batch._id})`, actor: a.actorId });
-      }
+  // -342 (was re-enrolment only, 2026-11-02): ANY student joining another course or centre now belongs to it -
+  // the candidate list, Rule 38 scoping and the next batch's pool all read these two fields. A free student
+  // belongs to no centre (Umesh 2026-11-03), so a fresh lead is no different. The earlier batch keeps its
+  // own program/location on the Batch, so nothing about that history changes. Audited by name, old -> new.
+  for (const field of ["program", "location"] as const) {
+    const was = c[field], now = batch[field];
+    if (was && now && String(was) !== String(now)) {
+      await Candidate.updateOne({ _id: c._id }, { $set: { [field]: now } });
+      await audit({ entity: "Candidate", entityId: c._id, field,
+        oldValue: String(was), newValue: `set to this batch's ${field === "program" ? "job role" : "centre"} on joining (${batch.code ?? batch._id})`, actor: a.actorId });
     }
   }
   // -124 (M4-04) / -130 (QA-273): a candidate with no centre ADOPTS this one. Audited by name, because it

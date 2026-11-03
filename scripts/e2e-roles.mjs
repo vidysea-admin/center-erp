@@ -213,7 +213,10 @@ if (foreignBatch) {
   ok("IDOR: batches list ?location=<foreign> → 403", (await req(spoc, "GET", `/api/batches?location=${foreignBatch.location._id}`)).status === 403);
   // Foreign CANDIDATE into own batch must also be blocked (sibling asymmetry regression)
   const ownBatch = spocBatches.data.items.find((b) => !["Completed", "Cancelled"].includes(b.status));
-  const foreignCand = (await req(admin, "GET", "/api/candidates?limit=200")).data.items.find((c) => c.location?.code && c.location.code !== "JPR03");
+  // -342 (Umesh 2026-11-03): a FREE student belongs to no centre and any centre may take them, so the foreign
+  // student this pin needs is one a batch at another centre still HOLDS (active_batch set). The free case is
+  // pinned in e2e.mjs (-342 block).
+  const foreignCand = (await req(admin, "GET", "/api/candidates?limit=200")).data.items.find((c) => c.location?.code && c.location.code !== "JPR03" && c.active_batch);
   if (ownBatch && foreignCand) {
     ok("IDOR: SPOC add foreign candidate to own batch → 403", (await req(spoc, "POST", `/api/batches/${ownBatch._id}/members`, { candidate: foreignCand._id })).status === 403);
   }

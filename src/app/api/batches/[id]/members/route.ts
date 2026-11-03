@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, hasEditLevel } from "@/lib/permissions";
 
 // The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
@@ -17,7 +17,7 @@ export async function rosterCandidateFields(user: Parameters<typeof hasEditLevel
   return (await hasEditLevel(user, "candidates.manage")) ? null : ROSTER_CANDIDATE_FIELDS;
 }
 import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, assertBatchJoinable, assignCandidateToBatch, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { assertBatchInScope, assertBatchJoinable, assertCandidateJoinScope, assignCandidateToBatch, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 
@@ -125,7 +125,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!body.candidate) throw new HttpError(400, "candidate is required");
   const cand = await Candidate.findById(body.candidate).select("name phone sidh_candidate_id location program archived_at batch_interest").lean<any>();
   if (!cand) throw new HttpError(404, "Candidate not found");
-  assertLocationInScope(user, String(cand.location)); // Rule 38 on the candidate too
+  // Rule 38 on the candidate too - but only while a running batch holds them. A FREE student belongs to no
+  // centre (-342): the scope that matters is the NEW batch's, checked by assertBatchJoinable above.
+  await assertCandidateJoinScope(user, cand);
   // qa-import-into-batch (-325): the centre test, the job-role test, addMemberChecked, programme and
   // centre adoption and their audit rows are assignCandidateToBatch (rules.ts) - one body for this door,
   // the bulk-assign door and the importer. The 2026-08-13 centre/role rulings, the -124 walk-in
