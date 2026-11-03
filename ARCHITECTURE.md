@@ -432,6 +432,20 @@ and `User.last_login_at` (`authorize` in `src/auth.ts`; it can never fail a sign
 (Admin only) groups that IST day's AuditLog by actor (sign-ins, changes, entities touched), and Admin → Users shows
 it in `ActivityOverview`. "Log" opens `GET /api/audit/by-user/<id>?day=<day>`. Sign-ins are recorded from 2026-11-02 onwards.
 
+**Range and dashboard (-342, Umesh 2026-11-03: "Monday, Monday+Tuesday, Monday..Thursday").** `dailyDigest` takes
+an optional `opts.from`. The ONE check is `assertDigestFrom(from, day)` in `rules.ts`: a real day, not after `day`, and at
+most 366 days back. Both routes call it before anything is read or mailed, and so does `dailyDigest`. With `from`, the
+cumulative column becomes "Range (from to day)", and the target table's cumulative figure sums only the WeeklyTarget weeks
+from `istWeekOf(from)` (that week counted whole). Without it, nothing changes. Publish now passes `{date, from}` through
+`publishDigestNow` → `sendOne` → `dailyDigest`. The subject and the link name the range. The 21:00 tick never sends one.
+The screen (`reports/daily/page.tsx`, `DigestTableView`) is presentation only over the same worded cells:
+- a section dropdown, with `?section=` in the URL, as are `date` and `from`;
+- per-column sort on the number a cell shows (`cellNumber`); sub rows move with their parent;
+- a label filter, a per-column minimum, and Hide zero rows;
+- a CSV of the rows as shown;
+- a week progress bar in Against target.
+The mail does not change. Batch-plan-derived targets were proposed and parked (Umesh: Manish ji keeps filling the grid).
+
 **Recipients are a custom list (cycle 2, Umesh 2026-10-07: "select it or add custom mail").** They are still
 the one Defaults string `digest_recipients`, but each entry is tagged: `u:<24-hex ERP user id>` is a picked
 account (so a renamed or re-emailed user keeps receiving it) and anything else is a typed address; a legacy

@@ -5856,6 +5856,17 @@ export function applyTrainerUnavailableReason(body: Record<string, any>, existin
   }
 }
 
+// Umesh, 2026-11-03: "Monday, then Monday+Tuesday, then Monday..Thursday" - the digest's cumulative column can run from
+// any chosen day up to the digest day. ONE check for the screen, Publish now and the digest itself: a real day, not
+// after the digest day, at most 366 days back (each range column is one more read over the span).
+export function assertDigestFrom(fromIST: unknown, dayIST: string): string | null {
+  if (fromIST === undefined || fromIST === null || fromIST === "") return null;
+  const from = assertDigestDay(fromIST);
+  if (from > dayIST) throw new HttpError(400, "The range must start on or before the report day.");
+  if ((Date.parse(`${dayIST}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000 > 366) throw new HttpError(400, "The range can span at most 366 days.");
+  return from;
+}
+
 // The IST week a digest day falls in: MONDAY to Sunday (Umesh, AskUserQuestion 2026-11-02). Pure calendar
 // arithmetic on the YYYY-MM-DD string, so no process timezone can move it. `to` is the Sunday; the digest's
 // "this week" column runs Monday..the chosen day (week to date), and a WeeklyTarget row is keyed by `from`.
@@ -5881,8 +5892,9 @@ const toneOf = (actual: number | null, target: number | null): "pos" | "neg" | "
 // no account to ask. It is passed ONLY by lib/daily-digest.ts, for a typed address that matches no ERP account.
 // Every other caller (the screen, the API, Publish now, an ERP recipient's mail) leaves it off, so finance.view
 // (no Admin bypass) and the centre scope stay exactly as they were.
-export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { fullView?: boolean } = {}) {
+export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { fullView?: boolean; from?: string | null } = {}) {
   assertDigestDay(dayIST);
+  const rangeFrom = assertDigestFrom(opts.from, dayIST);   // null = the default cumulative (since the first target week)
   const scope = locationFilter(viewer);
   const trainerScope = isScoped(viewer) ? trainerLocationFilter(viewer.location_scope ?? []) : {};
   const instants = { $gte: istStart(dayIST), $lte: istEnd(dayIST) };   // for fields stored as instants
@@ -6012,7 +6024,9 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   // the "on the day" column must equal the day's figure above it (the e2e pins that): one definition each.
   const week = istWeekOf(dayIST);
   const targetRows = isScoped(viewer) ? [] : await WeeklyTarget.find({ week_start: { $lte: dayKey(week.from) } }).sort({ week_start: 1 }).lean<any[]>();
-  const cumFrom: string | null = targetRows.length ? new Date(targetRows[0].week_start).toISOString().slice(0, 10) : null;
+  // A chosen range keeps only the target weeks it touches (the week holding `from` counts whole, like the current week).
+  if (rangeFrom) { const firstWeek = istWeekOf(rangeFrom).from; for (let i = targetRows.length - 1; i >= 0; i--) if (new Date(targetRows[i].week_start).toISOString().slice(0, 10) < firstWeek) targetRows.splice(i, 1); }
+  const cumFrom: string | null = rangeFrom ?? (targetRows.length ? new Date(targetRows[0].week_start).toISOString().slice(0, 10) : null);
   const periods: { key: "day" | "week" | "cum"; from: string | null }[] = [
     { key: "day", from: dayIST },
     { key: "week", from: week.from },
@@ -6023,7 +6037,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const scopedBatchIds = isScoped(viewer) ? (await Batch.find(scope).select("_id").lean<any[]>()).map((b) => b._id) : null;
   const inScopeBatches = scopedBatchIds ? { batch: { $in: scopedBatchIds } } : {};
   const stageMoves = await AuditLog.find({
-    entity: "Trainer", field: { $in: ["pipeline_status", "pipeline_bypass"] }, created_at: inst(cumFrom),
+    // Read from the EARLIER of the range start and the week's Monday: a range starting mid-week must not cut the week column.
+    entity: "Trainer", field: { $in: ["pipeline_status", "pipeline_bypass"] }, created_at: inst(cumFrom && cumFrom > week.from ? week.from : cumFrom),
     entity_id: { $in: trainers.map((t) => t._id) },
   }).select("entity_id new_value created_at").lean<any[]>();
   // The transition door audits the target stage; a bypass writes "BYPASS → <stage>".
@@ -6083,7 +6098,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
 
   // ---- the tables: what the screen and the mail both draw ----------------------------------------------
   const weekHead = `This week (${week.from} to ${dayIST})`;
-  const cumHead = cumFrom ? `Cumulative (since ${cumFrom})` : "Cumulative (all time)";
+  const cumHead = rangeFrom ? `Range (${rangeFrom} to ${dayIST})` : cumFrom ? `Cumulative (since ${cumFrom})` : "Cumulative (all time)";
   const flowCells = (f: Per) => [fmtN(f.day), fmtN(f.week), fmtN(f.cum)];
   const dash3 = ["—", "—", "—"];
   const mob = planTrackerSummary(planRows).total;
@@ -6130,7 +6145,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       tones: ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)],
     })),
     note: weekRow
-      ? `Week of ${week.from}. The targets are for the WHOLE week (and cumulative includes this whole week); the actuals are up to ${dayIST}, so early in the week the +/− shows what is still to do. Cumulative = every weekly target since ${cumFrom}. In training is a headcount, not a running total, so it has no cumulative figure.`
+      ? `Week of ${week.from}. The targets are for the WHOLE week (and cumulative includes this whole week); the actuals are up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = every weekly target from the week of ${rangeFrom} (that week counted whole).` : `Cumulative = every weekly target since ${cumFrom}.`} In training is a headcount, not a running total, so it has no cumulative figure.`
       : `No target is set for the week of ${week.from} (Admin, Targets).`,
   });
   if (costs) tables.push({
@@ -6147,6 +6162,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
 
   return {
     day: dayIST,
+    range_from: rangeFrom,
     generated_at: new Date().toISOString(),
     week,
     flows,

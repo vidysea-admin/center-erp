@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireRole } from "@/lib/authz";
 import { getDefaults } from "@/lib/defaults";
-import { assertDigestDay, dailyDigest, istDayOf } from "@/lib/rules";
+import { assertDigestDay, assertDigestFrom, dailyDigest, istDayOf } from "@/lib/rules";
 import { DIGEST_HOUR_IST, digestHealth } from "@/lib/daily-digest";
 
 // mtg-c1 (R4): the daily digest as data - the screen /reports/daily reads this, and the 21:00 mail and
@@ -15,8 +15,9 @@ export const GET = apiHandler(async (req: NextRequest) => {
   const user = await requireUser();
   requireRole(user, ...ADMIN_OPS, "Location", "Enrollment");
   const day = assertDigestDay(req.nextUrl.searchParams.get("date") || istDayOf());
+  const from = assertDigestFrom(req.nextUrl.searchParams.get("from"), day);   // optional range start (Umesh, 2026-11-03)
   // digestHealth only feeds the warning and the counts in `meta`: a failure there must not take the report down for a reader.
-  const [digest, defaults, health] = await Promise.all([dailyDigest(day, user), getDefaults(), digestHealth().catch(() => ({ digest_only: false, recipients: 0, deliverable: 0, digest_only_nobody: false }))]);
+  const [digest, defaults, health] = await Promise.all([dailyDigest(day, user, { from }), getDefaults(), digestHealth().catch(() => ({ digest_only: false, recipients: 0, deliverable: 0, digest_only_nobody: false }))]);
   // `meta` lets the screen say so when the mail cannot actually leave (email_enabled off, nobody listed).
   // It carries counts of recipients, not their addresses. `digest_only_nobody` (checker A2): digest-only is ON and no
   // listed recipient can receive the digest, so the approval mails are going nowhere; the screen says so in red.

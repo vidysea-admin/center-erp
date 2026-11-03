@@ -42,6 +42,10 @@
 //   K   Karunn sir's review 2026-11-02: the digest as TABLES (trainers, candidates, costs), stage entries per period
 //       (on the day / this week Mon-Sun IST / cumulative), trained-but-not-available counted by reason, weekly targets
 //       with +/- (Admin, Targets: validated before any write), and the activity tracker (sign-ins + work per day)
+//   K8  Umesh 2026-11-03: any range - "Monday, Monday+Tuesday, Monday..Thursday": the cumulative column runs from a chosen
+//       day (?from=), equals the sum of the daily figures over those days, its target sums only the weeks it touches,
+//       and a bad range is refused before anything is read or mailed
+//   S4  the screen as a dashboard: section dropdown, sort, row filter, minimum, hide zero rows, CSV = what is shown
 //
 // Every identity is derived from the run stamp. The shared wall DB holds other suites' data, so the EXACT
 // numbers are asserted through scoped personas on a day (2031-03-14) no other suite writes to.
@@ -616,6 +620,55 @@ const tBad = (tt?.rows ?? []).flatMap((row, i) => {
 ok("K4: the target table's +/- cells are actual minus target, signed and coloured (green at or above target, red below)", tt?.rows?.length === 3 && tBad.length === 0, tBad.join(" | ").slice(0, 300));
 ok("K4: in this fixture week nobody reached Certified, so trainers trained reads 0 against 10: −10, red", byKey.trainers_trained?.week_actual === 0 && tt?.rows?.[0]?.cells?.[2] === "−10" && tt?.rows?.[0]?.tones?.[2] === "neg", JSON.stringify(tt?.rows?.[0]));
 ok("K4: a centre login asking the same day gets no target figures at all", (await digest(uA.cookie, D)).data?.targets === null, "");
+
+// K8 - a chosen range. Flow rows only: their range cell must be the sum of the "on the day" cell over each day in it.
+const digestR = (cookie, day, from) => req(cookie, "GET", `/api/reports/daily?date=${day}&from=${from}`);
+const FLOW = ["Joined into batches", "Enrolled", "Training started", "Certified (certificate issued)", "Batches created", "Batches started"];
+const daysK8 = ["2031-03-10", "2031-03-11", "2031-03-12", "2031-03-13", "2031-03-14", "2031-03-15", "2031-03-16", "2031-03-17"];
+const onDay = {};
+for (const d of daysK8) { const dd = (await digest(uA.cookie, d)).data; onDay[d] = Object.fromEntries(FLOW.map((l) => [l, Number(cellsAt(dd, "candidates", l)?.[1])])); }
+const k8Bad = [];
+for (const [from, to] of [["2031-03-10", "2031-03-17"], ["2031-03-12", "2031-03-16"], ["2031-03-14", "2031-03-14"], ["2031-03-15", "2031-03-17"]]) {
+  const r = await digestR(uA.cookie, to, from);
+  if (r.status !== 200 || r.data?.range_from !== from) { k8Bad.push(`${from}..${to}: ${r.status} ${r.data?.range_from}`); continue; }
+  const head = tblOf(r.data, "candidates")?.head?.[4];
+  if (head !== `Range (${from} to ${to})`) k8Bad.push(`${from}..${to} head ${head}`);
+  for (const l of FLOW) {
+    const want = daysK8.filter((d) => d >= from && d <= to).reduce((a, d) => a + onDay[d][l], 0);
+    const got = Number(cellsAt(r.data, "candidates", l)?.[3]);
+    if (got !== want) k8Bad.push(`${from}..${to} ${l}: ${got} want ${want}`);
+  }
+}
+ok("K8: a range's column is exactly the sum of the daily figures over its days (Mon..Mon, Wed..Sun, one day, across a week end)", k8Bad.length === 0, k8Bad.join(" | "));
+const k8Def = (await digest(uA.cookie, "2031-03-17")).data;
+ok("K8: with no range chosen nothing changes: range_from is null and the column is the cumulative one", k8Def?.range_from === null && /^Cumulative/.test(tblOf(k8Def, "candidates")?.head?.[4] ?? ""), String(tblOf(k8Def, "candidates")?.head?.[4]));
+const k8T1 = (await digestR(uAdm.cookie, D, "2031-03-10")).data?.targets, k8T2 = (await digestR(uAdm.cookie, D, "2031-03-05")).data?.targets;
+const tk = (t, k) => t?.rows?.find((r) => r.key === k);
+ok("K8: the range target sums only the target weeks the range touches (from 03-10: week 03-10 alone; from 03-05: weeks 03-03 + 03-10)",
+  k8T1?.cumulative_from === "2031-03-10" && tk(k8T1, "trainers_trained")?.cum_target === 10 && tk(k8T1, "candidates_certified")?.cum_target === 5
+  && k8T2?.cumulative_from === "2031-03-05" && tk(k8T2, "trainers_trained")?.cum_target === 14 && tk(k8T2, "candidates_certified")?.cum_target === 7,
+  JSON.stringify([tk(k8T1, "trainers_trained"), tk(k8T2, "trainers_trained")]));
+// review -342: a range starting MID-WEEK must not cut the week column (the stage-move read is bounded by the earlier start)
+// A stage move on the week's MONDAY, before the range start, so a cut week column would show it missing.
+const k8Tr = await db.collection("trainers").findOne({ _id: oid(kIds.k1) });
+const k8Move = await db.collection("auditlogs").insertOne({ entity: "Trainer", entity_id: k8Tr._id, field: "pipeline_status", old_value: "NSDC Approved", new_value: "Certified", actor: oid(uAdm.id), created_at: istAt("2031-03-10", 12, 0) });
+for (const viewerK8 of [uAdm, uA]) {
+  const plain = (await digest(viewerK8.cookie, D)).data, mid = (await digestR(viewerK8.cookie, D, "2031-03-12")).data;
+  const wk = (d) => ({ tr: (tblOf(d, "trainers")?.rows ?? []).map((r) => r.cells[2]), ca: (tblOf(d, "candidates")?.rows ?? []).map((r) => r.cells[2]), tt: tk(d?.targets, "trainers_trained")?.week_actual ?? null });
+  ok(`K8: a range from mid-week (Wednesday 03-12) leaves every "this week" cell as it is without a range (${viewerK8 === uAdm ? "Admin" : "centre A"})`,
+    eq(wk(plain), wk(mid)) && (tblOf(plain, "trainers")?.rows ?? []).length > 0, JSON.stringify([wk(plain), wk(mid)]).slice(0, 280));
+}
+ok("K8: ...and that Monday move really is in the week column (the arm can see a cut)", Number(cellsAt((await digest(uAdm.cookie, D)).data, "trainers", bucketLabel("certified"))?.[2]) >= 1, "");
+await db.collection("auditlogs").deleteOne({ _id: k8Move.insertedId });
+const k8Refused = [];
+for (const [d, f] of [[D, "2031-03-15"], [D, "2030-03-01"], [D, "2031-02-30"], [D, "14-03-2031"]]) {
+  const r = await digestR(uA.cookie, d, f);
+  if (r.status !== 400) k8Refused.push(`${f}: ${r.status}`);
+}
+ok("K8: a range that starts after the day, spans over 366 days, or is not a real date is refused 400", k8Refused.length === 0, k8Refused.join(" | "));
+const k8MailsBefore = await mailLogs.countDocuments({ subject: { $regex: /^Daily digest 2031-03-14/ } });
+const k8Pub = await req(admin, "POST", "/api/reports/daily/publish", { date: D, from: "2031-03-20" });
+ok("K8: Publish now with a bad range is refused 400 and mails nobody", k8Pub.status === 400 && (await mailLogs.countDocuments({ subject: { $regex: /^Daily digest 2031-03-14/ } })) === k8MailsBefore, `${k8Pub.status} ${JSON.stringify(k8Pub.data).slice(0, 120)}`);
 const rm = await putT(admin, [{ week_start: "2031-03-03", trainers_trained: "", candidates_in_training: null }]);
 ok("K4: sending a week with every figure blank removes that week, and only that week",
   rm.status === 200 && rm.data?.removed === 1 && (await TW.countDocuments({ week_start: bizDay("2031-03-03") })) === 0 && (await TW.countDocuments({ week_start: bizDay("2031-03-10") })) === 1, JSON.stringify(rm.data));
@@ -1076,7 +1129,7 @@ await setDefaults({ digest_recipients: listAll });
 ok("U12: `fullView` appears only in lib/rules.ts (the option) and lib/daily-digest.ts (its one caller)", eq(fullViewUsers, ["lib/daily-digest.ts", "lib/rules.ts"]), fullViewUsers.join(","));
 ok("U10b: a claim is settled only by its CURRENT holder: the settle write is conditional on {instance, attempt, status sending}, so a slow first sender whose claim was re-taken cannot overwrite the re-taker (source shape; the race itself is not drivable through the door)",
   /async function settleClaim\([^)]*instance: string/.test(ddSrc) && /\{ _id: `digest-sent:\$\{day\}:\$\{to\}` as any, instance, attempts: attempt, status: "sending" \}/.test(ddSrc), "");
-ok("U12: ...and daily-digest.ts passes it on exactly one code line, only when the recipient is a typed address with no account (r.full)", ddCode.length === 1 && /r\.full \? \{ fullView: true \} : undefined/.test(ddCode[0]), JSON.stringify(ddCode));
+ok("U12: ...and daily-digest.ts passes it on exactly one code line, only when the recipient is a typed address with no account (r.full)", ddCode.length === 1 && /r\.full \? \{ fullView: true \} : (undefined|\{\})/.test(ddCode[0]), JSON.stringify(ddCode));
 
 // =================================================================================================
 // G1 - the "digest only" toggle on the per-approval mails
@@ -1244,6 +1297,52 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   ok("S1: the week is named on the screen (Monday to Sunday)", /Week 2031-03-10 to 2031-03-16/.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");
+
+  // S4 - the dashboard controls, on the same screen. Everything is presentation over the API's cells.
+  const rowIds = async (key) => page.locator(`[data-testid^="digest-row-${key}-"]`).evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
+  await page.locator('[data-testid="digest-section"]').selectOption("costs");
+  await page.waitForURL(/section=costs/);
+  ok("S4: the section dropdown shows only that table (Costs), and the link carries it",
+    (await page.locator('[data-testid="digest-table-costs"]').count()) === 1 && (await page.locator('[data-testid="digest-table-trainers"]').count()) === 0 && (await page.locator('[data-testid="digest-table-candidates"]').count()) === 0, page.url());
+  await page.locator('[data-testid="digest-section"]').selectOption("all");
+  await page.locator('[data-testid="digest-table-trainers"]').waitFor();
+  const tTr = (api?.tables ?? []).find((t) => t.key === "trainers");
+  const nowOf = (r) => { const m = String(r.cells[0]).replace(/,/g, "").match(/\d+/); return m ? Number(m[0]) : -1; };
+  const parents = tTr.rows.map((r, i) => ({ r, i })).filter((x) => !x.r.sub);
+  const wantDesc = [...parents].sort((a, b) => nowOf(b.r) - nowOf(a.r) || a.i - b.i).map((x) => x.i);
+  await page.locator('[data-testid="digest-sort-trainers-1"]').click();
+  const sortedParents = (await rowIds("trainers")).map((id) => Number(id.split("-").pop())).filter((i) => !tTr.rows[i].sub);
+  ok("S4: clicking the Now header sorts the Trainers rows high to low, and each breakdown row stays under its parent",
+    eq(sortedParents, wantDesc) && (await rowIds("trainers")).length === tTr.rows.length, JSON.stringify([sortedParents, wantDesc]));
+  await page.locator('[data-testid="digest-sort-trainers-1"]').click();
+  await page.locator('[data-testid="digest-sort-trainers-1"]').click();
+  ok("S4: a third click puts the report's own order back", eq((await rowIds("trainers")).map((id) => Number(id.split("-").pop())), tTr.rows.map((_, i) => i)), "");
+  await page.locator('[data-testid="digest-filter-candidates"]').fill("batches ");
+  const filtered = await rowIds("candidates");
+  ok("S4: the row filter keeps only matching rows (Batches created, Batches started)", filtered.length === 2, JSON.stringify(filtered));
+  await page.locator('[data-testid="digest-filter-candidates"]').fill("");
+  const tCa = (api?.tables ?? []).find((t) => t.key === "candidates");
+  const numAt = (c) => { const m = String(c ?? "").replace(/,/g, "").replace(/\u2212/g, "-").match(/[-+]?\d+(\.\d+)?/); return m ? Number(m[0]) : null; };
+  await page.locator('[data-testid="digest-min-candidates-3"]').fill("1");
+  const wantMin = tCa.rows.filter((r) => (numAt(r.cells[2]) ?? -1) >= 1).length;
+  ok("S4: a minimum on the week column keeps the rows at or above it", (await rowIds("candidates")).length === wantMin, `${(await rowIds("candidates")).length} vs ${wantMin}`);
+  await page.locator('[data-testid="digest-min-candidates-3"]').fill("");
+  await page.locator('[data-testid="digest-hide-zero"]').check();
+  const wantNz = tCa.rows.filter((r) => r.cells.some((c) => { const n = numAt(c); return n !== null && n !== 0; })).length;
+  ok("S4: Hide zero rows drops the rows whose every figure is 0 or blank", (await rowIds("candidates")).length === wantNz, `${(await rowIds("candidates")).length} vs ${wantNz}`);
+  await page.locator('[data-testid="digest-hide-zero"]').uncheck();
+  const [dl] = await Promise.all([page.waitForEvent("download"), page.locator('[data-testid="digest-csv-costs"]').click()]);
+  const csv = readFileSync(await dl.path(), "utf8").replace(/^\ufeff/, "");
+  const tCo = (api?.tables ?? []).find((t) => t.key === "costs");
+  const csvWant = [tCo.head, ...tCo.rows.map((r) => [(r.sub ? "  " : "") + r.label, ...r.cells])].map((r) => r.map((v) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)).join(",")).join("\r\n");
+  ok("S4: Download CSV gives the table exactly as shown (header + every row), named for the table and day", csv === csvWant && dl.suggestedFilename() === `digest-costs-${D}.csv`, `${dl.suggestedFilename()} ${csv.slice(0, 120)}`);
+  await page.goto(`${BASE}/reports/daily?date=${D}&from=2031-03-10`, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-testid="digest-table-candidates"]').waitFor();
+  const apiR = (await digestR(uAF.cookie, D, "2031-03-10")).data;
+  const enrIdx = tCa.rows.findIndex((r) => r.label === "Enrolled");
+  await page.waitForFunction(() => /Range 2031-03-10/.test(document.querySelector('[data-testid="digest-note"]')?.textContent ?? ""));
+  ok("S4: a range in the link is on the screen: the picker holds it and the range column matches the API",
+    (await page.locator('[data-testid="digest-from"]').inputValue()) === "2031-03-10" && (await txt(page, `digest-cell-candidates-${enrIdx}-3`)) === cellsAt(apiR, "candidates", "Enrolled")?.[3], "");
   await shot(page, "S1-digest-finance-viewer.png");
   await ctx.close();
 });

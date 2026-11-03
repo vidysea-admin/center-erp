@@ -185,7 +185,7 @@ export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
   return out;
 }
 
-const digestSubject = (day: string) => `Daily digest ${day}`;
+const digestSubject = (day: string, from?: string | null) => `Daily digest ${day}${from ? ` (range from ${from})` : ""}`;
 
 // The mail body for ONE recipient. Karunn sir, 2026-11-02: "tabular form - trainers, candidates, cost". The
 // TABLES are dailyDigest's own (rules.ts builds and words every cell), so the mail and the screen draw the same
@@ -194,7 +194,7 @@ const digestSubject = (day: string) => `Daily digest ${day}`;
 export function digestMailContent(d: DailyDigest) {
   const c = d.candidates;
   const lines: string[] = [
-    `Position for ${d.day} (IST). Week ${d.week.from} to ${d.week.to} (Monday to Sunday).`,
+    `Position for ${d.day} (IST). Week ${d.week.from} to ${d.week.to} (Monday to Sunday).${d.range_from ? ` Range ${d.range_from} to ${d.day}.` : ""}`,
     ...(c.joined.by_batch.length ? [`Joined on the day, by batch: ${c.joined.by_batch.map((b) => `${b.code}${b.location ? ` (${b.location})` : ""} ${b.count}`).join(", ")}`] : []),
     ...(c.training_started.exceptions.missing_actual_start || c.training_started.exceptions.missing_join_date
       ? [`Training-date exceptions (position now): ${c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start, ${c.training_started.exceptions.missing_join_date} missing a roster joining date.`]
@@ -204,22 +204,22 @@ export function digestMailContent(d: DailyDigest) {
     title: `Daily digest, ${d.day}`,
     lines,
     tables: d.tables,
-    cta: { label: "Open the daily digest", url: `https://www.vidysea.com/erp/reports/daily?date=${d.day}` },
+    cta: { label: "Open the daily digest", url: `https://www.vidysea.com/erp/reports/daily?date=${d.day}${d.range_from ? `&from=${d.range_from}` : ""}` },
   });
 }
 
-async function sendOne(day: string, r: Resolved, includeText: boolean): Promise<DigestResult> {
-  return { ...(await sendOneInner(day, r, includeText)), kind: r.kind, ...(r.full ? { full: true } : {}) };
+async function sendOne(day: string, r: Resolved, includeText: boolean, from?: string | null): Promise<DigestResult> {
+  return { ...(await sendOneInner(day, r, includeText, from)), kind: r.kind, ...(r.full ? { full: true } : {}) };
 }
-async function sendOneInner(day: string, r: Resolved, includeText: boolean): Promise<DigestResult> {
-  const base = { to: r.to, subject: digestSubject(day), entity: "DailyDigest", html: "", text: "" };
+async function sendOneInner(day: string, r: Resolved, includeText: boolean, from?: string | null): Promise<DigestResult> {
+  const base = { to: r.to, subject: digestSubject(day, from), entity: "DailyDigest", html: "", text: "" };
   if (r.problem || !r.viewer) {
     const o = await sendMail({ ...base, suppress: r.problem ?? PROBLEM_INACTIVE });
     return { to: r.to, outcome: "ineligible", status: o.status, reason: o.reason };
   }
   let content: { html: string; text: string };
   try {
-    content = digestMailContent(await dailyDigest(day, r.viewer, r.full ? { fullView: true } : undefined));
+    content = digestMailContent(await dailyDigest(day, r.viewer, { ...(r.full ? { fullView: true } : {}), from }));
   } catch (e) {
     const o = await sendMail({ ...base, suppress: `the digest could not be built: ${e instanceof Error ? e.message : String(e)}` });
     return { to: r.to, outcome: "failed", status: o.status, reason: o.reason };
@@ -331,14 +331,14 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
 // touch the day claims, so the 21:00 mail still goes (the two are different acts: this one is somebody
 // pressing a button). A 30-second cooldown stops a double click mailing everyone twice. The caller has
 // already checked defaults.manage.
-export async function publishDigestNow(day: string, user: SessionUser) {
+export async function publishDigestNow(day: string, user: SessionUser, from?: string | null) {
   const recipients = await resolveRecipients();
   if (!recipients.length) return { status: 409 as const, error: "No digest recipients are set. Add email addresses under Admin, Defaults, then press Publish now again." };
   if (!(await takeJobLock("daily-digest-manual", 30_000, user.id))) {
     return { status: 429 as const, error: "The digest was published a moment ago. Wait half a minute before publishing again." };
   }
   const results: DigestResult[] = [];
-  for (const r of recipients) results.push(await sendOne(day, r, false));
+  for (const r of recipients) results.push(await sendOne(day, r, false, from));
   // Counts come from each send's own outcome (the MailLog status), never from "was handed to the door":
   // a skipped mail (email off, no SES credentials, an ineligible address) must not read as delivered.
   const count = (st: "sent" | "skipped" | "failed") => results.filter((r) => (r.status ?? "failed") === st).length;
@@ -354,6 +354,7 @@ export async function publishDigestNow(day: string, user: SessionUser) {
   return {
     status: 200 as const,
     day,
+    range_from: from ?? null,
     attempted: results.length,
     sent: count("sent"),
     skipped: count("skipped"),

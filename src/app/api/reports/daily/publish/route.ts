@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, readJson, HttpError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { assertDigestDay, istDayOf } from "@/lib/rules";
+import { assertDigestDay, assertDigestFrom, istDayOf } from "@/lib/rules";
 import { publishDigestNow } from "@/lib/daily-digest";
 
 // mtg-c1 (R4): "Publish now" - mail the daily digest to the configured recipients immediately. It sends
@@ -15,7 +15,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
   await requirePerm(user, "defaults.manage");
   const body = await readJson(req);
   const day = assertDigestDay(body?.date || istDayOf());
-  const r = await publishDigestNow(day, user);
+  // Checked BEFORE any mail: a bad range must refuse the press, not reach each recipient as a "could not be built" skip.
+  const from = assertDigestFrom(body?.from, day);
+  const r = await publishDigestNow(day, user, from);
   if (r.status !== 200) throw new HttpError(r.status, r.error);
   const { status: _s, ...out } = r;
   return NextResponse.json(out);

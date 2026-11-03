@@ -232,7 +232,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // CAN ID. Ships with scripts/backfill-released-on.mjs, run on production after this build is live. No number is quoted.
 // -341 note: digest-tables (Karunn sir review 2026-11-02) - tabular digest, weekly targets, trainer unavailable
 // reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
-export const RELEASE = "2026.08.14-341";
+export const RELEASE = "2026.08.14-342";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -304,6 +304,16 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-342 lets the daily digest cover any range of days, and makes Reports, Daily digest easier to work with. " +
+  "Next to the day there is now an optional Range from date. With a range chosen, the last column counts everything from that day up to the chosen day, for example Monday to Thursday, and Against target adds up only the weekly targets of the weeks the range covers. " +
+  "Publish now mails the range that is on the screen, and the mail's subject and link name it. The 21:00 mail is unchanged. " +
+  "A Show menu picks one table (Trainers, Candidates, Against target or Costs) or all of them. " +
+  "Clicking a column heading sorts the rows by it; under the headings you can filter rows by name or set a minimum for a column, and Hide zero rows hides the rows that are all zero. " +
+  "Each table has a Download CSV button that saves the rows as shown, ready for Excel. Against target shows a bar for how far the week has got towards its target. " +
+  "The figures themselves, and who may see them, are unchanged.";
+
+// -342: the -341 note moved here unchanged when -342 became current.
+const RELEASE_NOTE_ARCHIVE_341 =
   "-341 turns the daily digest into tables, and adds weekly targets, a reason for trainers who are not available, and a record of who signed in. " +
   "The 21:00 mail and Reports, Daily digest now show the same tables: Trainers by stage, Candidates, Against target and Costs, each with the position now, the day, the week (Monday to Sunday) and the total since the first target week. " +
   "Against target shows trainers trained, candidates in training and candidates certified for the week and in total, with the difference marked plus or minus. " +
@@ -2294,6 +2304,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -342: ARCHIVE_341 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_341 + " " +
   // -341: ARCHIVE_340 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_340 + " " +
   // -340: ARCHIVE_339 wired in here in the SAME bump that declared it, same discipline.
