@@ -8,7 +8,7 @@ import {
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, hasRecordedResult, isCertificateSettled, isFreshCandidate } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -3657,6 +3657,37 @@ export function candidateEligibility(
   return { eligible: reasons.length === 0, reasons, unknown };
 }
 
+// -342 (Umesh 2026-11-03): "where this person stands" is read off their LATEST SEAT. That is the seat that
+// holds them now; otherwise the most recently joined one (a dropped or released seat). If that seat has no
+// decided result the answer is null - an older batch's Pass or Fail is history (admin History shows it), not
+// the person's current state. ONE function for enrichCandidateRows and the candidate drop route, which used
+// to run their own "latest result of any batch" queries. "Pending" is not a result.
+export async function latestSeatResultByCandidate(candidateIds: unknown[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(candidateIds.map(String))];
+  if (!ids.length) return out;
+  const seats = await BatchMember.find({ candidate: { $in: ids } })
+    .select("candidate batch joined_on left_on released_on createdAt").lean<any[]>();
+  const latest = new Map<string, any>();
+  for (const s of seats) {
+    const k = String(s.candidate), cur = latest.get(k);
+    const holds = !s.left_on && !s.released_on, curHolds = cur && !cur.left_on && !cur.released_on;
+    const newer = !cur || (holds && !curHolds)
+      || (holds === !!curHolds && (+new Date(s.joined_on) > +new Date(cur.joined_on)
+        || (+new Date(s.joined_on) === +new Date(cur.joined_on) && +new Date(s.createdAt) > +new Date(cur.createdAt))));
+    if (newer) latest.set(k, s);
+  }
+  if (!latest.size) return out;
+  const results = await CandidateResult.find({ candidate: { $in: [...latest.keys()] }, result: { $ne: "Pending" } })
+    .select("candidate batch result").lean<any[]>();
+  const byPair = new Map(results.map((r) => [`${r.candidate}|${r.batch}`, String(r.result)]));
+  for (const [k, s] of latest) {
+    const r = byPair.get(`${k}|${s.batch}`);
+    if (r) out.set(k, r);
+  }
+  return out;
+}
+
 // The candidate row the Candidates SCREEN shows: eligibility computed on read (never stored - it
 // flips on its own as the cooldown lapses), the active batch attached so the list shows the real
 // programme, and the latest recorded assessment. It lived inline in api/candidates/route.ts as
@@ -3670,20 +3701,13 @@ export async function enrichCandidateRows(items: any[]): Promise<any[]> {
     .populate({ path: "batch", select: "code program status", populate: { path: "program", select: "name code scheme" } })
     .lean();
   const byCand = new Map(members.map((m: any) => [String(m.candidate), m.batch]));
-  // QA-069 (S1): the Enrolled journey read "Result Awaited" for people whose result WAS recorded -
-  // the journey trusted lifecycle_status, which historical imports never caught up. The recorded
-  // assessment is the truth; it rides on every row as latest_result and the journey derives from it.
-  const results = await CandidateResult.find({ candidate: { $in: items.map((c) => c._id) }, result: { $ne: "Pending" } })
-    .select("candidate batch result assessed_on").sort({ assessed_on: -1, updatedAt: -1 }).lean<any[]>();
-  // Re-enrolment (Umesh 2026-11-02, "based on the batch status hona chahiye"): a person held by a batch NOW
-  // reads only THAT batch's result - a Pass (or Fail) from a finished batch must not label them Certified
-  // (or Failed) while they train in the next one. Not held anywhere: the latest result overall, as before.
-  const resByCand = new Map<string, string>();
-  for (const r of results) {
-    const k = String(r.candidate), held = byCand.get(k) as any;
-    if (held && String(r.batch) !== String(held._id)) continue;
-    if (!resByCand.has(k)) resByCand.set(k, r.result);
-  }
+  // QA-069 (S1): the Enrolled journey read "Result Awaited" for people whose result WAS recorded - the journey
+  // trusted lifecycle_status, which historical imports never caught up. The recorded assessment is the truth;
+  // it rides on every row as latest_result and the journey derives from it.
+  // -342 (Umesh 2026-11-03): from the person's LATEST SEAT only (latestSeatResultByCandidate). Before it, a
+  // person held by no batch read the latest result of ANY batch, so a Pass in batch A labelled them Certified
+  // after they had left batch B without a result.
+  const resByCand = await latestSeatResultByCandidate(items.map((c) => c._id));
   return items.map((c) => {
     const b: any = byCand.get(String(c._id));
     return {
@@ -5023,6 +5047,168 @@ export function dropoutSignalFor(x: {
   };
 }
 
+// ---------- One member's training picture, and the government figure that belongs to ITS batch (-342) ----------
+// Umesh 2026-11-03: a student now has several batches over time, and the portal and the staff drawer have to
+// show every one. The public per-member page (public/attendance/[token]) already computed everything a card
+// needs - days held and present, hours against the bar, eligibility, result and certificate - inline in its
+// route. It lives here now so the portal's "My courses", the admin candidate History and that page read ONE
+// computation; the page's own payload is unchanged.
+
+// The government-portal figure is a property of the (candidate, batch) PAIR. It used to be looked up by
+// candidate alone, so a finished batch's hours showed under the next batch (public page, batch roster,
+// Attendance tab). Rows come back in `order` of createdAt (-1 = newest first), keyed `${candidate}|${batch}`.
+// A matched row that carries NO batch (a centre-wide import before the matcher stamped one - 1 such row in
+// production at -342) is used only for a candidate with exactly ONE seat anywhere: with several seats it
+// cannot be said whose it is, and the answer is "none", never a guess.
+export async function matchedGovtRowsByMember(
+  pairs: { candidate: unknown; batch: unknown }[],
+  order: 1 | -1 = -1,
+): Promise<Map<string, any[]>> {
+  const out = new Map<string, any[]>();
+  const clean = pairs.filter((p) => p.candidate && p.batch);
+  if (!clean.length) return out;
+  const wanted = new Set(clean.map((p) => `${p.candidate}|${p.batch}`));
+  const cands = [...new Set(clean.map((p) => String(p.candidate)))];
+  const batches = [...new Set(clean.map((p) => String(p.batch)))];
+  const rows = await GovtAttendanceRow.find({ candidate: { $in: cands }, match_status: "Matched", batch: { $in: [...batches, null] } })
+    .sort({ createdAt: order })
+    .select("candidate batch total_days_present total_working_days total_hours_minutes total_hours_raw createdAt import")
+    .lean<any[]>();
+  const orphanCands = [...new Set(rows.filter((r) => !r.batch).map((r) => String(r.candidate)))];
+  const seatCount = new Map<string, number>();
+  if (orphanCands.length) {
+    const seats = await BatchMember.find({ candidate: { $in: orphanCands } }).select("candidate").lean<any[]>();
+    for (const s of seats) seatCount.set(String(s.candidate), (seatCount.get(String(s.candidate)) ?? 0) + 1);
+  }
+  for (const r of rows) {
+    const keys: string[] = [];
+    if (r.batch) keys.push(`${r.candidate}|${r.batch}`);
+    else if (seatCount.get(String(r.candidate)) === 1) {
+      for (const p of clean) if (String(p.candidate) === String(r.candidate)) keys.push(`${p.candidate}|${p.batch}`);
+    }
+    for (const k of keys) {
+      if (!wanted.has(k)) continue;
+      const list = out.get(k);
+      if (list) list.push(r); else out.set(k, [r]);
+    }
+  }
+  return out;
+}
+
+/** What a seat is called to the person holding it: left it, finished it, had it cancelled, or still on it. */
+export function seatStateOf(m: { left_on?: unknown }, batchStatus?: string | null): "Dropped" | "Completed" | "Cancelled" | "Running" {
+  if (m.left_on) return "Dropped";
+  if (batchStatus === "Completed" || batchStatus === "Closed") return "Completed";
+  if (batchStatus === "Cancelled") return "Cancelled";
+  return "Running";
+}
+
+// One summary per BatchMember id, every query batched with $in. Callers pick the fields they expose - nothing
+// here is a response shape. A departed seat (left_on) carries its days and result but none of the live hours
+// verdict: the public page tells a person who left only that they left (2026-08-25, Ashish Rana), and
+// `live` is null for them so no caller can quote an eligibility verdict about a course they are not on.
+export async function memberTrainingSummary(memberIds: unknown[]): Promise<Map<string, any>> {
+  const out = new Map<string, any>();
+  const ids = [...new Set(memberIds.map(String))];
+  if (!ids.length) return out;
+  const members = await BatchMember.find({ _id: { $in: ids } })
+    .select("candidate batch joined_on left_on released_on")
+    .populate({ path: "candidate", select: "name sidh_status" })
+    .populate({
+      path: "batch", select: "code status slot_start slot_end actual_start planned_start planned_end trainer location program",
+      populate: [
+        { path: "program", select: "name hours duration_days scheme" },
+        { path: "location", select: "name" },
+        { path: "trainer", select: "name" },
+      ],
+    }).lean<any[]>();
+  const batchIds = [...new Set(members.map((m) => String(m.batch?._id ?? "")).filter(Boolean))];
+  const candIds = [...new Set(members.map((m) => String(m.candidate?._id ?? "")).filter(Boolean))];
+  const [logs, closures, results, defaults, govt] = await Promise.all([
+    DailyLog.find({ batch: { $in: batchIds } }).select("batch log_date present_member_ids").sort({ log_date: 1 }).lean<any[]>(),
+    Closure.find({ batch: { $in: batchIds } }).select("batch assessment_date").lean<any[]>(),
+    CandidateResult.find({ batch: { $in: batchIds }, candidate: { $in: candIds } })
+      .select("batch candidate result score certificate_status certificate_no certificate_date reassessment_required reassessment_date").lean<any[]>(),
+    getDefaults(),
+    matchedGovtRowsByMember(members.filter((m) => !m.left_on).map((m) => ({ candidate: m.candidate?._id, batch: m.batch?._id })), -1),
+  ]);
+  const logsByBatch = new Map<string, any[]>();
+  for (const l of logs) { const k = String(l.batch); const a = logsByBatch.get(k); if (a) a.push(l); else logsByBatch.set(k, [l]); }
+  const closureByBatch = new Map(closures.map((c) => [String(c.batch), c]));
+  const resultByPair = new Map(results.map((r) => [`${r.batch}|${r.candidate}`, r]));
+  const barByProgram = new Map<string, Promise<{ requiredHours: number; minPct: number }>>();
+  const unresolvedByBatch = new Map<string, ReturnType<typeof unresolvedPortalRowsByName>>();
+
+  for (const m of members) {
+    const batch = m.batch, bid = String(batch?._id ?? ""), cid = String(m.candidate?._id ?? "");
+    const mid = String(m._id);
+    const days = (logsByBatch.get(bid) ?? []).map((l) => ({
+      date: l.log_date,
+      present: (l.present_member_ids ?? []).some((x: unknown) => String(x) === mid),
+    }));
+    const internalDays = days.filter((d) => d.present).length;
+    const res = resultByPair.get(`${bid}|${cid}`) ?? null;
+    const summary: any = {
+      member_id: mid,
+      joined_on: m.joined_on ?? null, left_on: m.left_on ?? null, released_on: m.released_on ?? null,
+      state: seatStateOf(m, batch?.status),
+      candidate: m.candidate ? { _id: m.candidate._id, name: m.candidate.name, sidh_status: m.candidate.sidh_status ?? null } : null,
+      batch: batch ? { _id: batch._id, code: batch.code, status: batch.status } : null,
+      program: batch?.program?.name ?? null,
+      centre: batch?.location?.name ?? null,
+      trainer: batch?.trainer?.name ?? null,
+      start_date: batch?.actual_start ?? batch?.planned_start ?? null,
+      end_date: batch?.planned_end ?? null,
+      days, internal_days_present: internalDays, days_held: days.length,
+      result_row: res,
+      // The decided outcome only: a "Pending" row is the absence of a record (hasRecordedResult).
+      result: res && hasRecordedResult(res) ? String(res.result) : null,
+      live: null,
+    };
+    if (!m.left_on && batch) {
+      const pk = String(batch.program?._id ?? "");
+      if (!barByProgram.has(pk)) barByProgram.set(pk, assessmentHoursBar(batch.program?.scheme, batch.program, defaults.min_attendance_pct ?? 50));
+      // QA-093 (-70): scheme's ABSOLUTE min_required_hours is the bar when the master has it.
+      const { requiredHours, minPct } = await barByProgram.get(pk)!;
+      const hoursPerDay = slotHoursPerDay(batch); // null when the batch has no slot (QA-085)
+      const govtRow = govt.get(`${cid}|${bid}`)?.[0] ?? null;
+      // QA-070 (-70): shared verdict - green from PORTAL hours alone; estimate labelled; no assumed 8.
+      const h = memberAttendedHours({ internalDays, hoursPerDay, govtMinutes: govtRow?.total_hours_minutes, requiredHours });
+      // -153 cycle 2/3 (QA-409/QA-419): an unattached portal row answering to this name, consulted only when the
+      // portal has NOT already answered for this student (awaitingMatchFor), and QA-439's namesake count.
+      let uq = unresolvedByBatch.get(bid);
+      if (!uq) { uq = unresolvedPortalRowsByName({ batchId: batch._id, locationId: batch.location?._id ?? batch.location }); unresolvedByBatch.set(bid, uq); }
+      const awaiting = awaitingMatchFor({ basis: h.basis, hit: (await uq).get(nameKey(m.candidate?.name)) });
+      let sameNameMembers = 1;
+      if (awaiting) {
+        const others = await BatchMember.find({ batch: batch._id, left_on: null, _id: { $ne: m._id } }).populate("candidate", "name").select("candidate").lean<any[]>();
+        const nk = nameKey(m.candidate?.name);
+        sameNameMembers = 1 + others.filter((o) => nameKey(o.candidate?.name) === nk).length;
+      }
+      summary.live = {
+        govt: govtRow ? {
+          days_present: govtRow.total_days_present,
+          working_days: govtRow.total_working_days,
+          hours: govtRow.total_hours_minutes != null ? Math.round(govtRow.total_hours_minutes / 60) : null,
+          hours_raw: govtRow.total_hours_raw,
+          as_of: govtRow.createdAt,
+        } : null,
+        program_hours: batch.program?.hours || (batch.program?.duration_days ?? 15) * 8,
+        min_attendance_pct: minPct,
+        required_hours: requiredHours,
+        attended_hours: h.attended_hours,
+        hours_basis: h.basis,
+        awaiting_match: awaiting ? { count: awaiting.count, same_name_members: sameNameMembers } : null,
+        remaining_hours: awaiting ? null : (h.attended_hours != null ? Math.max(0, requiredHours - h.attended_hours) : null),
+        eligible: h.govt_hours != null && h.govt_hours >= requiredHours,
+        assessment_date: closureByBatch.get(bid)?.assessment_date ?? null,
+      };
+    }
+    out.set(mid, summary);
+  }
+  return out;
+}
+
 export async function batchAttendanceRows(batchId: string) {
   const batch = await Batch.findById(batchId).populate("program", "name hours duration_days scheme").lean<any>();
   if (!batch) throw new HttpError(404, "Batch not found");
@@ -5037,11 +5223,11 @@ export async function batchAttendanceRows(batchId: string) {
     await assessmentHoursBar(batch.program?.scheme, batch.program, defaults.min_attendance_pct ?? 50);
   const hoursPerDay = slotHoursPerDay(batch);
 
-  const candIds = members.map((m) => m.candidate?._id).filter(Boolean);
-  const govtRows = await GovtAttendanceRow.find({ candidate: { $in: candIds }, match_status: "Matched" })
-    .sort({ createdAt: 1 })
-    .select("candidate total_days_present total_working_days total_hours_minutes total_hours_raw createdAt import")
-    .lean<any[]>();
+  // -342: THIS batch's portal rows only. Keyed by candidate alone, a finished batch's cumulative figure became
+  // the new batch's (matchedGovtRowsByMember: the (candidate, batch) pair, oldest first as the dropout signal needs).
+  const govtRows = [...(await matchedGovtRowsByMember(
+    members.filter((m) => m.candidate?._id).map((m) => ({ candidate: m.candidate._id, batch: batchId })), 1,
+  )).values()].flat().sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
   const govtByCand = new Map(govtRows.map((r) => [String(r.candidate), r]));
   const govtPrevByCand = new Map<string, any>();
   // Dropout signal (client call 2026-09-02, filed verbatim in qa/feedback-inbox.md). The portal

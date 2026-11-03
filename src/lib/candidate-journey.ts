@@ -101,9 +101,14 @@ export function freshJourneyOf(r: JourneyInput): string {
 
 export function journeyOf(r: JourneyInput): string {
   if (r.lifecycle_status === "Dropped") return "Dropout"; // enrolled-then-left (CEO 14/08)
-  if (r.latest_result === "Pass" || r.lifecycle_status === "Completed") return "Certified";
+  // -342 (Umesh 2026-11-03): Certified needs a RECORDED Pass. `lifecycle_status === "Completed"` alone used to
+  // mean Certified, but a batch with no results at all completes every roster member (transitionBatch,
+  // the legacy blanket), and a re-enrolled student keeps "Completed" from a batch they no longer sit in.
+  // Finished with no Pass on record now reads "Training Completed" - the label for exactly that.
+  if (r.latest_result === "Pass") return "Certified";
   if (r.latest_result === "Fail" || r.lifecycle_status === "Failed") return "Failed";
   if (r.latest_result === "Absent") return "Absent at Assessment";
+  if (r.lifecycle_status === "Completed") return "Training Completed";
   if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
   const bs = r.active_batch_status;
   // QA-2736: this used to read Closing -> "Training Completed" and Completed -> "Result Awaited",

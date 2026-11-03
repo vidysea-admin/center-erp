@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { BatchMember, Candidate, CandidateResult } from "@/models";
-import { dropMemberChecked } from "@/lib/rules";
+import { BatchMember, Candidate } from "@/models";
+import { dropMemberChecked, latestSeatResultByCandidate } from "@/lib/rules";
 import { currentStageOf, HOLDS_PERSON } from "@/lib/candidate-journey";
 import { audit } from "@/lib/audit";
 
@@ -68,11 +68,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     // candidate — one writer, no drift.
     await dropMemberChecked(String(activeMember._id), when, reason);
   } else {
-    const latest = await CandidateResult.findOne({ candidate: cand._id, result: { $ne: "Pending" } })
-      .sort({ assessed_on: -1, updatedAt: -1 }).select("result").lean<any>();
+    // -342: the result of the person's LATEST SEAT (rules.ts latestSeatResultByCandidate), the one function the
+    // Candidates list reads too - not the latest result of any batch they ever sat in.
+    const latestResult = (await latestSeatResultByCandidate([cand._id])).get(String(cand._id)) ?? null;
     const stage = currentStageOf({
       lifecycle_status: cand.lifecycle_status, enrolled_at: cand.enrolled_at, sidh_status: cand.sidh_status,
-      latest_result: latest?.result ?? null, active_batch_status: null,
+      latest_result: latestResult, active_batch_status: null,
     });
     cand.lifecycle_status = "Dropped";
     cand.dropped_reason = reason;

@@ -13,6 +13,8 @@ export default function CandidatePortalEntry() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pool, setPool] = useState<any>(null); // real candidate, not in a batch yet
+  // -342: a student with more than one seat sees every course (newest first); one course goes straight to it.
+  const [courses, setCourses] = useState<any[] | null>(null);
   // qa-2809: the DOB-less path is now two-step (phone → OTP). When the lookup answers otp_required,
   // we hold the session token and show the code field; the phone-alone token is gone.
   const [otpToken, setOtpToken] = useState("");
@@ -20,12 +22,13 @@ export default function CandidatePortalEntry() {
   const [code, setCode] = useState("");
 
   function landOrPool(d: any) {
-    if (d.enrolled) window.location.href = `${BASE_PATH}${d.url}`;
+    if (d.enrolled && Array.isArray(d.courses) && d.courses.length > 1) setCourses(d.courses);
+    else if (d.enrolled) window.location.href = `${BASE_PATH}${d.url}`;
     else setPool(d);
   }
 
   async function lookup() {
-    setBusy(true); setError(""); setPool(null); setOtpToken(""); setCode("");
+    setBusy(true); setError(""); setPool(null); setCourses(null); setOtpToken(""); setCode("");
     try {
       const d = await api("/api/public/portal-lookup", { method: "POST", json: { phone, dob: dob || undefined } });
       if (d.otp_required) { setOtpToken(d.otp_token); setOtpMessage(d.message || "Enter the 6-digit code we sent by SMS."); }
@@ -93,6 +96,27 @@ export default function CandidatePortalEntry() {
           </>
         )}
         {error && <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-sm text-red-700">{error}</p>}
+        {courses && (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-gray-800">My courses</p>
+            {courses.map((c, i) => (
+              <a key={i} href={`${BASE_PATH}${c.url}`} className="block rounded-xl border border-gray-200 bg-white p-4 text-sm hover:border-blue-400">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-semibold text-gray-900">{c.program || c.batch}</span>
+                  <span className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium ${c.status === "Running" ? "bg-blue-100 text-blue-800" : c.status === "Completed" ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-700"}`}>{c.status}</span>
+                </div>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  {[c.centre, c.start_date || c.end_date ? `${c.start_date ? new Date(c.start_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : ""} to ${c.end_date ? new Date(c.end_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : ""}` : ""].filter(Boolean).join(" - ")}
+                </p>
+                <p className="mt-1 text-xs text-gray-700">
+                  Attended {c.days_present ?? 0} of {c.days_held ?? 0} days
+                  {c.result ? ` - Result: ${c.result}` : ""}
+                  {c.certificate_no ? ` - Certificate ${c.certificate_no}` : ""}
+                </p>
+              </a>
+            ))}
+          </div>
+        )}
         {pool && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
             <p className="font-semibold">Hello {pool.name}! You are not enrolled in a batch yet.</p>
