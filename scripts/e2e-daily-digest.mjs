@@ -690,6 +690,12 @@ ok("K7: the per-person log for that day is exactly the sign-ins plus the changes
 ok("K7: ...and for a day without activity it is empty", (await req(admin, "GET", `/api/audit/by-user/${uC.id}?day=2031-01-01`)).data?.total === 0, "");
 const uCRow = ((await req(admin, "GET", "/api/users")).data?.items ?? []).find((u) => String(u._id) === String(uC.id));
 ok("K7: the account list carries the last sign-in time", uCRow?.last_login_at && Date.now() - Date.parse(uCRow.last_login_at) < 15 * 60_000, String(uCRow?.last_login_at));
+// the sign-in tracker is Admin-only: a non-Admin who may read the account list gets the list, never the times
+const uUM = await mkUser("Operations", [], "um", { extra_permissions: ["users.manage"] });
+const umList = await req(uUM.cookie, "GET", "/api/users");
+const umLeak = (umList.data?.items ?? []).find((u) => "last_login_at" in u);
+ok("K7: a non-Admin with the account list (users.manage) gets no last sign-in time on any row, the signed-in persona's included",
+  umList.status === 200 && (umList.data?.items ?? []).some((u) => String(u._id) === String(uC.id)) && !umLeak, `${umList.status} ${JSON.stringify(umLeak ?? null).slice(0, 120)}`);
 
 const zeroD = "2031-07-01";
 const zero = (await digest(uA.cookie, zeroD)).data;
@@ -1295,6 +1301,7 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
     && await cell("candidates", "In training (started Active batch)", 0) === "0" && /measured.*IST/.test(await txt(page, "digest-current-measured")), "");
   ok("S1: the money cells read Rs 1,250 today, Rs 5,750 this month, Rs 1,100 pending", got.today === "Rs 1,250" && got.month === "Rs 5,750" && got.pending === "Rs 1,100", JSON.stringify(got));
   ok("S1: the week is named on the screen (Monday to Sunday)", /Week 2031-03-10 to 2031-03-16/.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
+  ok("S1: a finance viewer's note does say how pending approvals and payment-pending are counted", /payment-pending are exact for today/.test(await txt(page, "digest-note")), "");
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");
 
@@ -1304,8 +1311,11 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   await page.waitForURL(/section=costs/);
   ok("S4: the section dropdown shows only that table (Costs), and the link carries it",
     (await page.locator('[data-testid="digest-table-costs"]').count()) === 1 && (await page.locator('[data-testid="digest-table-trainers"]').count()) === 0 && (await page.locator('[data-testid="digest-table-candidates"]').count()) === 0, page.url());
+  ok("S4: ...and the candidate details under the tables go with it (joined by batch, the 'measured' line)",
+    (await page.locator('[data-testid="digest-by-batch"]').count()) === 0 && (await page.locator('[data-testid="digest-current-measured"]').count()) === 0, "");
   await page.locator('[data-testid="digest-section"]').selectOption("all");
   await page.locator('[data-testid="digest-table-trainers"]').waitFor();
+  ok("S4: All sections brings them back", (await page.locator('[data-testid="digest-by-batch"]').count()) === 1 && (await page.locator('[data-testid="digest-current-measured"]').count()) === 1, "");
   const tTr = (api?.tables ?? []).find((t) => t.key === "trainers");
   const nowOf = (r) => { const m = String(r.cells[0]).replace(/,/g, "").match(/\d+/); return m ? Number(m[0]) : -1; };
   const parents = tTr.rows.map((r, i) => ({ r, i })).filter((x) => !x.r.sub);
@@ -1350,6 +1360,14 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   await page.waitForTimeout(800);
   ok("S4: picking a section and then a range straight away keeps both (section=costs and from=2031-03-11 in the link, only Costs shown)",
     /section=costs/.test(page.url()) && /from=2031-03-11/.test(page.url()) && (await page.locator('[data-testid^="digest-table-"]').count()) === 1, page.url());
+  // ...and THREE in a row: the third must build on the second even when the URL has only caught up with the first
+  await page.locator('[data-testid="digest-section"]').selectOption("trainers");
+  await page.locator('[data-testid="digest-from"]').fill("2031-03-12");
+  await page.locator('[data-testid="digest-date"]').fill("2031-03-13");
+  await page.waitForURL(/date=2031-03-13/);
+  await page.waitForTimeout(800);
+  ok("S4: three quick changes (section, range, day) all stay in the link",
+    /section=trainers/.test(page.url()) && /from=2031-03-12/.test(page.url()) && /date=2031-03-13/.test(page.url()), page.url());
   await shot(page, "S1-digest-finance-viewer.png");
   await ctx.close();
 });
@@ -1359,6 +1377,7 @@ await arm("S2 digest screen (Location A, no finance)", async () => {
   await page.locator('[data-testid="digest-table-candidates"]').waitFor();
   ok("S2: the costs section is not in the page at all, and no cost figure is", (await page.locator('[data-testid="digest-table-costs"]').count()) === 0 && !/1,250|5,750|14,249/.test(await page.locator("body").innerText()), "");
   ok("S2: no centre-B batch is on Location A's screen", (await page.locator(`text=${fx.pb1.code}`).count()) === 0, "");
+  ok("S2: the note above the tables does not talk about pending approvals or payment-pending (this viewer has no Costs table)", !/payment-pending|Pending approvals/i.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
   await shot(page, "S2-digest-no-finance.png");
   await ctx.close();
 });
@@ -1467,6 +1486,26 @@ await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the diges
   await setDefaults({ digest_only_approval_mails: false });
   await setListDirect("");
 });
+
+// ---- M1 a big joining day: the mail's "by batch" line names at most 10 batches and counts the rest. Last in the
+// suite, on its own day, with Closed batches, so no earlier arm's figures move.
+const CAPD = "2031-09-02";
+const capTags = [];
+for (let i = 0; i < 12; i++) {
+  const r = await req(admin, "POST", "/api/batches", { location: locA._id, program: prog._id, planned_start: today(), target_size: 5 });
+  if (r.status !== 201) { ok(`[precondition] M1 batch ${i} created`, false, JSON.stringify(r.data).slice(0, 160)); continue; }
+  await db.collection("batches").updateOne({ _id: oid(r.data.item._id) }, { $set: { status: "Closed", createdAt: istAt("2031-03-01", 10, 0) } });
+  fx[`cap${i}`] = { id: String(r.data.item._id), code: r.data.item.code, loc: locA, target: 5 };
+  capTags.push(`cap${i}`);
+}
+await db.collection("batchmembers").insertMany(capTags.map((t) => mem(t, CAPD)));
+await setListDirect(`u:${uAdm.id}`);
+const capTick = await tick(istAt(CAPD, 21, 0), "cap-" + s);
+const capLine = String(capTick.data?.results?.find((r) => r.to === uAdm.email.toLowerCase())?.text ?? "").split(/\r?\n/).find((l) => l.startsWith("Joined on the day, by batch:")) ?? "";
+const named = capTags.filter((t) => capLine.includes(fx[t].code)).length;
+ok("M1: 12 batches joined on one day: the mail line names 10 of them and says '2 more batches (see the Reports screen)'",
+  capTags.length === 12 && named === 10 && /, and 2 more batches \(see the Reports screen\)$/.test(capLine), `${named} named: ${capLine.slice(0, 200)}`);
+await setListDirect("");
 
 await browser.close();
 // remove the raw rows this suite inserted (marked with this run's stamp): they carry 2031 dates and real

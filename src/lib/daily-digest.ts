@@ -185,6 +185,7 @@ export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
   return out;
 }
 
+export const JOINED_LINE_MAX = 10;
 const digestSubject = (day: string, from?: string | null) => `Daily digest ${day}${from ? ` (range from ${from})` : ""}`;
 
 // The mail body for ONE recipient. Karunn sir, 2026-11-02: "tabular form - trainers, candidates, cost". The
@@ -195,7 +196,8 @@ export function digestMailContent(d: DailyDigest) {
   const c = d.candidates;
   const lines: string[] = [
     `Position for ${d.day} (IST). Week ${d.week.from} to ${d.week.to} (Monday to Sunday).${d.range_from ? ` Range ${d.range_from} to ${d.day}.` : ""}`,
-    ...(c.joined.by_batch.length ? [`Joined on the day, by batch: ${c.joined.by_batch.map((b) => `${b.code}${b.location ? ` (${b.location})` : ""} ${b.count}`).join(", ")}`] : []),
+    // At most JOINED_LINE_MAX batches named, so a big joining day cannot turn one line into a wall; the rest are counted.
+    ...(c.joined.by_batch.length ? [`Joined on the day, by batch: ${c.joined.by_batch.slice(0, JOINED_LINE_MAX).map((b) => `${b.code}${b.location ? ` (${b.location})` : ""} ${b.count}`).join(", ")}${c.joined.by_batch.length > JOINED_LINE_MAX ? `, and ${c.joined.by_batch.length - JOINED_LINE_MAX} more batch${c.joined.by_batch.length - JOINED_LINE_MAX === 1 ? "" : "es"} (see the Reports screen)` : ""}`] : []),
     ...(c.training_started.exceptions.missing_actual_start || c.training_started.exceptions.missing_join_date
       ? [`Training-date exceptions (position now): ${c.training_started.exceptions.missing_actual_start} candidates missing an actual batch start, ${c.training_started.exceptions.missing_join_date} missing a roster joining date.`]
       : []),
