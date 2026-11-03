@@ -6488,7 +6488,7 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
 //   3. admin History (GET /api/candidates/:id/results) is driven by the seats, with explicit fields only;
 //   4. "Certified" needs a recorded Pass - a finished batch with no result is "Training Completed", and
 //      latest_result reads the person's LATEST seat only.
-// Own helpers and a distinct prefix (HX / phone 78 / CAN_96): the -112 block's mkBatch is block-scoped.
+// Own helpers and a distinct prefix (HX / phone 78 / CAN_94): the -112 block's mkBatch is block-scoped.
 {
   const { MongoClient: HxMongo, ObjectId: HxOid } = await import("mongodb");
   const hxMc = new HxMongo(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
@@ -6498,7 +6498,7 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
   const hxTrainer = async (tag) => (await req("POST", "/api/trainers", { name: `TEST-HX${tag} ${stamp}`, phone: `77${tag}${stamp}9`.slice(0, 10), skills: [prog.trainer_skill] }, 201)).data.item;
   const hxPlain = async (tag, size = 5) => (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: (await hxTrainer(tag))._id, room: (await hxRoom(tag))._id, planned_start: today, target_size: size }, 201)).data.item;
   const hxCand = async (tag, extra = {}) => (await req("POST", "/api/candidates", {
-    name: `HX ${tag} ${stamp}`, phone: `78${stamp}0${tag}`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN_96${stamp}${tag}`, ...extra,
+    name: `HX ${tag} ${stamp}`, phone: `78${stamp}0${tag}`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN_94${stamp}${tag}` /* not 96: the free-centre block (FC) owns that */, ...extra,
   }, 201)).data.item;
   // A batch that is Active with the given candidates on its roster (enrolment steps done).
   const hxRunning = async (tag, cands) => {
