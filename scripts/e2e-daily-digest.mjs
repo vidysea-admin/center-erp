@@ -470,7 +470,7 @@ ok("K1: a centre login without money gets two tables, Trainers and Candidates (n
 ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
   eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved on the day"), ["Rs 1,250", "2"])
   && eq(cellsAt(rAF.data, "costs", "Payment pending"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which raised on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
-// -346 (Umesh, 2026-11-03: "jabse system start hua hai tabb se"): what is open, split by month back to the oldest item
+// -347 (Umesh, 2026-11-03: "jabse system start hua hai tabb se"): what is open, split by month back to the oldest item
 const subsAfter = (d, key, parent) => { const rows = tblOf(d, key)?.rows ?? []; const i = rows.findIndex((r) => r.label === parent); const out = []; for (let j = i + 1; j < rows.length && rows[j].sub; j++) out.push(rows[j]); return out; };
 ok("K1: pending approval is split by the month it was raised (Mar 2031: Rs 1,100 in 2), after the raised-today row",
   eq(subsAfter(rAF.data, "costs", "Pending approval").map((r) => [r.label, ...r.cells]), [["of which raised on the day", "Rs 800", "1"], ["raised in Mar 2031", "Rs 1,100", "2"]]),

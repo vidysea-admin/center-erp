@@ -450,7 +450,7 @@ candidate lists under the tables unless it is All or Candidates. The screen's UR
 asked for, so any number of quick changes build on each other. `live_note` carries the costs sentence only when the Costs
 table exists. The mail names at most `JOINED_LINE_MAX` (10) batches in the by-batch line. The table notes spell out
 the definitions a reader trips on: Enrolled now, seats, cancelled batches, the expense date, and the memo row.
--346 (Umesh): Enrolled now carries "of which <journey tag>" sub-rows from `journeyOf` (the Candidates screen's tag, in
+-347 (Umesh): Enrolled now carries "of which <journey tag>" sub-rows from `journeyOf` (the Candidates screen's tag, in
 `JOURNEY_TAGS` order) that add up to it. Costs splits pending approval by IST month raised and payment pending by the
 month of `entry_date`, newest first. Admin, Defaults links to the digest screen (no second Publish button).
 
