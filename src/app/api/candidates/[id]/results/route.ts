@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireRole, assertLocationInScope, HttpError } from "@/lib/authz";
+import { apiHandler, requireUser, requireRole, assertLocationInScope, isScoped, HttpError } from "@/lib/authz";
 import { CANDIDATE_READ_ROLES } from "@/lib/roles";
-import { BatchMember, Candidate } from "@/models";
+import { Batch, BatchMember, Candidate } from "@/models";
 import { memberTrainingSummary } from "@/lib/rules";
 
 // The candidate's History, for the staff drawer: every batch they have sat in, newest first - one row per SEAT,
@@ -16,6 +16,11 @@ import { memberTrainingSummary } from "@/lib/rules";
 //
 // Who may read: the candidate record's own roles (CANDIDATE_READ_ROLES - Trainer is refused, as it is there)
 // and Rule 38 on the candidate's centre.
+//
+// Which seats (Umesh 2026-11-03): Admin and Ops see every batch the person ever sat in. A centre-scoped
+// user (Rule 38 - Location, scoped Enrollment) sees only the seats whose BATCH is at one of their own
+// centres - a student who studied at Jaipur and moved to Bhopal shows Bhopal's manager the Bhopal batch,
+// not the Jaipur one.
 export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
   await dbConnect();
   const user = await requireUser();
@@ -25,7 +30,11 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   if (!cand) throw new HttpError(404, "Candidate not found");
   assertLocationInScope(user, String(cand.location)); // Rule 38
 
-  const seats = await BatchMember.find({ candidate: id }).sort({ joined_on: -1, createdAt: -1 }).select("_id").lean<any[]>();
+  let seats = await BatchMember.find({ candidate: id }).sort({ joined_on: -1, createdAt: -1 }).select("_id batch").lean<any[]>();
+  if (isScoped(user)) {
+    const own = new Set((await Batch.find({ _id: { $in: seats.map((s) => s.batch) }, location: { $in: user.location_scope } }).distinct("_id")).map(String));
+    seats = seats.filter((s) => own.has(String(s.batch)));
+  }
   const summaries = await memberTrainingSummary(seats.map((s) => s._id));
   const items = seats.map((s) => summaries.get(String(s._id))).filter(Boolean).map((m: any) => ({
     member: m.member_id,

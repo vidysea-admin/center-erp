@@ -6609,6 +6609,19 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
   const hEn = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("enroll@vidysea.com", "CiOnly@123") } });
   ok("history admin: Enrollment may read it (200)", hEn.status === 200, String(hEn.status));
   ok("history admin: anonymous is refused (401)", (await fetch(`${BASE}/api/candidates/${S._id}/results`)).status === 401);
+  // Umesh 2026-11-03: Admin/Ops see every seat; a centre-scoped user sees only the seats whose batch is at
+  // one of THEIR centres. S now lives at JPR03 and only B was held there: cm.jpr03 sees B alone.
+  const hxJpr = await hxDb.collection("locations").findOne({ code: "JPR03" });
+  await hxDb.collection("candidates").updateOne({ _id: hxOid(S._id) }, { $set: { location: hxJpr._id } });
+  await hxDb.collection("batches").updateOne({ _id: hxOid(bB._id) }, { $set: { location: hxJpr._id } });
+  try {
+  const hCm = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("cm.jpr03@vidysea.com", "CiOnly@123") } }).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  ok("history scope: a centre manager sees only the seats at their own centre", hCm.status === 200 && (hCm.data.items ?? []).map((i) => i.batch?.code).join(",") === bB.code, JSON.stringify({ s: hCm.status, b: (hCm.data.items ?? []).map((i) => i.batch?.code) }));
+  ok("history scope: ...while Admin still sees all three", ((await req("GET", `/api/candidates/${S._id}/results`)).data.items ?? []).length === 3);
+  } finally { // a throw above must not leave S and B at JPR03 for the rest of the block
+  await hxDb.collection("candidates").updateOne({ _id: hxOid(S._id) }, { $set: { location: hxOid(loc._id) } });
+  await hxDb.collection("batches").updateOne({ _id: hxOid(bB._id) }, { $set: { location: hxOid(loc._id) } });
+  }
 
   // ---- 4. Certified needs a recorded Pass ----
   const { createRequire: hxRequire } = await import("node:module");
