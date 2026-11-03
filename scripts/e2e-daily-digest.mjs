@@ -1343,6 +1343,13 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   await page.waitForFunction(() => /Range 2031-03-10/.test(document.querySelector('[data-testid="digest-note"]')?.textContent ?? ""));
   ok("S4: a range in the link is on the screen: the picker holds it and the range column matches the API",
     (await page.locator('[data-testid="digest-from"]').inputValue()) === "2031-03-10" && (await txt(page, `digest-cell-candidates-${enrIdx}-3`)) === cellsAt(apiR, "candidates", "Enrolled")?.[3], "");
+  // seen live on -342: two changes before the router re-renders - the second must not undo the first
+  await page.locator('[data-testid="digest-section"]').selectOption("costs");
+  await page.locator('[data-testid="digest-from"]').fill("2031-03-11");
+  await page.waitForURL(/from=2031-03-11/);
+  await page.waitForTimeout(800);
+  ok("S4: picking a section and then a range straight away keeps both (section=costs and from=2031-03-11 in the link, only Costs shown)",
+    /section=costs/.test(page.url()) && /from=2031-03-11/.test(page.url()) && (await page.locator('[data-testid^="digest-table-"]').count()) === 1, page.url());
   await shot(page, "S1-digest-finance-viewer.png");
   await ctx.close();
 });

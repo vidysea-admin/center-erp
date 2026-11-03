@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, fmtDT } from "@/lib/client";
@@ -175,9 +175,14 @@ function DailyDigestInner() {
   const section = sp.get("section") ?? "all";
   const [hideZero, setHideZero] = useState(false);
   // One URL holds the whole view (day, range start, section), so a link opens exactly this screen.
+  // Built on the LAST query this screen asked for, not on `sp`: two changes before the router re-renders (pick a
+  // section, then a range) must not have the second one put the first one back (seen live on -342).
+  const lastQ = useRef(sp.toString());
+  useEffect(() => { lastQ.current = sp.toString(); }, [sp]);
   const go = (patch: Record<string, string>) => {
-    const q = new URLSearchParams(sp.toString());
+    const q = new URLSearchParams(lastQ.current);
     for (const [k, v] of Object.entries(patch)) { if (v) q.set(k, v); else q.delete(k); }
+    lastQ.current = q.toString();
     router.replace(`/reports/daily${q.toString() ? `?${q}` : ""}`);
   };
   const [data, setData] = useState<any>(null);
@@ -247,7 +252,10 @@ function DailyDigestInner() {
             <input
               data-testid="digest-date" type="date" className="rounded border border-gray-300 px-2 py-1"
               value={wanted || data?.day || ""}
-              onChange={(e) => { if (e.target.value) go({ date: e.target.value, ...(from && from > e.target.value ? { from: "" } : {}) }); }}
+              onChange={(e) => {
+                const pendingFrom = new URLSearchParams(lastQ.current).get("from") ?? "";   // the range just asked for, not the last render's
+                if (e.target.value) go({ date: e.target.value, ...(pendingFrom && pendingFrom > e.target.value ? { from: "" } : {}) });
+              }}
             />
           </label>
           <label className="text-sm">
