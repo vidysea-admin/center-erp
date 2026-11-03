@@ -10,6 +10,9 @@ export type JourneyInput = {
   sidh_status?: string | null;
   latest_result?: string | null;
   active_batch_status?: string | null;
+  // -343: the status of the person's LAST batch when none holds them (enrichCandidateRows), read when
+  // active_batch_status is empty - a finished batch is "Training Completed", not "Training Ongoing".
+  last_batch_status?: string | null;
   // QA-945 (2026-08-24): "Current" or "Future". Optional because every record written before this
   // field existed has none, and absent must read as Current — the overwhelmingly common case, and
   // the one that keeps existing candidates enrollable exactly as they were.
@@ -110,7 +113,7 @@ export function journeyOf(r: JourneyInput): string {
   if (r.latest_result === "Absent") return "Absent at Assessment";
   if (r.lifecycle_status === "Completed") return "Training Completed";
   if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
-  const bs = r.active_batch_status;
+  const bs = r.active_batch_status ?? r.last_batch_status;
   // QA-2736: this used to read Closing -> "Training Completed" and Completed -> "Result Awaited",
   // written (39dac69) before -102 relabelled Closing itself as "Result Awaited". From -102 on it was
   // INVERTED: the batch header said "Result Awaited" while its students said "Training Completed",

@@ -115,12 +115,13 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
     t.active = false; // single use
     await t.save();
-    // Re-resolve the candidate from the phone stored ON THE TOKEN — never a caller-supplied one, and
-    // works for BOTH channels: the email token stores the same on-file phone (a DOB-less candidate on
-    // this door was matched by phone in step 1, so one always exists). qa-2809 keeps this channel-
-    // agnostic rather than adding a candidate column the schema does not have (all changes stay in
-    // this route; attendance_otp is unchanged).
-    const cand = await Candidate.findOne({ phone: { $regex: String(t.phone ?? "") + "$" } }).select("name dob sidh_status lifecycle_status").lean<any>();
+    // Re-resolve the candidate step 1 matched - never a caller-supplied one. -343 (security review): by the id stored
+    // ON THE TOKEN, because the phone-suffix lookup could open a DIFFERENT record sharing the number (families share
+    // phones) - one whose own DOB gate was never passed. A token minted before -343 carries no id and keeps the old
+    // phone lookup for its 10-minute life.
+    const cand = await (t.candidate
+      ? Candidate.findById(t.candidate)
+      : Candidate.findOne({ phone: { $regex: String(t.phone ?? "") + "$" } })).select("name dob sidh_status lifecycle_status").lean<any>();
     if (!cand) throw fail();
     return completeLookup(cand);
   }
@@ -144,6 +145,9 @@ export const POST = apiHandler(async (req: NextRequest) => {
       x.setMinutes(x.getMinutes() + 330);
       return x.toISOString().slice(0, 10);
     };
+    // -343 (security review): a per-NUMBER cap on DOB tries, independent of IP. The per-IP limit above alone let a
+    // rotating caller walk the ~36,500 birthdays of one known mobile; 10 an hour is far above a real student's typos.
+    rateLimit(`portal-dob:${phone}`, 10, 3_600_000);
     if (!dob || istDateKey(dob) !== istDateKey(cand.dob)) throw fail();
     return completeLookup(cand); // DOB was the second factor — mint in one step, unchanged.
   }
@@ -179,7 +183,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // a phone — it is how step 1 matched them). No schema change: attendance_otp already has both.
     await PublicToken.updateMany({ purpose: "attendance_otp", email, active: true }, { $set: { active: false } });
     await PublicToken.create({
-      token: otpToken, purpose: "attendance_otp", email, phone: otpPhone,
+      token: otpToken, purpose: "attendance_otp", email, phone: otpPhone, candidate: cand._id,
       otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
     });
     // Server-built mail; the code stays in the REAL subject (notification preview) but NEVER in the
@@ -218,7 +222,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // One live challenge per number — a new request burns the old one.
   await PublicToken.updateMany({ purpose: "attendance_otp", phone: otpPhone, active: true }, { $set: { active: false } });
   await PublicToken.create({
-    token: otpToken, purpose: "attendance_otp", phone: otpPhone,
+    token: otpToken, purpose: "attendance_otp", phone: otpPhone, candidate: cand._id,
     otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
   });
   // The template's var1 is a name; there is none on this door either. "Student" keeps the approved

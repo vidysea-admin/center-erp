@@ -3660,21 +3660,26 @@ export function candidateEligibility(
 // decided result the answer is null - an older batch's Pass or Fail is history (admin History shows it), not
 // the person's current state. ONE function for enrichCandidateRows and the candidate drop route, which used
 // to run their own "latest result of any batch" queries. "Pending" is not a result.
-export async function latestSeatResultByCandidate(candidateIds: unknown[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+export async function latestSeatByCandidate(candidateIds: unknown[]): Promise<Map<string, any>> {
+  const latest = new Map<string, any>();
   const ids = [...new Set(candidateIds.map(String))];
-  if (!ids.length) return out;
+  if (!ids.length) return latest;
   const seats = await BatchMember.find({ candidate: { $in: ids } })
     .select("candidate batch joined_on left_on released_on createdAt").lean<any[]>();
-  const latest = new Map<string, any>();
+  // a seat with no joined_on falls back to createdAt, so the order never depends on read order (review)
+  const t = (s: any) => +new Date(s.joined_on ?? s.createdAt ?? 0) || 0;
   for (const s of seats) {
     const k = String(s.candidate), cur = latest.get(k);
     const holds = !s.left_on && !s.released_on, curHolds = cur && !cur.left_on && !cur.released_on;
     const newer = !cur || (holds && !curHolds)
-      || (holds === !!curHolds && (+new Date(s.joined_on) > +new Date(cur.joined_on)
-        || (+new Date(s.joined_on) === +new Date(cur.joined_on) && +new Date(s.createdAt) > +new Date(cur.createdAt))));
+      || (holds === !!curHolds && (t(s) > t(cur) || (t(s) === t(cur) && +new Date(s.createdAt) > +new Date(cur.createdAt))));
     if (newer) latest.set(k, s);
   }
+  return latest;
+}
+export async function latestSeatResultByCandidate(candidateIds: unknown[], seats?: Map<string, any>): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const latest = seats ?? await latestSeatByCandidate(candidateIds);
   if (!latest.size) return out;
   const results = await CandidateResult.find({ candidate: { $in: [...latest.keys()] }, result: { $ne: "Pending" } })
     .select("candidate batch result").lean<any[]>();
@@ -3705,13 +3710,22 @@ export async function enrichCandidateRows(items: any[]): Promise<any[]> {
   // -342 (Umesh 2026-11-03): from the person's LATEST SEAT only (latestSeatResultByCandidate). Before it, a
   // person held by no batch read the latest result of ANY batch, so a Pass in batch A labelled them Certified
   // after they had left batch B without a result.
-  const resByCand = await latestSeatResultByCandidate(items.map((c) => c._id));
+  const seats = await latestSeatByCandidate(items.map((c) => c._id));
+  const resByCand = await latestSeatResultByCandidate(items.map((c) => c._id), seats);
+  // A person no batch holds any more still has a LAST batch, and its status is what the journey reads (Umesh:
+  // "based on the batch status"). Without it a finished batch whose student has no result read "Training
+  // Ongoing", because the released seat is not `active_batch` (review 2026-11-03).
+  const unheldBatchIds = [...seats.entries()].filter(([k]) => !byCand.has(k)).map(([, s]) => s.batch);
+  const lastStatus = new Map<string, string>(unheldBatchIds.length
+    ? (await Batch.find({ _id: { $in: unheldBatchIds } }).select("status").lean<any[]>()).map((b) => [String(b._id), String(b.status)])
+    : []);
   return items.map((c) => {
-    const b: any = byCand.get(String(c._id));
+    const k = String(c._id), b: any = byCand.get(k), seat = seats.get(k);
     return {
       ...c, eligibility: candidateEligibility(c, defaults),
       active_batch: b ? { _id: b._id, code: b.code, status: b.status, program: b.program } : null,
-      latest_result: resByCand.get(String(c._id)) ?? null,
+      last_batch_status: !b && seat ? (lastStatus.get(String(seat.batch)) ?? null) : null,
+      latest_result: resByCand.get(k) ?? null,
     };
   });
 }

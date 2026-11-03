@@ -70,6 +70,7 @@ export function CandidateHistory({ candidateId }: { candidateId: string }) {
   const [items, setItems] = useState<any[] | null>(null);
   useEffect(() => {
     let live = true;
+    setItems(null); // never show the previous candidate's rows while this one loads
     api(`/api/candidates/${candidateId}/results`).then((d) => { if (live) setItems(d.items ?? []); }).catch(() => { if (live) setItems(null); });
     return () => { live = false; };
   }, [candidateId]);
@@ -82,7 +83,9 @@ export function CandidateHistory({ candidateId }: { candidateId: string }) {
         {items.map((h) => (
           <li key={h.member} className="rounded border border-gray-100 px-2 py-1">
             <div className="flex items-center justify-between gap-2">
-              <Link className="min-w-0 truncate font-medium text-blue-700 hover:underline" href={`/batches/${h.batch?._id}`}>{h.batch?.code ?? "Batch"}{h.program ? ` \u2014 ${h.program}` : ""}</Link>
+              {h.batch?._id
+                ? <Link className="min-w-0 truncate font-medium text-blue-700 hover:underline" href={`/batches/${h.batch._id}`}>{h.batch.code ?? "Batch"}{h.program ? ` \u2014 ${h.program}` : ""}</Link>
+                : <span className="min-w-0 truncate font-medium text-gray-700">{h.batch?.code ?? "Batch"}{h.program ? ` \u2014 ${h.program}` : ""}</span>}
               <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700">{h.status}</span>
             </div>
             <div className="text-xs text-gray-500">
