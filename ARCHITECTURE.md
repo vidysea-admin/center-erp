@@ -1332,10 +1332,30 @@ join another batch.** Deliberately NOT changed: `candidates/portal-id-health` co
 seat, because a finished batch's seat still receives government attendance rows, and two seats is the
 "ambiguous, do not choose" answer it wants. Where one seat must still be PICKED (its re-match fallback,
 `govt-attendance.ts matchGovtRows` on the location path) the holding seat wins, else the latest joined.
-A returning student (`hasBatchHistory`) also skips
-`joinRefusalFor`'s centre/job-role refusal and adopts the new batch's, audited; `isFreeToJoin` is the
-picker's twin of that rule. That centre test was the bulk `candidates/assign` door's only Rule 38 check
-on the candidate, so that door now calls `assertLocationInScope` itself, like the members door.
+**A free student belongs to no centre (-343, Umesh 2026-11-03: "today MP, tomorrow UP is their choice").**
+Free = no `HOLDS_PERSON` seat, fresh leads included (`hasBatchHistory` is gone). Every free student skips
+`joinRefusalFor`'s centre/job-role refusal and adopts the new batch's centre and course, audited old->new;
+`isFreeToJoin(c)` is the picker's twin. Scope is checked on the **new batch** (`assertBatchJoinable`, Rule 38);
+`assertCandidateJoinScope` (rules.ts) applies the old-centre test only while a running batch holds the person.
+All three join doors (members POST, `candidates/assign`, the importer) call it. Ways to reach another centre's
+free student: the batch drawer's pool (`GET /api/candidates?pool=1`, crud `listFilter`; the user's scope
+still clamps it, so Admin/Ops see every centre and a scoped user their own), and for a scoped user
+`api/candidates/free-lookup` (exact 10-digit mobile or CAN only, `candidates.assign`, 30/10 min per user,
+every hit and miss audited, minimal fields, CAN echoed only for a CAN search). The importer attaches an
+existing CAN/APAAR holder from another centre who is free, but its preview shows that holder's name,
+phone and link **only** inside the user's own scope (`ownScope`); outside it the row carries only
+`holder_id`. A phone-only match is never auto-attached (families share phones).
+
+**History of a person = their seats (-343).** `memberTrainingSummary(memberIds)` (rules.ts) is the one
+per-seat computation (days, hours, eligibility, result, certificate, state) behind the public attendance
+token page, the portal's "My courses" (`portal-lookup` returns `courses[]`, one token per seat, behind the
+same DOB/OTP factor; the `attendance_otp` token stores the matched `candidate` id so step 2 opens exactly
+that record) and `GET /api/candidates/[id]/results` (driven by BatchMember, explicit fields,
+`CANDIDATE_READ_ROLES`). Government attendance rows are read per **seat** (`matchedGovtRowsByMember`: the
+row of that batch; a batch-null row only when the person has a single seat), so a finished batch's figure
+never shows beside the next batch's seat. "Certified" reads only the person's **latest seat**
+(`latestSeatByCandidate` / `latestSeatResultByCandidate`), and a person held by no batch carries
+`last_batch_status` so `journeyOf` says "Training Completed" for a finished batch with no result.
 Reopen and restore refuse up front if a released student now sits in another
 batch (`assertReleasedRosterFree`); `dropMemberChecked` refuses a released seat while the person sits
 elsewhere; `assertBatchJoinable` refuses Closed as well (a seat there would never be released).

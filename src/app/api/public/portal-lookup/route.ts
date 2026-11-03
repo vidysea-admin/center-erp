@@ -119,9 +119,10 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // ON THE TOKEN, because the phone-suffix lookup could open a DIFFERENT record sharing the number (families share
     // phones) - one whose own DOB gate was never passed. A token minted before -343 carries no id and keeps the old
     // phone lookup for its 10-minute life.
+    if (!t.candidate && !t.phone) throw fail(); // an empty suffix regex would match the first candidate on file
     const cand = await (t.candidate
       ? Candidate.findById(t.candidate)
-      : Candidate.findOne({ phone: { $regex: String(t.phone ?? "") + "$" } })).select("name dob sidh_status lifecycle_status").lean<any>();
+      : Candidate.findOne({ phone: { $regex: String(t.phone) + "$" } })).select("name dob sidh_status lifecycle_status").lean<any>();
     if (!cand) throw fail();
     return completeLookup(cand);
   }
@@ -131,6 +132,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
   if (phone.length !== 10) throw fail();
+  // -343 (security review): a per-NUMBER cap, independent of IP. The per-IP limit above alone let a rotating caller
+  // walk the ~36,500 birthdays of one known mobile; 10 an hour is far above a real student's typos. Counted BEFORE the
+  // lookup, for every 10-digit number alike, so a 429 never tells a known number from an unknown one. Accepted
+  // trade-off, the same shape as phoneChallengeGate: whoever knows a mobile can hold its owner off for an hour.
+  rateLimit(`portal-dob:${phone}`, 10, 3_600_000);
   const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob phone email sidh_status lifecycle_status").lean<any>();
   if (!cand) throw fail();
 
@@ -145,9 +151,6 @@ export const POST = apiHandler(async (req: NextRequest) => {
       x.setMinutes(x.getMinutes() + 330);
       return x.toISOString().slice(0, 10);
     };
-    // -343 (security review): a per-NUMBER cap on DOB tries, independent of IP. The per-IP limit above alone let a
-    // rotating caller walk the ~36,500 birthdays of one known mobile; 10 an hour is far above a real student's typos.
-    rateLimit(`portal-dob:${phone}`, 10, 3_600_000);
     if (!dob || istDateKey(dob) !== istDateKey(cand.dob)) throw fail();
     return completeLookup(cand); // DOB was the second factor — mint in one step, unchanged.
   }

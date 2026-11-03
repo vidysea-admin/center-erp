@@ -3672,7 +3672,8 @@ export async function latestSeatByCandidate(candidateIds: unknown[]): Promise<Ma
     const k = String(s.candidate), cur = latest.get(k);
     const holds = !s.left_on && !s.released_on, curHolds = cur && !cur.left_on && !cur.released_on;
     const newer = !cur || (holds && !curHolds)
-      || (holds === !!curHolds && (t(s) > t(cur) || (t(s) === t(cur) && +new Date(s.createdAt) > +new Date(cur.createdAt))));
+      || (holds === !!curHolds && (t(s) > t(cur) || (t(s) === t(cur) && (+new Date(s.createdAt) > +new Date(cur.createdAt)
+        || (+new Date(s.createdAt) === +new Date(cur.createdAt) && String(s._id) > String(cur._id))))));
     if (newer) latest.set(k, s);
   }
   return latest;

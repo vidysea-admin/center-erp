@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, HttpError, readJson } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
-import { BatchMember, Candidate } from "@/models";
-import { dropMemberChecked, latestSeatResultByCandidate } from "@/lib/rules";
+import { Batch, BatchMember, Candidate } from "@/models";
+import { dropMemberChecked, latestSeatByCandidate, latestSeatResultByCandidate } from "@/lib/rules";
 import { currentStageOf, HOLDS_PERSON } from "@/lib/candidate-journey";
 import { audit } from "@/lib/audit";
 
@@ -70,10 +70,15 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   } else {
     // -342: the result of the person's LATEST SEAT (rules.ts latestSeatResultByCandidate), the one function the
     // Candidates list reads too - not the latest result of any batch they ever sat in.
-    const latestResult = (await latestSeatResultByCandidate([cand._id])).get(String(cand._id)) ?? null;
+    const seats = await latestSeatByCandidate([cand._id]);
+    const latestResult = (await latestSeatResultByCandidate([cand._id], seats)).get(String(cand._id)) ?? null;
+    // -343: and that seat's batch status, exactly as enrichCandidateRows hands it to the list - so the stored stage
+    // says "Training Completed" for a finished batch with no result, the same words the dialog showed.
+    const lastSeat = seats.get(String(cand._id));
+    const lastBatch = lastSeat ? await Batch.findById(lastSeat.batch).select("status").lean<any>() : null;
     const stage = currentStageOf({
       lifecycle_status: cand.lifecycle_status, enrolled_at: cand.enrolled_at, sidh_status: cand.sidh_status,
-      latest_result: latestResult, active_batch_status: null,
+      latest_result: latestResult, active_batch_status: null, last_batch_status: lastBatch?.status ?? null,
     });
     cand.lifecycle_status = "Dropped";
     cand.dropped_reason = reason;
