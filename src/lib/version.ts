@@ -232,7 +232,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // CAN ID. Ships with scripts/backfill-released-on.mjs, run on production after this build is live. No number is quoted.
 // -341 note: digest-tables (Karunn sir review 2026-11-02) - tabular digest, weekly targets, trainer unavailable
 // reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
-export const RELEASE = "2026.08.14-344";
+export const RELEASE = "2026.08.14-345";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -304,6 +304,12 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-345 explains two figures in the daily digest. Under Enrolled, new rows show where those people are now (enrollment in progress, training ongoing, certified, failed and so on), using the same words as the Candidates screen, and they add up to Enrolled. " +
+  "In Costs, pending approval is split by the month each request was raised and payment pending by the month of the expense, back to the oldest open item. " +
+  "Admin, Defaults now has a link from the digest recipients to the digest screen, where Publish now is.";
+
+// -345: the -344 note moved here unchanged when -345 became current.
+const RELEASE_NOTE_ARCHIVE_344 =
   "-344 tidies the daily digest after its figures were checked against the records (every figure matched). " +
   "The notes under the tables now say what each figure counts: Enrolled now includes everyone who entered the batch journey, joins count seats, batches created include cancelled ones, cost figures go by the expense date, and Trained, not available is not added again (its people are already inside Certified or Rejected / dropped). " +
   "On Reports, Daily digest, choosing a table in Show also hides the candidate lists below the tables, and three quick changes in a row (Show, Range from, day) are all kept. " +
@@ -2316,6 +2322,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -345: ARCHIVE_344 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_344 + " " +
   // -344: ARCHIVE_343 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_343 + " " +
   // -343: ARCHIVE_342 wired in here in the SAME bump that declared it, same discipline.

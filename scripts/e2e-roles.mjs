@@ -13,7 +13,13 @@ import { requireLocalBase, requireSafeDb } from "./db-guard.mjs";
 // beside a comment claiming it is complete. Read-only, and it reads the copy this suite runs in.
 import fs from "node:fs";
 const BASE = requireLocalBase("e2e-roles", process.env.BASE_URL || "http://localhost:3000/erp");
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
+// A pin whose fixture another suite makes (e2e.mjs runs first in the wall) is SKIPPED, loudly, only when the runner
+// says e2e.mjs is not in this run (E2E_WITHOUT_E2E_MJS=1): not a pass (the runner counts and prints skips) and not a
+// fake failure either. In a wall that includes e2e.mjs a missing fixture is still a FAIL.
+const STANDALONE = process.env.E2E_WITHOUT_E2E_MJS === "1";
+const skip = (n, why) => { skipped++; console.log(`  ·   ${n} SKIPPED - ${why}. This is NOT a pass: the check did not run.`); };
+const AFTER_E2E = "its fixture is made by e2e.mjs, which runs before this suite in the wall; run the wall, or e2e.mjs first";
 const ok = (n, c, x = "") => { if (c) { pass++; console.log("PASS  " + n); } else { fail++; console.log("FAIL  " + n + " " + x); } };
 
 async function login(email, password) {
@@ -408,7 +414,10 @@ ok("Home queues leak nothing outside SPOC scope", leaks.length === 0, `leaked ${
     JSON.stringify(asSpoc));
 
   // The other side: an Admin DOES get it, so a fix that simply removed the block cannot pass.
-  ok("QA-1104: an Admin still gets the source block - otherwise this pin would pass on a deletion",
+  // With no sync ever run the block is there but empty, so the pin could only fail falsely. A block that is GONE (no
+  // source_name key at all) is not skipped: that is the deletion this pin exists to catch.
+  if (STANDALONE && "source_name" in asAdmin && !asAdmin.last_synced_at && !asAdmin.source_name) skip("QA-1104: an Admin still gets the source block (no sync has run in this database)", AFTER_E2E);
+  else ok("QA-1104: an Admin still gets the source block - otherwise this pin would pass on a deletion",
     typeof asAdmin.last_status === "string" && "source_name" in asAdmin && !!asAdmin.last_synced_at,
     JSON.stringify(asAdmin));
 
@@ -5364,10 +5373,12 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
         ok("QA-1973 fixture: the enrolment threshold can be raised to 100% to create the shortfall",
           [200, 201].includes(raised.status), `got ${raised.status}`);
 
-        const readyAll = ((await req(admin, "GET", "/api/batches?limit=100")).data?.items ?? [])
+        // Ask the server for Ready batches: after e2e.mjs has run, the newest 100 batches hold none, so a
+        // client-side filter over ?limit=100 found nothing on a full wall.
+        const readyAll = ((await req(admin, "GET", "/api/batches?status=Ready&limit=100")).data?.items ?? [])
           .filter((b) => String(b.status) === "Ready");
         const withChecks = [];
-        for (const b of readyAll.slice(0, 6)) {
+        for (const b of readyAll.slice(0, 20)) {
           const rdb = ((await req(admin, "GET", `/api/batches/${b._id}`)).data ?? {}).readiness ?? {};
           withChecks.push({ b, checks: rdb.checks ?? {} });
         }
@@ -6042,7 +6053,8 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
     const inv = ((await req(admin, "GET", "/api/invoices?status=Ready")).data?.items ?? [])[0]
       ?? ((await req(admin, "GET", "/api/invoices")).data?.items ?? []).find((i) => i.status === "Ready");
     if (!inv) {
-      ok("QA-1831 fixture: an invoice at Ready exists to walk through the ladder", false, "none found");
+      if (STANDALONE) skip("QA-1831 receipt ladder (no invoice at Ready in this database)", AFTER_E2E);
+      else ok("QA-1831 fixture: an invoice at Ready exists to walk through the ladder", false, "none found");
     } else {
       const bId = String(inv.batch?._id ?? inv.batch);
       // The proposal: computed server-side and gated as money.
@@ -6944,5 +6956,5 @@ ok("Unauthenticated API blocked (401)", anon.status === 401, `got ${anon.status}
   await gmc.close();
 }
 
-console.log(`\n${pass} passed, ${fail} failed`);
+console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} SKIPPED (did not run - NOT a pass)` : ""}`);
 process.exit(fail ? 1 : 0);

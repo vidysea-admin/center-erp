@@ -470,6 +470,20 @@ ok("K1: a centre login without money gets two tables, Trainers and Candidates (n
 ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
   eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved on the day"), ["Rs 1,250", "2"])
   && eq(cellsAt(rAF.data, "costs", "Payment pending"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which raised on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+// -345 (Umesh, 2026-11-03: "jabse system start hua hai tabb se"): what is open, split by month back to the oldest item
+const subsAfter = (d, key, parent) => { const rows = tblOf(d, key)?.rows ?? []; const i = rows.findIndex((r) => r.label === parent); const out = []; for (let j = i + 1; j < rows.length && rows[j].sub; j++) out.push(rows[j]); return out; };
+ok("K1: pending approval is split by the month it was raised (Mar 2031: Rs 1,100 in 2), after the raised-today row",
+  eq(subsAfter(rAF.data, "costs", "Pending approval").map((r) => [r.label, ...r.cells]), [["of which raised on the day", "Rs 800", "1"], ["raised in Mar 2031", "Rs 1,100", "2"]]),
+  JSON.stringify(subsAfter(rAF.data, "costs", "Pending approval")));
+ok("K1: payment pending is split by the month of the expense, newest first (Mar 2031 Rs 4,250 in 2, Feb 2031 Rs 9,999 in 1), adding up to Rs 14,249 in 3",
+  eq(subsAfter(rAF.data, "costs", "Payment pending").map((r) => [r.label, ...r.cells]), [["expense of Mar 2031", "Rs 4,250", "2"], ["expense of Feb 2031", "Rs 9,999", "1"]]),
+  JSON.stringify(subsAfter(rAF.data, "costs", "Payment pending")));
+const JTAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
+const enrSubs = subsAfter(dA, "candidates", "Enrolled");
+ok("K1: Enrolled now is split by where each person is now (the Candidates screen's journey tags, in order), and the split adds up to it",
+  eq(enrSubs.map((r) => r.label), JTAGS.map((t) => `of which ${t}`)) && enrSubs.every((r) => eq(r.cells.slice(1), dash3))
+  && enrSubs.reduce((n, r) => n + Number(r.cells[0]), 0) === Number(cellsAt(dA, "candidates", "Enrolled")?.[0]) && Number(cellsAt(dA, "candidates", "Enrolled")?.[0]) > 0,
+  JSON.stringify([cellsAt(dA, "candidates", "Enrolled"), enrSubs.map((r) => [r.label, r.cells[0]])]));
 ok("K1: the week runs Monday to Sunday: 2031-03-14 (a Friday) sits in 2031-03-10 to 2031-03-16, and the column says so",
   eq(dA?.week, { from: "2031-03-10", to: "2031-03-16" }) && tblOf(dA, "candidates")?.head?.[3] === "This week (2031-03-10 to 2031-03-14)", JSON.stringify([dA?.week, tblOf(dA, "candidates")?.head]));
 // Candidates, centre A, day D. Columns: Now, on the day, this week, cumulative (a centre login: all time).
@@ -1334,7 +1348,9 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   const tCa = (api?.tables ?? []).find((t) => t.key === "candidates");
   const numAt = (c) => { const m = String(c ?? "").replace(/,/g, "").replace(/\u2212/g, "-").match(/[-+]?\d+(\.\d+)?/); return m ? Number(m[0]) : null; };
   await page.locator('[data-testid="digest-min-candidates-3"]').fill("1");
-  const wantMin = tCa.rows.filter((r) => (numAt(r.cells[2]) ?? -1) >= 1).length;
+  // a breakdown row travels with its parent: a group is shown whole when the parent or any of its rows passes
+  const groupsOfRows = (rows) => rows.reduce((g, r) => { if (r.sub && g.length) g[g.length - 1].push(r); else g.push([r]); return g; }, []);
+  const wantMin = groupsOfRows(tCa.rows).filter((g) => g.some((r) => (numAt(r.cells[2]) ?? -1) >= 1)).reduce((n, g) => n + g.length, 0);
   ok("S4: a minimum on the week column keeps the rows at or above it", (await rowIds("candidates")).length === wantMin, `${(await rowIds("candidates")).length} vs ${wantMin}`);
   await page.locator('[data-testid="digest-min-candidates-3"]').fill("");
   await page.locator('[data-testid="digest-hide-zero"]').check();
@@ -1471,6 +1487,8 @@ await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the diges
   const { ctx, page } = await newPage(uAdm.email, PW);
   await page.goto(`${BASE}/admin?tab=Defaults`, { waitUntil: "domcontentloaded" });
   await page.locator('[data-testid="digest-only-nobody-warning"]').waitFor();
+  const shortcut = page.locator('[data-testid="digest-publish-shortcut"]');
+  ok("S6: the digest card on Defaults links straight to the digest screen, where Publish now is", (await shortcut.count()) === 1 && /\/erp\/reports\/daily$/.test(String(await shortcut.getAttribute("href"))), String(await shortcut.getAttribute("href").catch(() => "")));
   ok("S6: Defaults shows the red warning while digest-only is ON and the only recipient is deactivated", /going nowhere/.test(await txt(page, "digest-only-nobody-warning")), await txt(page, "digest-only-nobody-warning"));
   await page.goto(`${BASE}/reports/daily?date=${D}`, { waitUntil: "domcontentloaded" });
   await page.locator('[data-testid="digest-only-nobody-warning"]').waitFor();
@@ -1505,6 +1523,15 @@ const capLine = String(capTick.data?.results?.find((r) => r.to === uAdm.email.to
 const named = capTags.filter((t) => capLine.includes(fx[t].code)).length;
 ok("M1: 12 batches joined on one day: the mail line names 10 of them and says '2 more batches (see the Reports screen)'",
   capTags.length === 12 && named === 10 && /, and 2 more batches \(see the Reports screen\)$/.test(capLine), `${named} named: ${capLine.slice(0, 200)}`);
+// the edges: exactly 10 names all and adds nothing; 11 says "1 more batch" (singular)
+const capLineFor = async (day, n) => {
+  await db.collection("batchmembers").insertMany(capTags.slice(0, n).map((t) => mem(t, day)));
+  const tk = await tick(istAt(day, 21, 0), `cap-${day}-` + s);
+  return String(tk.data?.results?.find((r) => r.to === uAdm.email.toLowerCase())?.text ?? "").split(/\r?\n/).find((l) => l.startsWith("Joined on the day, by batch:")) ?? "";
+};
+const line10 = await capLineFor("2031-09-03", 10), line11 = await capLineFor("2031-09-04", 11);
+ok("M1: exactly 10 batches: all 10 named, no 'more' tail", capTags.slice(0, 10).every((t) => line10.includes(fx[t].code)) && !/more batch/.test(line10), line10.slice(0, 200));
+ok("M1: 11 batches: 10 named and 'and 1 more batch (see the Reports screen)', singular", capTags.slice(0, 11).filter((t) => line11.includes(fx[t].code)).length === 10 && /, and 1 more batch \(see the Reports screen\)$/.test(line11), line11.slice(-120));
 await setListDirect("");
 
 await browser.close();

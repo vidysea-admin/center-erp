@@ -1,6 +1,7 @@
 "use client";
 import { Fragment, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { api, fmtAuditValue, fmtDT, fmtDate, offerable, istTodayInput, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
 import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
@@ -1902,7 +1903,11 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
   };
   return (
     <div className="block text-sm" data-testid="digest-recipients">
-      <span className="font-medium">Daily digest recipients</span>
+      <span className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-medium">Daily digest recipients</span>
+        {/* A shortcut, not a second Publish button: publishing stays on the digest screen, where the figures being sent are visible. */}
+        <Link href="/reports/daily" data-testid="digest-publish-shortcut" className="text-xs text-blue-700 underline">See today&apos;s digest and Publish now</Link>
+      </span>
       <span className="block text-xs text-gray-500">
         One mail a day at 21:00 IST to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
         {canType ? " and/or type any email address (a typed address gets the full report, cost section included). " : ". Only an Admin can add an outside email address. "}Empty: no digest mail is sent.

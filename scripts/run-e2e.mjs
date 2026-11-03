@@ -770,7 +770,10 @@ const parserDrift = [];
 // ISS-39: async so the no-server static checks can share a pool; everything else still runs one at a time.
 function runSuite(suite) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(dir, suite)], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    // A suite whose fixtures e2e.mjs makes may skip (loudly) those pins only when e2e.mjs is not in this run.
+    const env = { ...process.env, E2E_WITHOUT_E2E_MJS: "1" };
+    if (SUITES.includes("e2e.mjs")) delete env.E2E_WITHOUT_E2E_MJS; // a stray shell export never lets the skips into a wall
+    const child = spawn(process.execPath, [path.join(dir, suite)], { env, stdio: ["ignore", "pipe", "pipe"] });
     const out = [], err = [];
     child.stdout.on("data", (c) => out.push(c));
     child.stderr.on("data", (c) => err.push(c));
@@ -803,7 +806,12 @@ async function execute(suite) {
   lines.push(r.stdout ?? "");
   const errLines = r.stderr ? [r.stderr] : [];
   let row = scoreSuite(suite, r);
-  if (isBad(row) && rerunOnce) {
+  // A first run that was already answered 429 is talking to a rate-limited server (memory: a long-lived test server
+  // fills its windows): a rerun on the same server can only get worse and spends the budget of the suites after it.
+  // Judged by the failure DETAIL ("got 429", a status/principal field of 429), not by a test name that mentions 429.
+  const rateLimited = /^FAIL .*(\bgot 429\b|"(?:status|principal)":\s*429\b|\bstatus 429\b)/m.test(r.stdout ?? "");
+  if (isBad(row) && rerunOnce && rateLimited) lines.push(`\n━━━ ${suite} - RED on first run with 429 answers: NOT rerun (the server is rate-limiting; restart it and run again) ━━━`);
+  if (isBad(row) && rerunOnce && !rateLimited) {
     const first = row;
     lines.push(`\n━━━ ${suite} - RED on first run (${first.crashed ? "crashed" : first.failed + " failed"}, exit ${first.exit}); rerun 1 of 1, alone ━━━`);
     const r2 = await runSuite(suite);
@@ -812,7 +820,9 @@ async function execute(suite) {
     const second = scoreSuite(suite, r2);
     row = second;
     if (!isBad(second)) row = { ...second, flaky: { failed: first.failed, crashed: first.crashed, exit: first.exit } };
-    else row = { ...second, rerunFailed: true };
+    // Still red: the FIRST run's numbers are the finding (the rerun ran on a server the first run had already
+    // worked, so its extra failures can be rate limits, as on -344: 2 failed, then 15 on the rerun, all 429).
+    else row = { ...first, rerunFailed: true, rerun: { failed: second.failed, crashed: second.crashed, exit: second.exit } };
   }
   return { row, lines, errLines };
 }
@@ -848,7 +858,7 @@ for (const r of results) {
   // true and incomplete - THIS unit's own manifest quoted the per-suite row as evidence the wall was
   // healthy, which is precisely how the dead CHANGELOG gate survived. A skip honest in TOTAL and
   // absent from the row a reader copies is the same defect one line up.
-  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${(r.skipped ?? 0) > 0 ? `, ${r.skipped} SKIPPED` : ""}${r.crashed ? " (no final count — crashed?)" : ""}${r.flaky ? ` (RED on first run: ${r.flaky.crashed ? "crashed" : r.flaky.failed + " failed"}, exit ${r.flaky.exit}; green on the single rerun)` : ""}${r.rerunFailed ? " (still RED on the single rerun)" : ""}`);
+  console.log(`${state.padEnd(8)} ${r.suite.padEnd(32)} ${r.passed} passed, ${r.failed} failed${(r.skipped ?? 0) > 0 ? `, ${r.skipped} SKIPPED` : ""}${r.crashed ? " (no final count — crashed?)" : ""}${r.flaky ? ` (RED on first run: ${r.flaky.crashed ? "crashed" : r.flaky.failed + " failed"}, exit ${r.flaky.exit}; green on the single rerun)` : ""}${r.rerunFailed ? ` (first run shown; still RED on the single rerun: ${r.rerun?.crashed ? "crashed" : `${r.rerun?.failed} failed`})` : ""}`);
 }
 // -153 (QA-354): a CRASHED suite reports `passed: 0, failed: 0`, so it adds nothing to either
 // total and the TOTAL line read "0 failed" while suites were dying. The per-suite rows do say

@@ -8,7 +8,7 @@ import {
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, isCertificateSettled, isFreshCandidate, JOURNEY_TAGS, journeyOf } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -5884,6 +5884,9 @@ export type DigestTable = {
 };
 const fmtN = (v: number | null | undefined) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
 const fmtRs = (v: number) => `Rs ${fmtN(v)}`;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// "2026-10" -> "Oct 2026"; anything else (an undated row) is said as it is.
+const monthName = (ym: string) => (/^\d{4}-\d{2}$/.test(ym) ? `${MONTHS[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}` : ym);
 const fmtVar = (actual: number | null, target: number | null) => (actual === null || target === null ? "—" : `${actual - target >= 0 ? "+" : "−"}${fmtN(Math.abs(actual - target))}`);
 const toneOf = (actual: number | null, target: number | null): "pos" | "neg" | "" => (actual === null || target === null ? "" : actual >= target ? "pos" : "neg");
 
@@ -5932,6 +5935,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       : Promise.resolve([] as any[]),
   ]);
   const currentEnrolled = currentRows.filter((r) => !isFreshCandidate(r) && !r.archived_at);
+  const enrolledByJourney = new Map<string, number>();
+  for (const r of currentEnrolled) { const tag = journeyOf({ ...r, active_batch_status: r.active_batch?.status }); enrolledByJourney.set(tag, (enrolledByJourney.get(tag) ?? 0) + 1); }
   const trainingById = new Map(trainingBatches.map((b) => [String(b._id), b]));
   // In training (Umesh, 2026-11-03): held by an ACTIVE batch that has really started (actual_start set). Not the
   // journey tag, which also says "Training Ongoing" for an enrolled person with no seat or a seat in a Planning batch.
@@ -5997,8 +6002,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const finance = opts.fullView === true || (await hasPermission(viewer, "finance.view"));
   let costs: null | {
     today: { amount: number; entries: number }; month: { amount: number; entries: number; from: string; to: string };
-    pending: { count: number; amount: number; raised_today: { count: number; amount: number } };
-    payment_pending: { count: number; amount: number };
+    pending: { count: number; amount: number; raised_today: { count: number; amount: number }; by_month: { month: string; count: number; amount: number }[] };
+    payment_pending: { count: number; amount: number; by_month: { month: string; count: number; amount: number }[] };
   } = null;
   if (finance) {
     const monthFrom = `${dayIST.slice(0, 8)}01`;
@@ -6006,15 +6011,32 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       costRollup(scope, { from: dayIST, to: dayIST }),
       costRollup(scope, { from: monthFrom, to: dayIST }),
       ApprovalRequest.find({ action: "cost.post", status: "Pending", createdAt: { $lte: instants.$lte }, ...scope }).select("payload createdAt").lean<any[]>(),
-      CostEntry.find({ payment_status: "Payment Pending", entry_date: { $lte: istEnd(dayIST) }, ...scope }).select("amount").lean<any[]>(),
+      CostEntry.find({ payment_status: "Payment Pending", entry_date: { $lte: istEnd(dayIST) }, ...scope }).select("amount entry_date").lean<any[]>(),
     ]);
     const sum = (rows: any[], pick: (r: any) => number) => ({ count: rows.length, amount: round2(rows.reduce((s, r) => s + (pick(r) || 0), 0)) });
     const raised = pendingRows.filter((r) => new Date(r.createdAt).getTime() >= instants.$gte.getTime());
+    // Umesh, 2026-11-03 ("jabse system start hua hai tabb se"): what is still open, split by month, newest first,
+    // back to the oldest open item. Pending approval by the IST month it was raised; payment pending by the month of
+    // the expense (entry_date is a business date, read as its own day key).
+    const byMonth = (rows: any[], monthOf: (r: any) => string | null, pick: (r: any) => number) => {
+      const m = new Map<string, any[]>();
+      for (const r of rows) { const k = monthOf(r) ?? "undated"; m.set(k, [...(m.get(k) ?? []), r]); }
+      // Newest month first; the "undated" bucket (no usable date) always goes last.
+      const rank = (k: string) => (k === "undated" ? "" : k);
+      return [...m.entries()].sort((a, b) => rank(b[0]).localeCompare(rank(a[0]))).map(([month, rs]) => ({ month, ...sum(rs, pick) }));
+    };
+    const okDate = (d: unknown) => { const t = d ? new Date(d as any) : null; return t && Number.isFinite(t.getTime()) ? t : null; };
     costs = {
       today: { amount: round2(todayRoll.totals.actual), entries: todayRoll.totals.entries },
       month: { amount: round2(monthRoll.totals.actual), entries: monthRoll.totals.entries, from: monthFrom, to: dayIST },
-      pending: { ...sum(pendingRows, (r) => Number(r.payload?.amount)), raised_today: sum(raised, (r) => Number(r.payload?.amount)) },
-      payment_pending: sum(payRows, (r) => Number(r.amount)),
+      pending: {
+        ...sum(pendingRows, (r) => Number(r.payload?.amount)), raised_today: sum(raised, (r) => Number(r.payload?.amount)),
+        by_month: byMonth(pendingRows, (r) => { const t = okDate(r.createdAt); return t ? istDayOf(t).slice(0, 7) : null; }, (r) => Number(r.payload?.amount)),
+      },
+      payment_pending: {
+        ...sum(payRows, (r) => Number(r.amount)),
+        by_month: byMonth(payRows, (r) => { const t = okDate(r.entry_date); return t ? t.toISOString().slice(0, 7) : null; }, (r) => Number(r.amount)),
+      },
     };
   }
 
@@ -6127,6 +6149,9 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       rows: [
         { label: "Joined into batches", cells: ["—", ...flowCells(flows.joined)] },
         { label: "Enrolled", cells: [fmtN(currentEnrolled.length), ...flowCells(flows.enrolled)] },
+        // Umesh, 2026-11-03: say what the Enrolled-now figure is made of. The same journey tag the Candidates screen
+        // shows per person (journeyOf), so a click-through count agrees; the sub-rows add up to Enrolled now.
+        ...JOURNEY_TAGS.map((tag) => ({ label: `of which ${tag}`, sub: true, cells: [fmtN(enrolledByJourney.get(tag) ?? 0), ...dash3] })),
         { label: "Training started", cells: ["—", ...flowCells(flows.training_started)] },
         { label: "In training (started Active batch)", strong: true, cells: [fmtN(currentOngoing.length), ...dash3] },
         { label: "Certified (certificate issued)", strong: true, cells: ["—", ...flowCells(flows.certified)] },
@@ -6134,7 +6159,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
         { label: "Batches started", cells: ["—", ...flowCells(flows.batches_started)] },
         { label: "Mobilised (planning batches)", cells: [`${fmtN(mob.mobilised)} of ${fmtN(mob.target)} (gap ${fmtN(mob.gap)})`, ...dash3] },
       ],
-      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period. Enrolled now = everyone who has entered the batch journey, whatever happened next (in progress, enrolled, completed, failed, dropped); the period columns count enrolment dates, which are recorded since the system went live in mid-August 2026, so a candidate imported before that is in Now only. Joined into batches counts seats, so a person who re-joined counts twice, and seats in cancelled batches count. Batches created includes batches cancelled later.",
+      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period. Enrolled now = everyone who has entered the batch journey, whatever happened next; the of-which rows under it split it by where each person is now (the same tag the Candidates screen shows) and add up to it; the period columns count enrolment dates, which are recorded since the system went live in mid-August 2026, so a candidate imported before that is in Now only. Joined into batches counts seats, so a person who re-joined counts twice, and seats in cancelled batches count. Batches created includes batches cancelled later.",
     },
   ];
   if (targets) tables.push({
@@ -6150,13 +6175,15 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   });
   if (costs) tables.push({
     key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
-    note: "Approved on the day and month to date go by the expense date on the entry, not the day it was approved. Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now. They carry everything still open, however old.",
+    note: "Approved on the day and month to date go by the expense date on the entry, not the day it was approved. Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now. They carry everything still open, however old, split by month back to the oldest open item: pending approval by the month it was raised, payment pending by the month of the expense.",
     rows: [
       { label: "Approved on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
       { label: "Month to date", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
       { label: "Pending approval", cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
       { label: "of which raised on the day", sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] },
+      ...costs.pending.by_month.map((m) => ({ label: `raised in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
       { label: "Payment pending", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
+      ...costs.payment_pending.by_month.map((m) => ({ label: `expense of ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
     ],
   });
 
