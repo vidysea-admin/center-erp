@@ -177,12 +177,22 @@ function DailyDigestInner() {
   // One URL holds the whole view (day, range start, section), so a link opens exactly this screen.
   // Built on the LAST query this screen asked for, not on `sp`: two changes before the router re-renders (pick a
   // section, then a range) must not have the second one put the first one back (seen live on -342).
+  // `pending` = queries asked for that the URL has not reached yet. When the URL lands on one of them, that one and
+  // the older ones are done; lastQ is taken from the URL only once nothing newer is still on its way (so a third quick
+  // change still builds on the second). A URL that is none of ours (back/forward, a link) wins outright.
   const lastQ = useRef(sp.toString());
-  useEffect(() => { lastQ.current = sp.toString(); }, [sp]);
+  const pending = useRef<string[]>([]);
+  useEffect(() => {
+    const now = sp.toString();
+    const i = pending.current.indexOf(now);
+    pending.current = i >= 0 ? pending.current.slice(i + 1) : [];
+    if (!pending.current.length) lastQ.current = now;
+  }, [sp]);
   const go = (patch: Record<string, string>) => {
     const q = new URLSearchParams(lastQ.current);
     for (const [k, v] of Object.entries(patch)) { if (v) q.set(k, v); else q.delete(k); }
     lastQ.current = q.toString();
+    pending.current.push(lastQ.current);
     router.replace(`/reports/daily${q.toString() ? `?${q}` : ""}`);
   };
   const [data, setData] = useState<any>(null);
@@ -308,6 +318,8 @@ function DailyDigestInner() {
 
           {visible.map((t: any) => <DigestTableView key={t.key} t={t} day={data.day} hideZero={hideZero} />)}
 
+          {/* The candidate details below belong to the Candidates section: Show (Trainers / Costs / ...) hides them too. */}
+          {(section === "all" || section === "candidates") && <>
           <p className="text-xs text-gray-500" data-testid="digest-current-measured">
             Current learner totals measured {fmtDT(c.current.measured_at)} IST. These show the position now, including when an earlier report day is chosen.
           </p>
@@ -341,6 +353,7 @@ function DailyDigestInner() {
               ))}
             </div>
           )}
+          </>}
         </>
       )}
     </div>

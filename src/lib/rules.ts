@@ -6319,7 +6319,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const tables: DigestTable[] = [
     {
       key: "trainers", title: "Trainers", head: ["Stage", "Now", "On the day", weekHead, cumHead], rows: trainerRows,
-      note: "Now = trainers at that stage today. The other columns count trainers who ENTERED the stage in the period, from the recorded stage moves (Fresh lead = added; a trainer entered directly at a later stage, or moved before moves were recorded, is in Now only). Total trainers = the six stage rows plus rejected / dropped.",
+      note: "Now = trainers at that stage today. The other columns count trainers who ENTERED the stage in the period, from the recorded stage moves (Fresh lead = added; a trainer entered directly at a later stage, or moved before moves were recorded, is in Now only). Total trainers = the six stage rows plus rejected / dropped. Trained, not available is a memo row: the marked-unavailable ones are already inside Certified and the ones dropped after Certified are already inside Rejected / dropped, so do not add it to either.",
     },
     {
       key: "candidates", title: "Candidates", head: ["Measure", "Now", "On the day", weekHead, cumHead],
@@ -6333,7 +6333,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
         { label: "Batches started", cells: ["—", ...flowCells(flows.batches_started)] },
         { label: "Mobilised (planning batches)", cells: [`${fmtN(mob.mobilised)} of ${fmtN(mob.target)} (gap ${fmtN(mob.gap)})`, ...dash3] },
       ],
-      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period.",
+      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period. Enrolled now = everyone who has entered the batch journey, whatever happened next (in progress, enrolled, completed, failed, dropped); the period columns count enrolment dates, which are recorded since the system went live in mid-August 2026, so a candidate imported before that is in Now only. Joined into batches counts seats, so a person who re-joined counts twice, and seats in cancelled batches count. Batches created includes batches cancelled later.",
     },
   ];
   if (targets) tables.push({
@@ -6349,7 +6349,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   });
   if (costs) tables.push({
     key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
-    note: "Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
+    note: "Approved on the day and month to date go by the expense date on the entry, not the day it was approved. Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now. They carry everything still open, however old.",
     rows: [
       { label: "Approved on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
       { label: "Month to date", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
@@ -6368,7 +6368,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     targets,
     tables,
     finance,
-    live_note: "Current learner totals, training-date exceptions, mobilisation and trainer availability show the position now, whichever day is chosen. They are not historical snapshots. Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now.",
+    // The costs sentence only for a viewer who gets the Costs table; anyone else would read about figures they never see.
+    live_note: `Current learner totals, training-date exceptions, mobilisation and trainer availability show the position now, whichever day is chosen. They are not historical snapshots.${costs ? " Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now." : ""}`,
     candidates: {
       joined: { total: by_batch.reduce((s, r) => s + r.count, 0), by_batch },
       enrolled: { total: enrolled },

@@ -445,6 +445,11 @@ The screen (`reports/daily/page.tsx`, `DigestTableView`) is presentation only ov
 - a CSV of the rows as shown;
 - a week progress bar in Against target.
 The mail does not change. Batch-plan-derived targets were proposed and parked (Umesh: Manish ji keeps filling the grid).
+-344 (after an independent read-only audit found every live figure matched the raw collections): Show also hides the
+candidate lists under the tables unless it is All or Candidates. The screen's URL state keeps a `pending` list of queries
+asked for, so any number of quick changes build on each other. `live_note` carries the costs sentence only when the Costs
+table exists. The mail names at most `JOINED_LINE_MAX` (10) batches in the by-batch line. The table notes spell out
+the definitions a reader trips on: Enrolled now, seats, cancelled batches, the expense date, and the memo row.
 
 **Recipients are a custom list (cycle 2, Umesh 2026-10-07: "select it or add custom mail").** They are still
 the one Defaults string `digest_recipients`, but each entry is tagged: `u:<24-hex ERP user id>` is a picked
