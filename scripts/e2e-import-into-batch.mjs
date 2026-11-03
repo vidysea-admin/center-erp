@@ -247,9 +247,12 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
   cookieScopeX = await login(emX, pw);
   emScopeX = emX; pwScopeX = pw; BXscope = BX8;
   const holderY = await mkCand({ apaar_id: mkApaar(), location: locY._id });
+  // -342: a FREE student belongs to no centre, so the holder here is one a running batch at Y HOLDS - the case
+  // where the old "a centre you cannot see" refusal and its no-identity rule still apply (a free holder: 8g-8i).
+  await req(admin, "POST", `/api/batches/${(await mkBatch(locY, progR))._id}/members`, { candidate: holderY._id }, 201);
   const pv = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S2 ${S}`), row(`ZZIMP-S3 ${S}`, { APAAR: holderY.apaar_id })], batch: BX8 });
   const H = holdersOf(pv.data)[0];
-  ok("IIB-8c: a holder at Y, seen by a user at X, is reported with candidate:null and cannot be assigned",
+  ok("IIB-8c: a holder HELD at Y, seen by a user at X, is reported with candidate:null and cannot be assigned",
     pv.status === 200 && H && H.candidate === null && H.link === null && H.can_assign === false, JSON.stringify(pv.data.batch_plan));
   const blob = JSON.stringify(pv.data);
   ok("IIB-8d: the holder's NAME and PHONE appear nowhere in the whole preview JSON", !blob.includes(holderY.name) && !blob.includes(holderY.phone), blob.slice(0, 300));
@@ -257,6 +260,25 @@ let userScopeY, cookieScopeY, userScopeX, cookieScopeX, emScopeX, pwScopeX, BXsc
   ok("IIB-8e: ticking the out-of-scope holder assigns nothing; the in-scope new row lands", cm.status === 201 && cm.data.batch_result?.assigned_existing === 0 && cm.data.batch_result?.created === 1 &&
     !(await activeIn(BX8._id)).some((m) => idOf(m.candidate) === String(holderY._id)), JSON.stringify(cm.data.batch_result));
   ok("IIB-8f: the commit response does not carry the out-of-scope holder's name either", !JSON.stringify(cm.data).includes(holderY.name));
+  // -342: the same, but the Y holder is FREE (no batch holds them): scope is the new batch's, so they attach.
+  const freeY = await mkCand({ apaar_id: mkApaar(), location: locY._id });
+  const pvF = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S4 ${S}`, { APAAR: freeY.apaar_id })], batch: BX8 });
+  const HF = holdersOf(pvF.data)[0];
+  // review 2026-11-03: the preview is not a CAN/APAAR -> name lookup, so the free Y holder is attachable but NOT identified
+  ok("IIB-8g: a FREE holder at Y, seen by a user at X, can be assigned (holder_id) but is not named, phoned or linked",
+    pvF.status === 200 && HF?.can_assign === true && HF?.holder_id === String(freeY._id) && HF?.candidate === null && HF?.link === null &&
+    !JSON.stringify(pvF.data).includes(freeY.name) && !JSON.stringify(pvF.data).includes(freeY.phone), JSON.stringify(HF));
+  // an ARCHIVED holder of another centre gets the same generic refusal as a held one, never "<name> is archived"
+  const archY = await mkCand({ apaar_id: mkApaar(), location: locY._id });
+  await req(admin, "DELETE", `/api/candidates/${archY._id}`, { reason: "ZZIMP archived cross-centre holder" }, 200);
+  const pvA = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S5 ${S}`, { APAAR: archY.apaar_id })], batch: BX8 });
+  const HA = holdersOf(pvA.data)[0];
+  ok("IIB-8g2: an archived holder at Y is refused generically and not named", pvA.status === 200 && HA?.can_assign === false && HA?.holder_id === null &&
+    !JSON.stringify(pvA.data).includes(archY.name), JSON.stringify(HA));
+  const cmF = await importSheet(cookieScopeX, { rows: [row(`ZZIMP-S4 ${S}`, { APAAR: freeY.apaar_id })], batch: BX8, assign_holders: [freeY._id], confirm: true });
+  ok("IIB-8h: ticking the free holder attaches the EXISTING record (no second candidate) and it takes the batch's centre",
+    cmF.status === 201 && cmF.data.batch_result?.assigned_existing === 1 && (await byName(`ZZIMP-S4 ${S}`)).length === 0
+    && idOf((await req(admin, "GET", `/api/candidates/${freeY._id}`)).data.item.location) === String(locX._id), JSON.stringify(cmF.data.batch_result));
 }
 
 // ============================================================ 8b. QA-2930: the look-alike line must not name another centre's candidate
@@ -545,13 +567,20 @@ const personas = [];
   const Bx = await mkBatch(locX, progR);
   const single = await req(admin, "POST", `/api/batches/${Bx._id}/members`, { candidate: alien._id });
   const bulk2 = await req(admin, "POST", "/api/candidates/assign", { batch: Bx._id, candidate_ids: [alien._id] });
-  ok("IIB-P3: a different-centre candidate is refused by BOTH doors with the SAME sentence",
-    single.status === 409 && bulk2.data.results?.[0]?.ok === false && single.data.error === bulk2.data.results[0].error && /belongs to another centre/.test(single.data.error), JSON.stringify([single.data, bulk2.data.results]));
+  ok("IIB-P3: a free candidate from a different centre is joined by BOTH doors (-342: a free student belongs to no centre)",
+    single.status === 201 && bulk2.data.results?.[0]?.ok === false && /already active/i.test(bulk2.data.results[0].error ?? ""), JSON.stringify([single.data, bulk2.data.results]));
+  ok("IIB-P3b: ...and they took the batch's centre, audited with the old one",
+    idOf((await req(admin, "GET", `/api/candidates/${alien._id}`)).data.item.location) === String(locX._id)
+    && (await audOf(alien._id)).some((a) => String(a.old_value) === String(locY._id) && /on joining/.test(String(a.new_value))), JSON.stringify(await audOf(alien._id)));
   const otherRole = await mkCand({ program: progR2._id });
   const s2 = await req(admin, "POST", `/api/batches/${Bx._id}/members`, { candidate: otherRole._id });
-  const b2 = await req(admin, "POST", "/api/candidates/assign", { batch: Bx._id, candidate_ids: [otherRole._id] });
-  ok("IIB-P4: a different-job-role candidate is refused by BOTH doors with the SAME sentence",
-    s2.status === 409 && s2.data.error === b2.data.results?.[0]?.error && /different job role\/scheme/.test(s2.data.error), JSON.stringify([s2.data, b2.data.results]));
+  const Bx2 = await mkBatch(locX, progR);
+  const otherRole2 = await mkCand({ program: progR2._id });
+  const b2 = await req(admin, "POST", "/api/candidates/assign", { batch: Bx2._id, candidate_ids: [otherRole2._id] });
+  ok("IIB-P4: a free candidate of a different job role is joined by BOTH doors and takes the batch's job role",
+    s2.status === 201 && b2.data.results?.[0]?.ok === true
+    && idOf((await req(admin, "GET", `/api/candidates/${otherRole._id}`)).data.item.program) === String(progR._id)
+    && idOf((await req(admin, "GET", `/api/candidates/${otherRole2._id}`)).data.item.program) === String(progR._id), JSON.stringify([s2.data, b2.data.results]));
   const Bclosed = await mkBatch(locX, progR);
   await req(admin, "POST", `/api/batches/${Bclosed._id}/transition`, { target: "Cancelled", reason: "ZZIMP closed-batch fixture" }, 200);
   const c1 = await req(admin, "POST", `/api/batches/${Bclosed._id}/members`, { candidate: (await mkCand())._id });
@@ -579,10 +608,11 @@ const personas = [];
   const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else if (/\.(ts|tsx)$/.test(e.name)) files.push(p); } };
   walk(root);
   const holders = (needle) => files.filter((f) => fs.readFileSync(f, "utf8").includes(needle)).map((f) => path.relative(root, f).replace(/\\/g, "/"));
+  // -342: neither refusal exists any more - a free student belongs to no centre and may take any course.
   const A = holders("belongs to another centre — move them");
   const B = holders("is registered under a different job role/scheme");
-  ok("IIB-S1: exactly one place spells the other-centre refusal, and it is rules.ts", A.length === 1 && A[0] === "lib/rules.ts", JSON.stringify(A));
-  ok("IIB-S2: exactly one place spells the other-job-role refusal, and it is rules.ts", B.length === 1 && B[0] === "lib/rules.ts", JSON.stringify(B));
+  ok("IIB-S1: the other-centre refusal is spelled nowhere (-342 removed it)", A.length === 0, JSON.stringify(A));
+  ok("IIB-S2: the other-job-role refusal is spelled nowhere (-342 removed it)", B.length === 0, JSON.stringify(B));
   const callers = ["app/api/candidates/import/route.ts", "app/api/candidates/assign/route.ts", "app/api/batches/[id]/members/route.ts"];
   ok("IIB-S3: all three routes import assignCandidateToBatch", callers.every((c) => /assignCandidateToBatch/.test(fs.readFileSync(path.join(root, c), "utf8"))), callers.join(", "));
 }

@@ -1530,12 +1530,19 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     ok("-124 (M4-04): …and the adoption is audited, because it changes who can see the record",
       ((await req("GET", `/api/audit/Candidate/${walkIn._id}`)).data.items ?? []).some((a2) => /walk-in|enrolment/i.test(String(a2.new_value ?? ""))),
       "no audit row naming the adoption");
-    // and a candidate who DOES belong elsewhere is still refused — that rule is Manish's own
+    // -342 (Umesh 2026-11-03) reverses Manish's -124 rule: a candidate whose last centre is elsewhere is FREE, so
+    // they join and ADOPT this batch's centre (audited old -> new). It was a 409 "belongs to another centre".
     const otherLoc = (await req("POST", "/api/locations", { code: "OC" + stamp, name: `Other Centre ${stamp}`, approval_status: "Approved", operational_status: "Active", city: "Kota" }, 201)).data.item;
     const other = (await req("POST", "/api/candidates", { name: `Other Centre Cand ${stamp}`, phone: `81${stamp}46`.slice(0, 10), location: otherLoc._id, program: prog._id }, 201)).data.item;
-    const blocked = await req("POST", `/api/batches/${batch._id}/members`, { candidate: other._id });
-    ok("-124 (M4-04): a candidate who belongs to ANOTHER centre is still refused (409) — only 'unplaced' is new",
-      blocked.status === 409 && /another centre/i.test(String(blocked.data?.error ?? "")), `${blocked.status} ${String(blocked.data?.error ?? "").slice(0, 70)}`);
+    const joinedOther = await req("POST", `/api/batches/${batch._id}/members`, { candidate: other._id });
+    ok("-124 (M4-04) / -342: a candidate whose last centre is ANOTHER centre is free, so they join (201)", joinedOther.status === 201, `${joinedOther.status} ${String(joinedOther.data?.error ?? "").slice(0, 70)}`);
+    const otherNow = (await req("GET", `/api/candidates/${other._id}`)).data.item;
+    ok("-342: ...and they take this batch's centre, audited with the old centre",
+      String(otherNow?.location?._id ?? otherNow?.location) === String(loc._id)
+      && ((await req("GET", `/api/audit/Candidate/${other._id}`)).data.items ?? []).some((a2) => a2.field === "location" && String(a2.old_value) === String(otherLoc._id)),
+      JSON.stringify(otherNow?.location));
+    // the fixture batch's roster is what the closure pins below count - put it back as it was
+    if (joinedOther.status === 201) await req("DELETE", `/api/members/${joinedOther.data.item._id}`, { reason: "-342 pin: roster put back as it was" }, 200);
   }
 
   // ---- -120 (M4-14): the chain's DATA — dates on the closure, mock test + roll number per candidate ----
@@ -1701,7 +1708,7 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
   // Skill India gives one CAN id per person, so the same Candidate row comes back for a second course.
   // Completing a batch never set `left_on`, so Rule 20 read every pass-out as "active" in that batch for
   // ever. Decided: free on Completed/Closed/Cancelled (not Assessment Awaited/Closing), any course, any
-  // centre; a fresh lead from another centre is still refused.
+  // centre; a fresh lead from another centre joins too (-342).
   {
     const mkPlain = async (tag, l, p) => {
       const room = (await req("POST", `/api/locations/${l._id}/rooms`, { name: `RE-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
@@ -1786,9 +1793,129 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     await req("POST", `/api/members/${xm._id}/drop`, { left_on: today, drop_reason: "re-enrol pin" }, 200);
     ok("re-enrol: a DROPPED student joins a batch of another course at another centre", (await join(rC, x)).status === 201);
 
-    // The centre/course refusal still protects fresh leads.
+    // -342 (Umesh 2026-11-03): a free student belongs to no centre, and a fresh lead is free too.
     const fresh = await mkCand(2);
-    ok("re-enrol: a fresh lead from another centre is still refused", (await join(rC, fresh)).status === 409);
+    const freshJoin = await join(rC, fresh);
+    ok("free-centre: a fresh lead from another centre joins a batch of another centre/course (-342 reverses the -340 refusal)", freshJoin.status === 201, JSON.stringify(freshJoin.data).slice(0, 200));
+    const freshNow = (await req("GET", `/api/candidates/${fresh._id}`)).data.item;
+    ok("free-centre: ...and the fresh lead adopts the new batch's centre and course",
+      String(freshNow?.location?._id ?? freshNow?.location) === String(loc2._id) && String(freshNow?.program?._id ?? freshNow?.program) === String(prog2._id),
+      JSON.stringify({ l: freshNow?.location, p: freshNow?.program }));
+
+    // ---- -342: a free student joins ANY centre. Scope is the NEW batch's, not the candidate's old centre. ----
+    {
+      const PW = "Test@12345";
+      const locU = (await req("POST", "/api/locations", { code: "LFC" + stamp, name: "Free-centre U " + stamp, external_id: "EFC" + stamp, approval_status: "Approved", spoc_name: "Test SPOC", principal_name: "Test Principal" }, 201)).data.item;
+      const mkFree = async (tag, l = loc, extra = {}) => (await req("POST", "/api/candidates", {
+        name: `FC ${tag} ${stamp}`, phone: `81${tag}${stamp}0`.slice(0, 10), location: l._id, program: prog._id, sidh_candidate_id: `CAN_96${stamp}${tag}`, ...extra,
+      }, 201)).data.item;
+      const bU = await mkPlain(5, locU, prog);
+      const cmEmail = `fc.cm.${stamp}@vidysea.com`, cm2Email = `fc.cm2.${stamp}@vidysea.com`;
+      await req("POST", "/api/users", { name: "FC CM " + stamp, email: cmEmail, password: PW, can_edit: true, role: "Center Manager", location_scope: [locU._id] }, 201);
+      await req("POST", "/api/users", { name: "FC CM2 " + stamp, email: cm2Email, password: PW, can_edit: true, role: "Center Manager", location_scope: [locU._id] }, 201);
+      const cmCookie = await loginAs(cmEmail, PW), cm2Cookie = await loginAs(cm2Email, PW);
+      ok("free-centre [precondition]: both Center Managers can sign in", !!cmCookie && !!cm2Cookie);
+      const asUser = async (ck, fn) => { const saved = cookie; cookie = ck; try { return await fn(); } finally { cookie = saved; } };
+      const lookup = (ck, q) => asUser(ck, () => req("POST", "/api/candidates/free-lookup", { q }));
+      const idOf2 = (v) => String(v?._id ?? v);
+
+      // sM: free (never held), last centre M. sU: free, already at the CM's own centre U.
+      const sM = await mkFree(1);
+      const sU = await mkFree(2, locU);
+      const cmPool = (await asUser(cmCookie, () => req("GET", "/api/candidates?pool=1&limit=2000"))).data.items ?? [];
+      ok("free-centre pool: a scoped Center Manager's pool lists free students of their own centre", cmPool.some((c) => idOf2(c) === idOf2(sU)), String(cmPool.length));
+      ok("free-centre pool: ...and does NOT list another centre's free student (that one is found by exact lookup)", !cmPool.some((c) => idOf2(c) === idOf2(sM)));
+
+      const byMobile = await lookup(cmCookie, sM.phone);
+      ok("free-centre lookup: the scoped CM finds another centre's free student by exact mobile",
+        byMobile.status === 200 && byMobile.data.items?.length === 1 && idOf2(byMobile.data.items[0]) === idOf2(sM), JSON.stringify(byMobile.data).slice(0, 240));
+      const hit = byMobile.data.items?.[0] ?? {};
+      ok("free-centre lookup: ...with an explicit minimal field list (no full phone, DOB, Aadhaar, APAAR, email)",
+        !!hit.name && typeof hit.phone_masked === "string" && !String(hit.phone_masked).includes(sM.phone) && String(hit.phone_masked).endsWith(sM.phone.slice(-4))
+        && !("phone" in hit) && !("dob" in hit) && !("aadhaar_no" in hit) && !("apaar_id" in hit) && !("email" in hit),
+        JSON.stringify(hit));
+      const byCan = await lookup(cmCookie, sM.sidh_candidate_id.toLowerCase().replace("_", " "));
+      ok("free-centre lookup: ...and by CAN ID, however it is spelled", byCan.status === 200 && byCan.data.items?.length === 1 && idOf2(byCan.data.items[0]) === idOf2(sM), JSON.stringify(byCan.data).slice(0, 200));
+      ok("free-centre lookup: a short or empty query is a 400, not a fishing trip",
+        (await lookup(cmCookie, "98765")).status === 400 && (await lookup(cmCookie, "")).status === 400);
+      const lookAud = ((await req("GET", `/api/audit/Candidate/${sM._id}`)).data.items ?? []).filter((a) => a.field === "free_lookup");
+      ok("free-centre lookup: every lookup that finds someone is audited against that student", lookAud.length >= 2, JSON.stringify(lookAud.map((a) => a.new_value)));
+      ok("free-centre lookup: ...without writing the full mobile into the audit trail", lookAud.length > 0 && lookAud.every((a) => !String(a.new_value ?? "").includes(sM.phone)));
+      ok("free-centre lookup: anonymous is 401", (await fetch(BASE + "/api/candidates/free-lookup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ q: sM.phone }) })).status === 401);
+
+      // Add: 201, centre adopted, audited old -> new.
+      const addM = await asUser(cmCookie, () => join(bU, sM));
+      ok("free-centre add: the scoped CM adds the other centre's free student to a batch at their centre", addM.status === 201, JSON.stringify(addM.data).slice(0, 240));
+      const sMNow = (await req("GET", `/api/candidates/${sM._id}`)).data.item;
+      ok("free-centre add: ...and the student's centre becomes U", idOf2(sMNow?.location) === idOf2(locU), JSON.stringify(sMNow?.location));
+      const adoptAud = ((await req("GET", `/api/audit/Candidate/${sM._id}`)).data.items ?? []).find((a) => a.field === "location" && /batch/.test(String(a.new_value ?? "")));
+      ok("free-centre add: ...audited old -> new (old = the previous centre)", !!adoptAud && String(adoptAud.old_value) === idOf2(loc), JSON.stringify(adoptAud && { o: adoptAud.old_value, n: adoptAud.new_value }));
+      ok("free-centre held: once a batch holds them, the lookup returns nothing for the scoped CM", (await lookup(cmCookie, sM.phone)).data.items?.length === 0);
+      ok("free-centre held: ...and for Admin too (a held student is not free)", (await req("POST", "/api/candidates/free-lookup", { q: sM.phone })).data.items?.length === 0);
+
+      // A student held by a RUNNING batch at M.
+      const { b: hb, cands: hc } = await mkBatch(1, 18);
+      ok("free-centre held: a student in a running batch at another centre is not found by the CM's lookup", (await lookup(cmCookie, hc[0].phone)).data.items?.length === 0);
+      const heldCm = await asUser(cmCookie, () => join(bU, hc[0]));
+      ok("free-centre held: ...the CM's Add is refused and does not name the holding batch", heldCm.status === 403 && !JSON.stringify(heldCm.data).includes(hb.code), JSON.stringify(heldCm.data).slice(0, 200));
+      const heldAdmin = await join(bU, hc[0]);
+      ok("free-centre held: ...and Admin's Add is a 409 (one batch holds a person at a time)", heldAdmin.status === 409 && /already active/i.test(String(heldAdmin.data?.error ?? "")), JSON.stringify(heldAdmin.data).slice(0, 200));
+
+      // Admin pool: every centre's free students, never a running one, never an archived one.
+      const sFar = await mkFree(7, loc2);
+      const arch = await mkFree(3);
+      await req("POST", "/api/candidates/bulk-archive", { candidate_ids: [arch._id], reason: "free-centre pin" }, 200);
+      const admPool = (await req("GET", "/api/candidates?pool=1&limit=2000")).data.items ?? [];
+      ok("free-centre pool: Admin's pool lists free students of EVERY centre", admPool.some((c) => idOf2(c) === idOf2(sU)) && admPool.some((c) => idOf2(c) === idOf2(sFar)), String(admPool.length));
+      ok("free-centre pool: ...a student a running batch holds is not in it", !admPool.some((c) => idOf2(c) === idOf2(hc[0])));
+      ok("free-centre pool: ...nor one who was just added to a batch", !admPool.some((c) => idOf2(c) === idOf2(sM)));
+      ok("free-centre pool: ...nor an archived one", !admPool.some((c) => idOf2(c) === idOf2(arch)));
+
+      // Bulk assign door: same rule.
+      const sB = await mkFree(4);
+      const bulk = await asUser(cmCookie, () => req("POST", "/api/candidates/assign", { batch: bU._id, candidate_ids: [sB._id, hc[0]._id] }));
+      const bulkRes = bulk.data.results ?? [];
+      ok("free-centre bulk assign: a free student of another centre is added, a held one is refused",
+        bulk.status === 200 && bulkRes.find((r) => r.candidate === sB._id)?.ok === true && bulkRes.find((r) => r.candidate === hc[0]._id)?.ok === false, JSON.stringify(bulk.data).slice(0, 300));
+
+      // Batch import: an existing CAN from another centre attaches the EXISTING record; a phone-only match only warns.
+      const eCand = await mkFree(5), fCand = await mkFree(6);
+      const imp = (ck, rows, confirm, ticks) => asUser(ck, async () => {
+        const fd = new FormData();
+        fd.append("file", new Blob([["Name,Phone,CAN", ...rows].join("\n")], { type: "text/csv" }), "fc.csv");
+        fd.append("location", String(locU._id)); fd.append("program", String(prog._id));
+        fd.append("mapping", JSON.stringify({ Name: "name", Phone: "phone", CAN: "sidh_candidate_id" }));
+        fd.append("accept_unknown", "1"); fd.append("batch", String(bU._id));
+        if (ticks) fd.append("assign_holders", JSON.stringify(ticks));
+        if (confirm) fd.append("confirm", "1");
+        const r = await fetch(BASE + "/api/candidates/import", { method: "POST", headers: { cookie }, body: fd });
+        return { status: r.status, data: await r.json().catch(() => ({})) };
+      });
+      const newPhone = `7${stamp}${String(Date.now()).slice(-3)}`.slice(0, 10);
+      const rowsFc = [`FC Sheet E ${stamp},${newPhone},${eCand.sidh_candidate_id}`, `FC Sheet F ${stamp},${fCand.phone},`];
+      const pv = await imp(cmCookie, rowsFc, false);
+      const holders = pv.data?.batch_plan?.holders ?? [];
+      ok("free-centre import: the preview offers the other centre's free CAN holder as an existing candidate to attach",
+        pv.status === 200 && holders.length === 1 && holders[0].can_assign === true && holders[0].holder_id === idOf2(eCand), JSON.stringify(pv.data).slice(0, 400));
+      ok("free-centre import: ...and that other-centre holder's phone is masked in the preview", !JSON.stringify(holders).includes(eCand.phone), JSON.stringify(holders).slice(0, 200));
+      const canCount = async () => ((await req("GET", `/api/candidates?q=${encodeURIComponent(eCand.sidh_candidate_id)}&limit=50`)).data.items ?? []).length;
+      const before = await canCount();
+      const done = await imp(cmCookie, rowsFc, true, [idOf2(eCand)]);
+      ok("free-centre import: commit attaches the existing record (no second candidate for that CAN)",
+        done.status === 201 && done.data.batch_result?.assigned_existing === 1 && (await canCount()) === before, JSON.stringify(done.data).slice(0, 300));
+      const eNow = (await req("GET", `/api/candidates/${eCand._id}`)).data.item;
+      ok("free-centre import: ...and the attached student took the batch's centre", idOf2(eNow?.location) === idOf2(locU), JSON.stringify(eNow?.location));
+      const fMem = ((await req("GET", `/api/batches/${bU._id}/members`)).data.items ?? []).some((m) => idOf2(m.candidate) === idOf2(fCand));
+      ok("free-centre import: a phone-only match is NOT attached (families share phones); it stays a possible duplicate", !fMem && (pv.data?.duplicate_count ?? 0) >= 1, JSON.stringify({ fMem, d: pv.data?.duplicate_count }));
+
+      // Rate limit: 30 lookups per user per 10 minutes, then 429. cm2 is throttled; cm is not.
+      let firstBlocked = 0;
+      for (let i = 1; i <= 34 && !firstBlocked; i++) {
+        if ((await lookup(cm2Cookie, "9" + String(100000000 + i))).status === 429) firstBlocked = i;
+      }
+      ok("free-centre lookup: rate limited per user (a 429 within 34 rapid lookups)", firstBlocked > 0, `first 429 at ${firstBlocked}`);
+      ok("free-centre lookup: ...the limit is per user - the other Center Manager is not throttled by it", (await lookup(cmCookie, sM.phone)).status === 200);
+    }
   }
 }
 
@@ -6350,6 +6477,188 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
   ok("qa-location-delete-warn-impact: an audit row records the delete with its impact snapshot",
     ldAudit.some((a) => a.field === "delete" && a.new_value?.snapshot?.carried),
     JSON.stringify(ldAudit.map((a) => a.field)));
+}
+
+// ================= history (release -342, Umesh 2026-11-03) =================
+// "Student ko dikhna chahiye ki wo kaun kaun se batch me rahe" - a student now has SEVERAL batches over
+// time, and neither the portal nor the staff drawer showed more than one. Four things pinned here:
+//   1. /p/me returns every seat (dropped included), each with its OWN attendance token;
+//   2. the govt-portal figure belongs to ITS batch (it used to be keyed by candidate alone, so an old
+//      batch's hours showed up under the new batch);
+//   3. admin History (GET /api/candidates/:id/results) is driven by the seats, with explicit fields only;
+//   4. "Certified" needs a recorded Pass - a finished batch with no result is "Training Completed", and
+//      latest_result reads the person's LATEST seat only.
+// Own helpers and a distinct prefix (HX / phone 78 / CAN_94): the -112 block's mkBatch is block-scoped.
+{
+  const { MongoClient: HxMongo, ObjectId: HxOid } = await import("mongodb");
+  const hxMc = new HxMongo(process.env.MONGODB_URL || "mongodb://127.0.0.1:27017");
+  await hxMc.connect();
+  const hxDb = hxMc.db(process.env.MONGODB_DB || "center_erp_ci");
+  const hxRoom = async (tag) => (await req("POST", `/api/locations/${loc._id}/rooms`, { name: `HX-${tag}-${stamp}`, type: "Classroom" }, 201)).data.item;
+  const hxTrainer = async (tag) => (await req("POST", "/api/trainers", { name: `TEST-HX${tag} ${stamp}`, phone: `77${tag}${stamp}9`.slice(0, 10), skills: [prog.trainer_skill] }, 201)).data.item;
+  const hxPlain = async (tag, size = 5) => (await req("POST", "/api/batches", { location: loc._id, program: prog._id, trainer: (await hxTrainer(tag))._id, room: (await hxRoom(tag))._id, planned_start: today, target_size: size }, 201)).data.item;
+  const hxCand = async (tag, extra = {}) => (await req("POST", "/api/candidates", {
+    name: `HX ${tag} ${stamp}`, phone: `78${stamp}0${tag}`, location: loc._id, program: prog._id, sidh_candidate_id: `CAN_94${stamp}${tag}` /* not 96: the free-centre block (FC) owns that */, ...extra,
+  }, 201)).data.item;
+  // A batch that is Active with the given candidates on its roster (enrolment steps done).
+  const hxRunning = async (tag, cands) => {
+    const b = await hxPlain(tag, cands.length);   // target = roster size, or Ready fails the 80% roster check
+    const mems = [];
+    for (const c of cands) {
+      const m = (await req("POST", `/api/batches/${b._id}/members`, { candidate: c._id }, 201)).data.item;
+      await req("PATCH", `/api/members/${m._id}`, { reg_done: true, kyc_done: true, enroll_done: true, accept_done: true }, 200);
+      mems.push(m);
+    }
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Ready" }, 200);
+    await req("POST", `/api/batches/${b._id}/transition`, { target: "Active" }, 200);
+    return { b, mems };
+  };
+  const hxStatus = async (b) => (await req("GET", `/api/batches/${b._id}`)).data.item.status;
+  // Marking the last result can derive the batch to Completed by itself; only force it if it has not.
+  const hxFinish = async (b) => {
+    if ((await hxStatus(b)) !== "Completed") await req("POST", `/api/batches/${b._id}/complete`, { reason: "history pin: batch finished", force: true });
+    ok(`history fixture: ${b.code} is Completed`, (await hxStatus(b)) === "Completed", await hxStatus(b));
+  };
+  const hxPass = async (b, mem, certNo) => {
+    await req("PUT", `/api/batches/${b._id}/results`, { rows: [{ member: String(mem._id), result: "Pass", assessed_on: today }] }, 200);
+    const row = ((await req("GET", `/api/batches/${b._id}/results`)).data.items ?? []).find((i) => String(i.member) === String(mem._id));
+    // a file on a Pass row IS the certificate (-112); the number is a separate touch
+    const fd = new FormData();
+    fd.append("file", new File([new Uint8Array([37, 80, 68, 70, 45, 49, 46, 52, 10])], `hx-${certNo}.pdf`, { type: "application/pdf" }));
+    fd.append("folder_centre", "_e2e"); fd.append("folder_kind", "certificates");
+    const up = (await fetch(`${BASE}/api/upload`, { method: "POST", headers: { cookie }, body: fd }).then((r) => r.json())).url;
+    await req("PATCH", `/api/results/${row?.result?._id}`, { certificate_file: up }, 200);
+    await req("PATCH", `/api/results/${row?.result?._id}`, { certificate_no: certNo }, 200);
+  };
+  const hxLookup = (ip, json) => fetch(`${BASE}/api/public/portal-lookup`, { method: "POST", headers: { "Content-Type": "application/json", "x-forwarded-for": ip }, body: JSON.stringify(json) })
+    .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const hxPublic = (tok) => fetch(`${BASE}/api/public/attendance/${tok}`).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const hxOid = (x) => new HxOid(String(x));
+
+  // ---- S: passed batch A (completed), then B (dropped), now C (running) ----
+  const S = await hxCand(1, { dob: "1999-03-04" });
+  const { b: bA, mems: mA } = await hxRunning(1, [S]);
+  await hxPass(bA, mA[0], `CERT-HX-${stamp}`);
+  await hxFinish(bA);
+  const bB = await hxPlain(2);
+  const sB = await req("POST", `/api/batches/${bB._id}/members`, { candidate: S._id });
+  ok("history fixture: S joins B after finishing A", sB.status === 201, JSON.stringify(sB.data).slice(0, 160));
+  await req("POST", `/api/members/${sB.data.item?._id}/drop`, { left_on: today, drop_reason: "history pin: left B" }, 200);
+  const { b: bC } = await hxRunning(3, [S]);
+
+  // ---- govt-portal rows: one for A, and a NO-batch row that must not leak into C ----
+  const nowMs = Date.now();
+  await hxDb.collection("govtattendancerows").insertMany([
+    { candidate: hxOid(S._id), batch: hxOid(bA._id), match_status: "Matched", name: S.name, total_days_present: 5, total_working_days: 6, total_hours_minutes: 300, createdAt: new Date(nowMs - 60000), updatedAt: new Date(nowMs - 60000) },
+    { candidate: hxOid(S._id), batch: null, match_status: "Matched", name: S.name, total_days_present: 99, total_working_days: 99, total_hours_minutes: 5940, createdAt: new Date(nowMs), updatedAt: new Date(nowMs) },
+  ]);
+
+  // ---- 1. portal: every seat, each with its own token ----
+  const lk = await hxLookup("10.78.0.1", { phone: S.phone, dob: "1999-03-04" });
+  const courses = lk.data.courses ?? [];
+  ok("history portal: a student with 3 seats gets 3 entries from the lookup", lk.status === 200 && courses.length === 3, JSON.stringify(lk.data).slice(0, 300));
+  const toks = courses.map((c) => String(c.url ?? "").split("/").pop());
+  ok("history portal: …each with its OWN attendance link", new Set(toks).size === 3 && toks.every((t) => /^[0-9a-f]{32}$/.test(t)), JSON.stringify(toks));
+  ok("history portal: …newest first (C, B, A)", courses.map((c) => c.batch).join(",") === [bC.code, bB.code, bA.code].join(","), JSON.stringify(courses.map((c) => c.batch)));
+  ok("history portal: …labelled Running / Dropped / Completed", courses.map((c) => c.status).join(",") === "Running,Dropped,Completed", JSON.stringify(courses.map((c) => c.status)));
+  const cardA = courses.find((c) => c.batch === bA.code) ?? {};
+  ok("history portal: …the finished card carries result and certificate number", cardA.result === "Pass" && cardA.certificate_no === `CERT-HX-${stamp}`, JSON.stringify(cardA));
+  ok("history portal: …every card says course, centre and days attended",
+    courses.length > 0 && courses.every((c) => c.program && c.centre && typeof c.days_present === "number" && typeof c.days_held === "number"), JSON.stringify(courses[0]));
+  const pubs = await Promise.all(toks.map(hxPublic));
+  ok("history portal: each link opens ITS OWN batch", pubs.length === 3 && pubs.every((p, i) => p.status === 200 && p.data.batch === courses[i].batch), JSON.stringify(pubs.map((p) => p.data.batch)));
+  const pubA = pubs[2]?.data ?? {};
+  const pubC = pubs[0]?.data ?? {};
+  ok("history govt figure: A's link shows A's own portal row (5 days), not the newer no-batch row", pubA.govt?.days_present === 5, JSON.stringify(pubA.govt));
+  ok("history govt figure: C's link shows NO figure - A's hours do not leak into the new batch", pubC.batch === bC.code && pubC.govt === null, JSON.stringify({ b: pubC.batch, g: pubC.govt }));
+  ok("history portal: the dropped seat's link still answers, as 'left', with no live verdict", !!pubs[1]?.data.left_on && pubs[1].data.eligible === undefined, JSON.stringify(pubs[1]?.data ?? null));
+  const rosterOf = async (b) => (await req("GET", `/api/batches/${b._id}/members`)).data.items ?? [];
+  const gA = (await rosterOf(bA)).find((m) => String(m.candidate?._id) === String(S._id))?.govt_attendance;
+  const gC = (await rosterOf(bC)).find((m) => String(m.candidate?._id) === String(S._id))?.govt_attendance;
+  ok("history govt figure: batch A's roster shows A's figure", gA?.days_present === 5, JSON.stringify(gA));
+  ok("history govt figure: batch C's roster shows none", gC == null, JSON.stringify(gC));
+  const attOf = async (b) => ((await req("GET", `/api/batches/${b._id}/attendance`)).data.members ?? []).find((m) => String(m.candidate_id) === String(S._id));
+  ok("history govt figure: batch A's Attendance tab shows A's figure, C's shows none",
+    (await attOf(bA))?.govt?.days_present === 5 && (await attOf(bC))?.govt === null, JSON.stringify({ a: (await attOf(bA))?.govt, c: (await attOf(bC))?.govt }));
+
+  // single-seat student: the no-batch row is the only evidence there is, so it still counts
+  const T = await hxCand(4, { dob: "1998-02-03" });
+  await hxRunning(4, [T]);
+  await hxDb.collection("govtattendancerows").insertOne({ candidate: hxOid(T._id), batch: null, match_status: "Matched", name: T.name, total_days_present: 3, total_working_days: 4, total_hours_minutes: 180, createdAt: new Date(), updatedAt: new Date() });
+  const lkT = await hxLookup("10.78.0.2", { phone: T.phone, dob: "1998-02-03" });
+  const pubT = await hxPublic(String(lkT.data.url ?? "").split("/").pop());
+  ok("history govt figure: a one-batch student keeps a no-batch portal row (fallback)", pubT.data.govt?.days_present === 3, JSON.stringify(pubT.data.govt));
+  ok("history portal: a one-batch student still gets the single link (My Training as before)", lkT.data.enrolled === true && /\/p\/attendance\//.test(lkT.data.url ?? "") && (lkT.data.courses ?? []).length === 1, JSON.stringify(lkT.data).slice(0, 200));
+
+  // ---- 3. admin History ----
+  const hist = await req("GET", `/api/candidates/${S._id}/results`);
+  const hItems = hist.data.items ?? [];
+  ok("history admin: lists the passed, the dropped and the running seat", hist.status === 200 && hItems.length === 3, JSON.stringify(hist.data).slice(0, 300));
+  const hBy = (code) => hItems.find((i) => i.batch?.code === code) ?? {};
+  ok("history admin: …newest first", hItems.map((i) => i.batch?.code).join(",") === [bC.code, bB.code, bA.code].join(","), JSON.stringify(hItems.map((i) => i.batch?.code)));
+  ok("history admin: …the passed seat carries result and certificate", hBy(bA.code).result === "Pass" && hBy(bA.code).certificate_no === `CERT-HX-${stamp}` && hBy(bA.code).status === "Completed", JSON.stringify(hBy(bA.code)));
+  ok("history admin: …the dropped seat shows with no result", hBy(bB.code).status === "Dropped" && !!hBy(bB.code).left_on && hBy(bB.code).result == null, JSON.stringify(hBy(bB.code)));
+  ok("history admin: …the running seat reads Running", hBy(bC.code).status === "Running", JSON.stringify(hBy(bC.code)));
+  ok("history admin: …each row has course, centre and an attendance summary",
+    hItems.length > 0 && hItems.every((i) => i.program && i.centre && typeof i.attendance?.days_held === "number" && typeof i.attendance?.days_present === "number"), JSON.stringify(hItems[0]));
+  const HX_ALLOWED = new Set(["member", "batch", "program", "centre", "start_date", "end_date", "status", "joined_on", "left_on", "released_on", "attendance", "result", "score", "certificate_status", "certificate_no", "certificate_date"]);
+  const hStray = [...new Set(hItems.flatMap((i) => Object.keys(i)).filter((k) => !HX_ALLOWED.has(k)))];
+  ok("history admin: explicit fields only - no evidence file, assessor or attempts go out", hItems.length > 0 && hStray.length === 0 && !/evidence_file|assessor|attempts|eligibility_override/.test(JSON.stringify(hist.data)), JSON.stringify(hStray));
+  const hTr = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("trainer.jpr03@vidysea.com", "CiOnly@123") } });
+  ok("history admin: a Trainer is refused, like the candidate record itself (403)", hTr.status === 403, String(hTr.status));
+  const hEn = await fetch(`${BASE}/api/candidates/${S._id}/results`, { headers: { cookie: await loginAs("enroll@vidysea.com", "CiOnly@123") } });
+  ok("history admin: Enrollment may read it (200)", hEn.status === 200, String(hEn.status));
+  ok("history admin: anonymous is refused (401)", (await fetch(`${BASE}/api/candidates/${S._id}/results`)).status === 401);
+
+  // ---- 4. Certified needs a recorded Pass ----
+  const { createRequire: hxRequire } = await import("node:module");
+  const hxPath = await import("node:path");
+  const hxRoot = hxPath.resolve(hxPath.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+  const hxJm = hxRequire(import.meta.url)(hxPath.join(hxRoot, "node_modules/jiti"));
+  const HJ = (hxJm.createJiti ?? hxJm)(hxPath.join(hxRoot, "scripts/e2e.mjs"), { interopDefault: true })(hxPath.join(hxRoot, "src/lib/candidate-journey.ts"));
+  const listRow = async (c) => ((await req("GET", `/api/candidates?location=${loc._id}&q=${encodeURIComponent(c.name)}&limit=50`)).data.items ?? []).find((r) => String(r._id) === String(c._id)) ?? {};
+  const journeyOfRow = (r) => HJ.journeyOf({ ...r, active_batch_status: r.active_batch?.status });
+
+  // U: batch completed, nobody got a result
+  const U = await hxCand(5);
+  const { b: bU } = await hxRunning(5, [U]);
+  await hxFinish(bU);
+  // Completing a batch writes a Fail for anyone unmarked (complete route), so "Completed with no result" is legacy
+  // data only; recreate it directly: no result row, lifecycle Completed, as the old records are.
+  await hxDb.collection("candidateresults").deleteMany({ candidate: hxOid(U._id) });
+  await hxDb.collection("candidates").updateOne({ _id: hxOid(U._id) }, { $set: { lifecycle_status: "Completed" } }); // what the legacy blanket close (Rule 21) left
+  const rowU = await listRow(U);
+  ok("history certified: U finished a batch with no result - lifecycle is Completed, latest_result is null", rowU.lifecycle_status === "Completed" && rowU.latest_result == null, JSON.stringify({ l: rowU.lifecycle_status, r: rowU.latest_result }));
+  ok("history certified: …and reads 'Training Completed', not Certified", journeyOfRow(rowU) === "Training Completed", journeyOfRow(rowU));
+  ok("history certified: a recorded Pass still reads Certified", HJ.journeyOf({ lifecycle_status: "Completed", latest_result: "Pass" }) === "Certified");
+  ok("history certified: Completed + a Fail reads Failed (unchanged)", HJ.journeyOf({ lifecycle_status: "Completed", latest_result: "Fail" }) === "Failed");
+  const dropU = await req("POST", `/api/candidates/${U._id}/drop`, { reason: "history pin: drop from Training Completed" }, 200);
+  ok("history certified: dropping U stamps the stage they were at - Training Completed, not Certified", dropU.data.item?.dropped_from_stage === "Training Completed", String(dropU.data.item?.dropped_from_stage));
+
+  // V: passed and finished, no later seat - the positive control
+  const V = await hxCand(6);
+  const { b: bV, mems: mV } = await hxRunning(6, [V]);
+  await hxPass(bV, mV[0], `CERT-HXV-${stamp}`);
+  await hxFinish(bV);
+  const rowV = await listRow(V);
+  ok("history certified: V passed and finished - latest_result Pass, journey Certified", rowV.latest_result === "Pass" && journeyOfRow(rowV) === "Certified", JSON.stringify({ r: rowV.latest_result, j: journeyOfRow(rowV) }));
+
+  // S again: A (Pass) -> B (dropped) -> C (running): held by C, whose result is none
+  const rowS = await listRow(S);
+  ok("history certified: S holds C now - A's Pass does not label them Certified", rowS.latest_result == null && rowS.active_batch?.code === bC.code, JSON.stringify({ r: rowS.latest_result, b: rowS.active_batch?.code }));
+
+  // W: passed E (finished), joined F and was dropped. Latest seat = F, which has no result.
+  const W = await hxCand(7);
+  const { b: bE, mems: mE } = await hxRunning(8, [W]);
+  await hxPass(bE, mE[0], `CERT-HXW-${stamp}`);
+  await hxFinish(bE);
+  const bF = await hxPlain(9);
+  const wm = await req("POST", `/api/batches/${bF._id}/members`, { candidate: W._id });
+  await req("POST", `/api/members/${wm.data.item?._id}/drop`, { left_on: today, drop_reason: "history pin: W left F" }, 200);
+  const rowW = await listRow(W);
+  ok("history certified: W passed E but LEFT their latest seat F - latest_result is that seat's (none), not E's Pass", rowW.latest_result == null, String(rowW.latest_result));
+
+  await hxMc.close();
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

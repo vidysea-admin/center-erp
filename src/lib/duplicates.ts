@@ -10,6 +10,13 @@ export function normalizePhone(raw: unknown): string {
   return digits.length > 10 ? digits.slice(-10) : digits;
 }
 
+// -342: a number shown to someone who may not see the whole record (a free student of another centre): the
+// last four digits only, the rest as asterisks.
+export function maskPhone(raw: unknown): string | null {
+  const d = normalizePhone(raw);
+  return d.length >= 4 ? "*".repeat(Math.max(0, d.length - 4)) + d.slice(-4) : null;
+}
+
 export type DuplicateHit = {
   field: "phone" | "name_dob";
   candidate_id: string;

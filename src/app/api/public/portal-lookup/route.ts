@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, HttpError, readJson } from "@/lib/authz";
 import { BatchMember, Candidate, Notification, PublicToken } from "@/models";
-import { HOLDS_PERSON } from "@/lib/candidate-journey";
+import { memberTrainingSummary } from "@/lib/rules";
 import { clientKey, rateLimit, phoneChallengeGate, emailChallengeGate } from "@/lib/rate-limit";
 import { sendSms, smsTemplateFor } from "@/lib/sms";
 import { renderMail, sendMail } from "@/lib/mailer";
@@ -51,11 +51,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // Reached by the DOB single-step path AND by the DOB-less path only AFTER its OTP is verified —
   // this is the ONLY place a purpose:"attendance" PublicToken is minted on this route.
   const completeLookup = async (cand: any) => {
-    // At most one seat HOLDS the person (partial-unique index on HOLDS_PERSON). A pass-out with no current
-    // seat still gets their latest finished batch (re-enrolment, 2026-11-02: finished seats are released,
-    // not left), so My Training does not go blank the day their batch completes.
-    const member = await BatchMember.findOne({ candidate: cand._id, ...HOLDS_PERSON }).select("_id batch").lean<any>()
-      ?? await BatchMember.findOne({ candidate: cand._id, left_on: null }).sort({ joined_on: -1 }).select("_id batch").lean<any>();
+    // -342 (Umesh 2026-11-03): EVERY seat of the person, dropped ones included, newest first - a student has several
+    // batches over time and must see them all ("My courses"). Each seat gets its own attendance link, minted or
+    // reused exactly as before; the second factor that got us here has not changed.
+    const seats = await BatchMember.find({ candidate: cand._id }).sort({ joined_on: -1, createdAt: -1 })
+      .select("_id batch left_on released_on").lean<any[]>();
+    // `url` stays the single link the page used to get: the seat that HOLDS the person (at most one - partial-unique
+    // index on HOLDS_PERSON), else their latest finished one (re-enrolment, 2026-11-02: finished seats are released,
+    // not left), else - only dropped seats - the latest of those.
+    const member = seats.find((s) => !s.left_on && !s.released_on) ?? seats.find((s) => !s.left_on) ?? seats[0];
     if (!member) {
       // Real candidate, no batch yet — say where they stand instead of a dead end.
       return NextResponse.json({
@@ -65,12 +69,30 @@ export const POST = apiHandler(async (req: NextRequest) => {
         lifecycle_status: cand.lifecycle_status ?? "Unassigned",
       });
     }
-    const existing = await PublicToken.findOne({ purpose: "attendance", batch_member: member._id, active: true }).lean<any>();
-    const token = existing?.token ?? (await PublicToken.create({
-      purpose: "attendance", batch: member.batch, batch_member: member._id,
-      token: crypto.randomBytes(16).toString("hex"), active: true,
-    })).token;
-    return NextResponse.json({ enrolled: true, url: `/p/attendance/${token}` });
+    const live = await PublicToken.find({ purpose: "attendance", batch_member: { $in: seats.map((s) => s._id) }, active: true }).select("batch_member token").lean<any[]>();
+    const tokenOf = new Map<string, string>(live.map((x) => [String(x.batch_member), x.token]));
+    for (const s of seats) {
+      if (tokenOf.has(String(s._id))) continue;
+      tokenOf.set(String(s._id), (await PublicToken.create({
+        purpose: "attendance", batch: s.batch, batch_member: s._id,
+        token: crypto.randomBytes(16).toString("hex"), active: true,
+      })).token);
+    }
+    // One card per seat, in explicit fields: what the student's own page already tells them, nothing else.
+    const summaries = await memberTrainingSummary(seats.map((s) => s._id));
+    const courses = seats.map((s) => {
+      const m = summaries.get(String(s._id));
+      if (!m) return null;
+      return {
+        url: `/p/attendance/${tokenOf.get(String(s._id))}`,
+        batch: m.batch?.code ?? null, program: m.program, centre: m.centre,
+        start_date: m.start_date, end_date: m.end_date,
+        status: m.state, left_on: m.left_on,
+        result: m.result, certificate_no: m.result_row?.certificate_no ?? null,
+        days_present: m.internal_days_present, days_held: m.days_held,
+      };
+    }).filter(Boolean);
+    return NextResponse.json({ enrolled: true, url: `/p/attendance/${tokenOf.get(String(member._id))}`, courses });
   };
 
   // ---- Step 2 (DOB-less path only): verify the phone OTP, THEN mint. ----
@@ -93,12 +115,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
     }
     t.active = false; // single use
     await t.save();
-    // Re-resolve the candidate from the phone stored ON THE TOKEN — never a caller-supplied one, and
-    // works for BOTH channels: the email token stores the same on-file phone (a DOB-less candidate on
-    // this door was matched by phone in step 1, so one always exists). qa-2809 keeps this channel-
-    // agnostic rather than adding a candidate column the schema does not have (all changes stay in
-    // this route; attendance_otp is unchanged).
-    const cand = await Candidate.findOne({ phone: { $regex: String(t.phone ?? "") + "$" } }).select("name dob sidh_status lifecycle_status").lean<any>();
+    // Re-resolve the candidate step 1 matched - never a caller-supplied one. -343 (security review): by the id stored
+    // ON THE TOKEN, because the phone-suffix lookup could open a DIFFERENT record sharing the number (families share
+    // phones) - one whose own DOB gate was never passed. A token minted before -343 carries no id and keeps the old
+    // phone lookup for its 10-minute life.
+    if (!t.candidate && !t.phone) throw fail(); // an empty suffix regex would match the first candidate on file
+    const cand = await (t.candidate
+      ? Candidate.findById(t.candidate)
+      : Candidate.findOne({ phone: { $regex: String(t.phone) + "$" } })).select("name dob sidh_status lifecycle_status").lean<any>();
     if (!cand) throw fail();
     return completeLookup(cand);
   }
@@ -108,6 +132,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
   const phone = String(body.phone ?? "").replace(/\D/g, "").slice(-10);
   const dob = String(body.dob ?? "").trim(); // yyyy-mm-dd from the date input
   if (phone.length !== 10) throw fail();
+  // -343 (security review): a per-NUMBER cap, independent of IP. The per-IP limit above alone let a rotating caller
+  // walk the ~36,500 birthdays of one known mobile; 10 an hour is far above a real student's typos. Counted BEFORE the
+  // lookup, for every 10-digit number alike, so a 429 never tells a known number from an unknown one. Accepted
+  // trade-off, the same shape as phoneChallengeGate: whoever knows a mobile can hold its owner off for an hour.
+  rateLimit(`portal-dob:${phone}`, 10, 3_600_000);
   const cand = await Candidate.findOne({ phone: { $regex: phone + "$" } }).select("name dob phone email sidh_status lifecycle_status").lean<any>();
   if (!cand) throw fail();
 
@@ -157,7 +186,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
     // a phone — it is how step 1 matched them). No schema change: attendance_otp already has both.
     await PublicToken.updateMany({ purpose: "attendance_otp", email, active: true }, { $set: { active: false } });
     await PublicToken.create({
-      token: otpToken, purpose: "attendance_otp", email, phone: otpPhone,
+      token: otpToken, purpose: "attendance_otp", email, phone: otpPhone, candidate: cand._id,
       otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
     });
     // Server-built mail; the code stays in the REAL subject (notification preview) but NEVER in the
@@ -196,7 +225,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   // One live challenge per number — a new request burns the old one.
   await PublicToken.updateMany({ purpose: "attendance_otp", phone: otpPhone, active: true }, { $set: { active: false } });
   await PublicToken.create({
-    token: otpToken, purpose: "attendance_otp", phone: otpPhone,
+    token: otpToken, purpose: "attendance_otp", phone: otpPhone, candidate: cand._id,
     otp_hash: sha(code), otp_expires_at: new Date(Date.now() + 10 * 60_000), otp_attempts: 0,
   });
   // The template's var1 is a name; there is none on this door either. "Student" keeps the approved

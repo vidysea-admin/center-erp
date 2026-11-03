@@ -1,6 +1,7 @@
 import { ADMIN_OPS } from "@/lib/roles";
 import { collectionRoutes } from "@/lib/crud";
-import { Candidate, Location, Program } from "@/models";
+import { BatchMember, Candidate, Location, Program } from "@/models";
+import { HOLDS_PERSON } from "@/lib/candidate-journey";
 import { assertLocationInScope, HttpError, isScoped } from "@/lib/authz";
 import { looksLikeCan, normalizeCan } from "@/lib/govt-attendance";
 import { aadhaarError, canonicalAadhaar, apaarError, canonicalApaar, sameGovtNumber, emailError, canonicalPhone, phoneError } from "@/lib/validate";
@@ -48,6 +49,16 @@ export const { GET, POST } = collectionRoutes({
     { path: "location", select: "name code" },
     { path: "program", select: "name code" },
   ],
+  // -342 (Umesh 2026-11-03): the batch picker's "Free students". A free student belongs to no centre - their
+  // centre is only where they last studied - so `?pool=1` pins NO location: it returns every unarchived
+  // candidate no running batch holds (HOLDS_PERSON), and Rule 38 (collectionRoutes, before this) still
+  // limits a scoped user to the centres they can see. A student of a centre outside that scope is found by
+  // exact mobile / CAN instead (api/candidates/free-lookup).
+  async listFilter(sp) {
+    if (sp.get("pool") !== "1") return null;
+    const held = await BatchMember.distinct("candidate", HOLDS_PERSON);
+    return { archived_at: null, _id: { $nin: held } };
+  },
   // Rule 38: creating a record at someone else's location was previously unchecked.
   async beforeCreate(data, user) {
     // -156 (QA-450): a blank portal ID is the ABSENCE of an identity, and "" is a string, so the

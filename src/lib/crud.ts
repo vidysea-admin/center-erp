@@ -25,6 +25,9 @@ export type CrudConfig = {
   // Rule 38 for entities whose "location" is not one field (trainers: nominated/capable/home).
   // Applied for scoped users as an AND-clause; return null to leave the user unscoped.
   scopeFilter?: (user: SessionUser) => Record<string, unknown> | null;
+  // -342: an extra AND-clause computed from the request's query string (e.g. candidates `?pool=1` = free,
+  // unarchived students). Applied AFTER Rule 38 scoping, so it can only narrow what the user may see.
+  listFilter?: (sp: URLSearchParams, user: SessionUser) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   writeRoles?: Role[]; // roles allowed to create/update (edit flag still applies)
   readRoles?: Role[]; // optional read restriction (Rule 40)
   // Togglable right required to READ. Reading and writing a screen are governed by the
@@ -117,6 +120,10 @@ export function collectionRoutes(cfg: CrudConfig) {
     // an AND-clause so it can carry its own $or without colliding with the search $or below.
     if (cfg.scopeFilter && isScoped(user)) {
       const f = cfg.scopeFilter(user);
+      if (f) filter.$and = [...((filter.$and as unknown[]) ?? []), f];
+    }
+    if (cfg.listFilter) {
+      const f = await cfg.listFilter(sp, user);
       if (f) filter.$and = [...((filter.$and as unknown[]) ?? []), f];
     }
     const q = sp.get("q");

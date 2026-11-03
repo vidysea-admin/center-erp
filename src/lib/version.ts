@@ -232,7 +232,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // CAN ID. Ships with scripts/backfill-released-on.mjs, run on production after this build is live. No number is quoted.
 // -341 note: digest-tables (Karunn sir review 2026-11-02) - tabular digest, weekly targets, trainer unavailable
 // reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
-export const RELEASE = "2026.08.14-345";
+export const RELEASE = "2026.08.14-346";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -304,9 +304,19 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
-  "-345 explains two figures in the daily digest. Under Enrolled, new rows show where those people are now (enrollment in progress, training ongoing, certified, failed and so on), using the same words as the Candidates screen, and they add up to Enrolled. " +
+  "-346 explains two figures in the daily digest. Under Enrolled, new rows show where those people are now (enrollment in progress, training ongoing, certified, failed and so on), using the same words as the Candidates screen, and they add up to Enrolled. " +
   "In Costs, pending approval is split by the month each request was raised and payment pending by the month of the expense, back to the oldest open item. " +
   "Admin, Defaults now has a link from the digest recipients to the digest screen, where Publish now is.";
+
+// -346: the -345 note moved here unchanged when -346 became current.
+const RELEASE_NOTE_ARCHIVE_345 =
+  "-345 lets a free student join a batch at any centre, and shows every student their full course history. " +
+  "A student is free when no running batch holds them: they finished a batch, dropped out, or never joined one. A free student no longer belongs to a centre and can join any centre's batch; joining moves their centre and course to the new batch, and this is recorded in the audit. " +
+  "In a batch, Add from pool now lists the free students of every centre you can see, this centre first. If you look after one centre only, Find by mobile or CAN ID adds a free student from another centre; type the exact number. " +
+  "A batch upload attaches a free student from another centre who already has that CAN or APAAR ID, instead of making a second record; a match on mobile number alone is still only a warning. " +
+  "Students who sign in to My Training now see My courses, one card for each batch they joined, with dates, attendance, result and certificate number. On the candidate screen, the new History list shows the same for staff. " +
+  "Fixed: a student is shown as Certified only when their latest batch passed, and a finished batch with no result yet shows Training Completed, not Training Ongoing. The government attendance figure now shows only against its own batch. " +
+  "My Training sign-in is safer: a code opens exactly the student it was sent for, and a mobile number gets at most 10 date-of-birth tries an hour.";
 
 // -345: the -344 note moved here unchanged when -345 became current.
 const RELEASE_NOTE_ARCHIVE_344 =
@@ -2322,6 +2332,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -346: ARCHIVE_345 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_345 + " " +
   // -345: ARCHIVE_344 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_344 + " " +
   // -344: ARCHIVE_343 wired in here in the SAME bump that declared it, same discipline.

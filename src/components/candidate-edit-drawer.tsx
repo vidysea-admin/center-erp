@@ -11,6 +11,7 @@ import { aadhaarError, apaarError, emailError, phoneError } from "@/lib/validate
 import { Btn, Drawer, Field, inputCls } from "@/components/ui";
 import { GeographyFields } from "@/components/geography-fields";
 import { uploadWithRetry } from "@/lib/upload";
+import Link from "next/link";
 
 // QA-105: document section for the edit drawer — list + multi-upload + delete.
 export function CandidateDocs({ candidateId, setError }: { candidateId: string; setError: (m: string) => void }) {
@@ -57,6 +58,47 @@ export function CandidateDocs({ candidateId, setError }: { candidateId: string; 
       </ul>
       <input type="file" multiple disabled={busy} accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.heic,.heif" onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }} />
       <p className="mt-1 text-[11px] text-gray-400">Pick several files at once — the type is detected from each filename. Wrong type? Delete the document and upload it again.</p>
+    </div>
+  );
+}
+
+// -342 (Umesh 2026-11-03): the candidate's History - every batch they have sat in, newest first, one row per seat
+// (course, centre, dates, status, attendance, result, certificate). READ-ONLY. A role the candidate record does
+// not open to (Trainer) gets a 403 from the route: the section stays empty rather than show an error.
+const fmtHistDate = (d: any) => (d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "");
+export function CandidateHistory({ candidateId }: { candidateId: string }) {
+  const [items, setItems] = useState<any[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setItems(null); // never show the previous candidate's rows while this one loads
+    api(`/api/candidates/${candidateId}/results`).then((d) => { if (live) setItems(d.items ?? []); }).catch(() => { if (live) setItems(null); });
+    return () => { live = false; };
+  }, [candidateId]);
+  if (items === null) return null;
+  return (
+    <div className="rounded-lg border border-gray-200 px-3 py-2">
+      <div className="mb-1 text-xs font-medium text-gray-500">History</div>
+      {items.length === 0 && <p className="text-xs text-gray-400">No batches yet.</p>}
+      <ul className="space-y-2 text-sm">
+        {items.map((h) => (
+          <li key={h.member} className="rounded border border-gray-100 px-2 py-1">
+            <div className="flex items-center justify-between gap-2">
+              {h.batch?._id
+                ? <Link className="min-w-0 truncate font-medium text-blue-700 hover:underline" href={`/batches/${h.batch._id}`}>{h.batch.code ?? "Batch"}{h.program ? ` \u2014 ${h.program}` : ""}</Link>
+                : <span className="min-w-0 truncate font-medium text-gray-700">{h.batch?.code ?? "Batch"}{h.program ? ` \u2014 ${h.program}` : ""}</span>}
+              <span className="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-700">{h.status}</span>
+            </div>
+            <div className="text-xs text-gray-500">
+              {[h.centre, h.start_date || h.end_date ? `${fmtHistDate(h.start_date)} to ${fmtHistDate(h.end_date)}` : "", h.left_on ? `left ${fmtHistDate(h.left_on)}` : ""].filter(Boolean).join(" \u00b7 ")}
+            </div>
+            <div className="text-xs text-gray-600">
+              Attendance {h.attendance?.days_present ?? 0} of {h.attendance?.days_held ?? 0} days
+              {h.result ? ` \u00b7 Result: ${h.result}` : ""}
+              {h.certificate_no ? ` \u00b7 Certificate ${h.certificate_no}` : ""}
+            </div>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -355,6 +397,7 @@ export function CandidateEditDrawer({
         {/* QA-105 (15/08): the candidate document store. Edit mode only: the candidate must
             exist before files can hang on them. */}
         {mode === "edit" && candidateId && <CandidateDocs candidateId={candidateId} setError={setError} />}
+        {mode === "edit" && candidateId && <CandidateHistory candidateId={candidateId} />}
         {form.custom_fields && Object.keys(form.custom_fields).length > 0 && (
           <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm">
             <div className="mb-1 text-xs font-medium text-gray-500">Extra columns (from import)</div>

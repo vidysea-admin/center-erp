@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, hasEditLevel } from "@/lib/permissions";
 
 // The fields the roster itself renders - the chip, both attendance pickers, the enrolment card.
@@ -16,8 +16,8 @@ export const ROSTER_CANDIDATE_FIELDS = "name phone lifecycle_status sidh_candida
 export async function rosterCandidateFields(user: Parameters<typeof hasEditLevel>[0]): Promise<string | null> {
   return (await hasEditLevel(user, "candidates.manage")) ? null : ROSTER_CANDIDATE_FIELDS;
 }
-import { Batch, BatchMember, Candidate, DailyLog, GovtAttendanceRow } from "@/models";
-import { assertBatchInScope, assertBatchJoinable, assignCandidateToBatch, assessmentHoursBar, awaitingMatchFor, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
+import { Batch, BatchMember, Candidate, DailyLog } from "@/models";
+import { assertBatchInScope, assertBatchJoinable, assertCandidateJoinScope, assignCandidateToBatch, assessmentHoursBar, awaitingMatchFor, matchedGovtRowsByMember, memberAttendedHours, slotHoursPerDay } from "@/lib/rules";
 import { nameKey, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { getDefaults } from "@/lib/defaults";
 
@@ -71,13 +71,16 @@ export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{
   // the roster shows both meters side by side, internal log days and portal days.
   // QA-070 (-70): hours ride along now — this API never even FETCHED total_hours_minutes,
   // which is why the roster showed days while the CEO asked for hours.
-  const candIds = items.map((m: any) => m.candidate?._id).filter(Boolean);
-  const govtLatest = candIds.length ? await GovtAttendanceRow.aggregate([
-    { $match: { candidate: { $in: candIds }, match_status: "Matched" } },
-    { $sort: { createdAt: -1 } },
-    { $group: { _id: "$candidate", days_present: { $first: "$total_days_present" }, working_days: { $first: "$total_working_days" }, hours_minutes: { $first: "$total_hours_minutes" }, as_of: { $first: "$createdAt" } } },
-  ]) : [];
-  const govtBy = new Map(govtLatest.map((g: any) => [String(g._id), g]));
+  // -342: THIS batch's portal row only (matchedGovtRowsByMember, rules.ts). Keyed by candidate alone, the figure of a
+  // finished batch showed beside the same student's seat in the next one.
+  const govtRows = await matchedGovtRowsByMember(
+    items.filter((m: any) => m.candidate?._id).map((m: any) => ({ candidate: m.candidate._id, batch: id })), -1,
+  );
+  const govtBy = new Map<string, any>();
+  for (const [key, rows] of govtRows) {
+    const g = rows[0]; // newest first: the latest import wins
+    govtBy.set(key.split("|")[0], { _id: g.candidate, days_present: g.total_days_present, working_days: g.total_working_days, hours_minutes: g.total_hours_minutes, as_of: g.createdAt });
+  }
 
   // One bar, one verdict — the same shared formulas as the Attendance tab and the portal.
   const batchDoc = await Batch.findById(id).populate("program", "hours duration_days scheme").select("program slot_start slot_end location").lean<any>();
@@ -125,7 +128,9 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   if (!body.candidate) throw new HttpError(400, "candidate is required");
   const cand = await Candidate.findById(body.candidate).select("name phone sidh_candidate_id location program archived_at batch_interest").lean<any>();
   if (!cand) throw new HttpError(404, "Candidate not found");
-  assertLocationInScope(user, String(cand.location)); // Rule 38 on the candidate too
+  // Rule 38 on the candidate too - but only while a running batch holds them. A FREE student belongs to no
+  // centre (-342): the scope that matters is the NEW batch's, checked by assertBatchJoinable above.
+  await assertCandidateJoinScope(user, cand);
   // qa-import-into-batch (-325): the centre test, the job-role test, addMemberChecked, programme and
   // centre adoption and their audit rows are assignCandidateToBatch (rules.ts) - one body for this door,
   // the bulk-assign door and the importer. The 2026-08-13 centre/role rulings, the -124 walk-in

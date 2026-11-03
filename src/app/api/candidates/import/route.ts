@@ -5,7 +5,7 @@ import { Types } from "mongoose";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, isScoped, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
-import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, hasBatchHistory, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
+import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { plain } from "@/lib/user-copy";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
@@ -489,7 +489,7 @@ export const POST = apiHandler(async (req: NextRequest) => {
   let toInsert: Record<string, unknown>[] = candidates;
   type HolderRow = {
     row: number; label: string; value: string; matched_on: "apaar" | "sidh"; holderId: string;
-    holder: any; inScope: boolean; refusal: string | null; warning?: string; dupOfRow?: number;
+    holder: any; ownScope: boolean; inScope: boolean; refusal: string | null; warning?: string; dupOfRow?: number;
   };
   const holderRows: HolderRow[] = [];
   const ambiguousRows: { row: number; label: string; reason: string }[] = [];
@@ -501,6 +501,12 @@ export const POST = apiHandler(async (req: NextRequest) => {
     const jb = joinBatch;
     const held = new Set<object>();
     const claimedBy = new Map<string, number>();
+    // who is held by a seat NOW (HOLDS_PERSON), one query for every holder this sheet resolved to
+    const holderIds = [...new Set([...holderHits.values()].flat().map((h) => String(h.holder._id)))];
+    const heldSeats = holderIds.length
+      ? await BatchMember.find({ candidate: { $in: holderIds }, ...HOLDS_PERSON }).select("candidate batch").populate("batch", "code").lean<any[]>()
+      : [];
+    const heldBy = new Map<string, any>(heldSeats.map((m) => [String(m.candidate), m]));
     for (const c of candidates) {
       const hits = holderHits.get(c);
       if (!hits) continue;
@@ -514,8 +520,15 @@ export const POST = apiHandler(async (req: NextRequest) => {
       }
       const hit = hits[0];
       const holderId = String(hit.holder._id);
-      const inScope = !isScoped(user) || (user.location_scope ?? []).map(String).includes(String(hit.holder.location ?? ""));
-      const row: HolderRow = { row: rowNo, label, value: hit.value, matched_on: hit.matched_on, holderId, holder: hit.holder, inScope, refusal: null };
+      // -342: a FREE holder (no running batch holds them) belongs to no centre, so the new batch's scope - the
+      // gate on the whole import - is the only one that applies; they are `inScope` wherever they last studied.
+      // A held holder keeps the old test. `ownScope` is the old meaning, kept for what the preview may show.
+      const ownScope = !isScoped(user) || (user.location_scope ?? []).map(String).includes(String(hit.holder.location ?? ""));
+      // An archived or Future-interest holder of another centre is NOT joinable, so it stays out of scope: the
+      // refusal is then the generic one a held holder gets, never "<name> is archived" (review 2026-11-03).
+      const joinableElsewhere = !heldBy.has(holderId) && !hit.holder.archived_at && hit.holder.batch_interest !== "Future";
+      const inScope = ownScope || joinableElsewhere;
+      const row: HolderRow = { row: rowNo, label, value: hit.value, matched_on: hit.matched_on, holderId, holder: hit.holder, ownScope, inScope, refusal: null };
       if (claimedBy.has(holderId)) {
         row.dupOfRow = claimedBy.get(holderId);
         row.refusal = `This is the same existing candidate as row ${row.dupOfRow}, already listed.`;
@@ -525,33 +538,26 @@ export const POST = apiHandler(async (req: NextRequest) => {
     toInsert = candidates.filter((c) => !held.has(c));
 
     // holder state: scope, join rules, Rule 20 (one query for all holders), eligibility
-    // Re-enrolment (2026-11-02): a holder with batch history is a returning student - the same `returning`
-    // assignCandidateToBatch computes at commit, so the preview says what the commit will do.
-    const returningHolders = await hasBatchHistory(holderRows.map((h) => h.holder._id));
     for (const h of holderRows) {
       if (h.refusal) continue;
       if (!h.inScope) { h.refusal = "This ID already belongs to a candidate at a centre you cannot see. Ask an Admin to add them."; continue; }
-      const r = joinRefusalFor(h.holder, jb, { returning: returningHolders.has(h.holderId) });
+      const r = joinRefusalFor(h.holder);
       if (r) h.refusal = r;
     }
-    const probe = holderRows.filter((h) => !h.refusal).map((h) => h.holder._id);
-    if (probe.length) {
-      const active = await BatchMember.find({ candidate: { $in: probe }, ...HOLDS_PERSON }).select("candidate batch").populate("batch", "code").lean<any[]>();
-      const byCand = new Map(active.map((m) => [String(m.candidate), m]));
-      for (const h of holderRows) {
-        if (h.refusal) continue;
-        const m = byCand.get(h.holderId);
-        if (m) h.refusal = rule20Sentence((m.batch as any)?.code ?? m.batch);
-        else {
-          const el = candidateEligibility(h.holder, joinDefaults);
-          if (!el.eligible) h.warning = `${h.holder.name ?? "Candidate"}: ${el.reasons.join("; ")}`;
-        }
+    for (const h of holderRows) {
+      if (h.refusal) continue;
+      const m = heldBy.get(h.holderId);
+      if (m) h.refusal = rule20Sentence((m.batch as any)?.code ?? m.batch);
+      else {
+        const el = candidateEligibility(h.holder, joinDefaults);
+        // another centre's student: the reasons can disclose age (dob), so they are not shown to this user
+        if (!el.eligible && h.ownScope) h.warning = `${h.holder.name ?? "Candidate"}: ${el.reasons.join("; ")}`;
       }
     }
     // new rows: the join rules that can be known before they exist, and the eligibility notes
     for (const c of toInsert) {
       const rowNo = rowNoOf.get(c) ?? 0;
-      const r = joinRefusalFor(c as any, jb);
+      const r = joinRefusalFor(c as any);
       if (r) { newRefused.push({ row: rowNo, label: personLabel(c), reason: plain(r) }); continue; }
       const el = candidateEligibility(c as any, joinDefaults);
       if (!el.eligible) newWarnings.push({ row: rowNo, label: personLabel(c), warning: `${c.name ?? "Candidate"}: ${el.reasons.join("; ")}` });
@@ -575,8 +581,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
         row: h.row, label: h.label, matched_on: h.matched_on, value: h.value,
         // out of scope: the holder is described by NOTHING that identifies them (no id, name, phone, link)
         holder_id: h.inScope ? h.holderId : null,
-        candidate: h.inScope ? { _id: h.holderId, name: h.holder.name, phone: h.holder.phone ?? null } : null,
-        link: h.inScope ? `/candidates?q=${encodeURIComponent(String(h.holder.name ?? ""))}` : null,
+        // a free holder from a centre the user cannot see is attachable (holder_id) but NOT identified: no name,
+        // phone or link, so this preview cannot be used as an unthrottled CAN/APAAR -> name lookup (review
+        // 2026-11-03); finding a student by name stays with the rate-limited, audited free-lookup
+        candidate: h.ownScope ? { _id: h.holderId, name: h.holder.name, phone: h.holder.phone ?? null } : null,
+        link: h.ownScope ? `/candidates?q=${encodeURIComponent(String(h.holder.name ?? ""))}` : null,
         can_assign: !h.refusal, refusal: h.refusal, warning: h.warning ?? null,
       })),
       ambiguous: ambiguousRows, new_refused: newRefused, new_warnings: newWarnings,

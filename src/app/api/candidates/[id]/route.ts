@@ -1,4 +1,4 @@
-import { ADMIN_OPS } from "@/lib/roles";
+import { ADMIN_OPS, CANDIDATE_READ_ROLES } from "@/lib/roles";
 import { NextRequest, NextResponse } from "next/server";
 import { itemRoutes } from "@/lib/crud";
 import { Candidate } from "@/models";
@@ -38,7 +38,7 @@ export const { GET, PATCH } = itemRoutes({
     // the create door accepts cannot be corrected at all.
     "apaar_id",
   ],
-  readRoles: [...ADMIN_OPS, "Location", "Enrollment"], // QA-060/095: not the Trainer's lens
+  readRoles: [...CANDIDATE_READ_ROLES], // QA-060/095: not the Trainer's lens (shared with candidates/[id]/results)
   writeRoles: [...ADMIN_OPS, "Location", "Enrollment"],
   permission: "candidates.manage", // 2026-08-11 togglable right (writeRoles = fallback only)
   // QA-141 (Umesh): edits are as strict as creates — fixed-up numbers land as the bare 10.

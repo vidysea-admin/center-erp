@@ -10,6 +10,9 @@ export type JourneyInput = {
   sidh_status?: string | null;
   latest_result?: string | null;
   active_batch_status?: string | null;
+  // -343: the status of the person's LAST batch when none holds them (enrichCandidateRows), read when
+  // active_batch_status is empty - a finished batch is "Training Completed", not "Training Ongoing".
+  last_batch_status?: string | null;
   // QA-945 (2026-08-24): "Current" or "Future". Optional because every record written before this
   // field existed has none, and absent must read as Current — the overwhelmingly common case, and
   // the one that keeps existing candidates enrollable exactly as they were.
@@ -101,11 +104,16 @@ export function freshJourneyOf(r: JourneyInput): string {
 
 export function journeyOf(r: JourneyInput): string {
   if (r.lifecycle_status === "Dropped") return "Dropout"; // enrolled-then-left (CEO 14/08)
-  if (r.latest_result === "Pass" || r.lifecycle_status === "Completed") return "Certified";
+  // -342 (Umesh 2026-11-03): Certified needs a RECORDED Pass. `lifecycle_status === "Completed"` alone used to
+  // mean Certified, but a batch with no results at all completes every roster member (transitionBatch,
+  // the legacy blanket), and a re-enrolled student keeps "Completed" from a batch they no longer sit in.
+  // Finished with no Pass on record now reads "Training Completed" - the label for exactly that.
+  if (r.latest_result === "Pass") return "Certified";
   if (r.latest_result === "Fail" || r.lifecycle_status === "Failed") return "Failed";
   if (r.latest_result === "Absent") return "Absent at Assessment";
+  if (r.lifecycle_status === "Completed") return "Training Completed";
   if (r.lifecycle_status === "Assigned") return "Enrollment in progress";
-  const bs = r.active_batch_status;
+  const bs = r.active_batch_status ?? r.last_batch_status;
   // QA-2736: this used to read Closing -> "Training Completed" and Completed -> "Result Awaited",
   // written (39dac69) before -102 relabelled Closing itself as "Result Awaited". From -102 on it was
   // INVERTED: the batch header said "Result Awaited" while its students said "Training Completed",
@@ -230,16 +238,13 @@ export const HOLDS_PERSON = { left_on: null, released_on: null } as const;
 // `active_batch` from HOLDS_PERSON). It used to be `lifecycle_status` in Unassigned/Dropped, which hid every
 // pass-out ("Completed"/"Failed") and every student of a cancelled batch. The server still decides through
 // addMemberChecked; this only decides who is offered.
-/** True when no seat holds this candidate now and the batch's job role does not rule them out. */
+// -342 (Umesh 2026-11-03): a free student belongs to no centre and may take any course, so neither the
+// student's centre nor job role matters here any more - the batch they join gives them its own.
+/** True when no seat holds this candidate now and they are not archived. */
 export function isFreeToJoin(
-  c: { active_batch?: unknown; archived_at?: unknown; program?: any; lifecycle_status?: string | null; enrolled_at?: unknown },
-  batchProgram: unknown,
+  c: { active_batch?: unknown; archived_at?: unknown },
 ): boolean {
-  if (c.active_batch || c.archived_at) return false;
-  // A returning student may take any job role (joinRefusalFor `returning`); a fresh lead only this one, or
-  // none yet - programme-less imports inherit the batch's on joining.
-  const returning = ["Completed", "Failed"].includes(String(c.lifecycle_status)) || !!c.enrolled_at;
-  return returning || !c.program || String(c.program?._id ?? c.program) === String((batchProgram as any)?._id ?? batchProgram);
+  return !c.active_batch && !c.archived_at;
 }
 
 // "Pending" is NOT a record. It is the absence of one — the row exists because somebody opened the

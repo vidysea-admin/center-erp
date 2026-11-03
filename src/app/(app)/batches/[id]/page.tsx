@@ -1435,6 +1435,7 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [refsPicker, setRefsPicker] = useState<{ rowId: string; importId: string }[] | null>(null);
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
+  const [poolTotal, setPoolTotal] = useState(0);
   const [showPool, setShowPool] = useState(false);
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
   // A-03
@@ -1498,12 +1499,23 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
   const load = () => Promise.all([
     api(`/api/batches/${batchId}/members`).then((d) => setMembers(d.items)),
     api(`/api/batches/${batchId}/results`).then((d) => setResultsByCand(new Map((d.items ?? []).filter((i: any) => i.result).map((i: any) => [String(i.result.candidate?._id ?? i.result.candidate), i.result])))).catch(() => {}),
-    // 2026-08-13 (Manish hit this live — Prem Kumar/Lalit from another job role in the pool):
-    // the pool is this location AND this job role. Program-less candidates (bulk imports)
-    // stay eligible — they inherit the batch's programme on enrol; the server enforces both.
-    // Re-enrolment (2026-11-02): pass-outs and cancelled-batch students are offered too - isFreeToJoin.
-    api(`/api/candidates?location=${batch.location?._id ?? batch.location}&limit=2000`).then((d) =>
-      setPool(d.items.filter((c: any) => isFreeToJoin(c, batch.program)))),
+    // -342 (Umesh 2026-11-03): "free" means no running batch holds the person, and a free student belongs to
+    // no centre - their centre is only where they last studied. So the picker pins no location: `pool=1`
+    // asks the server for every free, unarchived student the user may see (Rule 38 still limits a scoped
+    // user to their own centres; a student of any other centre is found by exact mobile / CAN below). This
+    // batch's own centre is listed first. Supersedes 2026-08-13's "this location AND this job role".
+    // This centre is fetched on its own first, so the 2000-row cap on the all-centres list can never push this
+    // batch's own students out; the rest are merged behind it and `poolTotal` says when the list is cut (review
+    // 2026-11-03).
+    Promise.all([
+      api(`/api/candidates?pool=1&location=${String(batch.location?._id ?? batch.location)}&limit=2000`),
+      api(`/api/candidates?pool=1&limit=2000`),
+    ]).then(([own, all]) => {
+      const seen = new Set((own.items ?? []).map((c: any) => String(c._id)));
+      const merged = [...(own.items ?? []), ...(all.items ?? []).filter((c: any) => !seen.has(String(c._id)))];
+      setPool(merged.filter((c: any) => isFreeToJoin(c)));
+      setPoolTotal(Math.max(Number(all.total ?? 0), merged.length));
+    }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [batchId]);
 
@@ -1519,8 +1531,24 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
   useEffect(() => { setJoinOn(batchBegan); }, [batchBegan]);
 
   async function add(candidateId: string) {
-    try { await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId, joined_on: joinOn || undefined } }); load(); onChanged(); }
+    try {
+      await api(`/api/batches/${batchId}/members`, { method: "POST", json: { candidate: candidateId, joined_on: joinOn || undefined } });
+      setFound((f) => f.filter((x) => x._id !== candidateId));
+      load(); onChanged();
+    }
     catch (e: any) { setError(e.message); throw e; }
+  }
+  // -342: exact lookup of a free student the pool above cannot list (another centre's), by mobile or CAN ID.
+  const [findQ, setFindQ] = useState("");
+  const [found, setFound] = useState<any[]>([]);
+  const [findMsg, setFindMsg] = useState("");
+  async function findFree() {
+    setFindMsg(""); setFound([]);
+    try {
+      const d = await api("/api/candidates/free-lookup", { method: "POST", json: { q: findQ } });
+      setFound(d.items ?? []);
+      if (!(d.items ?? []).length) setFindMsg("No free student matches that. They may already be in a running batch, or archived.");
+    } catch (e: any) { setFindMsg(e.message); }
   }
   const { dropTarget, setDropTarget, dropForm, setDropForm, dropReasons, drop } =
     useDropMember(() => { load(); onChanged(); }, setError);
@@ -1695,7 +1723,7 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
           ]} empty="No members yet — add from the candidate pool." />
       </Section>
 
-      <Drawer error={error} open={showPool} onClose={() => setShowPool(false)} title="Candidate pool (this location)">
+      <Drawer error={error} open={showPool} onClose={() => setShowPool(false)} title="Free students">
         <div className="space-y-2">
           {/* -235: one date for everyone added in this sitting — the normal case is a handful of late
               joiners who all belong to the same batch from the same day. */}
@@ -1709,13 +1737,32 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
                 : <>This batch has no recorded start yet, so leaving this blank counts them from today. Set it only if they joined earlier.</>}
             </p>
           </div>
+          <div className="rounded-lg border border-gray-200 px-3 py-2">
+            <Field label="Find by mobile / CAN ID">
+              <div className="flex gap-2">
+                <input className={inputCls} value={findQ} placeholder="10-digit mobile or CAN_12345678"
+                  onChange={(e) => setFindQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") findFree(); }} />
+                <Btn small onClick={findFree}>Find</Btn>
+              </div>
+            </Field>
+            <p className="mt-1 text-xs text-gray-500">A free student belongs to no centre. If they are not listed below, because they last studied at a centre you cannot see, enter their exact mobile or CAN ID.</p>
+            {findMsg && <p className="mt-1 text-xs text-gray-600">{findMsg}</p>}
+            {found.map((c) => (
+              <div key={c._id} className="mt-2 flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
+                <span>{c.name} <span className="text-gray-400">· {c.phone_masked}{c.can ? ` · ${c.can}` : ""} · {c.centre ?? "no centre"}</span></span>
+                <Btn small feedback onClick={() => add(c._id)}>Add</Btn>
+              </div>
+            ))}
+          </div>
+          {/* The batch's own centre first (sorted in load); the Centre is each student's last centre - they take this batch's on joining. */}
           {pool.map((c) => (
             <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-              <span>{c.name} <span className="text-gray-400">· {c.phone}</span></span>
+              <span>{c.name} <span className="text-gray-400">· {c.phone} · {c.location?.name ?? "no centre"}</span></span>
               <Btn small feedback onClick={() => add(c._id)}>Add</Btn>
             </div>
           ))}
-          {pool.length === 0 && <p className="text-sm text-gray-400">No unassigned candidates at this location.</p>}
+          {pool.length === 0 && <p className="text-sm text-gray-400">No free students listed. Use Find above for a student of another centre.</p>}
+          {poolTotal > pool.length && <p className="text-xs text-gray-500">Showing {pool.length} of {poolTotal} free students (this centre first). Use Find above for anyone not listed.</p>}
         </div>
       </Drawer>
 

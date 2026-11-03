@@ -1711,6 +1711,7 @@ const PublicTokenSchema = new Schema({
   program: oid("Program"),      // register: optional preselected program
   batch_member: oid("BatchMember"), // feedback: who this link belongs to
   trainer: oid("Trainer"),      // trainer_apply: the pre-created profile this link completes
+  candidate: oid("Candidate"),  // attendance_otp (-343): the record step 1 matched; step 2 opens exactly that one
   batch: oid("Batch"),          // plan: which batch's plan this link opens (attendance links also set it)
   allow_updates: { type: Boolean, default: false }, // plan: the link holder may tick milestones
   // email_otp / phone_otp: the challenge state. Only the HASH of the code is stored; 10-minute

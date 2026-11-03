@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
-import { apiHandler, requireUser, requireEdit, HttpError, assertLocationInScope, readJson, translateError } from "@/lib/authz";
+import { apiHandler, requireUser, requireEdit, HttpError, readJson, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { Candidate } from "@/models";
-import { assertBatchJoinable, assignCandidateToBatch } from "@/lib/rules";
+import { assertBatchJoinable, assertCandidateJoinScope, assignCandidateToBatch } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 
 // Bulk assign candidates to a batch. Body: { batch, candidate_ids: [], joined_on? }
@@ -40,10 +40,11 @@ export const POST = apiHandler(async (req: NextRequest) => {
     try {
       const c0 = byId.get(String(cid));
       if (!c0) throw new HttpError(404, "Candidate not found");
-      // Re-enrolment (2026-11-02): a returning student skips joinRefusalFor's centre test, which was the
-      // only thing keeping a scoped user to their own centres on this door. Rule 38 on the candidate, as
-      // the members door does it (walk-ins have no centre yet).
-      if (c0.location) assertLocationInScope(user, String(c0.location));
+      // Rule 38 on the candidate, only while a running batch holds them (-342). joinRefusalFor's centre test
+      // used to be the one thing keeping a scoped user to their own centres on this door; a FREE student
+      // belongs to no centre now, so the scope that matters is the NEW batch's (assertBatchJoinable above).
+      // A held student keeps the old test, so this door cannot probe other centres' running students.
+      await assertCandidateJoinScope(user, c0);
       // qa-import-into-batch (-325): everything between "found the candidate" and "joined" - the centre
       // test (with the -130 walk-in exemption), the job-role test, addMemberChecked, programme and centre
       // adoption and their audit rows - is assignCandidateToBatch now (rules.ts). It was a verbatim copy
