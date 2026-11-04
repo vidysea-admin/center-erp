@@ -1019,7 +1019,7 @@ ok("U6: ...and while ON the list may be swapped for another typed address", swap
 const toNobody = await setDefaults({ digest_recipients: uTr.email });
 ok("U6: ...but not for a list nobody on can receive (a typed address that is a Trainer's email): 400, list unchanged", toNobody.status === 400 && (await getDef())?.digest_recipients === `other.${typedFull}`, `${toNobody.status}`);
 await offAgain();
-for (const [label, list] of [["a typed address that is a Trainer account's email", uTr.email], ["a picked ERP user whose own mail switch is off", `u:${uOff.id}`], ["a picked ERP user that is deactivated", `u:${uDead.id}`], ["a typed address that is a deactivated account's email", uDead.email]]) {
+for (const [label, list] of [["a typed address that is a Trainer account's email", uTr.email], ["a picked ERP user that is deactivated", `u:${uDead.id}`], ["a typed address that is a deactivated account's email", uDead.email]]) {
   await setDefaults({ digest_recipients: list });
   const r = await setDefaults({ digest_only_approval_mails: true });
   const one = await setDefaults({ digest_recipients: list, digest_only_approval_mails: true });
@@ -1139,11 +1139,31 @@ await setListDirect(`${uTr.email}, u:${uGone.id}, ${uOff.email}, ${typedFull}, $
 await jobLocks.deleteMany({ _id: "daily-digest-manual" });
 const pubR = await req(admin, "POST", "/api/reports/daily/publish", { date: "2031-03-21" });
 const why = (pubR.data?.not_sent_reasons ?? []).join(" | ");
-ok("U11: Publish now names a reason for EACH category that was not sent: a Trainer, a removed user, an account with its mail switch off, and the mail door's own skip (test environment)",
-  pubR.status === 200 && /Trainer accounts are not sent/.test(why) && /no longer exists/.test(why) && /mail off for this account/.test(why) && /test environment/.test(why), `${pubR.status} ${why}`);
+ok("U11: Publish now names a reason for EACH category that was not sent: a Trainer, a removed user, and the mail door's own skip (test environment) - and NOT 'mail off' for the account whose mail switch is off, which now gets the digest (Umesh 2026-11-04)",
+  pubR.status === 200 && /Trainer accounts are not sent/.test(why) && /no longer exists/.test(why) && !/mail off for this account/.test(why) && /test environment/.test(why), `${pubR.status} ${why}`);
 ok("U11: ...it counts the typed address as a typed address, and its counts add up (5 attempted, 0 sent, 5 skipped, 2 not allowed to receive it)", pubR.data?.typed_addresses === 1 && pubR.data?.attempted === 5 && pubR.data?.sent === 0 && pubR.data?.skipped === 5 && pubR.data?.ineligible === 2, JSON.stringify({ t: pubR.data?.typed_addresses, a: pubR.data?.attempted, s: pubR.data?.skipped, i: pubR.data?.ineligible }));
 await jobLocks.deleteMany({ _id: "daily-digest-manual" });
 await setDefaults({ digest_recipients: listAll });
+
+// ---- U14 (Umesh 2026-11-04, "turn it on for the daily reports only"): the digest list beats the account's own mail switch.
+// A mail-off account that an Admin PICKED for the digest is mailed the digest (the only skip is the test environment's own),
+// it counts as a deliverable recipient for digest-only mode, and its other mails stay off (QA-2461 in e2e-cost-entry pins that).
+{
+  const onlyOff = await setDefaults({ digest_recipients: `u:${uOff.id}` });
+  await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+  const pubOff = await req(admin, "POST", "/api/reports/daily/publish", { date: "2031-03-22" });
+  const whyOff = (pubOff.data?.not_sent_reasons ?? []).join(" | ");
+  ok("U14: a picked account whose own mail switch is OFF is handed the digest: attempted 1, not ineligible, and the only skip reason is the test environment (never 'mail off for this account')",
+    onlyOff.status === 200 && pubOff.status === 200 && pubOff.data?.attempted === 1 && pubOff.data?.ineligible === 0 && /test environment/.test(whyOff) && !/mail off/.test(whyOff),
+    `${onlyOff.status} ${pubOff.status} ${JSON.stringify({ a: pubOff.data?.attempted, i: pubOff.data?.ineligible })} ${whyOff}`);
+  const offRow = await mailLogs.find({ entity: "DailyDigest", to: uOff.email.toLowerCase() }).sort({ _id: -1 }).limit(1).toArray();
+  ok("U14: ...its MailLog row says the test environment skipped it, not the account switch", offRow.length === 1 && /test environment/.test(String(offRow[0]?.reason)) && !/mail off/.test(String(offRow[0]?.reason)), JSON.stringify(offRow[0]?.reason ?? null));
+  const digestOnlyOff = await setDefaults({ digest_recipients: `u:${uOff.id}`, digest_only_approval_mails: true });
+  ok("U14: ...and digest-only ON is ACCEPTED with only that account on the list (it can receive the digest)", digestOnlyOff.status === 200 && (await getDef())?.digest_only_approval_mails === true, `${digestOnlyOff.status}`);
+  await setDefaults({ digest_only_approval_mails: false });
+  await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+  await setDefaults({ digest_recipients: listAll });
+}
 
 // ---- U12 fullView is reachable ONLY from lib/daily-digest.ts, and only for a typed address that matches no account
 ok("U12: `fullView` appears only in lib/rules.ts (the option) and lib/daily-digest.ts (its one caller)", eq(fullViewUsers, ["lib/daily-digest.ts", "lib/rules.ts"]), fullViewUsers.join(","));
@@ -1188,7 +1208,7 @@ ok("G1: switching 'digest only' ON with no digest recipient is refused (400) and
 // refuses to STORE one, so they are written straight to the document, the way an old row sits there); a Trainer account's email
 // and an active account whose own mail switch is off are listed but can never receive it. A typed address with NO account is
 // deliverable now (it gets the full report), so it is no longer in this loop: U6 pins that it is accepted.
-for (const [label, list, direct] of [["a comma only", ",", true], ["a semicolon only", ";", true], ["separators and spaces", " , ; ", true], ["a Trainer account's email", uTr.email, false], ["an account with its own mail switch off", uOff.email, false]]) {
+for (const [label, list, direct] of [["a comma only", ",", true], ["a semicolon only", ";", true], ["separators and spaces", " , ; ", true], ["a Trainer account's email", uTr.email, false]]) {
   if (direct) await setListDirect(list); else await setDefaults({ digest_recipients: list });
   const r = await setDefaults({ digest_only_approval_mails: true });
   const rb = (await req(admin, "GET", "/api/defaults")).data?.item;

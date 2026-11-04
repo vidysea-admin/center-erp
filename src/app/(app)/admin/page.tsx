@@ -527,7 +527,7 @@ function Users({ error, setError }: any) {
             render: (r: any) => (
               <button type="button"
                 className={`rounded px-2 py-0.5 text-xs ${r.mail_enabled === false ? "bg-amber-100 text-amber-800" : "bg-gray-100 text-gray-700"}`}
-                title={r.mail_enabled === false ? "This account is not being emailed. Click to start again." : "Stop emailing this account. They still see alerts in the app."}
+                title={r.mail_enabled === false ? "This account is not being emailed. Click to start again." : "Stop emailing this account. They still see alerts in the app, and still get the daily digest if they are on its list."}
                 onClick={async (e) => {
                   e.stopPropagation();
                   try { await api(`/api/users/${r._id}`, { method: "PATCH", json: { mail_enabled: r.mail_enabled === false } }); load(); }
@@ -1925,7 +1925,7 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
           return (
             <li key={t} data-testid="digest-chip" data-kind={m ? "user" : "address"} data-token={t} className="flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1">
               {m ? (
-                <span>{u ? <><b>{u.name}</b> <span className="text-gray-500">{u.email}</span>{u.mail_enabled === false && <span className="ml-1 text-amber-700">(mail switched off for this account)</span>}</> : !loaded ? <span className="text-gray-400">Loading.</span> : <span className="text-amber-700">An ERP user who can no longer receive it (removed, deactivated or a Trainer)</span>}</span>
+                <span>{u ? <><b>{u.name}</b> <span className="text-gray-500">{u.email}</span>{u.mail_enabled === false && <span className="ml-1 text-gray-500">(other mails off for this account; still gets this digest)</span>}</> : !loaded ? <span className="text-gray-400">Loading.</span> : <span className="text-amber-700">An ERP user who can no longer receive it (removed, deactivated or a Trainer)</span>}</span>
               ) : (
                 <>
                   <span><b>{t}</b> <span className="text-gray-500">(typed address)</span></span>

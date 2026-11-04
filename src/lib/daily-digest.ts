@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import { MailLog, User } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { dbConnect, takeJobLock } from "@/lib/db";
-import { renderMail, sendMail, suppressFor } from "@/lib/mailer";
+import { renderMail, sendMail } from "@/lib/mailer";
 import { dailyDigest, istDayOf, istMinuteOfDay, type DailyDigest } from "@/lib/rules";
 import type { SessionUser } from "@/auth";
 
@@ -50,8 +50,9 @@ export const DIGEST_MAX_RECIPIENTS = 50;
 export type DigestResult = {
   to: string;
   // mailed = handed to the one mail door (sendMail); its own outcome is `status`. ineligible = not an
-  // ERP account that may get the digest; silenced = the account's own mail switch is off.
-  outcome: "mailed" | "ineligible" | "silenced" | "failed";
+  // ERP account that may get the digest. There is no "silenced" here any more: being ON the digest list is
+  // the opt-in, and an account's own mail switch does not stop it (Umesh 2026-11-04, see asAccount below).
+  outcome: "mailed" | "ineligible" | "failed";
   status?: "sent" | "failed" | "skipped";
   reason?: string;
   text?: string;
@@ -122,13 +123,12 @@ export type Resolved = {
   viewer: SessionUser | null;       // null = nobody to render for (ineligible)
   full?: boolean;                   // true = a typed address that matches no ERP account: the full view, money included
   problem?: string;
-  silenced?: string;
 };
 export const PROBLEM_USER_GONE = "this ERP user no longer exists";
 export const PROBLEM_INACTIVE = "this ERP account is deactivated, dropped or awaiting approval";
 export const PROBLEM_TRAINER = "Trainer accounts are not sent the daily digest";
 export const PROBLEM_BAD_ADDRESS = "not a valid email address";
-export const isDeliverable = (r: Resolved) => !!r.viewer && !r.silenced;
+export const isDeliverable = (r: Resolved) => !!r.viewer;
 
 // Recipients -> who is mailed, and as whom. The finance section and the centre scope are decided by the ACCOUNT's
 // own permission, so an account always keeps its own view; only an address that is no account at all has no
@@ -143,7 +143,7 @@ export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
   const or: any[] = [];
   if (ids.length) or.push({ _id: { $in: ids } });
   if (addrs.length) or.push({ email: { $in: addrs } }, { dropped_email: { $in: addrs } });
-  const users = await User.find({ $or: or }).select("name email dropped_email role location_scope can_edit active dropped approval_status mail_enabled").lean<any[]>();
+  const users = await User.find({ $or: or }).select("name email dropped_email role location_scope can_edit active dropped approval_status").lean<any[]>();
   const byId = new Map(users.map((u) => [String(u._id), u]));
   // A dropped account's login email was renamed ("dropped.<ts>.<email>"); its original is in dropped_email. Index both, the
   // live email winning, so a typed copy of a dropped person's address finds the (refused) account instead of "no account".
@@ -154,10 +154,14 @@ export async function resolveRecipients(raw?: string): Promise<Resolved[]> {
     const to = toOverride ?? String(u.email).toLowerCase();
     if (u.active === false || u.dropped === true || u.approval_status === "Pending" || u.approval_status === "Rejected") return { to, kind, viewer: null, problem: PROBLEM_INACTIVE };
     if (u.role === "Trainer") return { to, kind, viewer: null, problem: PROBLEM_TRAINER };
+    // Umesh 2026-11-04 ("turn it on for the daily reports only", for Karunn sir): the per-account mail switch
+    // (`mail_enabled`, QA-2461) does NOT apply to the digest. An Admin putting a person ON this list is the
+    // explicit choice to mail them the digest; the switch keeps governing every OTHER mail (approvals, parked
+    // costs, ...) through mailer.ts suppressFor, unchanged. Before this, a mail-off account on the list was
+    // "silenced" and skipped, so there was no way to send someone the digest and nothing else.
     return {
       to, kind,
       viewer: { id: String(u._id), name: u.name, email: to, role: u.role, location_scope: (u.location_scope ?? []).map(String), can_edit: !!u.can_edit },
-      silenced: suppressFor(u),
     };
   };
   const out: Resolved[] = [];
@@ -226,8 +230,8 @@ async function sendOneInner(day: string, r: Resolved, includeText: boolean, from
     const o = await sendMail({ ...base, suppress: `the digest could not be built: ${e instanceof Error ? e.message : String(e)}` });
     return { to: r.to, outcome: "failed", status: o.status, reason: o.reason };
   }
-  const o = await sendMail({ ...base, ...content, suppress: r.silenced });
-  return { to: r.to, outcome: r.silenced ? "silenced" : "mailed", status: o.status, reason: o.reason, ...(includeText ? { text: content.text } : {}) };
+  const o = await sendMail({ ...base, ...content });
+  return { to: r.to, outcome: "mailed", status: o.status, reason: o.reason, ...(includeText ? { text: content.text } : {}) };
 }
 
 // The durable per-recipient day claim. Returns the attempt number the caller has WON (1 = first send of
@@ -264,7 +268,7 @@ async function takeClaim(day: string, to: string, instance: string, now: Date): 
 // overwrite the re-taker's state (a late "retry" over a "sent" would bring a third mail). Nothing matched = not ours any more.
 async function settleClaim(day: string, to: string, attempt: number, instance: string, res: DigestResult, at: Date): Promise<void> {
   let set: Record<string, unknown>;
-  if (res.outcome === "ineligible" || res.outcome === "silenced") set = { status: "closed" };
+  if (res.outcome === "ineligible") set = { status: "closed" };
   else if (res.status === "sent") set = { status: "sent", sent_at: at };
   else if (attempt >= DIGEST_MAX_ATTEMPTS) set = { status: "exhausted" };
   else set = { status: "retry", next_at: new Date(at.getTime() + DIGEST_RETRY_GAP_MS) };
@@ -348,7 +352,7 @@ export async function publishDigestNow(day: string, user: SessionUser, from?: st
   // person's own mail switch, a failed send and the mail door's own skip (email off, no credentials, test env) are
   // different things to fix, so a long list of one cannot crowd the others out. Up to 3 distinct reasons each.
   const why: string[] = [];
-  for (const cat of ["ineligible", "silenced", "failed", "mailed"] as const) {
+  for (const cat of ["ineligible", "failed", "mailed"] as const) {
     const rs_ = [...new Set(results.filter((r) => r.outcome === cat && r.status !== "sent" && r.reason).map((r) => String(r.reason)))].slice(0, 3);
     why.push(...rs_);
   }
