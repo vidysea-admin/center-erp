@@ -234,7 +234,7 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
 // -348 note: the daily digest reaches an account whose own mail switch is off, when an Admin has put it on the
 // digest list (Umesh 2026-11-04, for Karunn sir: "turn it on for the daily reports only"). No number is quoted.
-export const RELEASE = "2026.08.14-348";
+export const RELEASE = "2026.08.14-349";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -306,6 +306,12 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-349: a student who was certified or failed now waits before joining another batch: 6 months from the certificate date, or from the result date for a fail. " +
+  "Joining any batch is refused until then, and the message gives the date. The batch's student list shows them as \"Eligible from <date>\" without an Add button. " +
+  "A student who dropped out, or whose batch was cancelled, can join straight away. The 6 months is Admin, Defaults, Training cooldown.";
+
+// -349: the -348 note moved here unchanged when -349 became current.
+const RELEASE_NOTE_ARCHIVE_348 =
   "-348: a person on the daily digest list now gets the digest even when emails are switched off for their account. " +
   "Their other emails (approvals, costs) stay off. In Admin, Users and Admin, Defaults the label now says so.";
 
@@ -2344,6 +2350,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -319: ARCHIVE_318 wired in here in the SAME bump that declared it, same discipline.
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
+  // -349: ARCHIVE_348 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_348 + " " +
   // -348: ARCHIVE_347 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_347 + " " +
   // -347: ARCHIVE_346 wired in here in the SAME bump that declared it, same discipline.
