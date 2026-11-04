@@ -8,7 +8,7 @@ import {
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
 } from "@/models";
 import { audit, auditDiff } from "@/lib/audit";
-import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, HOLDS_PERSON, hasRecordedResult, isCertificateSettled, isFreshCandidate, JOURNEY_TAGS, journeyOf } from "@/lib/candidate-journey";
+import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, fmtDay, HOLDS_PERSON, hasRecordedResult, isCertificateSettled, isFreshCandidate, JOURNEY_TAGS, journeyOf, reenrolEligibleFrom } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
 // QA-1198: re-exported so server callers may import the settled-certificate predicate from either
 // module — the same shape normalizeCan has (ARCHITECTURE 3.0), and the reason is the same: the
@@ -857,6 +857,14 @@ export async function addMemberChecked(batchId: string, candidateId: string, joi
   const cand = await Candidate.findById(candidateId).select("name phone sidh_candidate_id batch_interest").lean<any>(); // QA-1749: REQ-389a separator fields
   if (cand?.batch_interest === "Future") {
     throw new HttpError(409, upcomingInterestRefusal(cand));
+  }
+
+  // -349 re-enrolment wait: a certified or failed student joins no batch until the Defaults cooldown has run
+  // from the certificate / result date. Here, not in a route, so assign, import, the batch roster and the public
+  // registration link all refuse the same person with the same sentence.
+  const hold = (await reenrolHoldsByCandidate([candidateId])).get(String(candidateId));
+  if (hold && hold.from > istToday()) {
+    throw new HttpError(409, reenrolRefusal(cand, hold));
   }
 
   // ---- 2. context read once, for the checks above and the values below ----
@@ -3678,6 +3686,43 @@ export async function latestSeatByCandidate(candidateIds: unknown[]): Promise<Ma
   }
   return latest;
 }
+// -349: the latest re-enrolment wait per candidate across ALL their finished seats (the strictest wins), for
+// addMemberChecked's refusal and the candidate rows' `eligible_from`. The rule itself is reenrolEligibleFrom
+// (candidate-journey.ts); this only reads the seats, their results and their batches' status.
+export type ReenrolHold = { from: Date; why: "certified" | "failed"; on: Date; months: number };
+export async function reenrolHoldsByCandidate(candidateIds: unknown[]): Promise<Map<string, ReenrolHold>> {
+  const out = new Map<string, ReenrolHold>();
+  const ids = [...new Set(candidateIds.map(String))];
+  if (!ids.length) return out;
+  const results = await CandidateResult.find({ candidate: { $in: ids }, result: { $in: ["Pass", "Fail"] } })
+    .select("candidate batch result certificate_date assessed_on").lean<any[]>();
+  if (!results.length) return out;
+  const months = Number((await getDefaults()).training_cooldown_months ?? 6);
+  const batchIds = [...new Set(results.map((r) => String(r.batch)))];
+  const [seats, batches] = await Promise.all([
+    BatchMember.find({ candidate: { $in: ids }, batch: { $in: batchIds } }).select("candidate batch left_on released_on").lean<any[]>(),
+    Batch.find({ _id: { $in: batchIds } }).select("status").lean<any[]>(),
+  ]);
+  const seatOf = new Map(seats.map((m) => [`${m.candidate}|${m.batch}`, m]));
+  const statusOf = new Map(batches.map((b) => [String(b._id), String(b.status)]));
+  for (const r of results) {
+    const seat = seatOf.get(`${r.candidate}|${r.batch}`);
+    if (!seat) continue; // a result with no seat is orphaned history, not a reason to hold a person
+    const h = reenrolEligibleFrom({
+      result: r.result, certificate_date: r.certificate_date, assessed_on: r.assessed_on,
+      released_on: seat.released_on, left_on: seat.left_on, batch_status: statusOf.get(String(r.batch)),
+    }, months);
+    if (!h) continue;
+    const k = String(r.candidate), cur = out.get(k);
+    if (!cur || h.from > cur.from) out.set(k, { ...h, months });
+  }
+  return out;
+}
+export function reenrolRefusal(cand: { name?: string | null; phone?: string | null; sidh_candidate_id?: string | null } | null | undefined, h: ReenrolHold): string {
+  return `${personLabel(cand ?? {}) || "This candidate"} can join a new batch only from ${fmtDay(h.from)}: ` +
+    `${h.why === "certified" ? "certified" : "failed the assessment"} on ${fmtDay(h.on)}, and a student waits ${h.months} months after that ` +
+    `before joining any batch (Admin, Defaults, Training cooldown).`;
+}
 export async function latestSeatResultByCandidate(candidateIds: unknown[], seats?: Map<string, any>): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const latest = seats ?? await latestSeatByCandidate(candidateIds);
@@ -3720,13 +3765,17 @@ export async function enrichCandidateRows(items: any[]): Promise<any[]> {
   const lastStatus = new Map<string, string>(unheldBatchIds.length
     ? (await Batch.find({ _id: { $in: unheldBatchIds } }).select("status").lean<any[]>()).map((b) => [String(b._id), String(b.status)])
     : []);
+  const holds = await reenrolHoldsByCandidate(items.map((c) => c._id));
+  const today = istToday();
   return items.map((c) => {
-    const k = String(c._id), b: any = byCand.get(k), seat = seats.get(k);
+    const k = String(c._id), b: any = byCand.get(k), seat = seats.get(k), hold = holds.get(k);
     return {
       ...c, eligibility: candidateEligibility(c, defaults),
       active_batch: b ? { _id: b._id, code: b.code, status: b.status, program: b.program } : null,
       last_batch_status: !b && seat ? (lastStatus.get(String(seat.batch)) ?? null) : null,
       latest_result: resByCand.get(k) ?? null,
+      // -349: YYYY-MM-DD; only while the wait still runs, so the picker and export see nothing for everyone else
+      ...(hold && hold.from > today ? { eligible_from: hold.from.toISOString().slice(0, 10), eligible_from_why: hold.why } : {}),
     };
   });
 }

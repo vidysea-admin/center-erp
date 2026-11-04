@@ -1722,7 +1722,12 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     const prog2 = (await req("POST", "/api/programs", { code: "PRRE" + stamp, name: "Re-enrol Program " + stamp, trainer_skill: "ReSkill" + stamp, duration_days: 15, buffer_days: 5, default_batch_size: 30, completion_deadline_days: 90 }, 201)).data.item;
     const loc2 = (await req("POST", "/api/locations", { code: "LRE" + stamp, name: "Re-enrol Location " + stamp, external_id: "ERE" + stamp, approval_status: "Approved", spoc_name: "Test SPOC", principal_name: "Test Principal" }, 201)).data.item;
 
-    const { b: rA, cands: rc } = await mkBatch(2, 14);
+    const { b: rA, mems: ram, cands: rc } = await mkBatch(2, 14);
+    // -349: a finished seat with a Pass/Fail now holds the person for 6 months, so batch A's results are dated
+    // 7 months back - these pins are about the SEAT being released, not the wait (pinned separately below).
+    const [ty, tm, td] = today.split("-").map(Number);
+    const sevenAgo = new Date(Date.UTC(ty, tm - 1 - 7, Math.min(td, 28))).toISOString().slice(0, 10);
+    await req("PUT", `/api/batches/${rA._id}/results`, { rows: ram.map((m) => ({ member: String(m._id), result: "Fail", failure_reason: "re-enrol pin: aged", assessed_on: sevenAgo })) }, 200);
     const rB = await mkPlain(1, loc, prog);    // same course, same centre
     const rC = await mkPlain(2, loc2, prog2);  // other course, other centre
 
@@ -1749,15 +1754,77 @@ await req("POST", `/api/batches/${batch._id}/logs`, { log_date: "2020-01-01", pr
     ok("re-enrol: the candidate list shows the student's CURRENT batch, not the finished one",
       pool.find((c) => String(c._id) === String(rc[0]._id))?.active_batch?.code === rB.code,
       JSON.stringify(pool.find((c) => String(c._id) === String(rc[0]._id))?.active_batch));
-    ok("re-enrol: …and their journey reads the CURRENT batch - the finished batch's Pass does not label them Certified",
+    ok("re-enrol: …and their journey reads the CURRENT batch - the finished batch's result does not label them",
       (pool.find((c) => String(c._id) === String(rc[0]._id))?.latest_result ?? null) === null,
       String(pool.find((c) => String(c._id) === String(rc[0]._id))?.latest_result));
 
-    // Freedom follows the BATCH status, not the result (Umesh 2026-11-02): a student who FAILED a completed batch joins too.
+    // -349 (Umesh + ops call 2026-11-04) REVERSES the -340 line "a student who FAILED joins too": a certified
+    // or failed student waits the Defaults training cooldown (6 months) from the certificate / result date
+    // before joining ANY batch. A dropout (left before submission) and a cancelled batch's student join at once.
+    {
+      const { createRequire } = await import("node:module");
+      const pathM = await import("node:path");
+      const root = pathM.resolve(pathM.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
+      const jm = createRequire(import.meta.url)(pathM.join(root, "node_modules/jiti"));
+      const J = (jm.createJiti ?? jm)(pathM.join(root, "scripts/e2e.mjs"), { interopDefault: true })(pathM.join(root, "src/lib/candidate-journey.ts"));
+      const ef = (seat, m = 6) => { const r = J.reenrolEligibleFrom(seat, m); return r ? { from: r.from.toISOString().slice(0, 10), why: r.why, on: r.on.toISOString().slice(0, 10) } : null; };
+      ok("-349 unit: certified -> eligible from certificate date + 6 months",
+        JSON.stringify(ef({ result: "Pass", certificate_date: "2026-11-03", assessed_on: "2026-10-20" })) === JSON.stringify({ from: "2027-05-03", why: "certified", on: "2026-11-03" }),
+        JSON.stringify(ef({ result: "Pass", certificate_date: "2026-11-03", assessed_on: "2026-10-20" })));
+      ok("-349 unit: certified with no certificate date falls back to the result date",
+        ef({ result: "Pass", assessed_on: "2026-10-20" })?.from === "2027-04-20", JSON.stringify(ef({ result: "Pass", assessed_on: "2026-10-20" })));
+      ok("-349 unit: failed -> eligible from result date + 6 months",
+        JSON.stringify(ef({ result: "Fail", assessed_on: "2026-05-01" })) === JSON.stringify({ from: "2026-11-01", why: "failed", on: "2026-05-01" }),
+        JSON.stringify(ef({ result: "Fail", assessed_on: "2026-05-01" })));
+      ok("-349 unit: 31 Aug + 6 months lands on the last day of February, not in March",
+        ef({ result: "Fail", assessed_on: "2026-08-31" })?.from === "2027-02-28", JSON.stringify(ef({ result: "Fail", assessed_on: "2026-08-31" })));
+      ok("-349 unit: a dropout (left_on) and a cancelled batch's student wait for nothing",
+        ef({ result: "Fail", assessed_on: "2026-11-01", left_on: "2026-10-01" }) === null && ef({ result: "Pass", assessed_on: "2026-11-01", batch_status: "Cancelled" }) === null);
+      ok("-349 unit: Pending and Absent are not a result to wait on",
+        ef({ result: "Pending", assessed_on: "2026-11-01" }) === null && ef({ result: "Absent", assessed_on: "2026-11-01" }) === null);
+      ok("-349 unit: the cooldown months come from the caller (Defaults), not a constant",
+        ef({ result: "Fail", assessed_on: "2026-05-01" }, 3)?.from === "2026-08-01");
+      ok("-349 unit: the picker offers nobody whose eligible_from is after today, and everyone else as before",
+        J.isFreeToJoin({ eligible_from: "2027-05-03" }, "2026-11-04") === false && J.isFreeToJoin({ eligible_from: "2026-11-04" }, "2026-11-04") === true
+          && J.isFreeToJoin({}, "2026-11-04") === true && J.isFreeToJoin({ active_batch: { code: "X" } }, "2026-11-04") === false);
+      // certificate_date is stamped `new Date()` when the file lands: 01:00 IST on 4 Nov is 19:30 UTC on 3 Nov
+      ok("-349 unit: a certificate stamped at 01:00 IST counts from that IST day, not the UTC day before",
+        J.reenrolEligibleFrom({ result: "Pass", certificate_date: new Date("2026-11-03T19:30:00Z") }, 6)?.on.toISOString().slice(0, 10) === "2026-11-04",
+        String(J.reenrolEligibleFrom({ result: "Pass", certificate_date: new Date("2026-11-03T19:30:00Z") }, 6)?.on?.toISOString()));
+      ok("-349 unit: the refusal date reads like a person wrote it", J.fmtDay("2027-05-03") === "03 May 2027", J.fmtDay("2027-05-03"));
+    }
+    const sixOn = (ymd, m = 6) => { const [y, mo, d] = ymd.split("-").map(Number); const last = new Date(Date.UTC(y, mo - 1 + m + 1, 0)).getUTCDate(); return new Date(Date.UTC(y, mo - 1 + m, Math.min(d, last))).toISOString().slice(0, 10); };
+    const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const human = (ymd) => `${ymd.slice(8, 10)} ${MON[+ymd.slice(5, 7) - 1]} ${ymd.slice(0, 4)}`;
+
     const { b: rK, mems: rkm, cands: rk } = await mkBatch(1, 17);
     await req("PUT", `/api/batches/${rK._id}/results`, { rows: [{ member: String(rkm[0]._id), result: "Fail", failure_reason: "re-enrol pin", assessed_on: today }] }, 200);
     await req("POST", `/api/batches/${rK._id}/complete`, { reason: "re-enrol pin: failed student", force: true }, 200);
-    ok("re-enrol: a student who FAILED a completed batch joins another batch", (await join(rB, rk[0])).status === 201);
+    const jFail = await join(rB, rk[0]);
+    ok("-349: a student who FAILED today is refused another batch for 6 months", jFail.status === 409, JSON.stringify(jFail.data).slice(0, 240));
+    ok("-349: …and the refusal names the date they can join again and why",
+      String(jFail.data?.error ?? "").includes(human(sixOn(today))) && /failed/i.test(String(jFail.data?.error ?? "")), String(jFail.data?.error));
+    const jFailC = await join(rC, rk[0]);
+    ok("-349: …a batch of ANOTHER course at ANOTHER centre refuses them too", jFailC.status === 409, JSON.stringify(jFailC.data).slice(0, 200));
+    const listed = ((await req("GET", `/api/candidates?location=${loc._id}&limit=2000`)).data.items ?? []).find((c) => String(c._id) === String(rk[0]._id));
+    ok("-349: the candidate list carries eligible_from, so the pool picker can say when", listed?.eligible_from === sixOn(today), JSON.stringify({ ef: listed?.eligible_from, why: listed?.eligible_from_why }));
+
+    // Failed long enough ago: free.
+    const { b: rL, mems: rlm, cands: rl } = await mkBatch(1, 91);
+    const putOld = await req("PUT", `/api/batches/${rL._id}/results`, { rows: [{ member: String(rlm[0]._id), result: "Fail", failure_reason: "re-enrol pin old", assessed_on: sevenAgo }] });
+    await req("POST", `/api/batches/${rL._id}/complete`, { reason: "re-enrol pin: failed long ago", force: true }, 200);
+    const jOld = await join(rB, rl[0]);
+    ok("-349: a student who failed more than 6 months ago joins another batch", putOld.status === 200 && jOld.status === 201,
+      JSON.stringify({ put: putOld.status, putErr: putOld.data?.errors ?? putOld.data?.error, join: jOld.status, err: jOld.data?.error }).slice(0, 300));
+
+    // Certified: the certificate date starts the clock.
+    const { b: rP, mems: rpm, cands: rp } = await mkBatch(1, 92);
+    await req("PUT", `/api/batches/${rP._id}/results`, { rows: [{ member: String(rpm[0]._id), result: "Pass", assessed_on: today }] }, 200);
+    await req("POST", `/api/batches/${rP._id}/complete`, { reason: "re-enrol pin: certified student", force: true }, 200);
+    const jPass = await join(rC, rp[0]);
+    ok("-349: a CERTIFIED (passed) student is refused any batch for 6 months, and told why",
+      jPass.status === 409 && /certified/i.test(String(jPass.data?.error ?? "")) && String(jPass.data?.error ?? "").includes(human(sixOn(today))),
+      JSON.stringify(jPass.data).slice(0, 240));
 
     const reopen = await req("POST", `/api/batches/${rA._id}/transition`, { target: "Closing", reason: "re-enrol pin: reopen" });
     ok("re-enrol: reopening batch A is refused while its students sit in other batches, and names them",
@@ -6534,12 +6601,19 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
     .then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
   const hxPublic = (tok) => fetch(`${BASE}/api/public/attendance/${tok}`).then(async (r) => ({ status: r.status, data: await r.json().catch(() => ({})) }));
   const hxOid = (x) => new HxOid(String(x));
+  // -349: a certified student waits 6 months before another batch. These fixtures are about history and the
+  // latest seat, not that wait, so the Pass and its certificate are moved 7 months back before the re-join.
+  const hxAged = async (c) => {
+    const old = new Date(Date.now() - 214 * 86_400_000);
+    await hxDb.collection("candidateresults").updateMany({ candidate: hxOid(c._id), result: "Pass" }, { $set: { assessed_on: old, certificate_date: old } });
+  };
 
   // ---- S: passed batch A (completed), then B (dropped), now C (running) ----
   const S = await hxCand(1, { dob: "1999-03-04" });
   const { b: bA, mems: mA } = await hxRunning(1, [S]);
   await hxPass(bA, mA[0], `CERT-HX-${stamp}`);
   await hxFinish(bA);
+  await hxAged(S);
   const bB = await hxPlain(2);
   const sB = await req("POST", `/api/batches/${bB._id}/members`, { candidate: S._id });
   ok("history fixture: S joins B after finishing A", sB.status === 201, JSON.stringify(sB.data).slice(0, 160));
@@ -6665,6 +6739,7 @@ ok(`-111: no API error in this run carries a Rule/DEC/QA code (${codeLeaks.lengt
   const { b: bE, mems: mE } = await hxRunning(8, [W]);
   await hxPass(bE, mE[0], `CERT-HXW-${stamp}`);
   await hxFinish(bE);
+  await hxAged(W);
   const bF = await hxPlain(9);
   const wm = await req("POST", `/api/batches/${bF._id}/members`, { candidate: W._id });
   await req("POST", `/api/members/${wm.data.item?._id}/drop`, { left_on: today, drop_reason: "history pin: W left F" }, 200);

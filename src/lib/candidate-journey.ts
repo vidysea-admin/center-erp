@@ -240,11 +240,59 @@ export const HOLDS_PERSON = { left_on: null, released_on: null } as const;
 // addMemberChecked; this only decides who is offered.
 // -342 (Umesh 2026-11-03): a free student belongs to no centre and may take any course, so neither the
 // student's centre nor job role matters here any more - the batch they join gives them its own.
-/** True when no seat holds this candidate now and they are not archived. */
+/** True when no seat holds this candidate now, they are not archived, and no re-enrolment wait runs. */
 export function isFreeToJoin(
-  c: { active_batch?: unknown; archived_at?: unknown },
+  c: { active_batch?: unknown; archived_at?: unknown; eligible_from?: string | null },
+  today?: string,
 ): boolean {
-  return !c.active_batch && !c.archived_at;
+  if (c.active_batch || c.archived_at) return false;
+  // -349: `eligible_from` (YYYY-MM-DD, from enrichCandidateRows) after today means the wait still runs.
+  return !(c.eligible_from && today && c.eligible_from > today);
+}
+
+// -349 re-enrolment wait (Umesh + ops call 2026-11-04, REVERSING -340's "a failed student joins too"):
+// a student whose finished seat ended CERTIFIED (Pass) waits from the certificate date (else the result
+// date), and one who FAILED waits from the result date, before joining ANY batch - same or another course.
+// The length is Defaults `training_cooldown_months` (6), the setting that was only a warning until now,
+// so ops can change it in one place. Two seats wait for nothing: one the student LEFT before the batch was
+// submitted (`left_on`, a dropout) and one in a CANCELLED batch. Absent and Pending are not a result.
+// Pure on purpose, beside HOLDS_PERSON: rules.ts `reenrolHoldsByCandidate` feeds it from Mongo, and the
+// unit tests in e2e.mjs load this file through jiti.
+export type ReenrolSeat = {
+  result?: string | null; certificate_date?: Date | string | null; assessed_on?: Date | string | null;
+  released_on?: Date | string | null; left_on?: unknown; batch_status?: string | null;
+};
+// A stored Date is read on its IST calendar day (+05:30): a certificate stamped `new Date()` at 01:00 IST is the
+// previous day in UTC, while a date typed as YYYY-MM-DD (stored at UTC midnight) stays on its own day.
+const ymdUTC = (d: Date | string): Date | null => {
+  const s = typeof d === "string" ? d : (d instanceof Date && !isNaN(+d) ? new Date(+d + 330 * 60_000).toISOString() : "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])) : null;
+};
+/** The day `months` calendar months after `d`; 31 Aug + 6 is 28 Feb, never 3 March. */
+function addMonthsUTC(d: Date, months: number): Date {
+  const y = d.getUTCFullYear(), mo = d.getUTCMonth() + months;
+  const last = new Date(Date.UTC(y, mo + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, mo, Math.min(d.getUTCDate(), last)));
+}
+/** When this finished seat lets the student join a batch again, or null when it imposes no wait. */
+export function reenrolEligibleFrom(
+  seat: ReenrolSeat, months: number,
+): { from: Date; why: "certified" | "failed"; on: Date } | null {
+  if (!seat || seat.left_on || seat.batch_status === "Cancelled") return null;
+  const why = seat.result === "Pass" ? "certified" : seat.result === "Fail" ? "failed" : null;
+  if (!why) return null;
+  const raw = why === "certified" ? (seat.certificate_date ?? seat.assessed_on ?? seat.released_on) : (seat.assessed_on ?? seat.released_on);
+  const on = raw ? ymdUTC(raw) : null;
+  if (!on) return null;
+  return { from: addMonthsUTC(on, Math.max(0, Number(months) || 0)), why, on };
+}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** "03 May 2027" - the same text on the server refusal and the pool picker. */
+export function fmtDay(d: Date | string): string {
+  const k = ymdUTC(d);
+  if (!k) return "";
+  return `${String(k.getUTCDate()).padStart(2, "0")} ${MONTHS[k.getUTCMonth()]} ${k.getUTCFullYear()}`;
 }
 
 // "Pending" is NOT a record. It is the absence of one — the row exists because somebody opened the

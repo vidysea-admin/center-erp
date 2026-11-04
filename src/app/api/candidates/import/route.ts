@@ -5,7 +5,7 @@ import { Types } from "mongoose";
 import { apiHandler, requireUser, requireEdit, assertLocationInScope, HttpError, isScoped, readFormData, translateError } from "@/lib/authz";
 import { requirePerm } from "@/lib/permissions";
 import { BatchMember, Candidate, EDUCATION_LEVEL, Location, Program, SIDH_STATUS } from "@/models";
-import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, joinRefusalFor, parseSheetDate, rule20Sentence } from "@/lib/rules";
+import { assertBatchJoinable, assignCandidateToBatch, candidateEligibility, istToday, joinRefusalFor, parseSheetDate, reenrolHoldsByCandidate, reenrolRefusal, rule20Sentence } from "@/lib/rules";
 import { getDefaults } from "@/lib/defaults";
 import { plain } from "@/lib/user-copy";
 import { CANDIDATE_IMPORT_FIELDS } from "@/lib/field-catalog";
@@ -544,10 +544,14 @@ export const POST = apiHandler(async (req: NextRequest) => {
       const r = joinRefusalFor(h.holder);
       if (r) h.refusal = r;
     }
+    // -349: the preview shows the re-enrolment wait in the very sentence addMemberChecked would refuse with
+    const reHolds = await reenrolHoldsByCandidate(holderRows.filter((h) => !h.refusal).map((h) => h.holderId));
+    const tdy = istToday();
     for (const h of holderRows) {
       if (h.refusal) continue;
-      const m = heldBy.get(h.holderId);
+      const m = heldBy.get(h.holderId), wait = reHolds.get(String(h.holderId));
       if (m) h.refusal = rule20Sentence((m.batch as any)?.code ?? m.batch);
+      else if (wait && wait.from > tdy) h.refusal = reenrolRefusal(h.holder, wait);
       else {
         const el = candidateEligibility(h.holder, joinDefaults);
         // another centre's student: the reasons can disclose age (dob), so they are not shown to this user

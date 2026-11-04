@@ -12,7 +12,7 @@ import { personLabel, personList, personPhone } from "@/lib/person";
 import { normalizeCan, storedCanIsUnreadable, apaarError, storedApaarIsUnreadable } from "@/lib/validate";
 // QA-1198: the settled-certificate predicate, from the PURE module — this screen cannot reach
 // rules.ts (mongoose), which is exactly why the definition lives in lib/candidate-journey.ts.
-import { activeOnly, hasLeft, hasRecordedResult, isCertificateSettled, isFreeToJoin, showsAfterLeaving } from "@/lib/candidate-journey";
+import { activeOnly, fmtDay, hasLeft, hasRecordedResult, isCertificateSettled, isFreeToJoin, showsAfterLeaving } from "@/lib/candidate-journey";
 import { trainerSelectGroups } from "@/lib/trainer-select";
 import { slotGuidelineErrors, slotHoursPerDay } from "@/lib/slot-rules";
 import { BackLink, Btn, Chip, CopyBtn, DataTable, Drawer, ErrorBanner, Field, FilterPills, HealthBanner, NameCell, Notice, Section, ShareLinkPanel, Tabs, inputCls, statusLabel, CostHeadOptions, showNewHeadBox, CostHeadPicker, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable } from "@/components/ui";
@@ -1436,6 +1436,8 @@ function Roster({ batchId, batch, error, setError, onChanged }: any) {
   const [members, setMembers] = useState<any[]>([]);
   const [pool, setPool] = useState<any[]>([]);
   const [poolTotal, setPoolTotal] = useState(0);
+  // -349: free of any batch but still inside the re-enrolment wait - listed with the date, never offered.
+  const [waiting, setWaiting] = useState<any[]>([]);
   const [showPool, setShowPool] = useState(false);
   const [attLinks, setAttLinks] = useState<any[] | null>(null);
   // A-03
@@ -1513,7 +1515,9 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
     ]).then(([own, all]) => {
       const seen = new Set((own.items ?? []).map((c: any) => String(c._id)));
       const merged = [...(own.items ?? []), ...(all.items ?? []).filter((c: any) => !seen.has(String(c._id)))];
-      setPool(merged.filter((c: any) => isFreeToJoin(c)));
+      const todayK = istTodayInput();
+      setPool(merged.filter((c: any) => isFreeToJoin(c, todayK)));
+      setWaiting(merged.filter((c: any) => isFreeToJoin({ ...c, eligible_from: null }) && !isFreeToJoin(c, todayK)));
       setPoolTotal(Math.max(Number(all.total ?? 0), merged.length));
     }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
@@ -1759,6 +1763,14 @@ The certificate status (${res.certificate_status ?? "—"}), number and date sta
             <div key={c._id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
               <span>{c.name} <span className="text-gray-400">· {c.phone} · {c.location?.name ?? "no centre"}</span></span>
               <Btn small feedback onClick={() => add(c._id)}>Add</Btn>
+            </div>
+          ))}
+          {waiting.map((c) => (
+            <div key={c._id} className="flex items-center justify-between rounded-lg border border-dashed px-3 py-2 text-sm text-gray-500">
+              <span>{c.name} <span className="text-gray-400">· {c.phone} · {c.location?.name ?? "no centre"}</span></span>
+              <span className="text-xs" title="A certified or failed student waits the Training cooldown (Admin, Defaults) before joining any batch.">
+                Eligible from {fmtDay(c.eligible_from)} ({c.eligible_from_why === "certified" ? "certified" : "failed"})
+              </span>
             </div>
           ))}
           {pool.length === 0 && <p className="text-sm text-gray-400">No free students listed. Use Find above for a student of another centre.</p>}
