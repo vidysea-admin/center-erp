@@ -468,16 +468,30 @@ const dash3 = ["—", "—", "—"];
 ok("K1: a centre login without money gets two tables, Trainers and Candidates (no target table: targets are organisation-wide; no Costs)",
   eq((dA?.tables ?? []).map((t) => t.key), ["trainers", "candidates"]) && dA?.targets === null, JSON.stringify((dA?.tables ?? []).map((t) => t.key)));
 ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
-  eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved on the day"), ["Rs 1,250", "2"])
-  && eq(cellsAt(rAF.data, "costs", "Payment pending"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which raised on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+  eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved, expense dated on the day"), ["Rs 1,250", "2"])
+  && eq(cellsAt(rAF.data, "costs", "Approved, payment not yet made"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which entered on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
 // -347 (Umesh, 2026-11-03: "jabse system start hua hai tabb se"): what is open, split by month back to the oldest item
 const subsAfter = (d, key, parent) => { const rows = tblOf(d, key)?.rows ?? []; const i = rows.findIndex((r) => r.label === parent); const out = []; for (let j = i + 1; j < rows.length && rows[j].sub; j++) out.push(rows[j]); return out; };
 ok("K1: pending approval is split by the month it was raised (Mar 2031: Rs 1,100 in 2), after the raised-today row",
-  eq(subsAfter(rAF.data, "costs", "Pending approval").map((r) => [r.label, ...r.cells]), [["of which raised on the day", "Rs 800", "1"], ["raised in Mar 2031", "Rs 1,100", "2"]]),
-  JSON.stringify(subsAfter(rAF.data, "costs", "Pending approval")));
+  eq(subsAfter(rAF.data, "costs", "Pending approval (entered, not yet approved)").map((r) => [r.label, ...r.cells]), [["of which entered on the day", "Rs 800", "1"], ["of which entered in Mar 2031", "Rs 1,100", "2"]]),
+  JSON.stringify(subsAfter(rAF.data, "costs", "Pending approval (entered, not yet approved)")));
 ok("K1: payment pending is split by the month of the expense, newest first (Mar 2031 Rs 4,250 in 2, Feb 2031 Rs 9,999 in 1), adding up to Rs 14,249 in 3",
-  eq(subsAfter(rAF.data, "costs", "Payment pending").map((r) => [r.label, ...r.cells]), [["expense of Mar 2031", "Rs 4,250", "2"], ["expense of Feb 2031", "Rs 9,999", "1"]]),
-  JSON.stringify(subsAfter(rAF.data, "costs", "Payment pending")));
+  eq(subsAfter(rAF.data, "costs", "Approved, payment not yet made").map((r) => [r.label, ...r.cells]), [["expense of Mar 2031", "Rs 4,250", "2"], ["expense of Feb 2031", "Rs 9,999", "1"]]),
+  JSON.stringify(subsAfter(rAF.data, "costs", "Approved, payment not yet made")));
+// Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own entries were still pending. The table now
+// leads with what is waiting, says on every approved row that it is approved, and adds one row he can recognise: all he
+// entered this month = approved (expense dated this month) + pending (entered this month). Fixture: Rs 5,750 in 4 + Rs 1,100 in 2.
+ok("K1: Costs reads pending first, then everything entered this month, then the approved rows, each saying what it counts",
+  eq((tblOf(rAF.data, "costs")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label), ["Pending approval (entered, not yet approved)", "Entered this month (approved + pending)", "Approved, expense dated on the day", "Approved, expense dated this month", "Approved, payment not yet made"])
+  && eq(cellsAt(rAF.data, "costs", "Entered this month (approved + pending)"), ["Rs 6,850", "6"]) && eq(cellsAt(rAF.data, "costs", "Approved, expense dated this month"), ["Rs 5,750", "4"]),
+  JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+ok("K1: the Costs note says plainly that a cost is in the approved rows only after approval, and that dates are the expense date",
+  /only after it is approved/.test(tblOf(rAF.data, "costs")?.note ?? "") && /expense date written on the entry/.test(tblOf(rAF.data, "costs")?.note ?? ""), tblOf(rAF.data, "costs")?.note);
+// Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status". The row folds NSDC Approved and the TOT stages, which
+// the Trainers tab calls Under preparation: same people, two names. The row now carries the tab's name and the note says so.
+ok("K1: the Trainers row for NSDC approved + TOT carries the Trainers tab's name, and the note ties it to that tab",
+  bucketLabel("approved") === "Under preparation (NSDC approved, TOT under way)" && !!cellsAt(dA, "trainers", "Under preparation (NSDC approved, TOT under way)")
+  && /same group as the Trainers tab/.test(tblOf(dA, "trainers")?.note ?? ""), `${bucketLabel("approved")} | ${tblOf(dA, "trainers")?.note}`);
 const JTAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
 const enrSubs = subsAfter(dA, "candidates", "Enrolled");
 ok("K1: Enrolled now is split by where each person is now (the Candidates screen's journey tags, in order), and the split adds up to it",
@@ -763,13 +777,13 @@ ok("T6: the ineligible one is ON THE RECORD with a reason, not silent", rowsD.fi
   JSON.stringify(rowsD.filter((r) => /tr\./.test(r.to)).map((r) => [r.to, r.status, r.reason])));
 const txtF = String(mailed(uAF.email)?.text ?? ""), txtN = String(mailed(uA.email)?.text ?? ""), txtAdm = String(mailed(uAdm.email)?.text ?? "");
 ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, month Rs 5,750, pending Rs 1,100, payment pending Rs 14,249)",
-  /^COSTS$/m.test(txtF) && eq(mailRow(txtF, "Approved on the day"), ["Rs 1,250", "2"]) && eq(mailRow(txtF, "Month to date"), ["Rs 5,750", "4"])
-  && eq(mailRow(txtF, "Pending approval"), ["Rs 1,100", "2"]) && eq(mailRow(txtF, "Payment pending"), ["Rs 14,249", "3"]), txtF.replace(/\s+/g, " ").slice(0, 400));
+  /^COSTS$/m.test(txtF) && eq(mailRow(txtF, "Approved, expense dated on the day"), ["Rs 1,250", "2"]) && eq(mailRow(txtF, "Approved, expense dated this month"), ["Rs 5,750", "4"])
+  && eq(mailRow(txtF, "Pending approval (entered, not yet approved)"), ["Rs 1,100", "2"]) && eq(mailRow(txtF, "Approved, payment not yet made"), ["Rs 14,249", "3"]), txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: ...and its other sections carry the same exact numbers as the screen (joined 4, enrolled 2, mobilised 12 of 30)",
   mailRow(txtF, "Joined into batches")?.[1] === "4" && mailRow(txtF, "Enrolled")?.[1] === "2" && mailRow(txtF, "Mobilised (planning batches)")?.[0] === "12 of 30 (gap 18)", txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: mail uses the same daily learner start and the current totals as the screen, and says the Now column is current, not historical",
   mailRow(txtF, "Training started")?.[1] === "7" && mailRow(txtF, "Enrolled")?.[0] === "5" && mailRow(txtF, "In training (started Active batch)")?.[0] === "0"
-  && /current totals, also when an earlier day is chosen/.test(txtF), txtF.replace(/\s+/g, " ").slice(0, 400));
+  && /Now = the position today, even when an earlier date is picked/.test(txtF.replace(/\s+/g, " ")), txtF.replace(/\s+/g, " ").slice(0, 400));
 // K: the mail draws the SAME cells as the API (one function): every row of every table, cell for cell
 const apiAF = (await digest(uAF.cookie, D)).data;
 const mailMismatch = (apiAF?.tables ?? []).flatMap((t) => t.rows.filter((r) => !eq(mailRow(txtF, r.label), r.cells)).map((r) => `${t.key}/${r.label}: mail ${JSON.stringify(mailRow(txtF, r.label))} api ${JSON.stringify(r.cells)}`));
@@ -1327,7 +1341,7 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   const got = {
     joined: await cell("candidates", "Joined into batches", 1), enrolled: await cell("candidates", "Enrolled", 1), mobilised: await cell("candidates", "Mobilised (planning batches)", 0),
     assigned: await cell("trainers", "Assigned to a live batch", 0), idle: await cell("trainers", "Free to assign", 0),
-    today: await cell("costs", "Approved on the day", 0), month: await cell("costs", "Month to date", 0), pending: await cell("costs", "Pending approval", 0),
+    today: await cell("costs", "Approved, expense dated on the day", 0), month: await cell("costs", "Approved, expense dated this month", 0), pending: await cell("costs", "Pending approval (entered, not yet approved)", 0),
   };
   ok("S1: the cells read joined 4, enrolled 2, mobilised 12 of 30, assigned 2, free 4", got.joined === "4" && got.enrolled === "2" && got.mobilised === "12 of 30 (gap 18)" && got.assigned === "2" && got.idle === "4", JSON.stringify(got));
   ok("S1: learner cells show 7 training starts on the day, 5 enrolled and 0 Training Ongoing now, with a current measurement time",
@@ -1335,7 +1349,7 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
     && await cell("candidates", "In training (started Active batch)", 0) === "0" && /measured.*IST/.test(await txt(page, "digest-current-measured")), "");
   ok("S1: the money cells read Rs 1,250 today, Rs 5,750 this month, Rs 1,100 pending", got.today === "Rs 1,250" && got.month === "Rs 5,750" && got.pending === "Rs 1,100", JSON.stringify(got));
   ok("S1: the week is named on the screen (Monday to Sunday)", /Week 2031-03-10 to 2031-03-16/.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
-  ok("S1: a finance viewer's note does say how pending approvals and payment-pending are counted", /payment-pending are exact for today/.test(await txt(page, "digest-note")), "");
+  ok("S1: a finance viewer's note does say how pending approvals and payment-pending are counted", /payment not yet made show what is still open today/.test(await txt(page, "digest-note")), "");
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");
 
@@ -1413,7 +1427,7 @@ await arm("S2 digest screen (Location A, no finance)", async () => {
   await page.locator('[data-testid="digest-table-candidates"]').waitFor();
   ok("S2: the costs section is not in the page at all, and no cost figure is", (await page.locator('[data-testid="digest-table-costs"]').count()) === 0 && !/1,250|5,750|14,249/.test(await page.locator("body").innerText()), "");
   ok("S2: no centre-B batch is on Location A's screen", (await page.locator(`text=${fx.pb1.code}`).count()) === 0, "");
-  ok("S2: the note above the tables does not talk about pending approvals or payment-pending (this viewer has no Costs table)", !/payment-pending|Pending approvals/i.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
+  ok("S2: the note above the tables does not talk about pending approvals or payment-pending (this viewer has no Costs table)", !/payment-pending|payment not yet made|Pending approval/i.test(await txt(page, "digest-note")), await txt(page, "digest-note"));
   await shot(page, "S2-digest-no-finance.png");
   await ctx.close();
 });

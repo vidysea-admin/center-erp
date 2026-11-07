@@ -6048,7 +6048,10 @@ export const STAGE_BUCKETS: Record<string, string> = {
 };
 export const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certified"] as const;
 const BUCKET_LABEL: Record<(typeof BUCKET_KEYS)[number], string> = {
-  fresh: "Fresh lead", shortlisted: "Shortlisted", docs: "Documents completed", sent: "Sent to NSDC", approved: "NSDC approved", certified: "Certified",
+  // Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status." The bucket folds NSDC Approved and the TOT stages,
+  // which the Trainers tab calls Under preparation; the label now carries that name so the two screens read as one group.
+  fresh: "Fresh lead", shortlisted: "Shortlisted", docs: "Documents completed", sent: "Sent to NSDC",
+  approved: "Under preparation (NSDC approved, TOT under way)", certified: "Certified",
 };
 
 // Who a centre-scoped login may see on the Trainers screen: tied to the centre by nomination, by
@@ -6390,7 +6393,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const tables: DigestTable[] = [
     {
       key: "trainers", title: "Trainers", head: ["Stage", "Now", "On the day", weekHead, cumHead], rows: trainerRows,
-      note: "Now = trainers at that stage today. The other columns count trainers who ENTERED the stage in the period, from the recorded stage moves (Fresh lead = added; a trainer entered directly at a later stage, or moved before moves were recorded, is in Now only). Total trainers = the six stage rows plus rejected / dropped. Trained, not available is a memo row: the marked-unavailable ones are already inside Certified and the ones dropped after Certified are already inside Rejected / dropped, so do not add it to either.",
+      note: "Now = how many trainers are at this stage today. The other three columns = how many trainers reached this stage in that period (Fresh lead = trainers added). A trainer who was put in directly at a later stage shows in Now only. Under preparation (NSDC approved, TOT under way) is the same group as the Trainers tab's Under preparation: approved by NSDC, TOT fee paid, TOT scheduled or TOT going on. Certified = Assigned to a live batch + Free to assign + Marked unavailable. Total trainers = the six stage rows + Rejected / dropped. Trained, not available is for information only: those trainers are already counted in Certified or in Rejected / dropped, so do not add it again.",
     },
     {
       key: "candidates", title: "Candidates", head: ["Measure", "Now", "On the day", weekHead, cumHead],
@@ -6407,7 +6410,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
         { label: "Batches started", cells: ["—", ...flowCells(flows.batches_started)] },
         { label: "Mobilised (planning batches)", cells: [`${fmtN(mob.mobilised)} of ${fmtN(mob.target)} (gap ${fmtN(mob.gap)})`, ...dash3] },
       ],
-      note: "Now = the position today (enrolled and in training are current totals, also when an earlier day is chosen). The other columns count what happened in the period. Enrolled now = everyone who has entered the batch journey, whatever happened next; the of-which rows under it split it by where each person is now (the same tag the Candidates screen shows) and add up to it; the period columns count enrolment dates, which are recorded since the system went live in mid-August 2026, so a candidate imported before that is in Now only. Joined into batches counts seats, so a person who re-joined counts twice, and seats in cancelled batches count. Batches created includes batches cancelled later.",
+      note: "Now = the position today, even when an earlier date is picked. The other three columns = what happened in that period. Enrolled now = everyone who has started the batch journey, whatever happened next; the 'of which' rows split it by where each person is now (the same tag as on the Candidates screen) and add up to it. Enrolment dates are recorded since mid-August 2026, so a candidate imported before that shows in Now only. Joined into batches counts seats: a person who re-joined counts twice, and seats in cancelled batches still count. Batches created includes batches cancelled later.",
     },
   ];
   if (targets) tables.push({
@@ -6418,19 +6421,24 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       tones: ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)],
     })),
     note: weekRow
-      ? `Week of ${week.from}. The targets are for the WHOLE week (and cumulative includes this whole week); the actuals are up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = every weekly target from the week of ${rangeFrom} (that week counted whole).` : `Cumulative = every weekly target since ${cumFrom}.`} In training is a headcount, not a running total, so it has no cumulative figure.`
+      ? `Targets come from the weekly plan (RPL - Revised Plan, Sheet2), entered under Admin, Targets. Week of ${week.from}: the week target is for the whole week, and the actual is counted up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = all weekly targets from the week of ${rangeFrom} (that week counted whole).` : `Cumulative target = all weekly targets since ${cumFrom}, including this whole week.`} In training is the number of candidates in training today, not a running total, so it has no cumulative figure.`
       : `No target is set for the week of ${week.from} (Admin, Targets).`,
   });
+  const pendingThisMonth = costs?.pending.by_month.find((m) => m.month === dayIST.slice(0, 7)) ?? { count: 0, amount: 0 };
   if (costs) tables.push({
     key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
-    note: "Approved on the day and month to date go by the expense date on the entry, not the day it was approved. Pending approval and payment pending are exact for today; for an earlier day they count what had been raised by then and is still pending now. They carry everything still open, however old, split by month back to the oldest open item: pending approval by the month it was raised, payment pending by the month of the expense.",
+    note: "A cost is counted in the Approved rows only after it is approved. Until then it shows under Pending approval, by the month it was entered. Approved rows go by the expense date written on the entry, not the day it was approved. Payment not yet made covers approved costs only, by the month of the expense. Pending approval and payment not yet made include everything still open, however old.",
+    // Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own November entries were still pending. So
+    // the table leads with what is waiting, every approved row says it is approved, and one row adds up what was entered
+    // this month (approved by expense date + pending by the month entered) - the figure he recognises.
     rows: [
-      { label: "Approved on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
-      { label: "Month to date", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
-      { label: "Pending approval", cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
-      { label: "of which raised on the day", sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] },
-      ...costs.pending.by_month.map((m) => ({ label: `raised in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
-      { label: "Payment pending", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
+      { label: "Pending approval (entered, not yet approved)", strong: true, cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
+      { label: "of which entered on the day", sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] },
+      ...costs.pending.by_month.map((m) => ({ label: `of which entered in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
+      { label: "Entered this month (approved + pending)", strong: true, cells: [fmtRs(round2(costs.month.amount + pendingThisMonth.amount)), fmtN(costs.month.entries + pendingThisMonth.count)] },
+      { label: "Approved, expense dated on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
+      { label: "Approved, expense dated this month", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
+      { label: "Approved, payment not yet made", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
       ...costs.payment_pending.by_month.map((m) => ({ label: `expense of ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
     ],
   });
@@ -6445,7 +6453,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     tables,
     finance,
     // The costs sentence only for a viewer who gets the Costs table; anyone else would read about figures they never see.
-    live_note: `Current learner totals, training-date exceptions, mobilisation and trainer availability show the position now, whichever day is chosen. They are not historical snapshots.${costs ? " Pending approvals and payment-pending are exact for today; for an earlier day they count what had been raised by then and is still pending now." : ""}`,
+    live_note: `The Now columns (learner totals, training-date exceptions, mobilisation, trainer availability) show today's position, even when an earlier date is picked.${costs ? " Pending approval and payment not yet made show what is still open today; for an earlier date they count what had been entered by then." : ""}`,
     candidates: {
       joined: { total: by_batch.reduce((s, r) => s + r.count, 0), by_batch },
       enrolled: { total: enrolled },
