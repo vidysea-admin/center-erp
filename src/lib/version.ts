@@ -234,7 +234,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // reason, sign-in/activity tracker, payment-pending day cut-off fix. No number is quoted.
 // -348 note: the daily digest reaches an account whose own mail switch is off, when an Admin has put it on the
 // digest list (Umesh 2026-11-04, for Karunn sir: "turn it on for the daily reports only"). No number is quoted.
-export const RELEASE = "2026.08.14-349";
+// -350 note: daily digest row names and notes reworded so each figure says what it counts (Manish sir, 2026-11-06). No number is quoted.
+export const RELEASE = "2026.08.14-350";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -306,6 +307,12 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-350: the daily report and the evening mail now say plainly what each row counts. In Trainers, the row that read \"NSDC approved\" is now \"Under preparation (NSDC approved, TOT under way)\", the same people the Trainers tab shows as Under preparation. " +
+  "In Costs, Pending approval comes first; the approved rows say \"Approved\"; and a new row, Entered this month, adds approved and pending together. A cost is counted as approved only after someone approves it. " +
+  "No figure has changed, only the wording.";
+
+// -350: the -349 note moved here unchanged when -350 became current.
+const RELEASE_NOTE_ARCHIVE_349 =
   "-349: a student who was certified or failed now waits before joining another batch: 6 months from the certificate date, or from the result date for a fail. " +
   "Joining any batch is refused until then, and the message gives the date. The batch's student list shows them as \"Eligible from <date>\" without an Add button. " +
   "A student who dropped out, or whose batch was cancelled, can join straight away. The 6 months is Admin, Defaults, Training cooldown.";
@@ -2351,6 +2358,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -320: ARCHIVE_319 wired in here in the SAME bump that declared it, same discipline.
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
   // -349: ARCHIVE_348 wired in here in the SAME bump that declared it, same discipline.
+  // -350: ARCHIVE_349 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_349 + " " +
   RELEASE_NOTE_ARCHIVE_348 + " " +
   // -348: ARCHIVE_347 wired in here in the SAME bump that declared it, same discipline.
   RELEASE_NOTE_ARCHIVE_347 + " " +
