@@ -235,7 +235,9 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -348 note: the daily digest reaches an account whose own mail switch is off, when an Admin has put it on the
 // digest list (Umesh 2026-11-04, for Karunn sir: "turn it on for the daily reports only"). No number is quoted.
 // -350 note: daily digest row names and notes reworded so each figure says what it counts (Manish sir, 2026-11-06). No number is quoted.
-export const RELEASE = "2026.08.14-350";
+// -351 note: corrects -350's false "same group as the Trainers tab" claim (Manish sir, 2026-11-10: the 3 is still wrong); the tab's
+// Under preparation gets its own row; Costs rows name their date and month (Umesh, same day). No number is quoted.
+export const RELEASE = "2026.08.14-351";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -307,7 +309,17 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
-  "-350: the daily report and the evening mail now say plainly what each row counts. In Trainers, the row that read \"NSDC approved\" is now \"Under preparation (NSDC approved, TOT under way)\", the same people the Trainers tab shows as Under preparation. " +
+  "-351: a correction to the daily report and the evening mail. In Trainers, -350 said the row \"Under preparation (NSDC approved, TOT under way)\" was the same people as Under preparation on the Trainers tab. That was wrong: the tab counts every stage before Certified, the row counted only NSDC Approved and the TOT stages. " +
+  "The row is now \"NSDC approved, TOT not yet complete\", with its four stages listed under it. A new row, Under preparation, counts every trainer who is not yet Certified and not rejected or dropped, and matches the Trainers tab for the same login. Trained, not available now comes after Total trainers, because it is not part of the total, and its name says its trainers are already counted in Certified or Rejected / dropped. " +
+  "In Candidates, \"Certified (certificate issued)\" is now \"Certificates issued\", and the note says how it differs from the Certified line under Enrolled, and how Training Ongoing differs from In training. " +
+  "In Costs, the rows that said \"on the day\" or \"this month\" now give the real dates. The approved figure for the month reads \"Approved, expense date 1 to <report date>\" (on the 1st, just that day), with the report day's part under it. \"Entered this month\" is now \"Total for 1 to <report date> (approved + pending entered in <month>)\" and comes after the two figures it adds up. Under Pending approval, the report day's part sits under its own month's row; when nothing pending was entered in that month it comes first, named by its day alone. " +
+  "The notes under Costs and Against target now also say how a cost that needs no approval, a pending change to an approved cost, Trainers trained and Candidates certified are counted. " +
+  "No existing figure has changed. Trainers has one new total row and one new breakdown, and the Costs rows are in a new order.";
+
+// -351: the -350 note moved here when -351 became current. One clause was false as shipped (the Trainers row was NOT the same
+// group as the Trainers tab's Under preparation); the text is kept as it went out and the correction is marked inside it.
+const RELEASE_NOTE_ARCHIVE_350 =
+  "-350: the daily report and the evening mail now say plainly what each row counts. In Trainers, the row that read \"NSDC approved\" is now \"Under preparation (NSDC approved, TOT under way)\", the same people the Trainers tab shows as Under preparation (this was wrong, corrected in -351). " +
   "In Costs, Pending approval comes first; the approved rows say \"Approved\"; and a new row, Entered this month, adds approved and pending together. A cost is counted as approved only after someone approves it. " +
   "No figure has changed, only the wording.";
 
@@ -2359,6 +2371,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -321: ARCHIVE_320 wired in here in the SAME bump that declared it, same discipline.
   // -349: ARCHIVE_348 wired in here in the SAME bump that declared it, same discipline.
   // -350: ARCHIVE_349 wired in here in the SAME bump that declared it, same discipline.
+  // -351: ARCHIVE_350 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_350 + " " +
   RELEASE_NOTE_ARCHIVE_349 + " " +
   RELEASE_NOTE_ARCHIVE_348 + " " +
   // -348: ARCHIVE_347 wired in here in the SAME bump that declared it, same discipline.
