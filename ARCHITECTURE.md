@@ -416,6 +416,16 @@ a bypass is `"BYPASS → <stage>"`), mapped through `STAGE_BUCKETS`. A candidate
 `CandidateResult{certificate_status:"Issued", certificate_date}`. **In training** (Umesh, 2026-11-03) = an
 enrolled, unarchived candidate whose held seat is in an `Active` batch with `actual_start` set; NOT the
 journey tag "Training Ongoing", which also covers an enrolled person with no seat or a seat in a Planning batch.
+**Under preparation** (-351) is its own Trainers row: `pipelineTotal`, every trainer `trainerAvailabilityTag` tags
+Under preparation (any stage before Certified, not rejected or dropped), so it equals the Trainers tab's count (e2e arm K1
+counts the tab's own list; arm S1 reads the tab's pill). The `approved` bucket row is only NSDC Approved + the TOT stages and
+lists them (`APPROVED_STAGES`, read off `STAGE_BUCKETS`); -350 wrongly called that row the tab's group. Costs rows name the
+report date and month (`dayName`, `monthName`), never "on the day" / "this month". The month figures run from the 1st to the
+report date, so their labels carry that span (`costSpan`); the report day's figure is a sub-row of its month figure, in
+Approved and in Pending approval alike (with nothing pending from the report month there is no month row: the day row
+leads, named by its day alone, and can only read zero), and the Total row comes after the two figures it adds. A pending cost-edit request
+is in Pending approval at its full new amount while the old amount is still approved, so the Total can hold it twice (said
+in the note; not netted).
 "Payment pending" cuts off at `istEnd(day)`, since `entry_date` can be an instant. **Trained, not available** = Certified-tag
 trainers whose status is Unavailable, plus Dropped trainers with `dropped_from_stage: "Certified"`, split by
 `Trainer.unavailable_reason`. The ONE list is `TRAINER_UNAVAILABLE_REASON` in `lib/person.ts` (client-safe,

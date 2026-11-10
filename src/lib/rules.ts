@@ -6048,11 +6048,24 @@ export const STAGE_BUCKETS: Record<string, string> = {
 };
 export const BUCKET_KEYS = ["fresh", "shortlisted", "docs", "sent", "approved", "certified"] as const;
 const BUCKET_LABEL: Record<(typeof BUCKET_KEYS)[number], string> = {
-  // Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status." The bucket folds NSDC Approved and the TOT stages,
-  // which the Trainers tab calls Under preparation; the label now carries that name so the two screens read as one group.
+  // Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status." -350 renamed this row after the Trainers tab's
+  // "Under preparation" and called it the same group. It is not: the tab's tag is every stage before Certified, this bucket
+  // is only NSDC Approved + the TOT stages, so on 2026-11-10 he still read the 3 as wrong (the tab said 15). -351: the row says
+  // what it holds and lists its stages (APPROVED_STAGES); the tab's number has its own row (UNDER_PREP_LABEL).
   fresh: "Fresh lead", shortlisted: "Shortlisted", docs: "Documents completed", sent: "Sent to NSDC",
-  approved: "Under preparation (NSDC approved, TOT under way)", certified: "Certified",
+  approved: "NSDC approved, TOT not yet complete", certified: "Certified",
 };
+// The stages folded into the "approved" row, under the names the Trainers tab shows. Read off STAGE_BUCKETS, so a stage added
+// to that bucket gets its own line in the report without a second list to keep in step.
+const APPROVED_STAGES = Object.keys(STAGE_BUCKETS).filter((s) => STAGE_BUCKETS[s] === "approved");
+// The Trainers tab's "Under preparation" tag (trainerAvailabilityTag): every trainer not yet Certified and not rejected or
+// dropped. In the digest that is the five rows before Certified added together (pipelineTotal). The label says who is counted,
+// not "the rows above": that could be read as the four stage rows too, and is untrue once the screen is sorted. It also says
+// "not rejected or dropped": "not yet Certified" alone fits those trainers too, and they have a row of their own.
+const UNDER_PREP_LABEL = "Under preparation (not yet Certified, not rejected or dropped; as on the Trainers tab)";
+// Bold and placed after Total trainers, so the name itself says its trainers are already counted. Not "counted above": the
+// screen can be sorted. What it is made of (Marked unavailable + dropped after Certified) is in the note.
+const NOT_AVAILABLE_LABEL = "Trained, not available (already counted in Certified or Rejected / dropped)";
 
 // Who a centre-scoped login may see on the Trainers screen: tied to the centre by nomination, by
 // capability or by home. It was an inline closure in api/trainers/route.ts; the digest needs the same
@@ -6138,6 +6151,8 @@ const fmtRs = (v: number) => `Rs ${fmtN(v)}`;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // "2026-10" -> "Oct 2026"; anything else (an undated row) is said as it is.
 const monthName = (ym: string) => (/^\d{4}-\d{2}$/.test(ym) ? `${MONTHS[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}` : ym);
+// "2026-11-10" -> "10 Nov 2026": the report date as a cost row names it (-351: no row says "on the day").
+const dayName = (ymd: string) => (/^\d{4}-\d{2}-\d{2}$/.test(ymd) ? `${Number(ymd.slice(8))} ${monthName(ymd.slice(0, 7))}` : ymd);
 const fmtVar = (actual: number | null, target: number | null) => (actual === null || target === null ? "—" : `${actual - target >= 0 ? "+" : "−"}${fmtN(Math.abs(actual - target))}`);
 const toneOf = (actual: number | null, target: number | null): "pos" | "neg" | "" => (actual === null || target === null ? "" : actual >= target ? "pos" : "neg");
 
@@ -6223,6 +6238,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     : [];
   const hasLive = new Set(liveLinks.map((b) => String(b.trainer)));
   const buckets = new Map<string, number>(BUCKET_KEYS.map((k) => [k, 0]));
+  const approvedByStage = new Map<string, number>(APPROVED_STAGES.map((s) => [s, 0]));
   let assigned = 0, idle = 0, unavailable = 0, rejected_dropped = 0, pipelineTotal = 0, added = 0;
   // Karunn sir, 2026-11-02: a TRAINED trainer who backed out, absconded or is unavailable is counted apart, by
   // reason, so the headcount never reads them as available: Certified + status Unavailable, and Dropped after
@@ -6244,6 +6260,7 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       pipelineTotal++;
       const key = STAGE_BUCKETS[t.pipeline_status || "Fresh Lead"] ?? "fresh";
       buckets.set(key, (buckets.get(key) ?? 0) + 1);
+      if (key === "approved") approvedByStage.set(t.pipeline_status, (approvedByStage.get(t.pipeline_status) ?? 0) + 1);
     }
     const made = t.createdAt ? new Date(t.createdAt).getTime() : NaN;
     if (made >= instants.$gte.getTime() && made <= instants.$lte.getTime()) added++;
@@ -6375,25 +6392,34 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   const flowCells = (f: Per) => [fmtN(f.day), fmtN(f.week), fmtN(f.cum)];
   const dash3 = ["—", "—", "—"];
   const mob = planTrackerSummary(planRows).total;
+  const stageRow = (k: (typeof BUCKET_KEYS)[number]) => ({
+    label: BUCKET_LABEL[k],
+    // Certified NOW is every trainer holding the stage: assigned + free + marked unavailable.
+    cells: [fmtN(k === "certified" ? assigned + idle + unavailable : (buckets.get(k) ?? 0)), ...flowCells(k === "fresh" ? flows.trainers_added : flows.trainers_entered[k])],
+    strong: k === "certified",
+  });
+  // Order (-351): the stages before Certified, then their sum under the Trainers tab's own name, then Certified, Rejected /
+  // dropped and the total those three add up to. "Trained, not available" comes after the total because it is not part of it.
   const trainerRows: DigestTable["rows"] = [
-    ...BUCKET_KEYS.map((k) => ({
-      label: BUCKET_LABEL[k],
-      // Certified NOW is every trainer holding the stage: assigned + free + marked unavailable.
-      cells: [fmtN(k === "certified" ? assigned + idle + unavailable : (buckets.get(k) ?? 0)), ...flowCells(k === "fresh" ? flows.trainers_added : flows.trainers_entered[k])],
-      strong: k === "certified",
-    })),
+    ...BUCKET_KEYS.filter((k) => k !== "certified").flatMap((k) => [
+      stageRow(k),
+      // "at stage": under a row of 3 NSDC-approved trainers, "of which NSDC Approved 0" read as a contradiction.
+      ...(k === "approved" ? APPROVED_STAGES.map((s) => ({ label: `of which at stage ${s}`, sub: true, cells: [fmtN(approvedByStage.get(s) ?? 0), ...dash3] })) : []),
+    ]),
+    { label: UNDER_PREP_LABEL, strong: true, cells: [fmtN(pipelineTotal), ...dash3] },
+    stageRow("certified"),
     { label: "Assigned to a live batch", sub: true, cells: [fmtN(assigned), ...dash3] },
     { label: "Free to assign", sub: true, cells: [fmtN(idle), ...dash3] },
     { label: "Marked unavailable", sub: true, cells: [fmtN(unavailable), ...dash3] },
-    { label: "Trained, not available (incl. dropped after Certified)", strong: true, cells: [fmtN(unavailable + droppedAfterTrained), ...dash3] },
-    ...[...notAvailable.entries()].map(([r, c]) => ({ label: r, sub: true, cells: [fmtN(c), ...dash3] })),
     { label: "Rejected / dropped", cells: [fmtN(rejected_dropped), ...flowCells(flows.trainers_entered.dropped)] },
     { label: "Total trainers", strong: true, cells: [fmtN(trainers.length), ...dash3] },
+    { label: NOT_AVAILABLE_LABEL, strong: true, cells: [fmtN(unavailable + droppedAfterTrained), ...dash3] },
+    ...[...notAvailable.entries()].map(([r, c]) => ({ label: r, sub: true, cells: [fmtN(c), ...dash3] })),
   ];
   const tables: DigestTable[] = [
     {
       key: "trainers", title: "Trainers", head: ["Stage", "Now", "On the day", weekHead, cumHead], rows: trainerRows,
-      note: "Now = how many trainers are at this stage today. The other three columns = how many trainers reached this stage in that period (Fresh lead = trainers added). A trainer who was put in directly at a later stage shows in Now only. Under preparation (NSDC approved, TOT under way) is the same group as the Trainers tab's Under preparation: approved by NSDC, TOT fee paid, TOT scheduled or TOT going on. Certified = Assigned to a live batch + Free to assign + Marked unavailable. Total trainers = the six stage rows + Rejected / dropped. Trained, not available is for information only: those trainers are already counted in Certified or in Rejected / dropped, so do not add it again.",
+      note: "Now = how many trainers are at this stage today. The other three columns = how many trainers reached this stage in that period (Fresh lead = trainers added). A trainer who was put in directly at a later stage shows in Now only. NSDC approved, TOT not yet complete = the stages listed under it, named as on the Trainers tab. Under preparation = every trainer not yet Certified and not rejected or dropped: Fresh lead + Shortlisted + Documents completed + Sent to NSDC + NSDC approved, TOT not yet complete. It is the Under preparation number on the Trainers tab for the same login. Certified = Assigned to a live batch + Free to assign + Marked unavailable. Total trainers = Under preparation + Certified + Rejected / dropped. Trained, not available = Marked unavailable + trainers dropped after they were Certified. It is for information only: those trainers are already counted in Certified or in Rejected / dropped, so it is not part of the total.",
     },
     {
       key: "candidates", title: "Candidates", head: ["Measure", "Now", "On the day", weekHead, cumHead],
@@ -6405,12 +6431,14 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
         ...JOURNEY_TAGS.map((tag) => ({ label: `of which ${tag}`, sub: true, cells: [fmtN(enrolledByJourney.get(tag) ?? 0), ...dash3] })),
         { label: "Training started", cells: ["—", ...flowCells(flows.training_started)] },
         { label: "In training (started Active batch)", strong: true, cells: [fmtN(currentOngoing.length), ...dash3] },
-        { label: "Certified (certificate issued)", strong: true, cells: ["—", ...flowCells(flows.certified)] },
+        // -351: was "Certified (certificate issued)", which read as the same thing as "of which Certified" above it (177 vs 63
+        // in the 10 Nov mail). That sub-row is everyone with a Pass; this row is certificates issued in the period.
+        { label: "Certificates issued", strong: true, cells: ["—", ...flowCells(flows.certified)] },
         { label: "Batches created", cells: ["—", ...flowCells(flows.batches_created)] },
         { label: "Batches started", cells: ["—", ...flowCells(flows.batches_started)] },
         { label: "Mobilised (planning batches)", cells: [`${fmtN(mob.mobilised)} of ${fmtN(mob.target)} (gap ${fmtN(mob.gap)})`, ...dash3] },
       ],
-      note: "Now = the position today, even when an earlier date is picked. The other three columns = what happened in that period. Enrolled now = everyone who has started the batch journey, whatever happened next; the 'of which' rows split it by where each person is now (the same tag as on the Candidates screen) and add up to it. Enrolment dates are recorded since mid-August 2026, so a candidate imported before that shows in Now only. Joined into batches counts seats: a person who re-joined counts twice, and seats in cancelled batches still count. Batches created includes batches cancelled later.",
+      note: "Now = the position today, even when an earlier date is picked. The other three columns = what happened in that period. Enrolled now = everyone who has started the batch journey, whatever happened next; the 'of which' rows split it by where each person is now (the same tag as on the Candidates screen) and add up to it. Training Ongoing is the Candidates screen's tag: enrolment is complete and the batch has not finished. It also counts people whose batch has not started yet, has no start date recorded or was cancelled, and people with no batch at the moment. In training counts only people in an Active batch that has a start date recorded, whatever their tag. So the two numbers need not match. Certified under Enrolled = people whose result in their latest batch is Pass, whenever it was recorded; a person who later dropped out or joined a new batch is under that tag instead. Certificates issued = certificates marked Issued with a certificate date in that period. It counts certificates, not people. Enrolment dates are recorded since mid-August 2026, so a candidate imported before that shows in Now only. Joined into batches counts seats: a person who re-joined counts twice, and seats in cancelled batches still count. Batches created includes batches cancelled later.",
     },
   ];
   if (targets) tables.push({
@@ -6421,27 +6449,50 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       tones: ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)],
     })),
     note: weekRow
-      ? `Targets come from the weekly plan (RPL - Revised Plan, Sheet2), entered under Admin, Targets. Week of ${week.from}: the week target is for the whole week, and the actual is counted up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = all weekly targets from the week of ${rangeFrom} (that week counted whole).` : `Cumulative target = all weekly targets since ${cumFrom}, including this whole week.`} In training is the number of candidates in training today, not a running total, so it has no cumulative figure.`
+      ? `Targets come from the weekly plan (RPL - Revised Plan, Sheet2), entered under Admin, Targets. Week of ${week.from}: the week target is for the whole week, and the actual is counted up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = all weekly targets from the week of ${rangeFrom} (that week counted whole).` : `Cumulative target = all weekly targets since ${cumFrom}, including this whole week.`} In training is the number of candidates in training today, not a running total, so it has no cumulative figure. Trainers trained = trainers moved to Certified in the period, each counted once. It matches the Certified row of the Trainers table in its This week and Cumulative (or Range) columns, not in its Now column. Candidates certified (certificate issued) matches Certificates issued in the Candidates table: it counts certificates, not people.`
       : `No target is set for the week of ${week.from} (Admin, Targets).`,
   });
-  const pendingThisMonth = costs?.pending.by_month.find((m) => m.month === dayIST.slice(0, 7)) ?? { count: 0, amount: 0 };
-  if (costs) tables.push({
-    key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
-    note: "A cost is counted in the Approved rows only after it is approved. Until then it shows under Pending approval, by the month it was entered. Approved rows go by the expense date written on the entry, not the day it was approved. Payment not yet made covers approved costs only, by the month of the expense. Pending approval and payment not yet made include everything still open, however old.",
-    // Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own November entries were still pending. So
-    // the table leads with what is waiting, every approved row says it is approved, and one row adds up what was entered
-    // this month (approved by expense date + pending by the month entered) - the figure he recognises.
-    rows: [
-      { label: "Pending approval (entered, not yet approved)", strong: true, cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
-      { label: "of which entered on the day", sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] },
-      ...costs.pending.by_month.map((m) => ({ label: `of which entered in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
-      { label: "Entered this month (approved + pending)", strong: true, cells: [fmtRs(round2(costs.month.amount + pendingThisMonth.amount)), fmtN(costs.month.entries + pendingThisMonth.count)] },
-      { label: "Approved, expense dated on the day", cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
-      { label: "Approved, expense dated this month", cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
-      { label: "Approved, payment not yet made", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
-      ...costs.payment_pending.by_month.map((m) => ({ label: `expense of ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
-    ],
-  });
+  // -351 (Umesh, 2026-11-10: "cost wale mai bhi label thik krne hai"): every row names its real date or month. "On the day" and
+  // "this month" made the reader work out which; "Entered this month" sat beside "of which entered in <month>" and counted
+  // something else (it adds the approved row, which goes by expense date). The figures are the same as before.
+  if (costs) {
+    const reportMonth = dayIST.slice(0, 7);
+    const costDay = dayName(dayIST), costMonth = monthName(reportMonth);
+    // The month figures run from the 1st to the report date, so the label says that span and not the bare month, which read
+    // as the whole month (review of -351). On the 1st the span is that one day.
+    const costSpan = dayIST.endsWith("-01") ? costDay : `1 to ${costDay}`;
+    const pendingThisMonth = costs.pending.by_month.find((m) => m.month === reportMonth) ?? { count: 0, amount: 0 };
+    // Under Pending approval the month rows add up to it. What was entered on the report day is a part of the report month's
+    // row, so it goes straight under that row and is named as part of it; listed beside the months as one more "of which", the
+    // rows added up to more than the parent. With nothing pending from the report month there is no such row: the day's row
+    // leads, and is named by its day alone, because "of the <month> amount" would point at an amount the table does not show.
+    const pendingSubs: DigestTable["rows"] = costs.pending.by_month.map((m) => ({ label: `of which entered in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] }));
+    const reportMonthAt = costs.pending.by_month.findIndex((m) => m.month === reportMonth);
+    pendingSubs.splice(reportMonthAt + 1, 0,
+      { label: reportMonthAt >= 0 ? `of the ${costMonth} amount, entered on ${costDay}` : `of which entered on ${costDay}`, sub: true, cells: [fmtRs(costs.pending.raised_today.amount), fmtN(costs.pending.raised_today.count)] });
+    tables.push({
+      key: "costs", title: "Costs", head: ["Measure", "Amount", "Count"],
+      // The note says two things a skeptic read of the code turned up (2026-11-10): a cost that needs no approval (pre-approved
+      // head, the rule switched off, an Admin entry on a finished batch) is in the Approved rows at once; and a pending EDIT of an
+      // approved cost (payload.kind "cost-edit", payload.amount = the full new amount) sits in Pending approval while its old
+      // amount is still in the Approved rows, so the Total holds that cost twice. Said, not netted: -351 changes no figure.
+      note: `A cost that needs approval is counted in the Approved rows only after it is approved. Until then it shows under Pending approval, by the month it was entered. A cost that needs no approval is counted in the Approved rows straight away. Approved rows go by the expense date written on the entry, not the day it was approved. Every row counts up to the report date. Total for ${costSpan} = Approved, expense date ${costSpan} + Pending approval entered in ${costMonth}. A change to an approved cost that is waiting for approval is listed under Pending approval with its full new amount. The old amount stays in the Approved rows until the change is decided. If that cost's expense date and the day the change was entered both fall within ${costSpan}, the Total counts it twice until then. Payment not yet made covers approved costs only, by the month of the expense date. Pending approval and payment not yet made include everything still open, however old.`,
+      // Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own November entries were still pending. So
+      // the table leads with what is waiting, every approved row says it is approved, and one row adds up the month
+      // (approved by expense date + pending by the month entered) - the figure he recognises. That Total comes after the two
+      // figures it adds: between the pending month rows and the approved rows it read as the total of the rows above it.
+      rows: [
+        { label: "Pending approval (entered, not yet approved)", strong: true, cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
+        ...pendingSubs,
+        // The report day's approved figure is a part of the month-so-far figure, so it is a row under it, not a row beside it.
+        { label: `Approved, expense date ${costSpan}`, cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
+        { label: `of which expense date ${costDay}`, sub: true, cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
+        { label: `Total for ${costSpan} (approved + pending entered in ${costMonth})`, strong: true, cells: [fmtRs(round2(costs.month.amount + pendingThisMonth.amount)), fmtN(costs.month.entries + pendingThisMonth.count)] },
+        { label: "Approved, payment not yet made", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
+        ...costs.payment_pending.by_month.map((m) => ({ label: `of which expense date in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
+      ],
+    });
+  }
 
   return {
     day: dayIST,

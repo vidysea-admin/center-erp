@@ -58,6 +58,11 @@ import { ok as okLib, req, login, adminLogin, finish as finishLib, stamp, today,
 const results = [];
 const ok = (n, c, x = "") => { results.push({ name: n, pass: !!c, detail: String(x ?? "").replace(/\s+/g, " ").slice(0, 300) }); okLib(n, c, x); };
 const pageErrors = [];
+const consoleErrors = [];   // console.error lines the pages print: recorded in the browser report, not asserted
+const watchPage = (page) => {
+  page.on("pageerror", (e) => pageErrors.push(String(e.message).slice(0, 160)));
+  page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(String(m.text()).replace(/\s+/g, " ").slice(0, 160)); });
+};
 const finish = () => {
   const dir = process.env.MC1_BROWSER_REPORT;
   if (dir) {
@@ -67,7 +72,8 @@ const finish = () => {
       writeFileSync(path.join(dir, "report.json"), JSON.stringify({
         unit: "mtg-c1-daily-digest", date: new Date().toISOString(), base: BASE, kind: "maker smoke, not validation",
         tz: process.env.TZ ?? null, total: results.length, passed: results.length - failed, failed,
-        uncaughtPageErrors: pageErrors.length, pageErrors: pageErrors.slice(0, 10), results,
+        uncaughtPageErrors: pageErrors.length, pageErrors: pageErrors.slice(0, 10),
+        consoleErrors: consoleErrors.length, consoleErrorSamples: [...new Set(consoleErrors)].slice(0, 10), results,
       }, null, 2));
     } catch { /* a convenience; the exit code still decides */ }
   }
@@ -214,9 +220,9 @@ const cost = (loc, day, amount, payment_status) => ({
   entry_date: bizDay(day), location: oid(loc._id), amount, note: "mc1 fixture " + s, payment_status,
   reservation_state: "Applied", createdAt: NOW, updatedAt: NOW,
 });
-await db.collection("costentries").insertMany([
+const costIns = await db.collection("costentries").insertMany([
   cost(locA, D, 1000, "Paid"), cost(locA, D, 250, "Payment Pending"),      // today: 1,250 in 2 entries
-  cost(locA, "2031-03-10", 4000, "Payment Pending"),                       // month to date, not today
+  cost(locA, "2031-03-10", 4000, "Payment Pending"),                       // month to date, not today (index 2: the cost the K1 cost-edit arm changes)
   cost(locA, "2031-03-01", 500, "Paid"),                                   // first day of the month: IN
   cost(locA, "2031-02-28", 9999, "Payment Pending"),                       // last month: not MTD, but still payment-pending as of D
   cost(locA, NEXT, 7777, "Payment Pending"),                               // the day AFTER: in nothing as of D
@@ -467,31 +473,154 @@ const bucketLabel = (k) => (dA?.trainers?.pipeline?.buckets ?? []).find((b) => b
 const dash3 = ["—", "—", "—"];
 ok("K1: a centre login without money gets two tables, Trainers and Candidates (no target table: targets are organisation-wide; no Costs)",
   eq((dA?.tables ?? []).map((t) => t.key), ["trainers", "candidates"]) && dA?.targets === null, JSON.stringify((dA?.tables ?? []).map((t) => t.key)));
+// The Costs rows for D = 2031-03-14. The month figures run from the 1st to the report date, and the labels say that span.
+const C_PEND = "Pending approval (entered, not yet approved)";
+const C_PEND_DAY = "of the Mar 2031 amount, entered on 14 Mar 2031";
+const C_APPR = "Approved, expense date 1 to 14 Mar 2031";
+const C_APPR_DAY = "of which expense date 14 Mar 2031";
+const C_TOTAL = "Total for 1 to 14 Mar 2031 (approved + pending entered in Mar 2031)";
+const C_PAY = "Approved, payment not yet made";
 ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
-  eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", "Approved, expense dated on the day"), ["Rs 1,250", "2"])
-  && eq(cellsAt(rAF.data, "costs", "Approved, payment not yet made"), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", "of which entered on the day"), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+  eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", C_APPR_DAY), ["Rs 1,250", "2"])
+  && eq(cellsAt(rAF.data, "costs", C_PAY), ["Rs 14,249", "3"]) && eq(cellsAt(rAF.data, "costs", C_PEND_DAY), ["Rs 800", "1"]), JSON.stringify(tblOf(rAF.data, "costs")?.rows));
 // -347 (Umesh, 2026-11-03: "jabse system start hua hai tabb se"): what is open, split by month back to the oldest item
 const subsAfter = (d, key, parent) => { const rows = tblOf(d, key)?.rows ?? []; const i = rows.findIndex((r) => r.label === parent); const out = []; for (let j = i + 1; j < rows.length && rows[j].sub; j++) out.push(rows[j]); return out; };
-ok("K1: pending approval is split by the month it was raised (Mar 2031: Rs 1,100 in 2), after the raised-today row",
-  eq(subsAfter(rAF.data, "costs", "Pending approval (entered, not yet approved)").map((r) => [r.label, ...r.cells]), [["of which entered on the day", "Rs 800", "1"], ["of which entered in Mar 2031", "Rs 1,100", "2"]]),
-  JSON.stringify(subsAfter(rAF.data, "costs", "Pending approval (entered, not yet approved)")));
+// Review of -351: the report day's part was listed as one more "of which" row beside the month rows, so the rows under Pending
+// approval added up to more than it. Now the month rows alone add up to it, and the day's part sits under its own month and says so.
+const pendSubs = subsAfter(rAF.data, "costs", C_PEND);
+ok("K1: pending approval is split by the month it was raised (Mar 2031: Rs 1,100 in 2); the report day's part sits straight under its month and is named as part of it",
+  eq(pendSubs.map((r) => [r.label, ...r.cells]), [["of which entered in Mar 2031", "Rs 1,100", "2"], [C_PEND_DAY, "Rs 800", "1"]]), JSON.stringify(pendSubs));
+ok("K1: the month rows under Pending approval add up to it (the day's part is not one more piece)",
+  pendSubs.filter((r) => /^of which entered in /.test(r.label)).reduce((n, r) => n + Number(r.cells[1]), 0) === Number(cellsAt(rAF.data, "costs", C_PEND)?.[1]) && Number(cellsAt(rAF.data, "costs", C_PEND)?.[1]) === 2, JSON.stringify(pendSubs));
 ok("K1: payment pending is split by the month of the expense, newest first (Mar 2031 Rs 4,250 in 2, Feb 2031 Rs 9,999 in 1), adding up to Rs 14,249 in 3",
-  eq(subsAfter(rAF.data, "costs", "Approved, payment not yet made").map((r) => [r.label, ...r.cells]), [["expense of Mar 2031", "Rs 4,250", "2"], ["expense of Feb 2031", "Rs 9,999", "1"]]),
-  JSON.stringify(subsAfter(rAF.data, "costs", "Approved, payment not yet made")));
-// Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own entries were still pending. The table now
-// leads with what is waiting, says on every approved row that it is approved, and adds one row he can recognise: all he
-// entered this month = approved (expense dated this month) + pending (entered this month). Fixture: Rs 5,750 in 4 + Rs 1,100 in 2.
-ok("K1: Costs reads pending first, then everything entered this month, then the approved rows, each saying what it counts",
-  eq((tblOf(rAF.data, "costs")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label), ["Pending approval (entered, not yet approved)", "Entered this month (approved + pending)", "Approved, expense dated on the day", "Approved, expense dated this month", "Approved, payment not yet made"])
-  && eq(cellsAt(rAF.data, "costs", "Entered this month (approved + pending)"), ["Rs 6,850", "6"]) && eq(cellsAt(rAF.data, "costs", "Approved, expense dated this month"), ["Rs 5,750", "4"]),
+  eq(subsAfter(rAF.data, "costs", C_PAY).map((r) => [r.label, ...r.cells]), [["of which expense date in Mar 2031", "Rs 4,250", "2"], ["of which expense date in Feb 2031", "Rs 9,999", "1"]]),
+  JSON.stringify(subsAfter(rAF.data, "costs", C_PAY)));
+// Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own entries were still pending. The table leads
+// with what is waiting, says on every approved row that it is approved, and adds one row he can recognise: approved (expense
+// date 1st to the report date) + pending (entered in the report month). Fixture: Rs 5,750 in 4 + Rs 1,100 in 2.
+// Review of -351: the Total sat between the pending month rows and the approved rows and read as the total of the rows above
+// it, so it now comes after the two figures it adds up; and the report day's approved figure is a part of the month figure,
+// so it is a row under it, not a row beside it.
+ok("K1: Costs reads pending first, then approved for the month so far with the report day under it, then the total of the two, then payment not yet made",
+  eq((tblOf(rAF.data, "costs")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label), [C_PEND, C_APPR, C_TOTAL, C_PAY])
+  && eq(subsAfter(rAF.data, "costs", C_APPR).map((r) => [r.label, ...r.cells]), [[C_APPR_DAY, "Rs 1,250", "2"]])
+  && eq(cellsAt(rAF.data, "costs", C_TOTAL), ["Rs 6,850", "6"]) && eq(cellsAt(rAF.data, "costs", C_APPR), ["Rs 5,750", "4"]),
   JSON.stringify(tblOf(rAF.data, "costs")?.rows));
+// -351 (Umesh, 2026-11-10: "cost wale mai bhi label thik krne hai"): "on the day" and "this month" made the reader work out
+// which day and which month, and "Entered this month" meant something else than "of which entered in <month>" beside it.
+ok("K1: every Costs row names its real date or month: no row says 'on the day' or 'this month'",
+  (tblOf(rAF.data, "costs")?.rows ?? []).length >= 8 && (tblOf(rAF.data, "costs")?.rows ?? []).every((r) => !/on the day|this month/i.test(r.label)),
+  JSON.stringify((tblOf(rAF.data, "costs")?.rows ?? []).map((r) => r.label)));
+// On the 1st the span is that one day. Fixture: one approved cost dated 2031-03-01 (Rs 500), nothing pending by then.
+const rAF1 = (await digest(uAF.cookie, "2031-03-01")).data;
+const costLabels1 = (tblOf(rAF1, "costs")?.rows ?? []).map((r) => r.label);
+ok("K1: on the 1st of a month the span reads as that one day (no leading zero), the figures are that day's, and no two Costs rows share a name",
+  eq(cellsAt(rAF1, "costs", "Approved, expense date 1 Mar 2031"), ["Rs 500", "1"]) && eq(cellsAt(rAF1, "costs", "of which expense date 1 Mar 2031"), ["Rs 500", "1"])
+  && eq(cellsAt(rAF1, "costs", "Total for 1 Mar 2031 (approved + pending entered in Mar 2031)"), ["Rs 500", "1"])
+  && new Set(costLabels1).size === costLabels1.length, JSON.stringify(tblOf(rAF1, "costs")?.rows));
+// Review of -351 (round 2): with nothing pending from the report month there is no month row, so a day row named "of the Mar
+// 2031 amount" pointed at an amount the table did not show. Then the day row names only its day.
+ok("K1: when nothing pending was entered in the report month, the day's row is named by its day alone (no month row for it to point at)",
+  !costLabels1.includes("of which entered in Mar 2031") && !costLabels1.some((l) => /^of the Mar 2031 amount/.test(l))
+  && eq(cellsAt(rAF1, "costs", "of which entered on 1 Mar 2031"), ["Rs 0", "0"]), JSON.stringify(costLabels1));
+const costNote = tblOf(rAF.data, "costs")?.note ?? "";
 ok("K1: the Costs note says plainly that a cost is in the approved rows only after approval, and that dates are the expense date",
-  /only after it is approved/.test(tblOf(rAF.data, "costs")?.note ?? "") && /expense date written on the entry/.test(tblOf(rAF.data, "costs")?.note ?? ""), tblOf(rAF.data, "costs")?.note);
-// Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status". The row folds NSDC Approved and the TOT stages, which
-// the Trainers tab calls Under preparation: same people, two names. The row now carries the tab's name and the note says so.
-ok("K1: the Trainers row for NSDC approved + TOT carries the Trainers tab's name, and the note ties it to that tab",
-  bucketLabel("approved") === "Under preparation (NSDC approved, TOT under way)" && !!cellsAt(dA, "trainers", "Under preparation (NSDC approved, TOT under way)")
-  && /same group as the Trainers tab/.test(tblOf(dA, "trainers")?.note ?? ""), `${bucketLabel("approved")} | ${tblOf(dA, "trainers")?.note}`);
+  /only after it is approved/.test(costNote) && /expense date written on the entry/.test(costNote), costNote);
+ok("K1: the Costs note says what the total adds up from, and that every row counts up to the report date",
+  costNote.includes("Total for 1 to 14 Mar 2031 = Approved, expense date 1 to 14 Mar 2031 + Pending approval entered in Mar 2031") && /Every row counts up to the report date/.test(costNote), costNote);
+// A skeptic read of the code (2026-11-10) found two cases the note had to own up to: a cost that needs no approval is in the
+// Approved rows at once, and a pending change to an approved cost shows in Pending approval while its old amount stays approved,
+// so the Total holds that cost twice.
+ok("K1: the Costs note covers a cost that needs no approval, and says a pending change to an approved cost is counted twice in the Total",
+  /needs no approval is counted in the Approved rows straight away/.test(costNote) && /change to an approved cost that is waiting for approval is listed under Pending approval with its full new amount/.test(costNote)
+  && /the Total counts it twice until then/.test(costNote), costNote);
+// ...and the figures do what that sentence says. The edit door parks the change as a cost.post request with payload.kind
+// "cost-edit" and the FULL new amount; the cost entry itself is not touched until someone decides.
+// Review of -351 (round 2): the request is tied to a real approved cost, the way the edit door writes it (entity_id and
+// payload.cost_entry), so a later change that nets a pending edit against its cost has to move these figures. The cost is the
+// Rs 4,000 one dated 2031-03-10 (index 2 of the insert above); the change asks for Rs 2,000.
+const editedCost = costIns.insertedIds[2];
+const editReq =(await db.collection("approvalrequests").insertOne({ ...approval(locA, "Pending", 2000, istAt(D, 12, 0)), entity_id: editedCost, payload: { kind: "cost-edit", cost_entry: String(editedCost), amount: 2000 } })).insertedId;
+let rEdit = null;
+try { rEdit = (await digest(uAF.cookie, D)).data; } finally { await db.collection("approvalrequests").deleteOne({ _id: editReq }); }
+const editedCostDoc = await db.collection("costentries").findOne({ _id: editedCost });   // read AFTER the digest: the cost itself still holds the old amount
+ok("K1: a pending change to an approved cost (Rs 4,000 asked down to Rs 2,000) raises Pending approval and the Total by its full new amount, one more in the count; the Approved row still holds the old Rs 4,000",
+  editedCostDoc?.amount === 4000 && eq(cellsAt(rEdit, "costs", C_PEND), ["Rs 3,100", "3"]) && eq(cellsAt(rEdit, "costs", C_PEND_DAY), ["Rs 2,800", "2"])
+  && eq(cellsAt(rEdit, "costs", C_APPR), ["Rs 5,750", "4"]) && eq(cellsAt(rEdit, "costs", C_TOTAL), ["Rs 8,850", "7"]), JSON.stringify([editedCostDoc?.amount, tblOf(rEdit, "costs")?.rows]));   // 6,850 + 2,000
+// Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status". Again on 2026-11-10: the 3 is still wrong. -350 named
+// this row after the Trainers tab's Under preparation and said it was the same group. It is not: the tab's tag is every stage
+// before Certified (15 that day); this row is only NSDC Approved + the TOT stages (3). Now the row says what it holds, lists its
+// four stages by the tab's own stage names, and a separate row carries the tab's number.
+const APPROVED_ROW = "NSDC approved, TOT not yet complete";
+// Review of -351: "all stages above" could be read as the four stage rows too, and is untrue once the screen is sorted; the
+// label now says who is counted. The stage rows say "at stage", so "of which NSDC Approved 0" under a row of 3 NSDC-approved
+// trainers no longer reads as a contradiction.
+// Round 2: "not yet Certified" alone also fits a rejected or dropped trainer, who has a row of their own; the label says so.
+const UNDER_PREP = "Under preparation (not yet Certified, not rejected or dropped; as on the Trainers tab)";
+// Round 2: the row is bold and sits under Total trainers, so its name says its trainers are already counted (not "above": the
+// screen can be sorted).
+const NOT_AVAIL = "Trained, not available (already counted in Certified or Rejected / dropped)";
+const STAGE_ROWS = ["NSDC Approved", "TOT Payment Done", "TOT Scheduled", "TOT In Progress"].map((st) => `of which at stage ${st}`);
+const apprSubs = subsAfter(dA, "trainers", APPROVED_ROW);
+ok("K1: the Trainers row for NSDC approved + TOT says what it holds and lists its four stages by the Trainers tab's stage names, adding up to it (centre A: TOT Scheduled 1)",
+  bucketLabel("approved") === APPROVED_ROW
+  && eq(apprSubs.map((r) => [r.label, ...r.cells]), STAGE_ROWS.map((l) => [l, /TOT Scheduled$/.test(l) ? "1" : "0", ...dash3]))
+  && apprSubs.reduce((n, r) => n + Number(r.cells[0]), 0) === Number(cellsAt(dA, "trainers", APPROVED_ROW)?.[0]),
+  JSON.stringify([bucketLabel("approved"), apprSubs.map((r) => [r.label, ...r.cells])]));
+const preCert = ["fresh", "shortlisted", "docs", "sent", "approved"].map((k) => Number(cellsAt(dA, "trainers", bucketLabel(k))?.[0]));
+ok("K1: Under preparation is its own row: the five stages before Certified added together (centre A: 2 + 1 + 1 + 1 + 1 = 6)",
+  eq(cellsAt(dA, "trainers", UNDER_PREP), ["6", ...dash3]) && preCert.reduce((a, b) => a + b, 0) === 6, JSON.stringify([cellsAt(dA, "trainers", UNDER_PREP), preCert]));
+ok("K1: Under preparation is drawn as a total (bold); the NSDC approved row is a plain stage row",
+  (tblOf(dA, "trainers")?.rows ?? []).find((r) => r.label === UNDER_PREP)?.strong === true && !(tblOf(dA, "trainers")?.rows ?? []).find((r) => r.label === APPROVED_ROW)?.strong, "");
+// Review of -351: centre A has one trainer in this group, so a split that put everyone under the wrong stage could still pass.
+// Centre S holds a different number at each stage and none at TOT Scheduled, plus one rejected and one dropped trainer.
+const locS = await mkLoc("S");
+const uS = await mkUser("Location", [locS._id], "st");
+const nomS = { nominated_for_location: oid(locS._id) };
+await db.collection("trainers").insertMany([
+  TR("s1 nsdc approved", { ...nomS, pipeline_status: "NSDC Approved" }),
+  TR("s2 tot paid", { ...nomS, pipeline_status: "TOT Payment Done" }), TR("s3 tot paid", { ...nomS, pipeline_status: "TOT Payment Done" }),
+  TR("s4 tot running", { ...nomS, pipeline_status: "TOT In Progress" }), TR("s5 tot running", { ...nomS, pipeline_status: "TOT In Progress" }), TR("s6 tot running", { ...nomS, pipeline_status: "TOT In Progress" }),
+  TR("s7 rejected", { ...nomS, pipeline_status: "NSDC Rejected" }), TR("s8 dropped", { ...nomS, pipeline_status: "Dropped" }),
+]);
+const dS = (await digest(uS.cookie, D)).data;
+ok("K1: each of the four stages is counted under its own name (centre S: NSDC Approved 1, TOT Payment Done 2, TOT Scheduled 0, TOT In Progress 3); the row is their sum 6 and so is Under preparation; the rejected and the dropped trainer are in neither",
+  eq(subsAfter(dS, "trainers", APPROVED_ROW).map((r) => [r.label, r.cells[0]]), STAGE_ROWS.map((l, i) => [l, ["1", "2", "0", "3"][i]]))
+  && cellsAt(dS, "trainers", APPROVED_ROW)?.[0] === "6" && eq(cellsAt(dS, "trainers", UNDER_PREP), ["6", ...dash3])
+  && cellsAt(dS, "trainers", "Rejected / dropped")?.[0] === "2" && eq(cellsAt(dS, "trainers", "Total trainers"), ["8", ...dash3]),
+  JSON.stringify((tblOf(dS, "trainers")?.rows ?? []).map((r) => [r.label, r.cells[0]])));
+// ...and it is the Trainers tab's number. The tab loads this list and tags every trainer that is not Certified, NSDC Rejected or
+// Dropped as Under preparation; counted here from the list itself, not through the product's tag function.
+const trListA = await req(uA.cookie, "GET", "/api/trainers?limit=2000");
+const dANow = (await digest(uA.cookie, D)).data;
+const tabUnderPrep = (trListA.data?.items ?? []).filter((t) => !["Certified", "NSDC Rejected", "Dropped"].includes(t.pipeline_status ?? "Fresh Lead")).length;
+ok("K1: ...and it equals what the Trainers tab counts as Under preparation for the same login",
+  trListA.status === 200 && tabUnderPrep > 0 && cellsAt(dANow, "trainers", UNDER_PREP)?.[0] === String(tabUnderPrep),
+  `list ${trListA.status}, tab ${tabUnderPrep}, report ${JSON.stringify(cellsAt(dANow, "trainers", UNDER_PREP))}`);
+const trNote = tblOf(dA, "trainers")?.note ?? "";
+ok("K1: the Trainers note no longer calls the NSDC approved row the Trainers tab's group; it says what Under preparation and Total trainers add up from",
+  trNote.length > 0 && !/same group/.test(trNote)
+  && trNote.includes("Under preparation = every trainer not yet Certified and not rejected or dropped: Fresh lead + Shortlisted + Documents completed + Sent to NSDC + NSDC approved, TOT not yet complete")
+  && trNote.includes("It is the Under preparation number on the Trainers tab for the same login")
+  && trNote.includes("Total trainers = Under preparation + Certified + Rejected / dropped")
+  && trNote.includes("Trained, not available = Marked unavailable + trainers dropped after they were Certified"), trNote);
+ok("K1: Trainers reads stages, Under preparation, Certified, Rejected / dropped, Total; Trained, not available comes after the total (it is not part of it)",
+  eq((tblOf(dA, "trainers")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label),
+    ["Fresh lead", "Shortlisted", "Documents completed", "Sent to NSDC", APPROVED_ROW, UNDER_PREP, "Certified", "Rejected / dropped", "Total trainers", NOT_AVAIL]),
+  JSON.stringify((tblOf(dA, "trainers")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label)));
+ok("K1: the reasons still sit under Trained, not available, and the three Certified rows under Certified",
+  eq(subsAfter(dA, "trainers", NOT_AVAIL).map((r) => r.label), ["Backed out", "Absconding", "Temporarily unavailable", "Reason not set"])
+  && eq(subsAfter(dA, "trainers", "Certified").map((r) => r.label), ["Assigned to a live batch", "Free to assign", "Marked unavailable"]),
+  JSON.stringify([subsAfter(dA, "trainers", NOT_AVAIL).map((r) => r.label), subsAfter(dA, "trainers", "Certified").map((r) => r.label)]));
+// The Candidates table has two pairs of rows that sound alike and differ (10 Nov mail: Training Ongoing 193 vs In training 131;
+// of which Certified 177 vs a bold row then worded as certified with a certificate, 63). The bold row is now "Certificates
+// issued" and the note says what each one counts.
+const candNote = tblOf(dA, "candidates")?.note ?? "";
+ok("K1: the Candidates note explains the pairs that sound alike: Training Ongoing vs In training, Certified vs Certificates issued",
+  /Training Ongoing is the Candidates screen's tag: enrolment is complete and the batch has not finished/.test(candNote) && /It also counts people whose batch has not started yet/.test(candNote)
+  && /In training counts only people in an Active batch that has a start date recorded/.test(candNote) && /the two numbers need not match/.test(candNote)
+  && /Certified under Enrolled = people whose result in their latest batch is Pass/.test(candNote)
+  && /Certificates issued = certificates marked Issued with a certificate date in that period\. It counts certificates, not people/.test(candNote), candNote);
 const JTAGS = ["Enrollment in progress", "Training Ongoing", "Training Completed", "Result Awaited", "Certified", "Dropout", "Failed", "Absent at Assessment"];
 const enrSubs = subsAfter(dA, "candidates", "Enrolled");
 ok("K1: Enrolled now is split by where each person is now (the Candidates screen's journey tags, in order), and the split adds up to it",
@@ -505,7 +634,7 @@ const candExpect = {
   "Joined into batches": ["—", "4", "5", "16"],            // week adds the day before (j4); all time adds the 11 base rows; the day after is out
   "Enrolled": ["5", "2", "3", "3"],                       // week adds 23:59 IST the day before; 00:01 the day after is out
   "In training (started Active batch)": ["0", ...dash3],
-  "Certified (certificate issued)": ["—", "0", "0", "0"],
+  "Certificates issued": ["—", "0", "0", "0"],
   "Batches created": ["—", "2", "3", "3"],                // week adds the batch created 23:59 IST the day before
   "Batches started": ["—", "2", "3", "3"],                // week adds the Closed batch started the day before
   "Mobilised (planning batches)": ["12 of 30 (gap 18)", ...dash3],
@@ -525,7 +654,7 @@ const trExpect = {
   "Assigned to a live batch": ["2", ...dash3],
   "Free to assign": ["4", ...dash3],
   "Marked unavailable": ["1", ...dash3],
-  "Trained, not available (incl. dropped after Certified)": ["1", ...dash3],
+  [NOT_AVAIL]: ["1", ...dash3],
   "Reason not set": ["1", ...dash3],                       // t4 was marked Unavailable before the reason existed
   "Backed out": ["0", ...dash3],
   "Rejected / dropped": ["2", "0", "0", "0"],
@@ -574,8 +703,9 @@ const dC = (await digest(uC.cookie, today())).data;
 const cExpect = {
   [bucketLabel("fresh")]: ["0", "4", "4", "4"],            // added today: all four
   [bucketLabel("shortlisted")]: ["1", "1", "1", "1"],      // k3 entered Shortlisted today
+  [UNDER_PREP]: ["1", ...dash3],                           // k3 alone is before Certified; k4 (NSDC Rejected) is not under preparation
   [bucketLabel("certified")]: ["1", "2", "2", "2"],        // k1 holds it (marked unavailable); k1 and k2 both ENTERED it today
-  "Trained, not available (incl. dropped after Certified)": ["2", ...dash3],
+  [NOT_AVAIL]: ["2", ...dash3],
   "Backed out": ["1", ...dash3], "Absconding": ["1", ...dash3], "Temporarily unavailable": ["0", ...dash3], "Reason not set": ["0", ...dash3],
   "Rejected / dropped": ["2", "2", "2", "2"],              // k2 entered Dropped and k4 NSDC Rejected today: both counted where Now counts them
   [bucketLabel("sent")]: ["0", "0", "0", "0"],             // an NSDC rejection is not an entry into Sent to NSDC
@@ -646,12 +776,22 @@ const tBad = (tt?.rows ?? []).flatMap((row, i) => {
   return eq(row.cells, want) && eq(row.tones, tones) ? [] : [`${row.label}: ${JSON.stringify(row.cells)} ${JSON.stringify(row.tones)} want ${JSON.stringify(want)} ${JSON.stringify(tones)}`];
 });
 ok("K4: the target table's +/- cells are actual minus target, signed and coloured (green at or above target, red below)", tt?.rows?.length === 3 && tBad.length === 0, tBad.join(" | ").slice(0, 300));
+// Review of -351: "need not match Certified now" was vague, and the certificates row still read as people. The note now
+// names the cells each target figure is the same as, and the figures are checked against those cells.
+ok("K4: the target note says what Trainers trained and Candidates certified count, and which cells of the other tables they match",
+  /Trainers trained = trainers moved to Certified in the period, each counted once/.test(tt?.note ?? "")
+  && /It matches the Certified row of the Trainers table in its This week and Cumulative \(or Range\) columns, not in its Now column/.test(tt?.note ?? "")
+  && /Candidates certified \(certificate issued\) matches Certificates issued in the Candidates table: it counts certificates, not people/.test(tt?.note ?? ""), tt?.note);
+ok("K4: ...and they do: Trainers trained = the Certified row's week and cumulative cells, Candidates certified = the Certificates issued row's",
+  eq([fmt(byKey.trainers_trained?.week_actual), fmt(byKey.trainers_trained?.cum_actual)], cellsAt(dAdmT, "trainers", "Certified")?.slice(2))
+  && eq([fmt(byKey.candidates_certified?.week_actual), fmt(byKey.candidates_certified?.cum_actual)], cellsAt(dAdmT, "candidates", "Certificates issued")?.slice(2)),
+  JSON.stringify([byKey.trainers_trained, cellsAt(dAdmT, "trainers", "Certified"), byKey.candidates_certified, cellsAt(dAdmT, "candidates", "Certificates issued")]));
 ok("K4: in this fixture week nobody reached Certified, so trainers trained reads 0 against 10: −10, red", byKey.trainers_trained?.week_actual === 0 && tt?.rows?.[0]?.cells?.[2] === "−10" && tt?.rows?.[0]?.tones?.[2] === "neg", JSON.stringify(tt?.rows?.[0]));
 ok("K4: a centre login asking the same day gets no target figures at all", (await digest(uA.cookie, D)).data?.targets === null, "");
 
 // K8 - a chosen range. Flow rows only: their range cell must be the sum of the "on the day" cell over each day in it.
 const digestR = (cookie, day, from) => req(cookie, "GET", `/api/reports/daily?date=${day}&from=${from}`);
-const FLOW = ["Joined into batches", "Enrolled", "Training started", "Certified (certificate issued)", "Batches created", "Batches started"];
+const FLOW = ["Joined into batches", "Enrolled", "Training started", "Certificates issued", "Batches created", "Batches started"];
 const daysK8 = ["2031-03-10", "2031-03-11", "2031-03-12", "2031-03-13", "2031-03-14", "2031-03-15", "2031-03-16", "2031-03-17"];
 const onDay = {};
 for (const d of daysK8) { const dd = (await digest(uA.cookie, d)).data; onDay[d] = Object.fromEntries(FLOW.map((l) => [l, Number(cellsAt(dd, "candidates", l)?.[1])])); }
@@ -687,6 +827,31 @@ for (const viewerK8 of [uAdm, uA]) {
     eq(wk(plain), wk(mid)) && (tblOf(plain, "trainers")?.rows ?? []).length > 0, JSON.stringify([wk(plain), wk(mid)]).slice(0, 280));
 }
 ok("K8: ...and that Monday move really is in the week column (the arm can see a cut)", Number(cellsAt((await digest(uAdm.cookie, D)).data, "trainers", bucketLabel("certified"))?.[2]) >= 1, "");
+// Review of -351 (round 2): at K4 every one of these cells is 0, so "the target figure matches the table cell" could not fail
+// there. Here they are not 0 and the three periods differ: one trainer reached Certified in the week (k8Move, Monday 03-10)
+// and one in the earlier target week (03-05); one certificate was issued in the week (03-11) and one in the earlier week
+// (03-05). So: on the day 0, this week 1, cumulative 2, in the table rows and in the target figures alike.
+// Two things this leans on, said here so a failure points at the cause: the cumulative window starts at the first target week
+// (2031-03-03, saved by the K4 arm above and removed further down), which is why 03-05 is inside it and is asserted below;
+// and the two certificate rows point at a batch and candidates already deleted. That is on purpose: an unscoped viewer's
+// count does not join to them.
+const k8Earlier = await db.collection("auditlogs").insertOne({ entity: "Trainer", entity_id: oid(kIds.k3), field: "pipeline_status", old_value: "NSDC Approved", new_value: "Certified", actor: oid(uAdm.id), created_at: istAt("2031-03-05", 12, 0) });
+const k8Certs = [new ObjectId(), new ObjectId()];
+const k8Cert = (i, cand, day) => ({ _id: k8Certs[i], candidate: cand, batch: oid(learnerBatches.edge), result: "Pass", assessed_on: bizDay(day), certificate_status: "Issued", certificate_no: `MC1-K8-${i}-${s}`, certificate_date: istAt(day, 12, 0), createdAt: NOW, updatedAt: NOW });
+let dK8 = null;
+try {
+  await db.collection("candidateresults").insertMany([k8Cert(0, learnerCandidateIds[7], "2031-03-11"), k8Cert(1, learnerCandidateIds[6], "2031-03-05")]);
+  dK8 = (await digest(uAdm.cookie, D)).data;
+} finally {
+  await db.collection("candidateresults").deleteMany({ _id: { $in: k8Certs } });
+  await db.collection("auditlogs").deleteOne({ _id: k8Earlier.insertedId });
+}
+const k8Tt = tk(dK8?.targets, "trainers_trained"), k8Cc = tk(dK8?.targets, "candidates_certified");
+ok("K8: with real moves in the period, Trainers trained equals the Certified row's This week and Cumulative cells (on the day 0, week 1, cumulative 2), and Candidates certified equals the Certificates issued row's",
+  dK8?.targets?.cumulative_from === "2031-03-03"
+  && eq(cellsAt(dK8, "trainers", bucketLabel("certified"))?.slice(1), ["0", "1", "2"]) && eq([k8Tt?.week_actual, k8Tt?.cum_actual], [1, 2])
+  && eq(cellsAt(dK8, "candidates", "Certificates issued")?.slice(1), ["0", "1", "2"]) && eq([k8Cc?.week_actual, k8Cc?.cum_actual], [1, 2]),
+  JSON.stringify([cellsAt(dK8, "trainers", bucketLabel("certified")), k8Tt, cellsAt(dK8, "candidates", "Certificates issued"), k8Cc]));
 await db.collection("auditlogs").deleteOne({ _id: k8Move.insertedId });
 const k8Refused = [];
 for (const [d, f] of [[D, "2031-03-15"], [D, "2030-03-01"], [D, "2031-02-30"], [D, "14-03-2031"]]) {
@@ -777,8 +942,8 @@ ok("T6: the ineligible one is ON THE RECORD with a reason, not silent", rowsD.fi
   JSON.stringify(rowsD.filter((r) => /tr\./.test(r.to)).map((r) => [r.to, r.status, r.reason])));
 const txtF = String(mailed(uAF.email)?.text ?? ""), txtN = String(mailed(uA.email)?.text ?? ""), txtAdm = String(mailed(uAdm.email)?.text ?? "");
 ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, month Rs 5,750, pending Rs 1,100, payment pending Rs 14,249)",
-  /^COSTS$/m.test(txtF) && eq(mailRow(txtF, "Approved, expense dated on the day"), ["Rs 1,250", "2"]) && eq(mailRow(txtF, "Approved, expense dated this month"), ["Rs 5,750", "4"])
-  && eq(mailRow(txtF, "Pending approval (entered, not yet approved)"), ["Rs 1,100", "2"]) && eq(mailRow(txtF, "Approved, payment not yet made"), ["Rs 14,249", "3"]), txtF.replace(/\s+/g, " ").slice(0, 400));
+  /^COSTS$/m.test(txtF) && eq(mailRow(txtF, C_APPR_DAY), ["Rs 1,250", "2"]) && eq(mailRow(txtF, C_APPR), ["Rs 5,750", "4"])
+  && eq(mailRow(txtF, C_PEND), ["Rs 1,100", "2"]) && eq(mailRow(txtF, C_PAY), ["Rs 14,249", "3"]), txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: ...and its other sections carry the same exact numbers as the screen (joined 4, enrolled 2, mobilised 12 of 30)",
   mailRow(txtF, "Joined into batches")?.[1] === "4" && mailRow(txtF, "Enrolled")?.[1] === "2" && mailRow(txtF, "Mobilised (planning batches)")?.[0] === "12 of 30 (gap 18)", txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: mail uses the same daily learner start and the current totals as the screen, and says the Now column is current, not historical",
@@ -786,6 +951,11 @@ ok("T5: mail uses the same daily learner start and the current totals as the scr
   && /Now = the position today, even when an earlier date is picked/.test(txtF.replace(/\s+/g, " ")), txtF.replace(/\s+/g, " ").slice(0, 400));
 // K: the mail draws the SAME cells as the API (one function): every row of every table, cell for cell
 const apiAF = (await digest(uAF.cookie, D)).data;
+// mailRow reads the FIRST line that carries a label, so the check below only means something if no two rows of one mail share
+// a name. Admin's digest is checked too: it has the fourth table (Against target).
+const dupLabels = (d) => { const labs = (d?.tables ?? []).flatMap((t) => t.rows.map((r) => r.label)); return labs.length ? labs.filter((l, i) => labs.indexOf(l) !== i) : ["<no rows>"]; };
+ok("K6: no two rows of one mail share a name, across all its tables (finance viewer's three tables; Admin's with Against target)",
+  dupLabels(apiAF).length === 0 && dupLabels(dAdmT).length === 0, [...dupLabels(apiAF), ...dupLabels(dAdmT)].join(" | "));
 const mailMismatch = (apiAF?.tables ?? []).flatMap((t) => t.rows.filter((r) => !eq(mailRow(txtF, r.label), r.cells)).map((r) => `${t.key}/${r.label}: mail ${JSON.stringify(mailRow(txtF, r.label))} api ${JSON.stringify(r.cells)}`));
 ok("K6: mail = API: every row of every table in the finance viewer's mail carries exactly the API's cells", (apiAF?.tables ?? []).length === 3 && mailMismatch.length === 0, mailMismatch.join(" | ").slice(0, 300));
 ok("T5: the SAME digest for a recipient WITHOUT finance.view has no Costs section and no cost figure at all",
@@ -794,6 +964,14 @@ ok("K4: the Admin's mail carries the target table (week of 2031-03-10: trainers 
   /^AGAINST TARGET$/m.test(txtAdm) && mailRow(txtAdm, "Trainers trained (reached Certified)")?.[0] === "10" && !/AGAINST TARGET/.test(txtN), txtAdm.replace(/\s+/g, " ").slice(0, 300));
 ok("T5: an Admin recipient gets no Costs section either (no finance.view)", txtAdm.length > 0 && !/Costs|Rs \d/i.test(txtAdm), txtAdm.replace(/\s+/g, " ").slice(0, 200));
 const txtTyped = String(mailed(unknownEmail)?.text ?? "");
+// Review of -351 (round 2): the typed address's mail is the only one with all four tables together (Against target AND Costs),
+// and no single login's digest holds both. So take the four tables' row names and count the lines of that mail each one is on.
+const fourLabels = [...(dAdmT?.tables ?? []), ...(apiAF?.tables ?? []).filter((t) => t.key === "costs")].flatMap((t) => t.rows.map((r) => r.label));
+const typedLines = txtTyped.split("\n");
+const typedHits = (label) => typedLines.filter((l) => new RegExp(`^\\s*(- )?${reEsc(label)}\\s{2,}`).test(l)).length;
+ok("K6: in the typed address's mail, the one with all four tables, every row name is on exactly one line, so a row read by its name is the right row",
+  /^AGAINST TARGET$/m.test(txtTyped) && /^COSTS$/m.test(txtTyped) && fourLabels.length >= 30 && new Set(fourLabels).size === fourLabels.length && fourLabels.every((l) => typedHits(l) === 1),
+  `${fourLabels.length} names; not on exactly one line: ${fourLabels.filter((l) => typedHits(l) !== 1).map((l) => `${l} x${typedHits(l)}`).join(" | ")}`);
 ok("T5: the typed address (no ERP account) gets the FULL report: both centres' batches and the cost section with both centres' money (today Rs 1,550 = 1,250 + 300, month Rs 6,050)",
   /^COSTS$/m.test(txtTyped) && txtTyped.includes("Rs 1,550") && txtTyped.includes("Rs 6,050") && txtTyped.includes(fx.pa1.code) && txtTyped.includes(fx.pb1.code), txtTyped.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: a scoped recipient's mail names only its own centre's batches", !txtN.includes(fx.pb1.code) && txtN.includes(fx.pa1.code), "");
@@ -1307,7 +1485,7 @@ catch (e) { ok("[precondition] chromium launches from the `playwright` devDepend
 const newPage = async (email, password) => {
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 1000 } });   // one context per persona
   const page = await ctx.newPage();
-  page.on("pageerror", (e) => pageErrors.push(String(e.message).slice(0, 160)));
+  watchPage(page);
   await page.goto(BASE, { waitUntil: "domcontentloaded" });
   await page.waitForTimeout(800);
   const emailBox = page.locator('input[type="email"], input[name="email"], input[id="email"]').first();
@@ -1341,7 +1519,7 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   const got = {
     joined: await cell("candidates", "Joined into batches", 1), enrolled: await cell("candidates", "Enrolled", 1), mobilised: await cell("candidates", "Mobilised (planning batches)", 0),
     assigned: await cell("trainers", "Assigned to a live batch", 0), idle: await cell("trainers", "Free to assign", 0),
-    today: await cell("costs", "Approved, expense dated on the day", 0), month: await cell("costs", "Approved, expense dated this month", 0), pending: await cell("costs", "Pending approval (entered, not yet approved)", 0),
+    today: await cell("costs", C_APPR_DAY, 0), month: await cell("costs", C_APPR, 0), pending: await cell("costs", C_PEND, 0),
   };
   ok("S1: the cells read joined 4, enrolled 2, mobilised 12 of 30, assigned 2, free 4", got.joined === "4" && got.enrolled === "2" && got.mobilised === "12 of 30 (gap 18)" && got.assigned === "2" && got.idle === "4", JSON.stringify(got));
   ok("S1: learner cells show 7 training starts on the day, 5 enrolled and 0 Training Ongoing now, with a current measurement time",
@@ -1352,6 +1530,28 @@ await arm("S1 digest screen (Location A with finance.view)", async () => {
   ok("S1: a finance viewer's note does say how pending approvals and payment-pending are counted", /payment not yet made show what is still open today/.test(await txt(page, "digest-note")), "");
   ok("S1: Publish now is NOT offered to a user without defaults.manage", (await page.locator('[data-testid="digest-publish"]').count()) === 0, "");
   ok("S1: the date shown is the chosen IST day", /2031-03-14/.test(await page.locator('[data-testid="digest-date"]').inputValue()), "");
+  // Review of -351: the row says "as on the Trainers tab", so read the tab itself: the Under preparation pill this same login
+  // sees on /trainers, once the list has loaded (the All pill stops reading 0), against the report's cell asked right then.
+  // Its own arm, on its own tab, so a failure here is reported and the checks below still run on the report page.
+  await arm("S1 Trainers tab pill", async () => {
+    const tp = await ctx.newPage();
+    // Closed in finally: a tab left open after a failure would keep loading and put its console errors into the checks below.
+    try {
+      watchPage(tp);
+      tp.setDefaultTimeout(20000);
+      await tp.goto(`${BASE}/trainers`, { waitUntil: "domcontentloaded" });
+      const pill = tp.locator('button[title^="Still in the hiring/TOT pipeline"]').first();
+      await pill.waitFor();
+      await tp.waitForFunction(() => [...document.querySelectorAll("button[aria-pressed]")].some((b) => /^All [1-9]\d*$/.test((b.textContent || "").trim())));
+      const pillText = (await pill.innerText()).replace(/\s+/g, " ").trim();
+      const reportUnderPrep = cellsAt((await digest(uAF.cookie, D)).data, "trainers", UNDER_PREP)?.[0];
+      ok("S1: the Under preparation pill on the Trainers tab reads the same number as the report's Under preparation row, for the same login",
+        /^Under preparation \d+$/.test(pillText) && Number(pillText.split(" ").pop()) > 0 && pillText.split(" ").pop() === reportUnderPrep, `tab "${pillText}", report ${reportUnderPrep}`);
+      await shot(tp, "S1-trainers-tab-under-preparation.png");
+    } finally {
+      await tp.close().catch(() => {});
+    }
+  });
 
   // S4 - the dashboard controls, on the same screen. Everything is presentation over the API's cells.
   const rowIds = async (key) => page.locator(`[data-testid^="digest-row-${key}-"]`).evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")));
