@@ -3,7 +3,7 @@ import path from "path";
 import { Readable } from "stream";
 import { apiHandler, HttpError, requireUser } from "@/lib/authz";
 import { dbConnect } from "@/lib/db";
-import { StoredFile, DailyLog, CandidateDocument, TrainerDocument, CandidateResult, Closure } from "@/models";
+import { StoredFile, DailyLog, CandidateDocument, TrainerDocument, CandidateResult, Closure, CostEntry, ApprovalRequest } from "@/models";
 import { getFileStream, removeStoredFile } from "@/lib/storage";
 import { audit } from "@/lib/audit";
 import { INTERNAL_FILE_HEADER, internalFileToken } from "@/lib/safe-fetch";
@@ -114,7 +114,11 @@ export const DELETE = apiHandler(async (_req: NextRequest, ctx: { params: Promis
     (await CandidateDocument.exists({ file_url: url })) ||
     (await TrainerDocument.exists({ file_url: url })) ||
     (await CandidateResult.exists({ $or: [{ certificate_file: url }, { evidence_file: url }, { "attempts.evidence_file": url }] })) ||
-    (await Closure.exists({ $or: [{ certificate_file: url }, { result_file: url }] }));
+    (await Closure.exists({ $or: [{ certificate_file: url }, { result_file: url }] })) ||
+    // -353: a cost bill, on a ledger row or on a cost request that is still waiting. A withdrawn or
+    // rejected request no longer holds its bill, so the uploader may discard it then.
+    (await CostEntry.exists({ bill_files: url })) ||
+    (await ApprovalRequest.exists({ status: { $in: ["Pending", "Applying"] }, "payload.bill_files": url }));
   if (referenced) throw new HttpError(409, "This file is attached to a saved record — remove it through that record, not here.");
   const r = await removeStoredFile(name, user.id);
   if (!r.removed) throw new HttpError(502, `Storage refused to delete the object: ${r.reason ?? "unknown"}`);

@@ -1406,9 +1406,16 @@ if (browser) {
     const det = apage.locator("[data-cost-approval-box] details").first();
     await det.waitFor({ state: "attached" });
     const isOpen = () => det.evaluate((el) => el.open);
+    // -353: read the state only after hydration. Read on the server-rendered <details>, `before` could be taken
+    // before the remembered choice was applied, so a correct flip compared against the wrong starting state
+    // (walls bill-g2 and bill-g3; green on -352's own walls).
+    await apage.waitForLoadState("networkidle").catch(() => {});
+    await apage.waitForTimeout(300);
     const before = await isOpen();
     await det.locator("summary").first().click();
-    ok("ui-352: clicking the summary flips the box", (await isOpen()) === !before);
+    let flipped = false, after = before;
+    for (let i = 0; i < 20 && !flipped; i++) { after = await isOpen(); flipped = after === !before; if (!flipped) await apage.waitForTimeout(150); }
+    ok("ui-352: clicking the summary flips the box", flipped, `before=${before} after=${after}`);
     if (await isOpen()) await det.locator("summary").first().click();
     ok("[precondition] the box is now folded", (await isOpen()) === false);
     await apage.reload({ waitUntil: "domcontentloaded" });

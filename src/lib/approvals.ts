@@ -1191,7 +1191,8 @@ export async function withdrawApproval(requestId: string, user: SessionUser, rea
 // opened}, so an approve, a withdraw or another tab's edit in between makes this a 409, never a lost update;
 // the edit bumps `revision`. The approver side has the mirror guard: a decision carrying `seen_revision`
 // refuses a version the approver did not see (decideApproval). initiator, approvers, createdAt, status stay.
-const PENDING_COST_EDIT_FIELDS = ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode"] as const;
+// -353: bill_files too - while the request waits, the raiser may add or remove the bill (Umesh: only before approval).
+const PENDING_COST_EDIT_FIELDS = ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode", "bill_files"] as const;
 export async function editPendingCostRequest(requestId: string, user: SessionUser, baseRevision: unknown, entry: unknown) {
   const notFound = () => new HttpError(404, "Approval request not found");
   if (!Types.ObjectId.isValid(String(requestId))) throw notFound();
@@ -1220,6 +1221,7 @@ export async function editPendingCostRequest(requestId: string, user: SessionUse
   for (const k of PENDING_COST_EDIT_FIELDS) {
     const v = raw[k];
     if (v === undefined || v === null || v === "") continue;
+    if (k === "bill_files") { body.bill_files = v; continue; } // checked + normalised by validateCostEntryInput
     if (k === "amount") {
       if (typeof v !== "number" && typeof v !== "string") throw new HttpError(400, "amount must be a number.");
       body.amount = Number(v);
@@ -1230,7 +1232,7 @@ export async function editPendingCostRequest(requestId: string, user: SessionUse
     if (k === "entry_date" && Number.isNaN(new Date(v).getTime())) throw new HttpError(400, "entry_date is not a valid date.");
     body[k] = v;
   }
-  await validateCostEntryInput(user, body);
+  await validateCostEntryInput(user, body, { selfRequestId: request._id });
   await assertFilableCostHead(body.category);
   if (body.batch) {
     const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(body.batch)), deletion_state: { $exists: false } }, { projection: { _id: 1 } });

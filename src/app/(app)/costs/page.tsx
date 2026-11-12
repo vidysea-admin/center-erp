@@ -3,9 +3,10 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { api, fmtDate, fmtDT, postCost, toInputDate, offerable, canDecideCostApprovals, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
-import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
+import { Btn, Chip, DataTable, ErrorBanner, Field, Section, Tabs, inputCls, CostHeadPicker, CostHeadFilter, costHeadApprovalNote, parkedCostHeadNote, showNewHeadBox, costHeadReady, costHeadPayload, NewCostHeadHint, useOwnCostActions, ownCostActionable, WithdrawRequestButton, approvalStatusLabel, BillLinks } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 import { Activity } from "@/components/activity";
+import { uploadWithRetry } from "@/lib/upload";
 
 function CostsInner() {
   const sp = useSearchParams();
@@ -180,6 +181,8 @@ function CostsInner() {
         entry_date: p.entry_date ? toInputDate(p.entry_date) : toInputDate(new Date()), amount: p.amount, note: p.note ?? "",
         category: id(p.category), location: id(p.location), trainer: id(p.trainer), batch: id(p.batch),
         vendor_payee: p.vendor_payee ?? "", voucher_no: p.voucher_no ?? "", payment_mode: p.payment_mode ?? "",
+        // -353: the bills on the waiting entry come back with it, so Save keeps them unless removed here.
+        bill_files: Array.isArray(p.bill_files) ? p.bill_files.map(String) : [],
       });
       scrollToForm();
     } catch (e: any) { setError(e.message); load(postOnly); }
@@ -306,6 +309,12 @@ function CostsInner() {
                   {["Cash", "Bank transfer", "UPI", "Cheque", "Card", "Adjustment", "Other"].map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </Field>
+              {/* -353 (Manish sir's feedback; Umesh, 12 Nov): a bill is optional, and it can be attached only
+                  before approval - on a new entry or on one's own waiting entry. A ledger row shows its
+                  bills read-only: the server ignores bill_files on every post-approval edit path. */}
+              {editId
+                ? <Field label="Bill"><div className="mt-1 text-sm"><BillLinks files={editRow?.bill_files} /><p className="text-xs text-gray-500">Bills cannot be changed after approval.</p></div></Field>
+                : <BillField files={form.bill_files ?? []} onChange={(bill_files) => setForm((f: any) => ({ ...f, bill_files }))} onError={setError} />}
               {editId && canApproveCosts && (
                 <>
                   <Field label="Payment date (today if left blank)"><input type="date" className={inputCls} value={form.paid_on ?? ""} onChange={(e) => setForm({ ...form, paid_on: e.target.value })} /></Field>
@@ -416,6 +425,7 @@ function CostsInner() {
                   { key: "createdAt", label: "Submitted", sortable: true, sortValue: (r: any) => new Date(r.createdAt).getTime(), render: (r: any) => fmtDate(r.createdAt) },
                   { key: "summary", label: "Entry", render: (r: any) => `${r.summary}${parkedCostHeadNote(r)}` },
                   { key: "status", label: "Status", sortable: true, render: (r: any) => <Chip value={r.status} label={approvalStatusLabel(r.status)} /> },
+                  { key: "bill", label: "Bill", mobile: false, render: (r: any) => r.action === "cost.post" && !r.payload?.kind ? <BillLinks files={r.payload?.bill_files} count={r.payload?.bill_count} none="No bill attached" /> : "—" },
                   { key: "decision_note", label: "Admin's note", render: (r: any) => r.status === "Cancelled" ? (r.decision_note ? `Your reason: ${r.decision_note}` : "—") : (r.decision_note ?? "—") },
                   { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.status === "Cancelled" ? (r.decided_by?.name ? `Withdrawn by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : "Withdrawn") : (r.decided_by?.name ?? "—") },
                   // approval-withdraw: your own request can be taken back while it is still waiting.
@@ -546,6 +556,8 @@ function CostsInner() {
                 { key: "batch", label: "Batch", sortable: true, sortValue: (r: any) => r.batch?.code, render: (r: any) => r.batch?.code ?? "—" },
                 { key: "trainer", label: "Trainer", sortable: true, sortValue: (r: any) => r.trainer?.name, render: (r: any) => r.trainer?.name ?? "—" },
                 { key: "note", label: "Note", mobile: false },
+                // -353: the bill, if one was attached before approval.
+                { key: "bill_files", label: "Bill", mobile: false, render: (r: any) => <BillLinks files={r.bill_files} /> },
                 {
                   // QA-039: provenance on cost rows — the person who entered it, or the sheet
                   // the seed absorbed it from (the note records "… — from AVPL <tab>").
@@ -760,6 +772,8 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
                             <span className="text-gray-500">{r.status === "Rejected" || r.status === "Cancelled" ? "Reason: " : "Note: "}</span>{r.decision_note}
                           </div>
                         ) : null}
+                        {/* -353: the approver sees the bill (or that there is none) before deciding. */}
+                        {!r.payload?.kind && <div className="mt-1 text-xs text-gray-700"><BillLinks files={r.payload?.bill_files} count={r.payload?.bill_count} none="No bill attached" /></div>}
                         {["Applying", "Approved"].includes(r.status) && r.approved_amount !== undefined ? (
                           <div className="mt-1 text-xs text-gray-700">Approved amount: ₹{Number(r.approved_amount).toLocaleString("en-IN")}</div>
                         ) : null}
@@ -807,4 +821,47 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
 
 export default function CostsPage() {
   return <Suspense><CostsInner /></Suspense>;
+}
+
+// -353: the optional bill on the cost form. Each file is uploaded at once (same door as every other
+// evidence upload), listed with View, and ✕ discards it before the entry is saved. At most 5, as on the server.
+const BILL_ACCEPT = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif";
+function BillField({ files, onChange, onError }: { files: string[]; onChange: (f: string[]) => void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  async function add(picked: File[]) {
+    if (!picked.length) return;
+    if (files.length + picked.length > 5) { onError("At most 5 bills on one entry."); return; }
+    let next = [...files];
+    try {
+      for (const f of picked) {
+        setBusy(`Uploading ${f.name}…`);
+        const url = await uploadWithRetry(f, "document", { folder_kind: "cost-bills", entity: "CostEntry" },
+          (p) => { if (p.phase === "uploading") setBusy(`${f.name}: ${p.pct}% uploaded…`); });
+        next = [...next, url];
+        onChange(next);
+      }
+    } catch (e: any) { onError(`The bill did not upload: ${e?.message ?? e}`); }
+    finally { setBusy(""); if (inputRef.current) inputRef.current.value = ""; }
+  }
+  async function discard(u: string) {
+    onChange(files.filter((x) => x !== u));
+    const name = u.split("/").pop();
+    try { await api(`/api/files/${name}`, { method: "DELETE" }); } catch { /* still on a waiting entry: it is released when that entry is saved */ }
+  }
+  return (
+    <Field label="Bill (optional) — photo or PDF">
+      <input ref={inputRef} type="file" multiple accept={BILL_ACCEPT} data-testid="cost-bill-input" className={inputCls} disabled={!!busy || files.length >= 5}
+        onChange={(e) => add(Array.from(e.target.files ?? []))} />
+      <div data-testid="cost-bill-list" className="mt-1 flex flex-col gap-1 text-xs">
+        {busy && <span className="text-gray-500">{busy}</span>}
+        {files.map((u, i) => (
+          <span key={u} className="flex items-center gap-2">
+            <a href={u} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline">📎 View bill {files.length > 1 ? i + 1 : ""}</a>
+            <button type="button" aria-label="Remove this bill" className="text-red-600" onClick={() => discard(u)}>✕</button>
+          </span>
+        ))}
+      </div>
+    </Field>
+  );
 }

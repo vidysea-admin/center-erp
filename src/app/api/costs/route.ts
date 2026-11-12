@@ -158,6 +158,8 @@ async function replayCostPost(user: Awaited<ReturnType<typeof requireUser>>, pri
       delete item.decision_note;
       // Match the own-request policy: only the raiser's original requested amount is theirs to see.
       if (payload.amount !== undefined) item.payload = { ...(item.payload ?? {}), amount: payload.amount };
+      // -353: the raiser's own bills come back with the replay.
+      if (Array.isArray(payload.bill_files)) item.payload = { ...(item.payload ?? {}), bill_files: payload.bill_files };
     }
     // pre_approval (the sentence explaining why it parked) is not stored on the request and is not
     // reconstructed here: the request, its summary and its status are the first result.
@@ -289,6 +291,8 @@ async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body
     vendor_payee: body.vendor_payee || undefined,
     voucher_no: body.voucher_no || undefined,
     payment_mode: body.payment_mode || undefined,
+    // -353: the bill, already checked and normalised by validateCostEntryInput (absent = no bill).
+    ...(Array.isArray(body.bill_files) && body.bill_files.length ? { bill_files: body.bill_files } : {}),
     _audit_events: [createdEvent(costEntryId)],
     entered_by: new Types.ObjectId(String(user.id)),
     ...(idemKey ? { idempotency_key: idemKey } : {}),

@@ -1287,6 +1287,11 @@ const CostEntrySchema = new Schema({
   vendor_payee: String,
   voucher_no: String,
   payment_mode: { type: String, enum: COST_PAYMENT_MODE },
+  // -353 (Umesh, 12 Nov): the bill - photo or PDF - as /erp/api/files/<name> URLs (StoredFile rows). OPTIONAL, at
+  // most 5, and set only BEFORE approval: at post time or by the raiser's edit of the waiting request. No edit
+  // path after that writes it (finance PATCH, own edit, cost-edit request leave it out on purpose). Checked by
+  // validateBillFiles (lib/rules.ts).
+  bill_files: { type: [String], default: undefined },
   // The amount requested remains visible even when an approver sanctions only part of it. Reports
   // use `amount` (the sanctioned liability), while this field preserves the raiser's original fact.
   requested_amount: Number,

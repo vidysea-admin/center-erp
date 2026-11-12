@@ -4,7 +4,7 @@ import { useSession } from "next-auth/react";
 import Link from "next/link";
 import { api, fmtAuditValue, fmtDT, fmtDate, offerable, istTodayInput, parsePartialAmount, partialAmountTypingOk, partialAmountPasteBlocked, PARTIAL_AMOUNT_UNCLEAR } from "@/lib/client";
 import { emailError } from "@/lib/validate";
-import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel } from "@/components/ui";
+import { Btn, Chip, DataTable, Drawer, ErrorBanner, Field, Section, Tabs, inputCls, parkedCostHeadNote, WithdrawRequestButton, approvalStatusLabel, BillLinks } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
 const TABS = ["Programs", "Users & Access", "Permissions", "Sync Source", "Approvals", "Master Lists", "Defaults", "Targets"];
@@ -1158,6 +1158,8 @@ function Approvals({ error, setError }: any) {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <div className="text-sm font-medium">{r.summary}{parkedCostHeadNote(r)}</div>
+                    {/* -353: a plain cost entry shows its bill (or that there is none) before the decision. */}
+                    {r.action === "cost.post" && !r.payload?.kind && <div className="text-xs text-gray-700"><BillLinks files={r.payload?.bill_files} count={r.payload?.bill_count} none="No bill attached" /></div>}
                     <div className="text-xs text-gray-500">
                       {r.location?.name ? `${r.location.name} · ` : ""}requested by {r.initiator?.name} · {fmtDT(r.createdAt)}
                       {/* QA-2296: this said "decided by X" beside the REQUEST's timestamp. The

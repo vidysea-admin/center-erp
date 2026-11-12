@@ -1663,3 +1663,22 @@ export function useOwnCostActions({ onChanged, onError, onNotice }: { onChanged:
   );
   return { remove, edit, restore, modal };
 }
+
+// -353: bill links. `files` are /erp/api/files/<32hex>.<ext> URLs (login-gated). `count` is what a reader
+// who has the money masked gets instead of the links (maskApprovalMoney): they learn a bill exists, no more.
+export function BillLinks({ files, count, none = "—" }: { files?: unknown; count?: unknown; none?: string }) {
+  const list = Array.isArray(files) ? files.map(String) : [];
+  if (!list.length) {
+    const n = Number(count ?? 0);
+    return n > 0 ? <span>{n === 1 ? "Bill attached" : `${n} bills attached`}</span> : <span className="text-gray-500">{none}</span>;
+  }
+  return (
+    <span className="flex flex-wrap gap-2">
+      {list.map((u, i) => (
+        <a key={u} href={u} target="_blank" rel="noopener noreferrer" className="text-blue-700 underline" onClick={(e) => e.stopPropagation()}>
+          📎 {list.length === 1 ? "View bill" : `Bill ${i + 1}`}
+        </a>
+      ))}
+    </span>
+  );
+}

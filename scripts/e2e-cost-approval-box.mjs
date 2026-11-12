@@ -960,6 +960,115 @@ try {
         && (await rawApprovals.countDocuments({ summary: { $regex: tag("e3") } })) === 1 && (await ledgerN("e3")) === 0,
       JSON.stringify(e3d && { status: e3d.status, payload: e3d.payload }).slice(0, 300));
     await eb.context.close();
+
+    // ---- -353 (Umesh, 12 Nov): a bill (photo / PDF) on a cost entry - OPTIONAL, and only BEFORE approval ----
+    //   B1  a cost posted with bill_files parks with them in the payload; one without a bill still parks
+    //   B2  refused with 400 and nothing parked: more than 5, a URL that is not one of our files, a file another
+    //       person uploaded, a file that does not exist
+    //   B3  the raiser's edit of the waiting entry can add and remove bills (same request, revision moves)
+    //   B4  an attached bill cannot be discarded through DELETE /api/files (409) - while waiting and after approval;
+    //       approval copies the bills to the ledger row
+    //   B5  after approval the bills are fixed: the finance PATCH and the raiser's own edit leave them unchanged
+    //   B6  screen: the form uploads a bill and shows View; the approval box shows the bill link or "No bill
+    //       attached"; the ledger's Bill column shows View
+    const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+    const upload = async (cookie, name = "bill.png") => {
+      const fd = new FormData();
+      fd.append("file", new Blob([PNG], { type: "image/png" }), name);
+      fd.append("folder_kind", "cost-bills"); fd.append("entity", "CostEntry");
+      const r = await fetch(BASE + "/api/upload", { method: "POST", headers: { cookie }, body: fd });
+      const d = await r.json().catch(() => ({}));
+      return r.status === 200 ? String(d.url ?? "") : "";
+    };
+    const fileName = (u) => String(u).split("/").pop();
+    const u1 = await upload(ops), u2 = await upload(ops), uAdmin = await upload(admin);
+    ok("[precondition] three bill images uploaded (two by Operations, one by Admin)", !!u1 && !!u2 && !!uAdmin, JSON.stringify({ u1, u2, uAdmin }));
+    const parkB = async (k, extra = {}) => {
+      const r = await req(ops, "POST", "/api/costs", { entry_date: "2031-05-07", location: locA._id, category: plain._id, amount: 7501, note: tag(k), ...extra });
+      const id = r.data?.item?._id ? String(r.data.item._id) : "";
+      if (id) created.requests.push(id);
+      created.ledgerNotes.push(tag(k));
+      return { status: r.status, id, error: r.data?.error };
+    };
+    const b1 = await parkB("b1", { bill_files: [u1] });
+    const b0 = await parkB("b0");
+    const b1d = b1.id ? await reqDoc(b1.id) : null;
+    ok("B1 a cost posted with a bill parks with the bill in its payload; a cost with no bill still parks (the bill is optional)",
+      b1.status === 202 && JSON.stringify(b1d?.payload?.bill_files) === JSON.stringify([u1]) && b0.status === 202 && !(b0.id && (await reqDoc(b0.id))?.payload?.bill_files?.length),
+      JSON.stringify({ b1, b0, bills: b1d?.payload?.bill_files }));
+    const bad = [
+      await parkB("b2", { bill_files: [u1, u2, u1, u2, u1, u2] }),
+      await parkB("b2", { bill_files: ["https://example.com/x.png"] }),
+      await parkB("b2", { bill_files: [uAdmin] }),
+      await parkB("b2", { bill_files: [u1.replace(/[a-f0-9]{32}/, "0".repeat(32))] }),
+      await parkB("b2", { bill_files: "not-a-list" }),
+    ];
+    ok("B2 refused with 400 and nothing parked: 6 bills, a foreign URL, someone else's file, a missing file, not a list",
+      bad.every((r) => r.status === 400) && (await rawApprovals.countDocuments({ summary: { $regex: tag("b2") } })) === 0,
+      JSON.stringify(bad.map((r) => [r.status, r.error])));
+    const rev0 = Number((await reqDoc(b1.id))?.revision ?? 0);
+    const be1 = await edit(ops, b1.id, rev0, { entry_date: "2031-05-07", location: String(locA._id), category: String(plain._id), amount: 7501, note: tag("b1"), bill_files: [u1, u2] });
+    const be1d = await reqDoc(b1.id);
+    const be2 = await edit(ops, b1.id, Number(be1d?.revision ?? 0), { entry_date: "2031-05-07", location: String(locA._id), category: String(plain._id), amount: 7501, note: tag("b1"), bill_files: [u2] });
+    const be2d = await reqDoc(b1.id);
+    ok("B3 the raiser's edit of the waiting entry adds a bill and then removes one: same request, still Pending, revision moves",
+      be1.status === 200 && JSON.stringify(be1d?.payload?.bill_files) === JSON.stringify([u1, u2]) && be2.status === 200
+        && JSON.stringify(be2d?.payload?.bill_files) === JSON.stringify([u2]) && be2d?.status === "Pending" && Number(be2d?.revision) === rev0 + 2,
+      JSON.stringify({ s1: be1.status, e1: be1.data?.error, s2: be2.status, bills: be2d?.payload?.bill_files, rev: be2d?.revision }));
+    const delWaiting = await req(ops, "DELETE", `/api/files/${fileName(u2)}`);
+    ok("B4 a bill on a waiting entry cannot be discarded: DELETE /api/files is 409", delWaiting.status === 409, JSON.stringify(delWaiting));
+    const bDecide = await req(admin, "POST", `/api/approvals/${b1.id}`, { decision: "Approved", seen_revision: be2d?.revision });
+    const bLed = await rawCosts.findOne({ note: tag("b1") });
+    const delApproved = await req(ops, "DELETE", `/api/files/${fileName(u2)}`);
+    ok("B4 approval copies the bill to the ledger row, and the bill still cannot be discarded (409)",
+      bDecide.status < 300 && JSON.stringify(bLed?.bill_files) === JSON.stringify([u2]) && delApproved.status === 409,
+      JSON.stringify({ st: bDecide.status, err: bDecide.data?.error, bills: bLed?.bill_files, del: delApproved.status }));
+    const delFree = await req(ops, "DELETE", `/api/files/${fileName(u1)}`);
+    ok("B4 a bill that was removed before approval is free again: its uploader can discard it", delFree.status === 200, JSON.stringify(delFree));
+    if (bLed) {
+      await req(admin, "PATCH", `/api/costs/${bLed._id}`, { bill_files: [] });
+      await req(ops, "PATCH", `/api/costs/${bLed._id}`, { bill_files: [], note: `${tag("b1")}` });
+    }
+    const bLed2 = bLed ? await rawCosts.findOne({ _id: bLed._id }) : null;
+    const editReq = bLed ? await rawApprovals.findOne({ entity_id: bLed._id, "payload.kind": "cost-edit" }) : null;
+    if (editReq) created.seeded.push(editReq._id);
+    ok("B5 after approval the bills are fixed: the finance PATCH and the raiser's own edit leave them as they are, and no edit request carries bills",
+      JSON.stringify(bLed2?.bill_files) === JSON.stringify([u2]) && !editReq?.payload?.bill_files && !editReq?.payload?.after?.bill_files,
+      JSON.stringify({ bills: bLed2?.bill_files, editReq: editReq?.payload }).slice(0, 300));
+    // B6: the screens
+    const b3 = await parkB("b3", { bill_files: [await upload(ops, "b3.png")] });
+    ok("[precondition] a second entry with a bill is waiting", b3.status === 202, JSON.stringify(b3));
+    const abill = await asPage(browser, "admin@vidysea.com", ADMIN_PW);
+    await abill.page.goto(BASE + "/costs#approvals", { waitUntil: "networkidle" });
+    const boxRow = (k) => abill.page.locator("tr, li, div.rounded-lg").filter({ hasText: tag(k) }).first();
+    await boxRow("b3").waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    const b3link = await boxRow("b3").locator('a[href*="/api/files/"]').count();
+    const b0none = await boxRow("b0").getByText("No bill attached").count();
+    ok("B6 the approval box shows the bill link on an entry with a bill and 'No bill attached' on one without",
+      b3link >= 1 && b0none >= 1, JSON.stringify({ b3link, b0none }));
+    const ledRow = abill.page.locator("table tbody tr").filter({ hasText: tag("b1") }).first();
+    await ledRow.waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    const ledLink = await ledRow.locator(`a[href$="${fileName(u2)}"]`).count();
+    ok("B6 All cost entries: the approved entry's Bill column links its bill", ledLink >= 1, `links=${ledLink}`);
+    await abill.context.close();
+    const obill = await asPage(browser, "ops@vidysea.com", PW);
+    await obill.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    await obill.page.locator('label:has-text("Location") select').first().selectOption(String(locA._id)).catch(() => {});
+    await obill.page.locator('[placeholder="Type to narrow the list..."]').locator("xpath=..").locator("select").selectOption(String(plain._id)).catch(() => {});
+    await obill.page.locator('label:has-text("Amount") input[type="number"]').first().fill("7504").catch(() => {});
+    await obill.page.locator('label:has-text("Description") input').first().fill(tag("b4")).catch(() => {});
+    const billInput = obill.page.locator('input[type="file"][data-testid="cost-bill-input"]');
+    await billInput.setInputFiles({ name: "receipt.png", mimeType: "image/png", buffer: PNG }).catch(() => {});
+    const viewLink = obill.page.locator('[data-testid="cost-bill-list"] a[href*="/api/files/"]');
+    await viewLink.first().waitFor({ state: "visible", timeout: 20000 }).catch(() => {});
+    const viewN = await viewLink.count();
+    await obill.page.getByRole("button", { name: "Add", exact: true }).click().catch(() => {});
+    const b4d = await until(() => rawApprovals.findOne({ summary: { $regex: tag("b4") } }));
+    if (b4d) created.requests.push(String(b4d._id));
+    created.ledgerNotes.push(tag("b4"));
+    ok("B6 the form uploads a bill, lists it with View, and Add sends it with the entry",
+      viewN === 1 && Array.isArray(b4d?.payload?.bill_files) && b4d.payload.bill_files.length === 1, JSON.stringify({ viewN, bills: b4d?.payload?.bill_files }));
+    await obill.context.close();
   });
 } catch (e) {
   ok("the suite ran without a crash", false, String(e?.stack ?? e).slice(0, 500));

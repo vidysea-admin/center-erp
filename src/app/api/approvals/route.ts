@@ -35,6 +35,10 @@ export const GET = apiHandler(async (req: NextRequest) => {
           && raw.payload.amount !== undefined) {
         masked.payload = { ...(masked.payload ?? {}), amount: raw.payload.amount };
       }
+      // -353: the raiser always sees their own bills.
+      if (raw.payload && Array.isArray(raw.payload.bill_files)) {
+        masked.payload = { ...(masked.payload ?? {}), bill_files: raw.payload.bill_files };
+      }
       return masked;
     });
     // QA-2852: the raiser's own parked costs say when their head is not approved (read from the raw row).

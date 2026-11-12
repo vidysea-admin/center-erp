@@ -240,7 +240,9 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -352 note: cost-entry fixes from the 12 Nov call (Umesh): Edit scrolls to the form, Payment date blank until paid, the
 // approval box folds, Edit beside Withdraw on one's own waiting entry, and the daily report shows approved and pending
 // apart (the combined total row Manish sir asked for on 6 Nov is removed by Umesh's 12 Nov decision). No number is quoted.
-export const RELEASE = "2026.08.14-352";
+// -353 note: a bill (photo or PDF) can be attached to a cost entry, optional, and only before approval (Umesh, 12 Nov).
+// No number is quoted.
+export const RELEASE = "2026.08.14-353";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -312,6 +314,16 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-353: a bill can now be attached to a cost entry. " +
+  "The cost form has a new field, Bill (optional), for a photo or PDF of the receipt, up to five files. Each file is uploaded as soon as it is picked and listed with View; the cross removes it before you save. An entry without a bill is still accepted. " +
+  "A bill can be added or removed only before the entry is approved: when it is first entered, or through Edit on your own waiting entry in My submissions. Once approved, the bills stay as they were. The finance edit and your own later edit of an approved entry do not change them, and the edit form says so. " +
+  "The approver sees the bill in the Waiting for your approval box and on the Admin approvals tab, or \"No bill attached\" when there is none. All cost entries has a Bill column, and My submissions shows your own bills. " +
+  "A bill on an entry, or on a request that is still waiting, cannot be deleted on its own. " +
+  "Someone who cannot see cost amounts sees only that a bill is attached, not the bill itself, because a bill shows the amount. The person who entered the cost always sees their own. " +
+  "No figure has changed.";
+
+// -353: the -352 note moved here unchanged when -353 became current.
+const RELEASE_NOTE_ARCHIVE_352 =
   "-352: changes to Costs from the 12 November call. " +
   "Edit on a cost entry now takes you to the form, which is titled \"Edit cost entry\". Before, the form filled in at the top of the page while the screen stayed where it was, so the button seemed to do nothing. " +
   "For an entry that has not been paid, Payment date is now blank instead of showing today's date. It was never saved unless you pressed Mark payment done; it only looked as if it had been. " +
@@ -2388,6 +2400,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -350: ARCHIVE_349 wired in here in the SAME bump that declared it, same discipline.
   // -351: ARCHIVE_350 wired in here in the SAME bump that declared it, same discipline.
   // -352: ARCHIVE_351 wired in here in the SAME bump that declared it, same discipline.
+  // -353: ARCHIVE_352 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_352 + " " +
   RELEASE_NOTE_ARCHIVE_351 + " " +
   RELEASE_NOTE_ARCHIVE_350 + " " +
   RELEASE_NOTE_ARCHIVE_349 + " " +

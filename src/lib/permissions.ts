@@ -791,6 +791,13 @@ export function maskApprovalMoney<T extends Record<string, any>>(request: T, can
     for (const k of Object.keys(stripped)) {
       if (typeof stripped[k] === "string") stripped[k] = redactFiguresInText(stripped[k] as string);
     }
+    // -353: a bill is a picture of a receipt, and a receipt shows the amount. A reader who has
+    // the figure masked gets only how many bills there are, never the links. The raiser's own
+    // views put their links back (approvals ?mine=1, the cost replay, the edit reply).
+    if (Array.isArray(stripped.bill_files)) {
+      stripped.bill_count = (stripped.bill_files as unknown[]).length;
+      delete stripped.bill_files;
+    }
     out.payload = stripped;
   }
   // QA-2356 (checker, qa-2295 cycle 1): this used to redact `summary` and nothing else, so the

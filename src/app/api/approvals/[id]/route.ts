@@ -42,7 +42,11 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   if (body?.action === "edit") {
     const edited = await editPendingCostRequest(id, user, body.base_revision, body.entry);
     const seeMoneyEdit = await hasPermission(user, FINANCE_VIEW);
-    return NextResponse.json({ item: maskApprovalMoney(edited, seeMoneyEdit), edited: true });
+    const editedItem: any = maskApprovalMoney(edited, seeMoneyEdit);
+    // -353: the edit is the raiser's own request; their bills are theirs to see.
+    const ep: any = (edited as any)?.payload;
+    if (!seeMoneyEdit && ep && Array.isArray(ep.bill_files)) editedItem.payload = { ...(editedItem.payload ?? {}), bill_files: ep.bill_files };
+    return NextResponse.json({ item: editedItem, edited: true });
   }
   if (body?.action !== "withdraw") throw new HttpError(400, 'action must be "withdraw" or "edit"');
   if (body.reason !== undefined && body.reason !== null && typeof body.reason !== "string") throw new HttpError(400, "reason must be text");
@@ -518,6 +522,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         vendor_payee: p.vendor_payee || undefined,
         voucher_no: p.voucher_no || undefined,
         payment_mode: p.payment_mode || undefined,
+        // -353: the bill travels to the ledger in BOTH replay sites (here and the plain cost.post one below).
+        ...(Array.isArray(p.bill_files) && p.bill_files.length ? { bill_files: p.bill_files.map(String) } : {}),
         pre_approved_applied: false,
         reservation_state: stagedCategory ? "Pending" : "Applied",
         ...(stagedCategory ? { reservation_kind: "ApprovalHead" } : {}),
@@ -611,6 +617,8 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
         vendor_payee: p.vendor_payee || undefined,
         voucher_no: p.voucher_no || undefined,
         payment_mode: p.payment_mode || undefined,
+        // -353: the bill, as the new-head replay above does.
+        ...(Array.isArray(p.bill_files) && p.bill_files.length ? { bill_files: p.bill_files.map(String) } : {}),
         // An entry that went through the queue was NOT pre-approved - somebody decided it. The basis
         // is still recorded, because it is what they decided against.
         pre_approved_applied: false,

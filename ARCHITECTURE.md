@@ -584,6 +584,17 @@ same function `requireApproval` uses when the request is raised (pulled out of i
 audience and the masking cannot drift between "raised" and "updated". A cost-EDIT request (`payload.kind`)
 is not editable here: it is withdrawn and the ledger row edited again.
 
+**Bills (-353, Umesh 12 Nov: optional, only before approval).** `CostEntry.bill_files` is a list of
+`/erp/api/files/<32hex>.<ext>` URLs. `validateBillFiles` (inside `validateCostEntryInput`, so both doors) takes at most
+`COST_BILL_MAX` = 5, each a ready `StoredFile` uploaded by the same user and not already on a ledger row or another
+waiting request. The field travels on: `postCostEntry`; both ledger-create sites of the approval replay
+(`approvals/[id]/route.ts`); `PENDING_COST_EDIT_FIELDS`; `COST_ENTRY_IMMUTABLE_FIELDS`; the register row. It is kept
+OUT of the paths that change an approved entry, on purpose: the finance PATCH whitelist (`costs/[id]/route.ts`),
+`COST_EDIT_FIELDS` and `COST_OWN_FIELDS`. `DELETE /api/files/[name]` refuses (409) a file on a ledger row or on a
+Pending/Applying request's `payload.bill_files`. `maskApprovalMoney` swaps the links for `bill_count` for a reader
+without `finance.view` (a bill shows the amount); the raiser's own views put the links back. The delete snapshot
+(`costDeletionSnapshot`) is unchanged and does not carry the bills.
+
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 
 **FOUR implementations, and the concept was not on this map at all** — which is how it reached four.

@@ -6,7 +6,7 @@ import { Types } from "mongoose";
 import {
   ApprovalRequest, AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceImport, GovtAttendanceRow, Invoice, Location,
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
-  COST_PAYMENT_MODE,
+  COST_PAYMENT_MODE, StoredFile,
 } from "@/models";
 import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 import { audit, auditDiff } from "@/lib/audit";
@@ -17,6 +17,7 @@ import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts'
 // definition must live in the import-free module because a CLIENT screen reads it too.
 export { isCertificateSettled, SETTLED_CERTIFICATE_STATUSES } from "@/lib/candidate-journey";
 import { getDefaults } from "@/lib/defaults";
+import { BASE_PATH } from "@/lib/base-path";
 import { nameKey, normalizeCan, unresolvedPortalRowsByName } from "@/lib/govt-attendance";
 import { HttpError, assertLocationInScope, isScoped, locationFilter } from "@/lib/authz";
 // QA-1575: trainerDocsAccess() needs the permission level, not just the role. permissions.ts
@@ -3148,7 +3149,7 @@ type CostEntryDraft = Record<string, any> & { _id: Types.ObjectId };
 const COST_ENTRY_IMMUTABLE_FIELDS = [
   "_id", "entry_date", "location", "batch", "trainer", "category", "amount",
   "requested_amount", "approval_request", "payment_status", "note", "vendor_payee",
-  "voucher_no", "payment_mode", "pre_approved_applied", "pre_approved_basis",
+  "voucher_no", "payment_mode", "bill_files", "pre_approved_applied", "pre_approved_basis",
   "pre_approved_unit", "reservation_state", "reservation_expires_at", "reservation_kind",
   "_audit_events", "entered_by", "idempotency_key",
 ] as const;
@@ -3633,7 +3634,7 @@ export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; t
 // POST /api/costs (postCostEntry) so the same rules guard the raiser's edit of their own pending request
 // (editPendingCostRequest, lib/approvals.ts). Order and wording are exactly the POST's: Rule 37, the
 // description, the payment-mode enum (QA-2450: first, before any write), then every supplied dimension's scope.
-export async function validateCostEntryInput(user: SessionUser, body: Record<string, any>) {
+export async function validateCostEntryInput(user: SessionUser, body: Record<string, any>, opts: { selfRequestId?: unknown } = {}) {
   assertCostEntryValid(body); // Rule 37
   // QA-1828b: the description is the CEO's, not an optional note.
   if (!String(body.note ?? "").trim()) {
@@ -3649,6 +3650,43 @@ export async function validateCostEntryInput(user: SessionUser, body: Record<str
   if (body.location) assertLocationInScope(user, String(body.location));
   if (body.batch) await assertBatchInScope(user, String(body.batch));
   if (body.trainer) await assertTrainerInScope(user, String(body.trainer));
+  // -353: the bill, optional. Normalised in place (a clean list, or the key removed) so what parks is what was checked.
+  const bills = await validateBillFiles(user, body.bill_files, opts.selfRequestId);
+  if (bills.length) body.bill_files = bills; else delete body.bill_files;
+}
+
+// -353 (Umesh, 12 Nov): a cost entry's bill - photo or PDF - OPTIONAL, at most COST_BILL_MAX, attached only BEFORE
+// approval. Each must be one of OUR stored files (the URL /api/upload returned), ready, uploaded by the person
+// entering the cost (a guessed name of someone else's file is refused), and not already on another cost entry or
+// on another waiting request. `selfRequestId` lets the raiser's edit of a waiting request keep its own bills.
+export const COST_BILL_MAX = 5;
+export const COST_BILL_EXT = ["pdf", "jpg", "jpeg", "png", "webp", "heic", "heif"] as const;
+const BILL_URL = new RegExp(`^${BASE_PATH}/api/files/([a-f0-9]{32}[.](?:${COST_BILL_EXT.join("|")}))$`);
+export async function validateBillFiles(user: SessionUser, raw: unknown, selfRequestId?: unknown): Promise<string[]> {
+  if (raw === undefined || raw === null || raw === "") return [];
+  if (!Array.isArray(raw)) throw new HttpError(400, "The bill must be a list of uploaded files.");
+  const urls = [...new Set(raw.map((u) => String(u ?? "").trim()).filter(Boolean))];
+  if (urls.length > COST_BILL_MAX) throw new HttpError(400, `Attach at most ${COST_BILL_MAX} bill files to one cost entry.`);
+  if (!urls.length) return [];
+  const names = urls.map((u) => {
+    const m = BILL_URL.exec(u);
+    if (!m) throw new HttpError(400, "A bill must be a photo or PDF uploaded here (PDF, JPG, PNG, WEBP or HEIC).");
+    return m[1];
+  });
+  const rows = await StoredFile.find({ name: { $in: names } }).select("name status uploaded_by").lean<any[]>();
+  for (const n of names) {
+    const r = rows.find((x) => x.name === n);
+    if (!r || r.status !== "ready") throw new HttpError(400, "A bill file was not found or did not finish uploading. Upload it again.");
+    if (String(r.uploaded_by ?? "") !== String(user.id)) throw new HttpError(400, "Attach a bill you uploaded yourself.");
+  }
+  const onCost = await CostEntry.collection.findOne({ bill_files: { $in: urls } }, { projection: { _id: 1 } });
+  const self = selfRequestId && Types.ObjectId.isValid(String(selfRequestId)) ? new Types.ObjectId(String(selfRequestId)) : null;
+  const onRequest = await ApprovalRequest.collection.findOne(
+    { status: { $in: ["Pending", "Applying"] }, "payload.bill_files": { $in: urls }, ...(self ? { _id: { $ne: self } } : {}) },
+    { projection: { _id: 1 } },
+  );
+  if (onCost || onRequest) throw new HttpError(400, "That bill is already attached to another cost entry. Upload this entry's own bill.");
+  return urls;
 }
 
 // -352: the head a cost is FILED under must be active, and never the bare Other/Misc head (Umesh,
@@ -7958,6 +7996,8 @@ export async function costRollup(scope: Record<string, unknown> = {}, filters: C
       vendor_payee: e.vendor_payee ?? null,
       voucher_no: e.voucher_no ?? null,
       payment_mode: e.payment_mode ?? null,
+      // -353: the bill links (shown only where the row's money is shown - the register is finance-gated).
+      bill_files: Array.isArray(e.bill_files) ? e.bill_files.map(String) : [],
       payment_status: e.payment_status ?? null,
       paid_on: e.paid_on ?? null,
       payment_ref: e.payment_ref ?? null,

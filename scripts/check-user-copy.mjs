@@ -3216,6 +3216,10 @@ for (const file of walk(root)) {
     "app/api/users/route.ts": "Admin-only ?activity= aggregate: counts and timestamps grouped by actor and entity name; no audit values are read or returned",
     // Umesh, 2026-09-05: *"sirf paisa chhupao, status sabko rehne do."* These two ship
     // `Invoice.status` (via settlementStage) and no rupee figure, which the ruling permits.
+    // -353 (Umesh, 12 Nov: bill on a cost entry): the file-discard door refuses a file still attached to a cost
+    // entry or a waiting cost request. It asks only `exists({bill_files: url})` - a yes/no on the file's own URL -
+    // and returns nothing from either document.
+    "app/api/files/[name]/route.ts": "DELETE refuse-check only: CostEntry/ApprovalRequest .exists() on the file's own URL; no document field is read or returned",
     "app/api/batches/route.ts": "status only via settlementStage, no money field (Umesh's field ruling 2026-09-05); its AuditLog read is .select('entity_id') — ids, never values",
     // `app/api/batches/[id]/route.ts` was exempted here as "status only, no money field". QA-1864
     // made that false — its force-delete branch now calls requireFinance before wiping a batch's
