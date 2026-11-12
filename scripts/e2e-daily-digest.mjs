@@ -478,7 +478,9 @@ const C_PEND = "Pending approval (entered, not yet approved)";
 const C_PEND_DAY = "of the Mar 2031 amount, entered on 14 Mar 2031";
 const C_APPR = "Approved, expense date 1 to 14 Mar 2031";
 const C_APPR_DAY = "of which expense date 14 Mar 2031";
-const C_TOTAL = "Total for 1 to 14 Mar 2031 (approved + pending entered in Mar 2031)";
+// -352 (Umesh, 2026-11-12: "Approved aur pending alag"): the combined "Total for <span> (approved + pending ...)" row is gone.
+// Manish asked for it on 2026-11-06; it double-counted a pending change to an approved cost. Each figure now stands alone.
+const C_TOTAL_RE = /^Total for |approved \+ pending/;
 const C_PAY = "Approved, payment not yet made";
 ok("K1: the finance viewer also gets Costs, worded from the same figures (today Rs 1,250 in 2, payment pending Rs 14,249 in 3)",
   eq((rAF.data?.tables ?? []).map((t) => t.key), ["trainers", "candidates", "costs"]) && eq(cellsAt(rAF.data, "costs", C_APPR_DAY), ["Rs 1,250", "2"])
@@ -501,10 +503,11 @@ ok("K1: payment pending is split by the month of the expense, newest first (Mar 
 // Review of -351: the Total sat between the pending month rows and the approved rows and read as the total of the rows above
 // it, so it now comes after the two figures it adds up; and the report day's approved figure is a part of the month figure,
 // so it is a row under it, not a row beside it.
-ok("K1: Costs reads pending first, then approved for the month so far with the report day under it, then the total of the two, then payment not yet made",
-  eq((tblOf(rAF.data, "costs")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label), [C_PEND, C_APPR, C_TOTAL, C_PAY])
+ok("K1: Costs reads pending first, then approved for the month so far with the report day under it, then payment not yet made; no combined approved + pending row (-352)",
+  eq((tblOf(rAF.data, "costs")?.rows ?? []).filter((r) => !r.sub).map((r) => r.label), [C_PEND, C_APPR, C_PAY])
+  && !(tblOf(rAF.data, "costs")?.rows ?? []).some((r) => C_TOTAL_RE.test(r.label))
   && eq(subsAfter(rAF.data, "costs", C_APPR).map((r) => [r.label, ...r.cells]), [[C_APPR_DAY, "Rs 1,250", "2"]])
-  && eq(cellsAt(rAF.data, "costs", C_TOTAL), ["Rs 6,850", "6"]) && eq(cellsAt(rAF.data, "costs", C_APPR), ["Rs 5,750", "4"]),
+  && eq(cellsAt(rAF.data, "costs", C_PEND), ["Rs 1,100", "2"]) && eq(cellsAt(rAF.data, "costs", C_APPR), ["Rs 5,750", "4"]),
   JSON.stringify(tblOf(rAF.data, "costs")?.rows));
 // -351 (Umesh, 2026-11-10: "cost wale mai bhi label thik krne hai"): "on the day" and "this month" made the reader work out
 // which day and which month, and "Entered this month" meant something else than "of which entered in <month>" beside it.
@@ -516,7 +519,7 @@ const rAF1 = (await digest(uAF.cookie, "2031-03-01")).data;
 const costLabels1 = (tblOf(rAF1, "costs")?.rows ?? []).map((r) => r.label);
 ok("K1: on the 1st of a month the span reads as that one day (no leading zero), the figures are that day's, and no two Costs rows share a name",
   eq(cellsAt(rAF1, "costs", "Approved, expense date 1 Mar 2031"), ["Rs 500", "1"]) && eq(cellsAt(rAF1, "costs", "of which expense date 1 Mar 2031"), ["Rs 500", "1"])
-  && eq(cellsAt(rAF1, "costs", "Total for 1 Mar 2031 (approved + pending entered in Mar 2031)"), ["Rs 500", "1"])
+  && !costLabels1.some((l) => C_TOTAL_RE.test(l))
   && new Set(costLabels1).size === costLabels1.length, JSON.stringify(tblOf(rAF1, "costs")?.rows));
 // Review of -351 (round 2): with nothing pending from the report month there is no month row, so a day row named "of the Mar
 // 2031 amount" pointed at an amount the table did not show. Then the day row names only its day.
@@ -526,14 +529,14 @@ ok("K1: when nothing pending was entered in the report month, the day's row is n
 const costNote = tblOf(rAF.data, "costs")?.note ?? "";
 ok("K1: the Costs note says plainly that a cost is in the approved rows only after approval, and that dates are the expense date",
   /only after it is approved/.test(costNote) && /expense date written on the entry/.test(costNote), costNote);
-ok("K1: the Costs note says what the total adds up from, and that every row counts up to the report date",
-  costNote.includes("Total for 1 to 14 Mar 2031 = Approved, expense date 1 to 14 Mar 2031 + Pending approval entered in Mar 2031") && /Every row counts up to the report date/.test(costNote), costNote);
+ok("K1: the Costs note no longer explains a combined total (-352), and still says every row counts up to the report date",
+  !/Total for /.test(costNote) && /Every row counts up to the report date/.test(costNote), costNote);
 // A skeptic read of the code (2026-11-10) found two cases the note had to own up to: a cost that needs no approval is in the
 // Approved rows at once, and a pending change to an approved cost shows in Pending approval while its old amount stays approved,
 // so the Total holds that cost twice.
-ok("K1: the Costs note covers a cost that needs no approval, and says a pending change to an approved cost is counted twice in the Total",
+ok("K1: the Costs note covers a cost that needs no approval and a pending change to an approved cost; with no combined row nothing is counted twice (-352)",
   /needs no approval is counted in the Approved rows straight away/.test(costNote) && /change to an approved cost that is waiting for approval is listed under Pending approval with its full new amount/.test(costNote)
-  && /the Total counts it twice until then/.test(costNote), costNote);
+  && !/counts it twice/.test(costNote), costNote);
 // ...and the figures do what that sentence says. The edit door parks the change as a cost.post request with payload.kind
 // "cost-edit" and the FULL new amount; the cost entry itself is not touched until someone decides.
 // Review of -351 (round 2): the request is tied to a real approved cost, the way the edit door writes it (entity_id and
@@ -544,9 +547,9 @@ const editReq =(await db.collection("approvalrequests").insertOne({ ...approval(
 let rEdit = null;
 try { rEdit = (await digest(uAF.cookie, D)).data; } finally { await db.collection("approvalrequests").deleteOne({ _id: editReq }); }
 const editedCostDoc = await db.collection("costentries").findOne({ _id: editedCost });   // read AFTER the digest: the cost itself still holds the old amount
-ok("K1: a pending change to an approved cost (Rs 4,000 asked down to Rs 2,000) raises Pending approval and the Total by its full new amount, one more in the count; the Approved row still holds the old Rs 4,000",
+ok("K1: a pending change to an approved cost (Rs 4,000 asked down to Rs 2,000) raises Pending approval by its full new amount, one more in the count; the Approved row still holds the old Rs 4,000; no combined row adds the two (-352)",
   editedCostDoc?.amount === 4000 && eq(cellsAt(rEdit, "costs", C_PEND), ["Rs 3,100", "3"]) && eq(cellsAt(rEdit, "costs", C_PEND_DAY), ["Rs 2,800", "2"])
-  && eq(cellsAt(rEdit, "costs", C_APPR), ["Rs 5,750", "4"]) && eq(cellsAt(rEdit, "costs", C_TOTAL), ["Rs 8,850", "7"]), JSON.stringify([editedCostDoc?.amount, tblOf(rEdit, "costs")?.rows]));   // 6,850 + 2,000
+  && eq(cellsAt(rEdit, "costs", C_APPR), ["Rs 5,750", "4"]) && !(tblOf(rEdit, "costs")?.rows ?? []).some((r) => C_TOTAL_RE.test(r.label)), JSON.stringify([editedCostDoc?.amount, tblOf(rEdit, "costs")?.rows]));
 // Manish sir, 2026-11-06: "NSDC approved 3 - no trainer has that status". Again on 2026-11-10: the 3 is still wrong. -350 named
 // this row after the Trainers tab's Under preparation and said it was the same group. It is not: the tab's tag is every stage
 // before Certified (15 that day); this row is only NSDC Approved + the TOT stages (3). Now the row says what it holds, lists its

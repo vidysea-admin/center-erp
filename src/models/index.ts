@@ -1564,6 +1564,9 @@ const ApprovalRequestSchema = new Schema({
   approver_users: [oid("User")],
   status: { type: String, enum: APPROVAL_REQUEST_STATUS, required: true, default: "Pending" },
   decided_by: oid("User"), decided_at: Date, decision_note: String,
+  // -352: bumped ONLY by the raiser's edit of a Pending cost (editPendingCostRequest). The edit and every
+  // decision are pinned to it. Not updatedAt: background writes (the finance audit outbox) move that too.
+  revision: { type: Number, default: 0 },
   // For a partially sanctioned cost, payload.amount stays the original request and this is the
   // amount the approver actually authorised. Keeping both is the audit trail Karunn described.
   approved_amount: Number,

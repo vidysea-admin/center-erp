@@ -34,7 +34,7 @@ page.** It imports models, so client components can't import it — client-safe 
 | Daily log | `validateDailyLog` · `createDailyLogChecked` · `canEditDailyLog` | **Rules 27–32, 51, 53** |
 | Health | `attendanceGap` · `missingLogStreak` · `batchHealth` · `settlementStage` · `missingLogQueue` | **Rules 31, 33** |
 | Results | `summarizeResults` · `recomputeClosureAggregates` (1067) · `settleCertificatesFromFiles` · `deriveCompletion` (1138) · `upsertCandidateResult` · `upsertCandidateCertificate` (1301) · `bulkMarkResults` | **Rules 41–47** + **DEC-4** + **DEC-6**. `CERT_FLOW` at :1240 |
-| Closure / money | `upsertClosureChecked` · `updateInvoiceChecked` · `assertCostEntryValid` | **Rules 34–37, 43, 46, 52** |
+| Closure / money | `upsertClosureChecked` · `updateInvoiceChecked` · `assertCostEntryValid` · **`validateCostEntryInput` · `assertFilableCostHead`** (the new-cost-entry checks, shared by POST /api/costs and the raiser's edit of a Pending request, -352, §3.0i) | **Rules 34–37, 43, 46, 52** |
 | Trainer pipeline | `MANDATORY_TRAINER_DOCS` (1788) · `TRAINER_FLOW` (1792) · `trainerDocSummary` · `transitionTrainer` (1833) | **Rules T2–T8** — T2 docs (:1882) · T3 vacancy (:1885) · T4 remarks (:1899) · T5 TR ID (:1938) · T6 drop reason · T7 assigned-batch · T8 bypass (:1847) |
 | Attendance hours | `memberAttendedHours` · `eligibilityVerdict` (2069) · `courseIsFinished` | Six states incl. `"trainer"`, which it never returns — the grid constructs it |
 | Readiness rollup | `NOMINATED_STATES` · `trainerCountsFor` · `mappingReadinessBulk` · `mappingReadiness` | Counts are DERIVED, never stored |
@@ -565,6 +565,24 @@ branch (`locations/[id]`, `locations/[id]/rooms`, `locations/[id]/targets`): ide
 `location.edit` request that always reaches Admin for a Center Manager (no dependence on the rule switch); (c) a scope change
 applies immediately because `authz.requireUser` already re-reads role and `location_scope` from the User row (5 s cache, dropped
 on every users PATCH) - no new mechanism was needed, `[CM7]` pins it.
+
+### 3.0i "Is this a valid new cost entry?" — one check, two doors (-352, Umesh 12 Nov: Edit beside Withdraw)
+
+A new cost entry reaches the server through two doors, and they must accept exactly the same entries:
+
+| Door | Where | Calls |
+|---|---|---|
+| Post a cost | `POST /api/costs` → `postCostEntry` (`src/app/api/costs/route.ts`) | `validateCostEntryInput(user, body)` then `assertFilableCostHead(body.category)` |
+| Correct one's own WAITING cost | `PATCH /api/approvals/[id] {action:"edit"}` → `editPendingCostRequest` (`src/lib/approvals.ts`) | the same two, plus "no new head" and "batch not being deleted" |
+
+Both live in `src/lib/rules.ts`; the code was MOVED out of `postCostEntry`, not copied. A new rule for what a
+cost entry may hold goes into `validateCostEntryInput` and so reaches both doors. The approver's twin of the
+edit is `decideApproval`'s `seenRevision`: a decision is pinned to the request `revision` the approver saw (bumped only by the raiser's edit; not `updatedAt`, which background audit writes also move) (the
+route pins it to the version its own pre-checks read even when the screen sends nothing), so a raiser's edit
+and an approval can never both win. The approvers' bell + mail after an edit go through `alertApprovers`, the
+same function `requireApproval` uses when the request is raised (pulled out of it, not copied), so the
+audience and the masking cannot drift between "raised" and "updated". A cost-EDIT request (`payload.kind`)
+is not editable here: it is withdrawn and the ledger row edited again.
 
 ### 3.0c "The earliest a centre could start" — collapsed in -168 (QA-509)
 

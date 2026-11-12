@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, isScoped, locationFilter, assertLocationInScope, readJson, HttpError } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { CostEntry, CostCategory, COST_PAYMENT_MODE, Batch, ApprovalRequest } from "@/models";
-import { assertActiveCostCategory, assertBatchInScope, assertCostEntryValid, assertTrainerInScope, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, expandCostCategoryFilter, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
+import { CostEntry, CostCategory, Batch, ApprovalRequest } from "@/models";
+import { assertBatchInScope, assertFilableCostHead, assertTrainerInScope, validateCostEntryInput, awaitPriorCostPost, createBatchScopedCostEntryIdempotently, costApproverOptions, evaluatePreApproval, expandCostCategoryFilter, filterCostsByApproval, findPriorCostPost, isIdempotencyKeyCollision, parseCostFilters, scopedIdempotencyKey, stampCostApprovals, type SettledCostPost } from "@/lib/rules";
 import { financeAuditEvent, flushPendingFinanceAuditEvents, requireApproval, requireHeadApproval, settleFinanceAuditEvents } from "@/lib/approvals";
 import { audit } from "@/lib/audit";
 import { coerceExtras } from "@/app/api/master-lists/[list]/route";
 import { Types } from "mongoose";
-import { normalizeCostHeadName, costHeadNameProblem, isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
+import { normalizeCostHeadName, costHeadNameProblem } from "@/lib/validate";
 
 export const GET = apiHandler(async (req: NextRequest) => {
   await dbConnect();
@@ -168,44 +168,13 @@ async function replayCostPost(user: Awaited<ReturnType<typeof requireUser>>, pri
 
 async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body: Record<string, any>, idemKey: string | null) {
   const isTestDb = /^center_erp_ci(?:_|$)/.test(process.env.MONGODB_DB ?? "");
-  assertCostEntryValid(body); // Rule 37
-  // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead
-  // of writing the ledger — the CostEntry is created only by the approval replay. Admin (as
-  // the configured approver) passes straight through, exactly as before.
-  // QA-1828b: the description is the CEO's, not an optional note. *"हेड हो, सब हेड हो,
-  // डिस्क्रिप्शन हो"* — and the example is a sentence explaining a decision, which is exactly the
-  // thing that is unrecoverable later if nobody wrote it down at the time.
-  if (!String(body.note ?? "").trim()) {
-    throw new HttpError(400, "Say what this cost was for — the description is what makes it answerable later.");
-  }
-
-  // Cost entry is intentionally wider than finance visibility: every operational role can submit
-  // its own expense, but a granted form must never become a foreign-centre write door. Check every
-  // dimension the caller supplied before creating a head, an approval request, or a ledger row.
-  // The shared assertions preserve the project's existing scope semantics, including a Trainer's
-  // explicit assignment being stronger than a stale location_scope for a batch.
-  // QA-2450 (live checker, measured on production -302). This door took `payment_mode` on trust
-  // while the two beside it did not - `PATCH /api/costs/[id]:76` checks the enum before recording a
-  // payment, and the `costcategory.create` replay checks it too. `cost.post` is this release own
-  // headline action and it was the one of the three with no guard.
-  //
-  // The cost of trusting it is not a bad string in a field: under -302 every cost PARKS, so the
-  // entry got a 202 and the schema then refused it on replay - the request could never be APPROVED
-  // by anybody, only rejected. The person who typed the value is told `submitted`; a DIFFERENT
-  // person is left with a row that cannot be said yes to.
-  //
-  // FIRST STATEMENT IN THE HANDLER, BEFORE THE SCOPE CHECKS AND BEFORE ANY WRITE. The first
-  // version of this guard sat beside `baseEntry`, which is after the new-head branch below -
-  // where an Admin proposing a head has already had a CostCategory CREATED and audited (:101).
-  // A 400 that leaves a head behind is a refusal that is not a refusal. Senior review raised it
-  // as an open question rather than a finding; it costs one line to answer properly.
-  if (body.payment_mode && !COST_PAYMENT_MODE.includes(String(body.payment_mode) as never)) {
-    throw new HttpError(400, "Choose how this payment was made.");
-  }
-
-  if (body.location) assertLocationInScope(user, String(body.location));
-  if (body.batch) await assertBatchInScope(user, String(body.batch));
-  if (body.trainer) await assertTrainerInScope(user, String(body.trainer));
+  // R-E: when the cost.post approval rule is enabled, a non-approver's entry PARKS instead of writing the
+  // ledger — the CostEntry is created only by the approval replay.
+  // -352: Rule 37, the description (QA-1828b), the payment-mode enum (QA-2450, before ANY write - a 400 that
+  // leaves a new head behind is a refusal that is not a refusal) and the scope of every supplied dimension
+  // now live in ONE function (lib/rules.ts validateCostEntryInput), because the raiser's edit of a pending
+  // request must pass exactly the same checks. Still the first statement, before the new-head branch below.
+  await validateCostEntryInput(user, body);
 
   // Is it pre-approved, and can a machine tell? A cap can be checked; a free-text basis cannot, so
   // that entry parks WITH the basis quoted rather than being waved through on a flag. The CEO named
@@ -296,11 +265,10 @@ async function postCostEntry(user: Awaited<ReturnType<typeof requireUser>>, body
     delete body.new_head_parent;
   }
 
-  const filedUnder = await assertActiveCostCategory(body.category);
   // Umesh, 2026-10-06 ~22:00 ("Others needs a name"): the bare Other/Misc head is the door to naming
-  // a head, not a place to file a cost. Same words as the form (lib/validate.ts). A named head can
-  // never match here - costHeadNameProblem above already refuses a new head called "Others".
-  if (isBareOtherHeadName(filedUnder.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
+  // a head, not a place to file a cost. A named head can never match - costHeadNameProblem above already
+  // refuses a new head called "Others". -352: shared with the pending-request edit (lib/rules.ts).
+  const filedUnder = await assertFilableCostHead(body.category);
 
   // Allocate the id before any write. Formula submissions persist under this id as hidden Pending
   // rows before the cap decision; fixed/non-approved submissions use it for ambiguity-safe create.

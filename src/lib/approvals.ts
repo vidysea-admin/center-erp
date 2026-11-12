@@ -9,7 +9,7 @@ import { mailUsers, mailUsersByRole, type MailRecipient, type PerRecipientMail }
 import { redactMoneyInText, redactFiguresInText, financeApprovers, hasPermission, FINANCE_VIEW } from "@/lib/permissions";
 import { createHash } from "crypto";
 import { Types } from "mongoose";
-import { confirmBatchAcceptingFinanceWork } from "@/lib/rules";
+import { assertFilableCostHead, confirmBatchAcceptingFinanceWork, validateCostEntryInput } from "@/lib/rules";
 
 export type ApprovalAction =
   | "location.close" | "location.stop" | "batch.cancel"
@@ -589,6 +589,58 @@ export function approvalNeededRecipientMail(summary: string, payload: unknown, r
   return async (u) => (await canSeeMailFigures(u)) ? approvalNeededMail(summary, payload, requesterName, true) : undefined;
 }
 
+// -352: the bell + mail that tell a request's approvers it is waiting, pulled out of requireApproval (edit in
+// place, not a copy) so the raiser's edit of a pending cost can re-alert the SAME audience with the SAME
+// masking: the bell is redacted for everyone, the mail per recipient (finance.view sees figures). `heading`
+// is "Approval needed" when the request is raised and "Updated: approval needed" after the raiser edits it.
+async function alertApprovers(
+  action: string, user: SessionUser, request: { _id: unknown },
+  ctx: { safeSummary: string; perRecipient: PerRecipientMail; location?: unknown; approverRole: string; approverUsers: string[]; heading?: string },
+) {
+  const { safeSummary, perRecipient, approverUsers } = ctx;
+  const heading = ctx.heading ?? "Approval needed";
+  const rule = { approver_role: ctx.approverRole };
+  await Notification.create({
+    type: "approval_pending",
+    severity: "warning",
+    message: `${heading}: ${safeSummary} (requested by ${user.name})`,
+    entity: "ApprovalRequest", entity_id: request._id,
+    link: "/admin?tab=Approvals",
+    // QA-1827: addressed to the named people when there are any. `role_target` is left set either
+    // way so an existing rule with no named list behaves exactly as it did, and so the inbox query
+    // has something to match on for those.
+    role_target: [rule.approver_role],
+    ...(approverUsers.length ? { user_target: approverUsers } : {}),
+    location: ctx.location as any,
+  });
+  // QA-115: the approver hears about it in their inbox too — an approval that waits for
+  // someone to open the bell is an approval that waits.
+  (approverUsers.length
+    ? mailUsers({
+        perEvent: action === "cost.post", // mtg-c1: only cost approvals are folded - the digest's pending block is the cost one
+        userIds: approverUsers,
+        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
+        subject: `${heading}: ${safeSummary}`,
+        perRecipient,
+        title: "An action is waiting for your approval",
+        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
+        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
+      })
+    : mailUsersByRole({
+        perEvent: action === "cost.post",
+        roles: [rule.approver_role], location: ctx.location as any,
+        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
+        subject: `${heading}: ${safeSummary}`,
+        perRecipient,
+        title: "An action is waiting for your approval",
+        // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
+        // lock-screen and in a forward, long after any permission check could reach it.
+        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
+        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
+      })
+  ).catch(() => {});
+}
+
 export async function requireApproval(
   action: ApprovalAction,
   user: SessionUser,
@@ -761,45 +813,7 @@ export async function requireApproval(
     await audit({ entity: "ApprovalRequest", entityId: request._id, field: "created", newValue: { summary: ctx.summary, payload: ctx.payload }, actor: user.id });
     return { request };
   }
-  await Notification.create({
-    type: "approval_pending",
-    severity: "warning",
-    message: `Approval needed: ${safeSummary} (requested by ${user.name})`,
-    entity: "ApprovalRequest", entity_id: request._id,
-    link: "/admin?tab=Approvals",
-    // QA-1827: addressed to the named people when there are any. `role_target` is left set either
-    // way so an existing rule with no named list behaves exactly as it did, and so the inbox query
-    // has something to match on for those.
-    role_target: [rule.approver_role],
-    ...(approverUsers.length ? { user_target: approverUsers } : {}),
-    location: ctx.location,
-  });
-  // QA-115: the approver hears about it in their inbox too — an approval that waits for
-  // someone to open the bell is an approval that waits.
-  (approverUsers.length
-    ? mailUsers({
-        perEvent: action === "cost.post", // mtg-c1: only cost approvals are folded - the digest's pending block is the cost one
-        userIds: approverUsers,
-        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
-        subject: `Approval needed: ${safeSummary}`,
-        perRecipient,
-        title: "An action is waiting for your approval",
-        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
-        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
-      })
-    : mailUsersByRole({
-        perEvent: action === "cost.post",
-        roles: [rule.approver_role], location: ctx.location,
-        excludeUserIds: [user.id], excludeEmails: [user.email], // approval-decision-mail C4: never the requester
-        subject: `Approval needed: ${safeSummary}`,
-        perRecipient,
-        title: "An action is waiting for your approval",
-        // Mail leaves the building. A figure in a subject line survives in an inbox, on a phone
-        // lock-screen and in a forward, long after any permission check could reach it.
-        lines: [`${safeSummary}`, `Requested by ${user.name}.`],
-        link: "/admin?tab=Approvals", entity: "ApprovalRequest", entity_id: request._id,
-      })
-  ).catch(() => {});
+  await alertApprovers(action, user, request, { safeSummary, perRecipient, location: ctx.location, approverRole: rule.approver_role, approverUsers });
 
   // QA-1850: the payload rides along so the READ-side mask can redact the sentence properly — a
   // bare string here can only have its ₹ figures taken, not a bare invoice number. Stored raw on
@@ -955,11 +969,20 @@ export async function decideApproval(
   user: SessionUser,
   decision: "Approved" | "Rejected",
   note?: string,
-  decisionData: { approvedAmount?: number; applying?: boolean; mapToCategory?: string; byGrant?: boolean } = {},
+  decisionData: { approvedAmount?: number; applying?: boolean; mapToCategory?: string; byGrant?: boolean; seenRevision?: unknown } = {},
 ) {
   const request = await ApprovalRequest.findById(requestId);
   if (!request) throw new HttpError(404, "Approval request not found");
   const resuming = request.status === "Applying" && decision === "Approved" && decisionData.applying;
+  // -352: the raiser may now edit a Pending cost (editPendingCostRequest), which bumps `revision`. A decision
+  // carrying `seenRevision` (the version the approver looked at) is refused with 409 on a mismatch - checked
+  // after the permission checks below, so who-may-decide answers first - and the claim also matches it, so an
+  // edit landing between this read and the claim loses. Without it the plain {status: "Pending"} claim stays.
+  const seenRaw = resuming ? undefined : decisionData.seenRevision;
+  const seen = seenRaw === undefined || seenRaw === null || seenRaw === "" ? null : Number(seenRaw);
+  if (seen !== null && (!Number.isInteger(seen) || seen < 0)) throw new HttpError(400, "seen_revision must be a whole number.");
+  const staleMsg = "This request was changed by the person who raised it after you opened it. Refresh to see the latest version, then decide.";
+  const revFilter = seen === null ? {} : seen === 0 ? { revision: { $in: [0, null] } } : { revision: seen };
   // approval-withdraw: "Cancelled" is the stored word, "withdrawn" is what the person who raised it did.
   if (request.status !== "Pending" && !resuming) throw new HttpError(409, request.status === "Cancelled" ? "Already withdrawn by the person who raised it." : `Already ${request.status}.`);
   // QA-1977 5B: a head-approval request is decided by the finance approve GRANT, which the caller
@@ -990,6 +1013,9 @@ export async function decideApproval(
   if (String(request.initiator) === String(user.id)) {
     throw new HttpError(403, "You cannot approve your own request.");
   }
+  if (seen !== null && request.status === "Pending" && Number((request as any).revision ?? 0) !== seen) {
+    throw new HttpError(409, staleMsg);
+  }
   if (resuming) {
     if (note !== undefined && String(request.decision_note ?? "") !== String(note ?? "")) {
       throw new HttpError(409, "This approval is already applying a different decision note. Resume it without changing the decision.");
@@ -1014,7 +1040,7 @@ export async function decideApproval(
       })
     : null;
   const claimed = await ApprovalRequest.findOneAndUpdate(
-    { _id: request._id, status: "Pending" },
+    { _id: request._id, status: "Pending", ...revFilter },
     {
       $set: {
         status: nextStatus,
@@ -1029,6 +1055,10 @@ export async function decideApproval(
     { new: true, runValidators: true },
   );
   if (!claimed) {
+    if (seen !== null) {
+      const now: any = await ApprovalRequest.findById(request._id).select("status").lean();
+      if (now?.status === "Pending") throw new HttpError(409, staleMsg);
+    }
     throw new HttpError(409, "This request was already claimed by another approver. Refresh the queue.");
   }
   return claimed;
@@ -1148,6 +1178,108 @@ export async function withdrawApproval(requestId: string, user: SessionUser, rea
     await audit({ entity: "ApprovalRequest", entityId: id, field: "status", oldValue: "Pending", newValue: "Withdrawn", actor: user.id });
   }
   return claimed;
+}
+
+// -352 (Umesh, 12 Nov call: Edit beside Withdraw, same form, every field prefilled). The raiser corrects their
+// OWN cost.post request while it is still Pending, instead of withdrawing it and typing it again.
+// WHO: the initiator only - anyone else gets the same 404 a missing id gets (QA-2977, as withdrawApproval).
+// WHAT: a new cost entry only. A cost-edit request (payload.kind) points at a ledger row and carries its own
+// receipts and links; it is withdrawn and edited again instead, never rewritten here.
+// RULES: the entry passes exactly the checks POST /api/costs applies (validateCostEntryInput +
+// assertFilableCostHead, lib/rules.ts) and may not name a new head. A batch being deleted is refused, as in
+// requireApproval. WHEN: one compare-and-swap on {initiator, status Pending, revision = what the raiser
+// opened}, so an approve, a withdraw or another tab's edit in between makes this a 409, never a lost update;
+// the edit bumps `revision`. The approver side has the mirror guard: a decision carrying `seen_revision`
+// refuses a version the approver did not see (decideApproval). initiator, approvers, createdAt, status stay.
+const PENDING_COST_EDIT_FIELDS = ["entry_date", "location", "batch", "trainer", "category", "amount", "note", "vendor_payee", "voucher_no", "payment_mode"] as const;
+export async function editPendingCostRequest(requestId: string, user: SessionUser, baseRevision: unknown, entry: unknown) {
+  const notFound = () => new HttpError(404, "Approval request not found");
+  if (!Types.ObjectId.isValid(String(requestId))) throw notFound();
+  const request: any = await ApprovalRequest.findById(requestId).lean();
+  if (!request) throw notFound();
+  if (!request.initiator || String(request.initiator) !== String(user.id)) throw notFound();
+  const refuseState = (status: unknown) => new HttpError(409, status === "Cancelled"
+    ? "This request was already withdrawn, so it can no longer be edited."
+    : status === "Pending"
+      ? "This request changed after you opened it. Refresh and edit the latest version."
+      : `This request is already ${String(status).toLowerCase()}, so it can no longer be edited.`);
+  if (request.status !== "Pending") throw refuseState(request.status);
+  if (request.action !== "cost.post" || (request.payload as any)?.kind) {
+    throw new HttpError(409, "Only a new cost entry that is still waiting can be edited here. Withdraw this request, then edit the entry again.");
+  }
+  const base = baseRevision === undefined || baseRevision === null || baseRevision === "" ? NaN : Number(baseRevision);
+  if (!Number.isInteger(base) || base < 0) throw new HttpError(400, "base_revision is required: the version of the request you are editing.");
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new HttpError(400, "entry must be the cost entry's fields.");
+  const raw = entry as Record<string, unknown>;
+  if (raw.new_subhead !== undefined && String(raw.new_subhead ?? "").trim()) {
+    throw new HttpError(400, "A new cost head cannot be named while editing a request. Pick an existing head, or withdraw and post the entry again.");
+  }
+  // The whole entry is replaced by what the form sends (a blank field is dropped), so only the form's own
+  // fields are taken, each type-checked - a stray key never reaches the replay on approval.
+  const body: Record<string, any> = {};
+  for (const k of PENDING_COST_EDIT_FIELDS) {
+    const v = raw[k];
+    if (v === undefined || v === null || v === "") continue;
+    if (k === "amount") {
+      if (typeof v !== "number" && typeof v !== "string") throw new HttpError(400, "amount must be a number.");
+      body.amount = Number(v);
+      continue;
+    }
+    if (typeof v !== "string") throw new HttpError(400, `${k} must be text.`);
+    if (["location", "batch", "trainer", "category"].includes(k) && !Types.ObjectId.isValid(v)) throw new HttpError(400, `${k} is not a valid id.`);
+    if (k === "entry_date" && Number.isNaN(new Date(v).getTime())) throw new HttpError(400, "entry_date is not a valid date.");
+    body[k] = v;
+  }
+  await validateCostEntryInput(user, body);
+  await assertFilableCostHead(body.category);
+  if (body.batch) {
+    const live = await Batch.collection.findOne({ _id: new Types.ObjectId(String(body.batch)), deletion_state: { $exists: false } }, { projection: { _id: 1 } });
+    if (!live) throw new HttpError(409, "This batch is being deleted or no longer exists, so this request cannot be changed to it.");
+  }
+
+  const oldPayload = (request.payload ?? {}) as Record<string, any>;
+  // The pre-approved basis quoted on the request belongs to the head it was judged against; on another head
+  // it would quote a sentence that head never had, so it is kept only while the head is unchanged.
+  const basis = String(oldPayload.category ?? "") === String(body.category ?? "") ? (oldPayload._pre_approved_basis ?? null) : null;
+  const payload: Record<string, any> = { ...body, _pre_approved_basis: basis };
+  if (oldPayload.idempotency_key) payload.idempotency_key = oldPayload.idempotency_key;
+  const summary = `Cost entry ₹${body.amount} (${user.name})${body.note ? ` — ${body.note}` : ""}${basis ? ` · pre-approved basis: ${basis}` : ""}`;
+  const $set: Record<string, unknown> = { payload, summary };
+  const $unset: Record<string, 1> = {};
+  if (body.location) $set.location = new Types.ObjectId(String(body.location)); else $unset.location = 1;
+  if (body.batch) $set.batch = new Types.ObjectId(String(body.batch)); else $unset.batch = 1;
+  const updated: any = await ApprovalRequest.findOneAndUpdate(
+    { _id: request._id, initiator: request.initiator, status: "Pending", ...(base === 0 ? { revision: { $in: [0, null] } } : { revision: base }) },
+    { $set: { ...$set, revision: base + 1 }, ...(Object.keys($unset).length ? { $unset } : {}) },
+    { new: true },
+  ).lean();
+  if (!updated) {
+    const now: any = await ApprovalRequest.findById(requestId).select("status").lean();
+    if (!now) throw notFound();
+    throw refuseState(now.status);
+  }
+  const id = updated._id as Types.ObjectId;
+  // Written straight to the audit trail, the way requireApproval records "created": the finance outbox
+  // (_audit_events) only delivers decided requests, and the decision's claim replaces that array.
+  await audit({ entity: "ApprovalRequest", entityId: id, field: "edited", oldValue: { summary: request.summary, payload: oldPayload }, newValue: { summary, payload }, actor: user.id });
+  // The approvers' old bell describes the old figure: it is resolved and a new one raised to the same
+  // audience with the same masking (alertApprovers, shared with requireApproval).
+  await Notification.updateMany(
+    { entity: "ApprovalRequest", entity_id: id, status: { $in: ["New", "Acknowledged"] } },
+    { $set: { status: "Resolved" } },
+  ).catch(() => {});
+  const safeSummary = redactFiguresInText(redactMoneyInText(summary, payload));
+  const raised = approvalNeededRecipientMail(summary, payload, user.name);
+  const perRecipient: PerRecipientMail = async (u) => {
+    const m: any = await raised(u);
+    return m && typeof m === "object" && typeof m.subject === "string" ? { ...m, subject: `Updated: ${m.subject}` } : m;
+  };
+  await alertApprovers("cost.post", user, updated, {
+    safeSummary, perRecipient, location: updated.location,
+    approverRole: String(updated.approver_role ?? ""), approverUsers: (updated.approver_users ?? []).map(String).filter(Boolean),
+    heading: "Updated: approval needed",
+  }).catch((e) => console.error("[approvals] re-alert after edit failed", e));
+  return updated;
 }
 
 // approval-decision-mail (Umesh, 2026-10-19: "approve ya reject ka bhi mail jana chahiye, tabhi to

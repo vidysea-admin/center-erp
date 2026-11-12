@@ -1078,6 +1078,8 @@ function Approvals({ error, setError }: any) {
           ...(sanctioned !== undefined ? { approved_amount: sanctioned } : {}),
           ...(mapped ? { map_to_category: mapped } : {}),
           ...seenCap,
+          // -352: a Pending cost can be edited by its raiser; the server refuses a decision on a version not seen.
+          ...(row?.action === "cost.post" ? { seen_revision: Number(row.revision ?? 0) } : {}),
         },
       });
       load();

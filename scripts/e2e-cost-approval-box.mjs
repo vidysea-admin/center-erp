@@ -615,7 +615,7 @@ try {
     const longR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: "x".repeat(501) });
     const numR = await wd(ops, Wt.w1.id, { action: "withdraw", reason: 5 });
     ok("W1 body: a wrong / missing action, a non-text reason and a 501-character reason are each 400 with their own message, and nothing is written",
-      badAct.status === 400 && badAct.data?.error === 'Action must be "withdraw"' && noAct.status === 400 && noAct.data?.error === 'Action must be "withdraw"'
+      badAct.status === 400 && badAct.data?.error === 'Action must be "withdraw" or "edit"' && noAct.status === 400 && noAct.data?.error === 'Action must be "withdraw" or "edit"'
         && numR.status === 400 && numR.data?.error === "Reason must be text"
         && longR.status === 400 && /too long/.test(longR.data?.error ?? "") && untouched(await reqDoc(Wt.w1.id)),
       JSON.stringify({ badAct, noAct, numR, longR }));
@@ -854,6 +854,112 @@ try {
     ok("W5 Admin tab: the status filter offers Withdrawn and lists it with who withdrew it and the reason, and no buttons",
       /Withdrawn/.test(awt) && !/Cancelled/.test(awt) && /withdrawn by/.test(awt) && /Reason: raised by mistake/.test(awt) && (await AWr.locator("button").count()) === 0, awt.slice(0, 300));
     await hm.context.close();
+
+    // ---- -352 (Umesh, 12 Nov call): Edit beside Withdraw on the raiser's own Pending cost ----------
+    //   E1  GET /api/approvals/[id]: the raiser reads their own Pending request with the figures they typed
+    //       (even without finance.view); anyone else, or a decided request, is 404
+    //   E2  PATCH {action:"edit"}: raiser only (404 otherwise), Pending only (409), a plain cost.post only
+    //       (a cost-edit request is 409), the same checks as POST /api/costs (400), no new head, and a
+    //       compare-and-swap on base_updated_at (a second edit on the old version is 409). Same request id,
+    //       still Pending, summary rebuilt, no ledger row, one "edited" audit row, the approvers re-alerted.
+    //   E3  approver: a decision sent with the version seen BEFORE the edit is 409 and writes nothing; with
+    //       the current version it approves and the ledger gets the EDITED figure
+    //   E4  screen (Operations, My submissions): Edit only on a Pending cost row; it fills the form with what
+    //       was typed and scrolls to it; Save sends the edit, the same request now holds the new figure
+    Object.assign(AMT, { e1: 7101, e2: 7102, e3: 7103 });
+    const Et = { e1: await park(ops, "e1", locA), e2: await park(ops, "e2", locA), e3: await park(ops, "e3", locB) };
+    ok("[precondition] the edit fixtures are parked (202) and none reached the ledger",
+      Object.values(Et).every((t) => t.status === 202 && t.id) && (await ledgerN("e1")) + (await ledgerN("e2")) + (await ledgerN("e3")) === 0, JSON.stringify(Et));
+    const getE = (who, id) => req(who, "GET", `/api/approvals/${id}`);
+    const edit = (who, id, base, entry) => req(who, "PATCH", `/api/approvals/${id}`, { action: "edit", base_revision: base, entry });
+    const entryOf = (k, amount, extra = {}) => ({ entry_date: "2031-05-06", location: String(locA._id), category: String(plain._id), amount, note: `${tag(k)} corrected`, ...extra });
+    const g1 = await getE(ops, Et.e1.id);
+    ok("E1 GET: the raiser reads their own Pending request with the figure, note and centre they typed, even without finance.view",
+      g1.status === 200 && Number(g1.data?.item?.payload?.amount) === AMT.e1 && g1.data?.item?.payload?.note === tag("e1")
+        && String(g1.data?.item?.payload?.location) === String(locA._id) && g1.data?.item?.revision === 0, JSON.stringify(g1.data ?? g1).slice(0, 300));
+    const gOther = await getE(admin, Et.e1.id);
+    ok("E1 GET: anyone else gets 404 'Approval request not found'", gOther.status === 404 && gOther.data?.error === M_NOTFOUND, JSON.stringify(gOther.data));
+    const base1 = g1.data?.item?.revision;
+    const eOther = await edit(admin, Et.e1.id, base1, entryOf("e1", 7201));
+    ok("E2 raiser only: an edit by someone else is 404 'Approval request not found' and the request is untouched",
+      eOther.status === 404 && eOther.data?.error === M_NOTFOUND && Number((await reqDoc(Et.e1.id))?.payload?.amount) === AMT.e1, JSON.stringify(eOther.data));
+    const eHead = await edit(ops, Et.e1.id, base1, entryOf("e1", 7201, { new_subhead: "zz new head" }));
+    const eNeg = await edit(ops, Et.e1.id, base1, entryOf("e1", -5));
+    const eNoNote = await edit(ops, Et.e1.id, base1, entryOf("e1", 7201, { note: "" }));
+    const eNoBase = await edit(ops, Et.e1.id, undefined, entryOf("e1", 7201));
+    ok("E2 same rules as a new entry: a new head, a negative amount, a blank description and a missing base version are each 400, and nothing changes",
+      [eHead, eNeg, eNoNote, eNoBase].every((r) => r.status === 400) && Number((await reqDoc(Et.e1.id))?.payload?.amount) === AMT.e1,
+      JSON.stringify([eHead, eNeg, eNoNote, eNoBase].map((r) => [r.status, r.data?.error])));
+    const e1r = await edit(ops, Et.e1.id, base1, entryOf("e1", 7201));
+    const e1d = await reqDoc(Et.e1.id);
+    ok("E2 the raiser's edit lands on the SAME request: still Pending, new amount / note / date, summary rebuilt, raiser kept, no ledger row",
+      e1r.status === 200 && e1d?.status === "Pending" && Number(e1d.payload?.amount) === 7201 && e1d.payload?.note === `${tag("e1")} corrected`
+        && String(e1d.payload?.entry_date).startsWith("2031-05-06") && /7201/.test(e1d.summary ?? "") && (e1d.summary ?? "").includes(`${tag("e1")} corrected`)
+        && String(e1d.initiator) === String(opsRow._id) && (await ledgerN("e1")) === 0 && (await rawApprovals.countDocuments({ summary: { $regex: tag("e1") } })) === 1,
+      JSON.stringify({ st: e1r.status, err: e1r.data?.error, d: e1d && { status: e1d.status, payload: e1d.payload, summary: e1d.summary } }).slice(0, 400));
+    const eStale = await edit(ops, Et.e1.id, base1, entryOf("e1", 7301));
+    ok("E2 compare-and-swap: a second edit sent on the version before the first is 409 and the first edit stands",
+      eStale.status === 409 && Number((await reqDoc(Et.e1.id))?.payload?.amount) === 7201, JSON.stringify(eStale.data));
+    const eAud = await auditAll.countDocuments({ entity: "ApprovalRequest", entity_id: new ObjectId(Et.e1.id), field: "edited" });
+    ok("E2 the edit is in the audit trail: one 'edited' row on the request", eAud === 1, `rows=${eAud}`);
+    const notes = db.collection("notifications");
+    const fresh = await notes.countDocuments({ entity: "ApprovalRequest", entity_id: new ObjectId(Et.e1.id), message: { $regex: "^Updated: approval needed" }, status: "New" });
+    const oldOpen = await notes.countDocuments({ entity: "ApprovalRequest", entity_id: new ObjectId(Et.e1.id), message: { $not: /^Updated: / }, status: { $in: ["New", "Acknowledged"] } });
+    ok("E2 the approvers are told: the old bell is resolved and one 'Updated: approval needed' bell is raised", fresh === 1 && oldOpen === 0, JSON.stringify({ fresh, oldOpen }));
+    const kindDoc = wSeed("cost.post", "kindedit", { payload: { kind: "cost-edit", amount: 10 } });
+    await rawApprovals.insertOne(kindDoc); created.seeded.push(kindDoc._id);
+    const eKind = await edit(ops, String(kindDoc._id), 0, entryOf("e1", 7201));
+    ok("E2 a cost-EDIT request is not rewritten here: 409, withdraw and edit the entry again", eKind.status === 409 && /Withdraw this request/.test(eKind.data?.error ?? ""), JSON.stringify(eKind.data));
+    // E3: the approver
+    const staleDecide = await req(admin, "POST", `/api/approvals/${Et.e1.id}`, { decision: "Approved", seen_revision: base1 });
+    ok("E3 an approval sent on the version seen BEFORE the raiser's edit is 409 and writes nothing",
+      staleDecide.status === 409 && /changed by the person who raised it/.test(staleDecide.data?.error ?? "") && (await reqDoc(Et.e1.id))?.status === "Pending" && (await ledgerN("e1")) === 0,
+      JSON.stringify(staleDecide.data));
+    const goDecide = await req(admin, "POST", `/api/approvals/${Et.e1.id}`, { decision: "Approved", seen_revision: (await reqDoc(Et.e1.id))?.revision });
+    const e1led = await rawCosts.findOne({ note: `${tag("e1")} corrected` });
+    ok("E3 approving the current version writes the EDITED figure to the ledger",
+      goDecide.status < 300 && (await reqDoc(Et.e1.id))?.status === "Approved" && Number(e1led?.amount) === 7201, JSON.stringify({ st: goDecide.status, err: goDecide.data?.error, amt: e1led?.amount }));
+    const eLate = await edit(ops, Et.e1.id, (await reqDoc(Et.e1.id))?.revision ?? 0, entryOf("e1", 7401));
+    const gLate = await getE(ops, Et.e1.id);
+    await wd(ops, Et.e2.id);
+    const eGone = await edit(ops, Et.e2.id, (await reqDoc(Et.e2.id))?.revision ?? 0, entryOf("e2", 7402));
+    ok("E2 Pending only: an approved request (409 'already approved') and a withdrawn one (409 'already withdrawn') cannot be edited, and GET no longer serves them",
+      eLate.status === 409 && /already approved/.test(eLate.data?.error ?? "") && eGone.status === 409 && /already withdrawn/.test(eGone.data?.error ?? "") && gLate.status === 404
+        && Number((await rawCosts.findOne({ note: `${tag("e1")} corrected` }))?.amount) === 7201,
+      JSON.stringify([eLate.data?.error, eGone.data?.error, gLate.status]));
+    // E4: the screen, as Operations (no finance rights)
+    const eb = await asPage(browser, "ops@vidysea.com", PW);
+    await eb.page.setViewportSize({ width: 1280, height: 600 });
+    await eb.page.goto(BASE + "/costs", { waitUntil: "networkidle" });
+    const erow = (k) => eb.page.locator("table tbody tr").filter({ hasText: tag(k) }).first();
+    const ebtn = (k) => erow(k).getByRole("button", { name: "Edit", exact: true });
+    await erow("e3").waitFor({ state: "visible", timeout: 30000 }).catch(() => {});
+    ok("E4 My submissions: a Pending cost row has Edit beside Withdraw; the approved and the withdrawn rows have no Edit",
+      (await ebtn("e3").count()) === 1 && (await erow("e3").getByRole("button", { name: "Withdraw", exact: true }).count()) === 1
+        && (await ebtn("e1").count()) === 0 && (await ebtn("e2").count()) === 0,
+      JSON.stringify({ e3: await ebtn("e3").count(), e1: await ebtn("e1").count(), e2: await ebtn("e2").count() }));
+    await ebtn("e3").click().catch(() => {});
+    const eHeading = eb.page.getByRole("heading", { name: "Edit pending entry" });
+    await eHeading.first().waitFor({ state: "visible", timeout: 15000 }).catch(() => {});
+    let inView = false;
+    for (let i = 0; i < 20 && !inView; i++) {
+      inView = await eHeading.first().evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; }).catch(() => false);
+      if (!inView) await eb.page.waitForTimeout(150);
+    }
+    const amountIn = eb.page.locator('label:has-text("Amount") input[type="number"]').first();
+    const noteIn = eb.page.locator('label:has-text("Description") input').first();
+    const amtVal = await amountIn.inputValue().catch(() => "");
+    const noteVal = await noteIn.inputValue().catch(() => "");
+    ok("E4 Edit fills the form with exactly what was typed (the figure too, for a reader without finance.view) and scrolls it into view under 'Edit pending entry'",
+      inView && amtVal === String(AMT.e3) && noteVal === tag("e3"), JSON.stringify({ inView, amtVal, noteVal }));
+    await amountIn.fill("7303").catch(() => {});
+    await eb.page.getByRole("button", { name: "Save", exact: true }).click().catch(() => {});
+    const e3d = await until(async () => { const d = await reqDoc(Et.e3.id); return Number(d?.payload?.amount) === 7303 ? d : null; });
+    ok("E4 Save sends the edit: the SAME request is still Pending and now holds the new figure; nothing new was raised and nothing reached the ledger",
+      !!e3d && e3d.status === "Pending" && e3d.payload?.note === tag("e3") && String(e3d.payload?.location) === String(locB._id)
+        && (await rawApprovals.countDocuments({ summary: { $regex: tag("e3") } })) === 1 && (await ledgerN("e3")) === 0,
+      JSON.stringify(e3d && { status: e3d.status, payload: e3d.payload }).slice(0, 300));
+    await eb.context.close();
   });
 } catch (e) {
   ok("the suite ran without a crash", false, String(e?.stack ?? e).slice(0, 500));

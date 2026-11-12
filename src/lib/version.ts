@@ -237,7 +237,10 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -350 note: daily digest row names and notes reworded so each figure says what it counts (Manish sir, 2026-11-06). No number is quoted.
 // -351 note: corrects -350's false "same group as the Trainers tab" claim (Manish sir, 2026-11-10: the 3 is still wrong); the tab's
 // Under preparation gets its own row; Costs rows name their date and month (Umesh, same day). No number is quoted.
-export const RELEASE = "2026.08.14-351";
+// -352 note: cost-entry fixes from the 12 Nov call (Umesh): Edit scrolls to the form, Payment date blank until paid, the
+// approval box folds, Edit beside Withdraw on one's own waiting entry, and the daily report shows approved and pending
+// apart (the combined total row Manish sir asked for on 6 Nov is removed by Umesh's 12 Nov decision). No number is quoted.
+export const RELEASE = "2026.08.14-352";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -309,6 +312,18 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-352: changes to Costs from the 12 November call. " +
+  "Edit on a cost entry now takes you to the form, which is titled \"Edit cost entry\". Before, the form filled in at the top of the page while the screen stayed where it was, so the button seemed to do nothing. " +
+  "For an entry that has not been paid, Payment date is now blank instead of showing today's date. It was never saved unless you pressed Mark payment done; it only looked as if it had been. " +
+  "The \"Waiting for your approval\" box can be folded with Hide the list / Show the list. It remembers your choice on this browser, and the Home card's link still opens it. " +
+  "In My submissions, an entry that is still waiting has an Edit button beside Withdraw. It opens the same form with everything you entered filled in, under \"Edit pending entry\". Saving updates the same request, and the approver is told it was updated. " +
+  "If you change an entry after an approver has opened it, their Approve or Reject is refused and they are asked to refresh, so nobody approves a version they have not seen. " +
+  "Only the person who entered it can edit it, and only while it is waiting. A new cost head cannot be named in an edit. If the head is changed, its pre-approved note is dropped. " +
+  "In the daily report and the evening mail, Costs shows Pending approval and Approved as separate rows. The row that added them together has been removed, so a changed approved cost is no longer counted twice. " +
+  "No figure has changed.";
+
+// -352: the -351 note moved here unchanged when -352 became current.
+const RELEASE_NOTE_ARCHIVE_351 =
   "-351: a correction to the daily report and the evening mail. In Trainers, -350 said the row \"Under preparation (NSDC approved, TOT under way)\" was the same people as Under preparation on the Trainers tab. That was wrong: the tab counts every stage before Certified, the row counted only NSDC Approved and the TOT stages. " +
   "The row is now \"NSDC approved, TOT not yet complete\", with its four stages listed under it. A new row, Under preparation, counts every trainer who is not yet Certified and not rejected or dropped, and matches the Trainers tab for the same login. Trained, not available now comes after Total trainers, because it is not part of the total, and its name says its trainers are already counted in Certified or Rejected / dropped. " +
   "In Candidates, \"Certified (certificate issued)\" is now \"Certificates issued\", and the note says how it differs from the Certified line under Enrolled, and how Training Ongoing differs from In training. " +
@@ -2372,6 +2387,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -349: ARCHIVE_348 wired in here in the SAME bump that declared it, same discipline.
   // -350: ARCHIVE_349 wired in here in the SAME bump that declared it, same discipline.
   // -351: ARCHIVE_350 wired in here in the SAME bump that declared it, same discipline.
+  // -352: ARCHIVE_351 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_351 + " " +
   RELEASE_NOTE_ARCHIVE_350 + " " +
   RELEASE_NOTE_ARCHIVE_349 + " " +
   RELEASE_NOTE_ARCHIVE_348 + " " +

@@ -6,7 +6,9 @@ import { Types } from "mongoose";
 import {
   ApprovalRequest, AuditLog, Batch, BatchDocument, BATCH_DOC_TYPE, BatchMember, Candidate, CandidateResult, Closure, CostCategory, CostEntry, DailyLog, GovtAttendanceImport, GovtAttendanceRow, Invoice, Location,
   LocationTarget, MeetingNote, Notification, Program, PublicToken, Room, Scheme, SheetChange, SLOT_OCCUPANT_FIELDS, SyncSource, TRAINER_PIPELINE, TRAINER_UNAVAILABLE_REASON, Trainer, TrainerDocument, TrainerRequest, User, WeeklyTarget,
+  COST_PAYMENT_MODE,
 } from "@/models";
+import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 import { audit, auditDiff } from "@/lib/audit";
 import { BATCH_STATUS_LABEL, batchStatusLabel, currentStageOf, fmtDay, HOLDS_PERSON, hasRecordedResult, isCertificateSettled, isFreshCandidate, JOURNEY_TAGS, journeyOf, reenrolEligibleFrom } from "@/lib/candidate-journey";
 import type { TargetRecon } from "@/lib/sync"; // QA-1263: the shape is sync.ts's, declared once
@@ -3627,6 +3629,36 @@ export function assertCostEntryValid(e: { location?: unknown; batch?: unknown; t
   }
 }
 
+// -352: the checks a cost entry's INPUT must pass, wherever it comes from. Moved here (not copied) out of
+// POST /api/costs (postCostEntry) so the same rules guard the raiser's edit of their own pending request
+// (editPendingCostRequest, lib/approvals.ts). Order and wording are exactly the POST's: Rule 37, the
+// description, the payment-mode enum (QA-2450: first, before any write), then every supplied dimension's scope.
+export async function validateCostEntryInput(user: SessionUser, body: Record<string, any>) {
+  assertCostEntryValid(body); // Rule 37
+  // QA-1828b: the description is the CEO's, not an optional note.
+  if (!String(body.note ?? "").trim()) {
+    throw new HttpError(400, "Say what this cost was for — the description is what makes it answerable later.");
+  }
+  // QA-2450: the enum is checked before anything is written, so a value the schema would refuse on replay
+  // can never park a request nobody is able to approve.
+  if (body.payment_mode && !COST_PAYMENT_MODE.includes(String(body.payment_mode) as never)) {
+    throw new HttpError(400, "Choose how this payment was made.");
+  }
+  // Cost entry is intentionally wider than finance visibility, but a granted form must never become a
+  // foreign-centre write door: every dimension the caller supplied is checked against their scope.
+  if (body.location) assertLocationInScope(user, String(body.location));
+  if (body.batch) await assertBatchInScope(user, String(body.batch));
+  if (body.trainer) await assertTrainerInScope(user, String(body.trainer));
+}
+
+// -352: the head a cost is FILED under must be active, and never the bare Other/Misc head (Umesh,
+// 2026-10-06 ~22:00, "Others needs a name"). Shared by POST /api/costs and editPendingCostRequest.
+export async function assertFilableCostHead(category: unknown) {
+  const filedUnder = await assertActiveCostCategory(category);
+  if (isBareOtherHeadName(filedUnder.name)) throw new HttpError(400, OTHER_HEAD_NEEDS_NAME);
+  return filedUnder;
+}
+
 // ---------- Candidate eligibility (2026-08-11 meeting) ----------
 // "Age 18 से 40 के बीच… 10th pass नहीं है तो ineligible… पिछले 6 महीने में training ले रखी
 // है तो ineligible।" All thresholds live in Defaults. Advisory on assignment (eligibility
@@ -6461,7 +6493,6 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
     // The month figures run from the 1st to the report date, so the label says that span and not the bare month, which read
     // as the whole month (review of -351). On the 1st the span is that one day.
     const costSpan = dayIST.endsWith("-01") ? costDay : `1 to ${costDay}`;
-    const pendingThisMonth = costs.pending.by_month.find((m) => m.month === reportMonth) ?? { count: 0, amount: 0 };
     // Under Pending approval the month rows add up to it. What was entered on the report day is a part of the report month's
     // row, so it goes straight under that row and is named as part of it; listed beside the months as one more "of which", the
     // rows added up to more than the parent. With nothing pending from the report month there is no such row: the day's row
@@ -6475,19 +6506,19 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       // The note says two things a skeptic read of the code turned up (2026-11-10): a cost that needs no approval (pre-approved
       // head, the rule switched off, an Admin entry on a finished batch) is in the Approved rows at once; and a pending EDIT of an
       // approved cost (payload.kind "cost-edit", payload.amount = the full new amount) sits in Pending approval while its old
-      // amount is still in the Approved rows, so the Total holds that cost twice. Said, not netted: -351 changes no figure.
-      note: `A cost that needs approval is counted in the Approved rows only after it is approved. Until then it shows under Pending approval, by the month it was entered. A cost that needs no approval is counted in the Approved rows straight away. Approved rows go by the expense date written on the entry, not the day it was approved. Every row counts up to the report date. Total for ${costSpan} = Approved, expense date ${costSpan} + Pending approval entered in ${costMonth}. A change to an approved cost that is waiting for approval is listed under Pending approval with its full new amount. The old amount stays in the Approved rows until the change is decided. If that cost's expense date and the day the change was entered both fall within ${costSpan}, the Total counts it twice until then. Payment not yet made covers approved costs only, by the month of the expense date. Pending approval and payment not yet made include everything still open, however old.`,
+      // amount is still in the Approved rows. -351 said the combined Total held it twice; -352 removed that Total, so no row adds them.
+      note: `A cost that needs approval is counted in the Approved rows only after it is approved. Until then it shows under Pending approval, by the month it was entered. A cost that needs no approval is counted in the Approved rows straight away. Approved rows go by the expense date written on the entry, not the day it was approved. Every row counts up to the report date. Approved and pending are shown apart and are not added together. A change to an approved cost that is waiting for approval is listed under Pending approval with its full new amount. The old amount stays in the Approved rows until the change is decided. Payment not yet made covers approved costs only, by the month of the expense date. Pending approval and payment not yet made include everything still open, however old.`,
       // Manish sir, 2026-11-06: read "Month to date Rs 540" as wrong because his own November entries were still pending. So
-      // the table leads with what is waiting, every approved row says it is approved, and one row adds up the month
-      // (approved by expense date + pending by the month entered) - the figure he recognises. That Total comes after the two
-      // figures it adds: between the pending month rows and the approved rows it read as the total of the rows above it.
+      // the table leads with what is waiting and every approved row says it is approved. -350/-351 also added one row adding
+      // the month up (approved by expense date + pending by the month entered), at his request. -352 (Umesh, 2026-11-12:
+      // "Approved aur pending alag"): that combined Total is removed. It mixed two different things and counted a pending
+      // change to an approved cost twice; the Pending and Approved rows above already carry both figures, each on its own.
       rows: [
         { label: "Pending approval (entered, not yet approved)", strong: true, cells: [fmtRs(costs.pending.amount), fmtN(costs.pending.count)] },
         ...pendingSubs,
         // The report day's approved figure is a part of the month-so-far figure, so it is a row under it, not a row beside it.
         { label: `Approved, expense date ${costSpan}`, cells: [fmtRs(costs.month.amount), fmtN(costs.month.entries)] },
         { label: `of which expense date ${costDay}`, sub: true, cells: [fmtRs(costs.today.amount), fmtN(costs.today.entries)] },
-        { label: `Total for ${costSpan} (approved + pending entered in ${costMonth})`, strong: true, cells: [fmtRs(round2(costs.month.amount + pendingThisMonth.amount)), fmtN(costs.month.entries + pendingThisMonth.count)] },
         { label: "Approved, payment not yet made", cells: [fmtRs(costs.payment_pending.amount), fmtN(costs.payment_pending.count)] },
         ...costs.payment_pending.by_month.map((m) => ({ label: `of which expense date in ${monthName(m.month)}`, sub: true, cells: [fmtRs(m.amount), fmtN(m.count)] })),
       ],

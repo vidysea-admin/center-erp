@@ -1355,6 +1355,75 @@ if (browser) {
     ok("ui: saved (amount 654) and no dialog was shown", (await raw(id))?.amount === 654 && (await modal.count()) === 0 && nativeDialogs === 0);
   });
 
+  // -352 (Umesh, 12 Nov call, seen live on -351): Edit filled the form ~550px above the visible area
+  // and never scrolled to it, so "Edit does nothing". The heading also kept saying "Post an expense"
+  // for a post-only person who was in fact editing. Checked by geometry BEFORE any Playwright fill,
+  // because fill() scrolls its target into view by itself and would hide the bug.
+  await arm("ui-352: Edit brings the form into view, headed 'Edit cost entry'", async () => {
+    await mkDirect(uiCreator, "ui-scroll");
+    await page.setViewportSize({ width: 1440, height: 600 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await rowOf("ui-scroll").waitFor();
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await rowOf("ui-scroll").getByRole("button", { name: "Edit" }).click();
+    const heading = page.getByRole("heading", { name: "Edit cost entry", exact: true, level: 3 });
+    let inView = false;
+    const until = Date.now() + 5000;
+    while (Date.now() < until && !inView) {
+      if (await heading.count()) inView = await heading.evaluate((el) => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+      if (!inView) await page.waitForTimeout(150);
+    }
+    ok("ui-352: after Edit the form heading reads 'Edit cost entry' and is inside the viewport", inView, `heading count ${await heading.count()}`);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  });
+
+  const actx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const apage = await actx.newPage();
+  apage.setDefaultTimeout(20000);
+  await apage.goto(BASE + "/login", { waitUntil: "domcontentloaded" });
+  await apage.locator('input[type="email"], input[name="email"], input[id="email"]').first().fill(approverB.email);
+  await apage.locator('input[type="password"]').first().fill(PW);
+  await apage.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in")').first().click();
+  await apage.waitForURL((u) => !/login/i.test(String(u)), { timeout: 30000 }).catch(() => {});
+  ok("[precondition] the approver is logged in in a second browser", !/login/i.test(apage.url()), apage.url());
+
+  // -352: an unpaid row opened for editing showed TODAY as its Payment date. Plain Save never wrote it
+  // (the PATCH whitelist leaves paid_on out), but the form claimed a payment that had not happened.
+  await arm("ui-352: Payment date is empty for an unpaid row", async () => {
+    const id = await mkDirect(uiCreator, "ui-unpaid");
+    ok("[precondition] the unpaid entry has no paid_on", !!id && !(await raw(id))?.paid_on);
+    await apage.goto(`${BASE}/costs?edit=${id}`, { waitUntil: "domcontentloaded" });
+    await apage.getByRole("heading", { name: "Edit cost entry", exact: true, level: 3 }).waitFor();
+    const pd = apage.locator('label:has-text("Payment date") input[type="date"]').first();
+    await pd.waitFor();
+    const v = await pd.inputValue();
+    ok("ui-352: the Payment date field is blank for an unpaid entry", v === "", `value "${v}"`);
+  });
+
+  // -352: "Waiting for your approval" folds away; #approvals (the Home card's link) always opens it.
+  await arm("ui-352: the approval box folds, remembers the choice, and #approvals opens it", async () => {
+    await apage.goto(BASE + "/costs", { waitUntil: "domcontentloaded" });
+    const det = apage.locator("[data-cost-approval-box] details").first();
+    await det.waitFor({ state: "attached" });
+    const isOpen = () => det.evaluate((el) => el.open);
+    const before = await isOpen();
+    await det.locator("summary").first().click();
+    ok("ui-352: clicking the summary flips the box", (await isOpen()) === !before);
+    if (await isOpen()) await det.locator("summary").first().click();
+    ok("[precondition] the box is now folded", (await isOpen()) === false);
+    await apage.reload({ waitUntil: "domcontentloaded" });
+    await det.waitFor({ state: "attached" });
+    await apage.waitForTimeout(500);
+    ok("ui-352: a reload keeps it folded (the choice is remembered)", (await isOpen()) === false);
+    await apage.goto(BASE + "/costs#approvals", { waitUntil: "domcontentloaded" });
+    await det.waitFor({ state: "attached" });
+    let opened = false;
+    const until = Date.now() + 5000;
+    while (Date.now() < until && !(opened = await isOpen())) await apage.waitForTimeout(150);
+    ok("ui-352: /costs#approvals opens the folded box", opened);
+  });
+  await actx.close();
+
   await browser.close();
 }
 

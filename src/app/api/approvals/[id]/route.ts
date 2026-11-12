@@ -2,14 +2,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { dbConnect } from "@/lib/db";
 import { apiHandler, requireUser, requireEdit, HttpError, readJson } from "@/lib/authz";
 import { requirePerm, requireFinance, hasPermission, hasFinanceApprove, maskApprovalMoney, FINANCE_VIEW } from "@/lib/permissions";
-import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, headLimitChanged, headLimitOf, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents, withdrawApproval } from "@/lib/approvals";
+import { applyApprovedCostEdit, assertSeenHeadCap, decideApproval, editPendingCostRequest, headLimitChanged, headLimitOf, financeAuditEvent, finalizeApprovalDecision, flushPendingFinanceAuditEvents, rollbackApprovalDecision, settleFinanceAuditEvents, withdrawApproval } from "@/lib/approvals";
 import { assertActiveCostCategory, assertCostEntryValid, createBatchScopedCostEntryIdempotently, transitionBatch, updateInvoiceChecked } from "@/lib/rules";
 import { ApprovalRequest, Batch, CostEntry, Location, LocationTarget, Room, CostCategory, COST_PAYMENT_MODE } from "@/models";
 import { audit } from "@/lib/audit";
 import { Types } from "mongoose";
 import { isBareOtherHeadName, OTHER_HEAD_NEEDS_NAME } from "@/lib/validate";
 
+// GET - -352 (Umesh, 12 Nov): the raiser's own Pending request, unmasked, so "Edit" beside Withdraw can
+// prefill the cost form with exactly what they typed. The list masks figures for anyone without
+// finance.view (maskApprovalMoney), and the raiser typed those figures, so the prefill cannot come from it.
+// Anyone else, or a request no longer Pending, gets the same 404 a missing id gets.
+export const GET = apiHandler(async (_req: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
+  await dbConnect();
+  const user = await requireUser();
+  const { id } = await ctx.params;
+  if (!Types.ObjectId.isValid(String(id))) throw new HttpError(404, "Approval request not found");
+  const r: any = await ApprovalRequest.findById(id).select("action status initiator payload summary revision").lean();
+  if (!r || !r.initiator || String(r.initiator) !== String(user.id) || r.status !== "Pending") throw new HttpError(404, "Approval request not found");
+  const { _pre_approved_basis, idempotency_key, ...payload } = (r.payload ?? {}) as Record<string, unknown>;
+  void _pre_approved_basis; void idempotency_key;
+  return NextResponse.json({ item: { _id: r._id, action: r.action, status: r.status, payload, revision: Number(r.revision ?? 0) } });
+});
+
 // PATCH { action: "withdraw", reason? } - approval-withdraw (Umesh, 2026-10-20).
+// PATCH { action: "edit", base_revision, entry } - -352: the raiser corrects their own Pending cost entry
+// (editPendingCostRequest, lib/approvals.ts: initiator only, plain cost.post only, compare-and-swap on
+// base_revision, same checks as POST /api/costs).
 // The person who raised a request takes it back while it is still Pending. This is NOT a decision and
 // needs no approvals.decide right: the only test is "are you the initiator", made inside
 // withdrawApproval (lib/approvals.ts) together with the Pending-only compare-and-swap. An Admin who did
@@ -20,7 +39,12 @@ export const PATCH = apiHandler(async (req: NextRequest, ctx: { params: Promise<
   requireEdit(user);
   const { id } = await ctx.params;
   const body = await readJson(req);
-  if (body?.action !== "withdraw") throw new HttpError(400, 'action must be "withdraw"');
+  if (body?.action === "edit") {
+    const edited = await editPendingCostRequest(id, user, body.base_revision, body.entry);
+    const seeMoneyEdit = await hasPermission(user, FINANCE_VIEW);
+    return NextResponse.json({ item: maskApprovalMoney(edited, seeMoneyEdit), edited: true });
+  }
+  if (body?.action !== "withdraw") throw new HttpError(400, 'action must be "withdraw" or "edit"');
   if (body.reason !== undefined && body.reason !== null && typeof body.reason !== "string") throw new HttpError(400, "reason must be text");
   const reason = String(body.reason ?? "").trim();
   if (reason.length > 500) throw new HttpError(400, "The reason is too long - keep it under 500 characters.");
@@ -66,7 +90,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // proposed; approving WITH it files the cost under an existing head instead and creates nothing.
   // Both are an approval, because in both cases the cost is real and belongs somewhere - only the
   // taxonomy differs, and that is the approver's expertise, not the poster's.
-  const { decision, note, map_to_category, approved_amount, seen_cap } = await readJson(req);
+  const { decision, note, map_to_category, approved_amount, seen_cap, seen_revision } = await readJson(req);
   if (!["Approved", "Rejected"].includes(decision)) throw new HttpError(400, "decision must be Approved or Rejected");
 
   // The gate has to run BEFORE decideApproval, which writes the decision. Gating after it would
@@ -85,7 +109,7 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
   // ("the head now exists", "the entry is in the ledger") failed downstream of the two 400s rather
   // than independently. The pins were right; nobody ran them.
   const pending = await ApprovalRequest.findById(id)
-    .select("action payload status initiator approved_amount decision_map_to_category").lean<any>();
+    .select("action payload status initiator approved_amount decision_map_to_category revision").lean<any>();
   if (!pending) {
     if (queueDenied) throw queueDenied;
     throw new HttpError(404, "Approval request not found");
@@ -225,6 +249,12 @@ export const POST = apiHandler(async (req: NextRequest, ctx: { params: Promise<{
     applying: decision === "Approved" && RESUMABLE_COST_ACTIONS.has(pending.action) && !headOnly,
     ...(map_to_category !== undefined ? { mapToCategory: String(map_to_category ?? "") } : {}),
     byGrant: headOnly || capOnly,
+    // -352: a Pending cost can now be edited by its raiser. The checks above read `pending`, so the claim is
+    // pinned to the revision they read even when the screen sends nothing; a screen that sends
+    // seen_revision (the version the approver looked at) is held to that one.
+    ...(pending.status === "Pending" && pending.action === "cost.post"
+      ? { seenRevision: seen_revision ?? Number(pending.revision ?? 0) }
+      : {}),
   });
   // The REJECT path hands back the same document and was the same leak; masked identically rather
   // than only fixing the branch the review happened to quote.

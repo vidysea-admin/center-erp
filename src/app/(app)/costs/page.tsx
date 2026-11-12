@@ -73,6 +73,14 @@ function CostsInner() {
   const [trainers, setTrainers] = useState<any[]>([]);
   const [form, setForm] = useState<any>({ entry_date: toInputDate(new Date()) });
   const [editId, setEditId] = useState("");
+  // -352 (Umesh, 12 Nov): Edit beside Withdraw. The raiser's own Pending cost request (not a ledger row) is
+  // open in the form; Save sends PATCH /api/approvals/[id] {action:"edit"} pinned to the version opened.
+  const [editRequestId, setEditRequestId] = useState("");
+  const [editRequestRevision, setEditRequestRevision] = useState(0);
+  // -352 (Umesh, 12 Nov call; seen live on -351): Edit filled this form ~550px above the visible area and never
+  // scrolled to it, so the button looked dead. Every door that opens the form for editing scrolls it into view.
+  const formRef = useRef<HTMLDivElement>(null);
+  const scrollToForm = () => requestAnimationFrame(() => formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(true);
@@ -118,6 +126,14 @@ function CostsInner() {
 
   async function addCost() {
     try {
+      if (editRequestId) {
+        const entry = Object.fromEntries(Object.entries(form).filter(([k, v]) => v !== "" && v !== undefined && !["new_subhead", "new_head_parent", "paid_on", "payment_ref", "payment_status"].includes(k)));
+        await api(`/api/approvals/${editRequestId}`, { method: "PATCH", json: { action: "edit", base_revision: editRequestRevision, entry } });
+        setNotice("Your waiting entry was updated - the approver now sees the new version.");
+        closeRequestEdit();
+        load(postOnly);
+        return;
+      }
       if (editId) {
         // blank select = "not changing this" (imported entries may anchor on batch, not location)
         const json = Object.fromEntries(Object.entries(form).filter(([, v]) => v !== "" && v !== undefined));
@@ -151,8 +167,30 @@ function CostsInner() {
   // Sheet-imported cost rows (Batch_Master's cost columns) can carry wrong amounts — row click
   // loads the entry into the form for correction or removal (finance.approve holders only; the API
   // 403s everyone else).
+  // -352: "Edit" on one's own Pending cost request. The prefill is read from GET /api/approvals/[id] (raiser
+  // only, unmasked): the list masks figures for a reader without finance.view, and the raiser typed them.
+  async function openRequestEdit(r: any) {
+    try {
+      const { item } = await api(`/api/approvals/${r._id}`);
+      const p = item?.payload ?? {};
+      const id = (v: any) => String(v?._id ?? v ?? "");
+      setEditId(""); setEditRow(null);
+      setEditRequestId(String(item._id)); setEditRequestRevision(Number(item.revision ?? 0));
+      setForm({
+        entry_date: p.entry_date ? toInputDate(p.entry_date) : toInputDate(new Date()), amount: p.amount, note: p.note ?? "",
+        category: id(p.category), location: id(p.location), trainer: id(p.trainer), batch: id(p.batch),
+        vendor_payee: p.vendor_payee ?? "", voucher_no: p.voucher_no ?? "", payment_mode: p.payment_mode ?? "",
+      });
+      scrollToForm();
+    } catch (e: any) { setError(e.message); load(postOnly); }
+  }
+  function closeRequestEdit() {
+    setEditRequestId(""); setEditRequestRevision(0); setForm({ entry_date: toInputDate(new Date()) });
+  }
+
   function openEdit(r: any) {
     if (!canApproveCosts && !ownCostActionable(r)) return;
+    setEditRequestId(""); setEditRequestRevision(0);
     setEditRow(r);
     setEditId(r._id);
     setForm({
@@ -164,8 +202,11 @@ function CostsInner() {
       // form being right, and the next field added here would not get that courtesy.
       vendor_payee: r.vendor_payee ?? "", voucher_no: r.voucher_no ?? "", payment_mode: r.payment_mode ?? "",
       payment_status: r.payment_status ?? "", payment_ref: r.payment_ref ?? "",
-      paid_on: r.paid_on ? toInputDate(r.paid_on) : toInputDate(new Date()),
+      // -352: an unpaid row showed TODAY here, which read as a payment that never happened. Blank until paid;
+      // "Mark payment done" still falls back to today (markPaymentDone below), and plain Save never sends paid_on.
+      paid_on: r.paid_on ? toInputDate(r.paid_on) : "",
     });
+    scrollToForm();
   }
 
   // QA-2484: a prompt rather than a confirm, because the server now refuses a deletion that cannot
@@ -219,7 +260,8 @@ function CostsInner() {
       {!postOnly && <Tabs tabs={["Costs", "Invoices"]} active={tab} onChange={setTab} />}
       {tab === "Costs" ? (
         <>
-          <Section title={postOnly ? "Post an expense / cost" : editId ? "Edit cost entry" : "Add cost entry"}>
+          <div ref={formRef} className="scroll-mt-4">
+          <Section title={editRequestId ? "Edit pending entry" : editId ? "Edit cost entry" : postOnly ? "Post an expense / cost" : "Add cost entry"}>
             <div className="grid gap-3 md:grid-cols-6">
               <Field label="Date"><input type="date" className={inputCls} value={form.entry_date} onChange={(e) => setForm({ ...form, entry_date: e.target.value })} /></Field>
               <Field label="Location">
@@ -241,7 +283,7 @@ function CostsInner() {
                 </select>
               </Field>
               <Field label="Category" required>
-                <CostHeadPicker cats={cats} value={form.category} allowNew={!editId} onChange={(category) => {
+                <CostHeadPicker cats={cats} value={form.category} allowNew={!editId && !editRequestId} onChange={(category) => {
                   // QA-2482: a hidden field that still posts is worse than a visible one nobody
                   // wanted. Moving off Other hides the naming box, so whatever was typed in it must
                   // go too - otherwise the next Add silently creates a cost head the person can no
@@ -266,7 +308,7 @@ function CostsInner() {
               </Field>
               {editId && canApproveCosts && (
                 <>
-                  <Field label="Payment date"><input type="date" className={inputCls} value={form.paid_on ?? toInputDate(new Date())} onChange={(e) => setForm({ ...form, paid_on: e.target.value })} /></Field>
+                  <Field label="Payment date (today if left blank)"><input type="date" className={inputCls} value={form.paid_on ?? ""} onChange={(e) => setForm({ ...form, paid_on: e.target.value })} /></Field>
                   <Field label="Payment reference"><input className={inputCls} value={form.payment_ref ?? ""} onChange={(e) => setForm({ ...form, payment_ref: e.target.value })} /></Field>
                 </>
               )}
@@ -299,8 +341,9 @@ function CostsInner() {
                   immediately beside the primary Save, while an ordinary frequent action was stranded
                   at the clipped end. `ml-auto` splits them - Delete now sits furthest from Save. */}
               <div className="flex flex-wrap items-end gap-2 md:col-span-6">
-                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form, cats, !!editId) || !form.amount || !String(form.note ?? "").trim()}>{editId ? "Save" : "Add"}</Btn>
+                <Btn feedback resetKey={JSON.stringify(form)} onClick={addCost} disabled={!costHeadReady(form, cats, !!editId || !!editRequestId) || !form.amount || !String(form.note ?? "").trim()}>{editId || editRequestId ? "Save" : "Add"}</Btn>
                 {editId && <Btn kind="ghost" onClick={() => { setEditId(""); setEditRow(null); setForm({ entry_date: toInputDate(new Date()) }); }}>Cancel</Btn>}
+                {editRequestId && <Btn kind="ghost" onClick={closeRequestEdit}>Cancel</Btn>}
                 {editId && canApproveCosts && (
                   <span className="flex flex-wrap items-end gap-2 md:ml-auto">
                     {form.payment_status !== "Paid" && <Btn kind="ghost" feedback onClick={markPaymentDone}>Mark payment done</Btn>}
@@ -319,7 +362,7 @@ function CostsInner() {
                 *"सिस्टम पूरा बंद हो जाएगा"* is about people giving up when the head they need is not
                 offered, and the usual workaround is to file it under something close and wrong,
                 which is worse than not filing it. Naming one parks the whole entry for review. */}
-            {!editId && showNewHeadBox(cats, form.category) && (<>
+            {!editId && !editRequestId && showNewHeadBox(cats, form.category) && (<>
             <Field label="Name of the new cost head">
               <input className={inputCls + " mt-2"} value={form.new_subhead ?? ""} placeholder="e.g. Assessor travel" aria-label="Name of the new cost head"
                 onChange={(e) => setForm({ ...form, new_subhead: e.target.value })} />
@@ -348,6 +391,7 @@ function CostsInner() {
                 : "Pick at least one of location / batch / trainer. Batch-level costs are added from the batch's Costs tab."}
             </p>
           </Section>
+          </div>
           {/* QA-2486: Manish, on the 2026-09-11 call - "kaunsi date me ye entry hui thi, ye edit hui
               thi... ye audit edit Manish ji ne do din baad kari hai". Every one of those rows has
               existed all along: the cost PATCH writes one AuditLog row per changed field with the
@@ -375,8 +419,12 @@ function CostsInner() {
                   { key: "decision_note", label: "Admin's note", render: (r: any) => r.status === "Cancelled" ? (r.decision_note ? `Your reason: ${r.decision_note}` : "—") : (r.decision_note ?? "—") },
                   { key: "decided_by", label: "Decided by", mobile: false, render: (r: any) => r.status === "Cancelled" ? (r.decided_by?.name ? `Withdrawn by ${r.decided_by.name}${r.decided_at ? ` · ${fmtDT(r.decided_at)}` : ""}` : "Withdrawn") : (r.decided_by?.name ?? "—") },
                   // approval-withdraw: your own request can be taken back while it is still waiting.
+                  // -352: and a plain new cost entry can be corrected in place (Edit), opening the same form prefilled.
                   { key: "withdraw", label: "Action", render: (r: any) => r.status === "Pending"
-                    ? <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); await load(postOnly); }} onDismiss={() => load(postOnly)} />
+                    ? <span className="flex flex-wrap gap-2">
+                        {r.action === "cost.post" && !r.payload?.kind && <Btn kind="ghost" onClick={() => openRequestEdit(r)}>Edit</Btn>}
+                        <WithdrawRequestButton what={r.summary} onWithdraw={async (reason) => { await api(`/api/approvals/${r._id}`, { method: "PATCH", json: { action: "withdraw", ...(reason ? { reason } : {}) } }); if (String(r._id) === editRequestId) closeRequestEdit(); await load(postOnly); }} onDismiss={() => load(postOnly)} />
+                      </span>
                     : null },
                 ]} empty="Nothing submitted yet — post your first entry above." />
               <p className="mt-2 text-xs text-gray-500">Approved entries land on the Admin's ledger; a Rejected one shows the Admin's note so you can fix and repost. A request that is still waiting can be withdrawn.</p>
@@ -567,6 +615,7 @@ function CostsInner() {
 const COST_BOX_TABS = ["Pending", "Approved", "Rejected", "Withdrawn"];
 // approval-withdraw: the tab says "Withdrawn", the stored status of such a request is "Cancelled".
 const boxTabStatus = (t: string) => (t === "Withdrawn" ? "Cancelled" : t);
+const COST_BOX_OPEN_KEY = "erp.costs.approvalBox.open";
 function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: string; setError: (m: string) => void; onDecided: () => void }) {
   const [tab, setTab] = useState("Pending");
   const [pending, setPending] = useState<any[]>([]);
@@ -592,10 +641,29 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
     tab === "Pending" ? Promise.resolve() : api(`/api/approvals?status=${boxTabStatus(tab)}&action=cost.post`).then((d) => { const l = (d.items ?? []).filter(isCost); setDecided(l); setDecidedTotal(typeof d.total === "number" ? d.total : l.length); }),
   ]).catch((e: any) => setError(e.message)).finally(() => setLoaded(true));
   useEffect(() => { load(); }, [tab]);
-  // /costs#approvals lands here from the Home card; the box renders after its data, so the browser's
-  // own anchor jump has already missed it by then.
+  // -352 (Umesh, 12 Nov call): the list folds away. Open by default while something is waiting; a person's own
+  // open/closed choice is remembered in this browser (a convenience only - the page works without storage);
+  // and /costs#approvals, the Home card's link, always opens it, because that link means "show me what waits".
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const [forceOpen, setForceOpen] = useState(false);
   useEffect(() => {
-    if (loaded && typeof window !== "undefined" && window.location.hash === "#approvals") anchor.current?.scrollIntoView();
+    try { const v = window.localStorage.getItem(COST_BOX_OPEN_KEY); if (v === "1" || v === "0") setUserOpen(v === "1"); } catch { /* storage blocked: default rule */ }
+  }, []);
+  const boxOpen = forceOpen || (userOpen ?? pendingTotal > 0);
+  const toggleBox = () => {
+    const next = !boxOpen;
+    setForceOpen(false);
+    setUserOpen(next);
+    try { window.localStorage.setItem(COST_BOX_OPEN_KEY, next ? "1" : "0"); } catch { /* not remembered, still toggled */ }
+  };
+  // /costs#approvals lands here from the Home card; the box renders after its data, so the browser's
+  // own anchor jump has already missed it by then. A hash change on the same page (no reload) counts too.
+  useEffect(() => {
+    if (!loaded || typeof window === "undefined") return;
+    const onHash = () => { if (window.location.hash === "#approvals") { setForceOpen(true); requestAnimationFrame(() => anchor.current?.scrollIntoView()); } };
+    onHash();
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
   }, [loaded]);
 
   async function decide(id: string, decision: string) {
@@ -617,11 +685,16 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
     try {
       await api(`/api/approvals/${id}`, {
         method: "POST",
-        json: { decision, note: note[id], ...(sanctioned !== undefined ? { approved_amount: sanctioned } : {}) },
+        // -352: the version this approver is looking at; the raiser may have edited it since (409, list reloads).
+        json: { decision, note: note[id], ...(sanctioned !== undefined ? { approved_amount: sanctioned } : {}), seen_revision: Number(pending.find((p: any) => p._id === id)?.revision ?? 0) },
       });
       await load();
       onDecided(); // the register below: an approved cost has just become a ledger row
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) {
+      setError(e.message);
+      // -352: a refusal because the raiser edited it meanwhile (409) - show the current version to decide on.
+      if (/changed by the person who raised it/.test(String(e?.message ?? ""))) load();
+    }
   }
 
   // approval-withdraw: the raiser takes their own Pending request back. A refusal is thrown to the dialog.
@@ -642,6 +715,12 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
   return (
     <div id="approvals" ref={anchor} data-cost-approval-box>
       <Section title={`Waiting for your approval (${pendingTotal})`}>
+        <details open={boxOpen}>
+        <summary className="cursor-pointer select-none text-xs font-medium text-blue-700"
+          onClick={(e) => { e.preventDefault(); toggleBox(); }}>
+          {boxOpen ? "Hide the list" : `Show the list (${pendingTotal} waiting)`}
+        </summary>
+        <div className="mt-3">
         <Tabs tabs={COST_BOX_TABS} active={tab} onChange={setTab} />
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <select aria-label="Filter by centre" className={inputCls + " min-w-0 max-w-[13rem]"} value={fLoc} onChange={(e) => setFLoc(e.target.value)}>
@@ -719,6 +798,8 @@ function CostApprovalBox({ me, role, setError, onDecided }: { me: string; role: 
             </ul>
           )}
         </div>
+        </div>
+        </details>
       </Section>
     </div>
   );
