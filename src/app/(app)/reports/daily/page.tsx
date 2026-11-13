@@ -229,6 +229,8 @@ function DailyDigestInner() {
       const parts = [`${r.attempted} recipient${r.attempted === 1 ? "" : "s"} attempted for ${r.day}${r.range_from ? ` (range from ${r.range_from})` : ""}`, `${r.sent} sent`];
       if (r.skipped) parts.push(`${r.skipped} skipped (not sent)`);
       if (r.failed) parts.push(`${r.failed} failed`);
+      // -354: the admins with the same view got ONE mail together, each other in copy; the counts above stay per person.
+      for (const g of Array.isArray(r.groups) ? r.groups : []) parts.push(`${g.length} admins in one mail (each other in copy)`);
       if (r.ineligible) parts.push(`${r.ineligible} of the skipped ${r.ineligible === 1 ? "is" : "are"} not allowed to receive it (a Trainer, a deactivated or removed ERP account)`);
       const why = Array.isArray(r.not_sent_reasons) && r.not_sent_reasons.length ? ` Reason${r.not_sent_reasons.length === 1 ? "" : "s"}: ${r.not_sent_reasons.join("; ")}.` : "";
       setPublishedAllSent(r.sent === r.attempted);

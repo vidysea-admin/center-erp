@@ -242,7 +242,9 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // apart (the combined total row Manish sir asked for on 6 Nov is removed by Umesh's 12 Nov decision). No number is quoted.
 // -353 note: a bill (photo or PDF) can be attached to a cost entry, optional, and only before approval (Umesh, 12 Nov).
 // No number is quoted.
-export const RELEASE = "2026.08.14-353";
+// -354 note: the daily digest goes to the admins as ONE mail together, each other in copy (Umesh, 13 Nov); everyone else
+// keeps a private mail. No number is quoted.
+export const RELEASE = "2026.08.14-354";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -314,6 +316,15 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-354: the daily report mail now goes to the admins together. " +
+  "Until now every person on the daily digest list got a separate mail and could not see who else had it. Now the admins on the list get one mail between them: it is addressed to the first admin on the list, the other admins are in copy, and the mail starts with a line naming everyone it went to, so they can reply to each other on it. " +
+  "Only admins whose report is exactly the same share the mail. An admin who cannot see cost figures, or who sees only some centres, gets their own mail as before, so no one sees a figure through the shared mail that their own report would not show. " +
+  "Everyone else on the list, and any outside address, still gets a private mail. The time is unchanged, 21:00 IST. " +
+  "Publish now on the daily digest screen says how many admins were in the one mail. " +
+  "No figure in the report has changed.";
+
+// -354: the -353 note moved here unchanged when -354 became current.
+const RELEASE_NOTE_ARCHIVE_353 =
   "-353: a bill can now be attached to a cost entry. " +
   "The cost form has a new field, Bill (optional), for a photo or PDF of the receipt, up to five files. Each file is uploaded as soon as it is picked and listed with View; the cross removes it before you save. An entry without a bill is still accepted. " +
   "A bill can be added or removed only before the entry is approved: when it is first entered, or through Edit on your own waiting entry in My submissions. Once approved, the bills stay as they were. The finance edit and your own later edit of an approved entry do not change them, and the edit form says so. " +
@@ -2401,6 +2412,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -351: ARCHIVE_350 wired in here in the SAME bump that declared it, same discipline.
   // -352: ARCHIVE_351 wired in here in the SAME bump that declared it, same discipline.
   // -353: ARCHIVE_352 wired in here in the SAME bump that declared it, same discipline.
+  // -354: ARCHIVE_353 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_353 + " " +
   RELEASE_NOTE_ARCHIVE_352 + " " +
   RELEASE_NOTE_ARCHIVE_351 + " " +
   RELEASE_NOTE_ARCHIVE_350 + " " +

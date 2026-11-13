@@ -126,7 +126,14 @@ export type MailAttempt = {
   // than a boolean so the MailLog row says WHY, and it is handled at this one door rather than by
   // filtering the recipient out of the query upstream - see the note in sendMail.
   suppress?: string;
+  // -354 (Umesh 2026-11-13, "admins ko ek saath, baaki CC me"): more people on the SAME mail, each other in copy. Used only by
+  // the daily digest, and only for recipients whose rendered copy is byte-identical (daily-digest.ts groupAdmins), so a CC
+  // never shows anyone a figure their own copy would not carry. Every address is tested like `to`; one bad one refuses the
+  // whole mail. One MailLog row is written per person (the To and each CC), all with the same outcome and cc_group.
+  cc?: string[];
 };
+
+export const ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // The one door out. Resolves to the MailLog outcome; never rejects.
 export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "failed" | "skipped"; reason?: string }> {
@@ -135,15 +142,19 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
     // below swallowed it — the one case where the answer to "did the mail go?" was NOT recorded was
     // the case where it definitely did not. Found by pinning the phone-only candidate path. A
     // placeholder keeps the row, and the reason already says what happened.
-    await MailLog.create({
-      to: m.to && String(m.to).trim() ? m.to : "(no address on record)",
-      subject: m.log_subject ?? m.subject ?? "(no subject)",
-      status, entity: m.entity, entity_id: m.entity_id, ...extra,
-    }).catch(() => {});
+    const row = { subject: m.log_subject ?? m.subject ?? "(no subject)", status, entity: m.entity, entity_id: m.entity_id, ...extra };
+    const to = m.to && String(m.to).trim() ? m.to : "(no address on record)";
+    if (!m.cc?.length) await MailLog.create({ to, ...row }).catch(() => {});
+    else {
+      const cc_group = [to, ...m.cc.map(String)];
+      await MailLog.insertMany(cc_group.map((who) => ({ to: who, ...row, cc_group }))).catch(() => {});
+    }
     return { status, reason: extra.reason };
   };
   try {
-    if (!m.to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.to)) return await log("skipped", { reason: "no valid recipient address" });
+    if (!m.to || !ADDRESS_RE.test(m.to)) return await log("skipped", { reason: "no valid recipient address" });
+    // -354: a CC is held to the same test as the To (a newline or comma in one is how a header gets injected).
+    if (m.cc?.length && !m.cc.every((a) => typeof a === "string" && ADDRESS_RE.test(a))) return await log("skipped", { reason: "a CC address is not a valid email address" });
     // QA-2461: the per-account switch, honoured HERE and not by dropping the recipient from the
     // query that found them. Filtering upstream would have been one line shorter and would have
     // written NO MailLog row at all - and -109 already records what that costs: the one case where
@@ -157,7 +168,7 @@ export async function sendMail(m: MailAttempt): Promise<{ status: "sent" | "fail
     if (defaults.email_enabled === false) return await log("skipped", { reason: "email_enabled is off in Defaults" });
     const t = getTransporter();
     if (!t) return await log("skipped", { reason: "not configured (SES_SMTP_USER/PASS env missing)" });
-    const info = await t.sendMail({ from: `"${FROM_NAME()}" <${FROM_EMAIL()}>`, to: m.to, subject: m.subject, text: m.text, html: m.html });
+    const info = await t.sendMail({ from: `"${FROM_NAME()}" <${FROM_EMAIL()}>`, to: m.to, ...(m.cc?.length ? { cc: m.cc } : {}), subject: m.subject, text: m.text, html: m.html });
     return await log("sent", { message_id: info.messageId });
   } catch (e) {
     return await log("failed", { reason: e instanceof Error ? e.message : String(e) });

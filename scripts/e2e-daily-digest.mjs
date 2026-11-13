@@ -1742,6 +1742,71 @@ await arm("S6 the 'nobody can receive it' warning (Admin: Defaults and the diges
   await setListDirect("");
 });
 
+// ---- AG -354 (Umesh 2026-11-13): the admins get ONE digest mail together, each other in copy, so they are in sync.
+// Everyone else keeps a private mail. Safety net: only admins whose rendered copy is byte-identical share a mail, so an
+// admin without finance.view (or with a centre scope) never receives another admin's cost figures through the CC.
+await arm("AG admins share one digest mail (To = first in the list, CC = the rest)", async () => {
+  await wipeLocks();
+  const g1 = await mkUser("Admin", [], "g1", { extra_permissions: ["finance.view"] });
+  const g2 = await mkUser("Admin", [], "g2", { extra_permissions: ["finance.view"] });
+  const g3 = await mkUser("Admin", [], "g3", { extra_permissions: ["finance.view"] });
+  const g4 = await mkUser("Admin", [], "g4", { extra_permissions: ["finance.view"] });          // deactivated below: skipped, never in a CC
+  await db.collection("users").updateOne({ _id: oid(g4.id) }, { $set: { active: false } });
+  const typed = `zz.ag.typed.${s.toLowerCase()}@vidysea-test.local`;
+  const L = (u) => u.email.toLowerCase();
+  const grp = [L(g1), L(g2), L(g3)];
+  await setListDirect([`u:${g1.id}`, `u:${uOps.id}`, `u:${g2.id}`, `u:${uAdm.id}`, `u:${g4.id}`, typed, `u:${g3.id}`].join(", "));
+  const AGD = "2031-10-01";
+  const t1 = await tick(istAt(AGD, 21, 0), "ag1-" + s);
+  const res = t1.data?.results ?? [];
+  const by = (to) => res.find((r) => r.to === to);
+  ok("AG1: the three admins with the same view are one mail: each result names the same group, To first in list order",
+    grp.every((to) => JSON.stringify(by(to)?.group) === JSON.stringify(grp)), JSON.stringify(res.map((r) => [r.to, r.group])));
+  const rows = await mailLogs.find({ entity: "DailyDigest", subject: mailSubject(AGD), to: { $in: grp } }).toArray();
+  ok("AG1: one MailLog row per admin, every row carrying the same cc_group (To first)",
+    rows.length === 3 && rows.every((r) => JSON.stringify(r.cc_group) === JSON.stringify(grp)), JSON.stringify(rows.map((r) => [r.to, r.cc_group])));
+  ok("AG1: the mail body says who it went to together, so it shows even where a client hides CC",
+    /Sent together to: /.test(String(by(grp[0])?.text ?? "")) && /Sent together to: ZZ MC1 g1, ZZ MC1 g2, ZZ MC1 g3$/m.test(String(by(grp[0])?.text ?? "")), String(by(grp[0])?.text ?? "").split("\n").find((l) => /together/.test(l)) ?? "(no line)");
+  const opsRow = await mailLogs.findOne({ entity: "DailyDigest", subject: mailSubject(AGD), to: L(uOps) });
+  ok("AG2: a non-admin account keeps its own private mail: no group, no cc_group", !!by(L(uOps)) && !by(L(uOps))?.group && opsRow && !(opsRow.cc_group?.length), JSON.stringify({ r: by(L(uOps))?.group, row: opsRow?.cc_group }));
+  const admRow = await mailLogs.findOne({ entity: "DailyDigest", subject: mailSubject(AGD), to: L(uAdm) });
+  ok("AG3: an admin WITHOUT finance.view is not in the group (its copy differs) and its own mail has no Costs table",
+    !!by(L(uAdm)) && !by(L(uAdm))?.group && admRow && !(admRow.cc_group?.length) && !/^COSTS$/m.test(String(by(L(uAdm))?.text ?? "")) && /^COSTS$/m.test(String(by(grp[0])?.text ?? "")), JSON.stringify(by(L(uAdm))?.group));
+  ok("AG4: a typed address that is no account stays individual", !!by(typed) && !by(typed)?.group, JSON.stringify(by(typed)));
+  ok("AG5: the deactivated admin is recorded as ineligible and is in nobody's CC", by(L(g4))?.outcome === "ineligible" && rows.every((r) => !(r.cc_group ?? []).includes(L(g4))), JSON.stringify(by(L(g4))));
+  const t2 = await tick(istAt(AGD, 21, 5), "ag2-" + s);
+  ok("AG6: a second tick the same evening sends nothing to anyone (claims stay per person)", (t2.data?.results ?? []).length === 0 && t2.data?.fired === false, JSON.stringify(t2.data).slice(0, 200));
+
+  // a failed group send: every member retries, together, on the next tick; a member already sent is left out
+  await setListDirect([`u:${g1.id}`, `u:${g2.id}`, `u:${g3.id}`].join(", "));
+  const AGR = "2031-10-02";
+  const f1 = await tick(istAt(AGR, 21, 0), "agr1-" + s, admin, { simulate: ["failed", "sent"] });
+  const claims1 = await jobLocks.find({ _id: { $in: grp.map((to) => `digest-sent:${AGR}:${to}`) } }).toArray();
+  ok("AG7: a failed group send leaves every member's claim in retry", claims1.length === 3 && claims1.every((c) => c.status === "retry"), JSON.stringify(claims1.map((c) => [c.to, c.status])));
+  ok("AG7: ...and the failure was one group attempt", (f1.data?.results ?? []).filter((r) => r.group).length === 3, JSON.stringify((f1.data?.results ?? []).map((r) => [r.to, r.group])));
+  await jobLocks.updateOne({ _id: `digest-sent:${AGR}:${grp[1]}` }, { $set: { status: "sent", sent_at: new Date() } });   // say g2's copy went through some other way
+  const f2 = await tick(istAt(AGR, 21, 11), "agr2-" + s, admin, { simulate: ["failed", "sent"] });
+  const r2 = f2.data?.results ?? [];
+  ok("AG8: the retry regroups only those still owed (g1, g3) and never re-mails the one already sent",
+    r2.length === 2 && !r2.some((r) => r.to === grp[1]) && r2.every((r) => JSON.stringify(r.group) === JSON.stringify([grp[0], grp[2]])) && r2.every((r) => r.status === "sent"), JSON.stringify(r2.map((r) => [r.to, r.group, r.status])));
+
+  // Publish now groups the same way and says so; the counts stay per person
+  await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+  await setListDirect([`u:${g1.id}`, `u:${uOps.id}`, `u:${g2.id}`, `u:${g3.id}`].join(", "));
+  const pub = await req(admin, "POST", "/api/reports/daily/publish", { date: "2031-10-03" });
+  ok("AG9: Publish now: 4 attempted (per person) and one group of the three admins listed in the result",
+    pub.status === 200 && pub.data?.attempted === 4 && JSON.stringify(pub.data?.groups) === JSON.stringify([grp]), JSON.stringify({ st: pub.status, a: pub.data?.attempted, g: pub.data?.groups }));
+  const pubRows = await mailLogs.find({ entity: "DailyDigest", subject: mailSubject("2031-10-03"), to: { $in: grp } }).toArray();
+  ok("AG9: ...its MailLog rows carry the shared cc_group", pubRows.length === 3 && pubRows.every((r) => JSON.stringify(r.cc_group) === JSON.stringify(grp)), JSON.stringify(pubRows.map((r) => r.cc_group)));
+
+  // the mail door refuses a malformed CC address (header injection) - pinned in source, the door is not reachable alone
+  const mailerSrc = readFileSync(path.join(srcRoot, "lib", "mailer.ts"), "utf8");
+  ok("AG10: sendMail takes cc, tests every cc address like the To, and logs cc_group (source shape)",
+    /cc\?: string\[\]/.test(mailerSrc) && /m\.cc[\s\S]{0,200}(every|some)\([\s\S]{0,80}ADDRESS_RE/.test(mailerSrc) && /cc_group/.test(mailerSrc) && /cc: /.test(mailerSrc), "");
+  await setListDirect("");
+  await wipeLocks();
+});
+
 // ---- M1 a big joining day: the mail's "by batch" line names at most 10 batches and counts the rest. Last in the
 // suite, on its own day, with Closed batches, so no earlier arm's figures move.
 const CAPD = "2031-09-02";

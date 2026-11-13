@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
 import { MailLog, User } from "@/models";
 import { getDefaults } from "@/lib/defaults";
 import { dbConnect, takeJobLock } from "@/lib/db";
@@ -41,6 +42,16 @@ import type { SessionUser } from "@/auth";
 //   * a typed address that matches NO account gets the FULL report including money (Umesh, AskUserQuestion
 //     2026-10-07): an Admin-shaped, unscoped viewer plus `dailyDigest(..., {fullView: true})`. Only an ADMIN
 //     can add one (QA-2923, Umesh 2026-10-17; a defaults.manage grantee may only pick users), and the screen warns "This address will receive cost figures".
+//
+// ADMINS SHARE ONE MAIL (-354, Umesh 2026-11-13: "admins ko ek saath, ek doosre ko CC me, taaki sync rahe"). Every copy is
+// still rendered for its own viewer first. Then the deliverable recipients whose account role is Admin (never a typed
+// full-view address) AND whose rendered html+text are byte-identical are sent ONE mail: To = the first of them in the
+// Defaults list, CC = the rest, with a "Sent together to:" line in the body. The byte-identical test is the money rule:
+// the Admin role alone does not carry finance.view (NO_ADMIN_BYPASS), so an admin whose copy has no Costs table, or a
+// centre-scoped one, renders differently and gets a private mail; no figure reaches anyone through a CC that their own
+// copy would not show. Everyone else is unchanged: one private mail each. The claims stay per person: each member's claim
+// is taken first, only the winners are grouped, and every member's claim is settled with the group's one outcome, so a
+// failed group send retries them together on a later tick (regrouped from whoever is still owed).
 export const DIGEST_HOUR_IST = 21;
 export const DIGEST_MAX_ATTEMPTS = 3;
 export const DIGEST_RETRY_GAP_MS = 10 * 60_000;
@@ -59,6 +70,7 @@ export type DigestResult = {
   kind?: "user" | "address";   // a picked/typed ERP account, or a typed address
   full?: boolean;     // a typed address with no account: it got the full view, money included
   attempt?: number;   // 1 for the first send of the day, 2 and 3 for retries (the tick only)
+  group?: string[];   // -354: every address on the shared admin mail this person was on (To first); absent on a private mail
 };
 export type DigestTickResult = { fired: boolean; day: string; reason?: string; warning?: string; results: DigestResult[] };
 
@@ -196,9 +208,11 @@ const digestSubject = (day: string, from?: string | null) => `Daily digest ${day
 // TABLES are dailyDigest's own (rules.ts builds and words every cell), so the mail and the screen draw the same
 // cells. The Costs table exists only when the digest carries costs (finance.view, or a typed full-view
 // address), so a recipient without the right gets a mail with no cost word and no cost figure in it at all.
-export function digestMailContent(d: DailyDigest) {
+export function digestMailContent(d: DailyDigest, together?: string[]) {
   const c = d.candidates;
   const lines: string[] = [
+    // -354: a shared admin mail names everyone on it, so it reads right even in a client that hides CC.
+    ...(together && together.length > 1 ? [`Sent together to: ${together.join(", ")}`] : []),
     `Position for ${d.day} (IST). Week ${d.week.from} to ${d.week.to} (Monday to Sunday).${d.range_from ? ` Range ${d.range_from} to ${d.day}.` : ""}`,
     // At most JOINED_LINE_MAX batches named, so a big joining day cannot turn one line into a wall; the rest are counted.
     ...(c.joined.by_batch.length ? [`Joined on the day, by batch: ${c.joined.by_batch.slice(0, JOINED_LINE_MAX).map((b) => `${b.code}${b.location ? ` (${b.location})` : ""} ${b.count}`).join(", ")}${c.joined.by_batch.length > JOINED_LINE_MAX ? `, and ${c.joined.by_batch.length - JOINED_LINE_MAX} more batch${c.joined.by_batch.length - JOINED_LINE_MAX === 1 ? "" : "es"} (see the Reports screen)` : ""}`] : []),
@@ -214,24 +228,56 @@ export function digestMailContent(d: DailyDigest) {
   });
 }
 
-async function sendOne(day: string, r: Resolved, includeText: boolean, from?: string | null): Promise<DigestResult> {
-  return { ...(await sendOneInner(day, r, includeText, from)), kind: r.kind, ...(r.full ? { full: true } : {}) };
-}
-async function sendOneInner(day: string, r: Resolved, includeText: boolean, from?: string | null): Promise<DigestResult> {
+// One recipient's copy, built but not sent. `done` is set when there is nothing to send (ineligible, or the digest could
+// not be built): that MailLog row is already written. Otherwise `d` is the digest and `content` its mail, rendered once.
+type Built = { r: Resolved; done?: DigestResult; d?: DailyDigest; content?: { html: string; text: string } };
+const tagOf = (r: Resolved) => ({ kind: r.kind, ...(r.full ? { full: true as const } : {}) });
+
+async function buildOne(day: string, r: Resolved, from?: string | null): Promise<Built> {
   const base = { to: r.to, subject: digestSubject(day, from), entity: "DailyDigest", html: "", text: "" };
   if (r.problem || !r.viewer) {
     const o = await sendMail({ ...base, suppress: r.problem ?? PROBLEM_INACTIVE });
-    return { to: r.to, outcome: "ineligible", status: o.status, reason: o.reason };
+    return { r, done: { to: r.to, outcome: "ineligible", status: o.status, reason: o.reason, ...tagOf(r) } };
   }
-  let content: { html: string; text: string };
   try {
-    content = digestMailContent(await dailyDigest(day, r.viewer, { ...(r.full ? { fullView: true } : {}), from }));
+    const d = await dailyDigest(day, r.viewer, { ...(r.full ? { fullView: true } : {}), from });
+    return { r, d, content: digestMailContent(d) };
   } catch (e) {
     const o = await sendMail({ ...base, suppress: `the digest could not be built: ${e instanceof Error ? e.message : String(e)}` });
-    return { to: r.to, outcome: "failed", status: o.status, reason: o.reason };
+    return { r, done: { to: r.to, outcome: "failed", status: o.status, reason: o.reason, ...tagOf(r) } };
   }
-  const o = await sendMail({ ...base, ...content });
-  return { to: r.to, outcome: "mailed", status: o.status, reason: o.reason, ...(includeText ? { text: content.text } : {}) };
+}
+
+// -354: which built copies go out as one mail. Only account recipients with role Admin (never a typed full-view address)
+// whose rendered copy is byte-identical share a key; everyone else is a group of one. List order is kept, inside a group
+// and between groups, so the first admin in the Defaults list is the To.
+export function groupAdmins<T extends Built>(built: T[]): T[][] {
+  const groups: T[][] = [];
+  const byKey = new Map<string, T[]>();
+  for (const b of built) {
+    if (b.done || !b.content || b.r.full || b.r.viewer?.role !== "Admin") { groups.push([b]); continue; }
+    const key = createHash("sha256").update(b.content.html).update("\0").update(b.content.text).digest("hex");
+    const g = byKey.get(key);
+    if (g) g.push(b);
+    else { const ng = [b]; byKey.set(key, ng); groups.push(ng); }
+  }
+  return groups;
+}
+
+// Send one group: a private mail for a group of one, else ONE mail To the first and CC the rest. Every member gets a
+// result carrying the same outcome.
+async function sendGroup(day: string, g: Built[], includeText: boolean, from?: string | null): Promise<DigestResult[]> {
+  if (g.length === 1 && g[0].done) return [g[0].done];
+  const subject = digestSubject(day, from);
+  if (g.length === 1) {
+    const { r, content } = g[0];
+    const o = await sendMail({ to: r.to, subject, entity: "DailyDigest", ...content! });
+    return [{ to: r.to, outcome: "mailed", status: o.status, reason: o.reason, ...(includeText ? { text: content!.text } : {}), ...tagOf(r) }];
+  }
+  const group = g.map((x) => x.r.to);
+  const content = digestMailContent(g[0].d!, g.map((x) => x.r.viewer!.name || x.r.to));
+  const o = await sendMail({ to: group[0], cc: group.slice(1), subject, entity: "DailyDigest", ...content });
+  return g.map((x) => ({ to: x.r.to, outcome: "mailed" as const, status: o.status, reason: o.reason, group, ...(includeText ? { text: content.text } : {}), ...tagOf(x.r) }));
 }
 
 // The durable per-recipient day claim. Returns the attempt number the caller has WON (1 = first send of
@@ -305,25 +351,34 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
       if (claimed) await MailLog.create({ to: "(daily digest: no deliverable recipient)", subject: `Daily digest ${day}: digest-only is ON with nobody to send it to`, status: "skipped", entity: "DailyDigestWarning", reason: DIGEST_ONLY_NOBODY }).catch(async () => { await mongoose.connection.db!.collection("job_locks").deleteOne({ _id: `digest-warn:${day}` as any }).catch(() => {}); });   // a failed log write must not use up the day's warning
     }
     if (!recipients.length) return { fired: false, day, reason: "no recipients configured", ...(warning ? { warning } : {}), results: [] };
-    const results: DigestResult[] = [];
+    // Claims first, one per person (exactly-once stays per person), then only the winners are built and grouped.
+    const won: Array<Built & { attempt: number }> = [];
     for (const r of recipients) {
       if (istDayOf(clock()) !== day) break;   // a long tick that crosses midnight must not send yesterday's digest
       const attempt = await takeClaim(day, r.to, instance, clock());
       if (!attempt) continue;
-      let res: DigestResult;
+      let built: Built;
+      try { built = await buildOne(day, r); } catch (e) { built = { r, done: { to: r.to, outcome: "failed", status: "failed", reason: e instanceof Error ? e.message : String(e), ...tagOf(r) } }; }
+      won.push({ ...built, attempt });
+    }
+    const results: DigestResult[] = [];
+    for (const g of groupAdmins(won)) {
+      let rs: DigestResult[];
       try {
-        res = await sendOne(day, r, opts.includeText === true);
-        const sim = opts.simulate?.[attempt - 1];
-        if (sim && res.outcome === "mailed") res.status = sim;
-        res.attempt = attempt;
-        await settleClaim(day, r.to, attempt, instance, res, clock());
+        rs = await sendGroup(day, g, opts.includeText === true);
+        // the group shares one send, so one simulated outcome: the To's attempt picks it
+        const sim = opts.simulate?.[g[0].attempt - 1];
+        for (const res of rs) if (sim && res.outcome === "mailed") res.status = sim;
       } catch (e) {
-        // Neither step is expected to throw (sendMail catches everything). If one does, do not leave the claim
+        // Neither step is expected to throw (sendMail catches everything). If one does, do not leave the claims
         // "sending" for the rest of the day: record a failed attempt so the retry rules apply.
-        res = { to: r.to, outcome: "failed", status: "failed", reason: e instanceof Error ? e.message : String(e), attempt };
-        await settleClaim(day, r.to, attempt, instance, res, clock()).catch(() => {});
+        rs = g.map((x) => ({ to: x.r.to, outcome: "failed" as const, status: "failed" as const, reason: e instanceof Error ? e.message : String(e) }));
       }
-      results.push(res);
+      for (let i = 0; i < g.length; i++) {
+        const res = { ...rs[i], attempt: g[i].attempt };
+        await settleClaim(day, g[i].r.to, g[i].attempt, instance, res, clock()).catch(() => {});
+        results.push(res);
+      }
     }
     if (!results.length) return { fired: false, day, reason: `already handled for ${day}: sent, closed, exhausted, or waiting out the ${DIGEST_RETRY_GAP_MS / 60_000}-minute gap before a retry`, ...(warning ? { warning } : {}), results };
     return { fired: true, day, ...(warning ? { warning } : {}), results };
@@ -343,8 +398,15 @@ export async function publishDigestNow(day: string, user: SessionUser, from?: st
   if (!(await takeJobLock("daily-digest-manual", 30_000, user.id))) {
     return { status: 429 as const, error: "The digest was published a moment ago. Wait half a minute before publishing again." };
   }
+  const built: Built[] = [];
+  for (const r of recipients) built.push(await buildOne(day, r, from));
   const results: DigestResult[] = [];
-  for (const r of recipients) results.push(await sendOne(day, r, false, from));
+  const groups: string[][] = [];
+  for (const g of groupAdmins(built)) {
+    const rs = await sendGroup(day, g, false, from);
+    if (g.length > 1) groups.push(rs[0].group!);
+    results.push(...rs);
+  }
   // Counts come from each send's own outcome (the MailLog status), never from "was handed to the door":
   // a skipped mail (email off, no SES credentials, an ineligible address) must not read as delivered.
   const count = (st: "sent" | "skipped" | "failed") => results.filter((r) => (r.status ?? "failed") === st).length;
@@ -368,6 +430,7 @@ export async function publishDigestNow(day: string, user: SessionUser, from?: st
     ineligible: results.filter((r) => r.outcome === "ineligible").length,
     not_sent_reasons: [...new Set(why)],
     typed_addresses: typed,
+    groups,              // -354: the shared admin mails, each a list of addresses (To first); counts above stay per person
     results,
   };
 }

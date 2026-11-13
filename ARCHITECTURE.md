@@ -402,6 +402,16 @@ the cap (trade-off, stated: a send that was only slow, not dead, and finishes af
 the alternative is a crash losing the whole day). The claim key is the NORMALISED LOWERCASE EMAIL, so a person
 listed as an ERP user and as a typed address with the same email is one claim and one mail.
 
+**Admins share one mail (-354, Umesh 2026-11-13).** After each copy is rendered for its own viewer, `groupAdmins`
+(`lib/daily-digest.ts`) puts the deliverable ACCOUNT recipients with role Admin whose html+text are byte-identical into
+one mail: To = the first of them in the Defaults list, CC = the rest (`sendMail`'s `cc`, every address tested like the
+To), with a "Sent together to:" line in the body. Byte-identical is the money rule: the Admin role does not carry
+`finance.view` (NO_ADMIN_BYPASS), so an admin whose copy differs (no Costs table, a centre scope) gets a private mail and
+no figure reaches anyone through a CC. Typed full-view addresses and every non-admin stay private. Claims stay per
+person: the tick takes each claim first, groups only the winners, and settles every member with the group's one outcome
+(a failed group retries together, regrouped from whoever is still owed). MailLog keeps one row per person, each with
+`cc_group` (all addresses, To first). Publish now groups the same way and returns `groups`; its counts stay per person.
+
 **Tables, periods, targets (Karunn sir's review, 2026-11-02: "tabular, stage-wise, against target +/−").**
 `dailyDigest` also returns `tables` (`DigestTable[]`: every cell already worded) and the mail (`renderMail`'s
 `tables` option in `lib/mailer.ts`: inline-styled HTML plus a fixed-width plain-text twin) and the screen

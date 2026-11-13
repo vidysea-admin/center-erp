@@ -1637,6 +1637,7 @@ const MailLogSchema = new Schema({
   reason: String,                              // skip reason or failure message
   message_id: String,                          // SES message id / EnableX message id on success
   entity: String, entity_id: Schema.Types.ObjectId, // what this mail was about
+  cc_group: { type: [String], default: undefined }, // -354: every address on a shared mail (To first); absent on a private mail
 }, { timestamps: true });
 MailLogSchema.index({ createdAt: -1 });
 MailLogSchema.index({ channel: 1, createdAt: -1 });
