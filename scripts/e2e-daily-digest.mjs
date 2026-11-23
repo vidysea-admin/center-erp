@@ -21,7 +21,8 @@
 //   D3  exact costs numbers, and ONLY for a viewer holding finance.view
 //   D4  centre scope: a Location user sees its own centre and nothing else, in every section
 //   D5  the IST day boundary: 23:59 and 00:01 IST land on opposite days, in every encoding
-//   T1  the tick fires at 21:00 IST and not at 20:59
+//   T1  the tick fires at 22:00 IST and not at 21:59 (-355)
+//   T7  no scheduled digest on a Sunday (-355); Saturday and Monday fire; Publish now still works on a Sunday
 //   T2  two concurrent ticks give exactly one mail per recipient
 //   T3  a lock held by another instance means nothing is sent and the day is not consumed
 //   T4  a restart after a send does not send again; the next IST day does send
@@ -109,7 +110,7 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---- the test day, and instants built a DIFFERENT way from the product (ISO strings with +05:30) -------
-const D = "2031-03-14", PREV = "2031-03-13", NEXT = "2031-03-15", D2 = "2031-03-16", D3 = "2031-03-17", PUBDAY = "2031-03-19";
+const D = "2031-03-14", PREV = "2031-03-13", NEXT = "2031-03-15", D2 = "2031-03-18", D3 = "2031-03-17", PUBDAY = "2031-03-19";
 const istAt = (day, hh, mm, ss = 0) => new Date(`${day}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}+05:30`);
 const bizDay = (day) => new Date(`${day}T00:00:00Z`);          // a business date: UTC midnight of the IST date (dayKey)
 const mailSubject = (day) => `Daily digest ${day}`;
@@ -914,7 +915,7 @@ const putR = await setDefaults({ digest_recipients: recipients.join(", ") });
 const readBack = (await req(admin, "GET", "/api/defaults")).data?.item;
 ok("[precondition] the recipient list is stored and read back, and the toggle defaults to OFF", putR.status === 200 && readBack?.digest_recipients === recipients.join(", ") && readBack?.digest_only_approval_mails === false,
   JSON.stringify({ put: putR.status, rb: readBack?.digest_recipients, toggle: readBack?.digest_only_approval_mails }));
-const zeroTick = await tick(istAt(zeroD, 21, 0), "zero-" + s);
+const zeroTick = await tick(istAt(zeroD, 22, 0), "zero-" + s);
 const zeroText = String(zeroTick.data?.results?.find((r) => r.to === uA.email.toLowerCase())?.text ?? "");
 ok("D8: a zero-activity scheduled report still attempts the recipient list and explicitly mails zero daily figures plus current totals",
   zeroTick.data?.fired === true && (await digestRows(zeroD, recipients)).length === 5
@@ -923,13 +924,13 @@ ok("D8: a zero-activity scheduled report still attempts the recipient list and e
   JSON.stringify({ fired: zeroTick.data?.fired, text: zeroText.slice(0, 400) }));
 
 // =================================================================================================
-// T1 - the tick fires at 21:00 IST and not at 20:59
+// T1 - the tick fires at 22:00 IST and not at 21:59 (-355: was 21:00)
 // =================================================================================================
-const before = await tick(istAt(D, 20, 59, 59), "inst-early-" + s);
-ok("T1: at 20:59:59 IST the tick does nothing", before.status === 200 && before.data?.fired === false && (before.data?.results ?? []).length === 0, JSON.stringify(before.data).slice(0, 160));
+const before = await tick(istAt(D, 21, 59, 59), "inst-early-" + s);
+ok("T1: at 21:59:59 IST the tick does nothing", before.status === 200 && before.data?.fired === false && (before.data?.results ?? []).length === 0, JSON.stringify(before.data).slice(0, 160));
 ok("T1: ...and it left no mail row and no day claim", (await digestRows(D, recipients)).length === 0 && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${D}:` } })) === 0, "");
-const at21 = await tick(istAt(D, 21, 0, 0), "inst-a-" + s);
-ok("T1: at 21:00:00 IST the tick fires for that IST day", at21.status === 200 && at21.data?.fired === true && at21.data?.day === D, JSON.stringify(at21.data).slice(0, 200));
+const at21 = await tick(istAt(D, 22, 0, 0), "inst-a-" + s);
+ok("T1: at 22:00:00 IST the tick fires for that IST day", at21.status === 200 && at21.data?.fired === true && at21.data?.day === D, JSON.stringify(at21.data).slice(0, 200));
 const resByTo = Object.fromEntries((at21.data?.results ?? []).map((r) => [r.to, r]));
 const rowsD = await digestRows(D, recipients);
 ok("T1: exactly one mail row per recipient was written (5 recipients, 5 rows), each addressed once", rowsD.length === 5 && Object.values(rowsByTo(rowsD)).every((n) => n === 1), JSON.stringify(rowsByTo(rowsD)));
@@ -986,7 +987,7 @@ ok("T5: a scoped recipient's mail names only its own centre's batches", !txtN.in
 // =================================================================================================
 // T2 - two concurrent ticks, one mail
 // =================================================================================================
-const [c1, c2] = await Promise.all([tick(istAt(D2, 21, 0, 5), "inst-c1-" + s), tick(istAt(D2, 21, 0, 5), "inst-c2-" + s)]);
+const [c1, c2] = await Promise.all([tick(istAt(D2, 22, 0, 5), "inst-c1-" + s), tick(istAt(D2, 22, 0, 5), "inst-c2-" + s)]);
 const rowsD2 = await digestRows(D2, recipients);
 ok("T2: two ticks racing on two containers wrote exactly 5 rows, one per recipient (not 10)", rowsD2.length === 5 && Object.values(rowsByTo(rowsD2)).every((n) => n === 1), JSON.stringify(rowsByTo(rowsD2)));
 ok("T2: exactly one of the two ticks did the sending", [c1, c2].filter((r) => r.data?.fired === true).length === 1, JSON.stringify([c1.data?.fired, c1.data?.reason, c2.data?.fired, c2.data?.reason]));
@@ -996,26 +997,26 @@ ok("T2: exactly one of the two ticks did the sending", [c1, c2].filter((r) => r.
 // =================================================================================================
 await jobLocks.deleteMany({ _id: "daily-digest" });
 await jobLocks.insertOne({ _id: "daily-digest", holder: "some-other-container", expires_at: new Date(Date.now() + 5 * 60_000) });
-const held = await tick(istAt(D3, 21, 0, 0), "inst-h-" + s);
+const held = await tick(istAt(D3, 22, 0, 0), "inst-h-" + s);
 ok("T3: while another container holds the lock the tick sends nothing", held.status === 200 && held.data?.fired === false && /lock/i.test(String(held.data?.reason ?? "")), JSON.stringify(held.data).slice(0, 200));
 ok("T3: ...writes no mail row and claims no day (so the holder's work is not pre-empted)", (await digestRows(D3, recipients)).length === 0 && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${D3}:` } })) === 0, "");
 await jobLocks.deleteMany({ _id: "daily-digest" });
-const freed = await tick(istAt(D3, 21, 0, 10), "inst-f-" + s);
+const freed = await tick(istAt(D3, 22, 0, 10), "inst-f-" + s);
 ok("T3: once the lock is free the same tick sends (so it was the lock that stopped it)", freed.data?.fired === true && (await digestRows(D3, recipients)).length === 5, JSON.stringify(freed.data).slice(0, 160));
 
 // =================================================================================================
 // T4 - a restart after a send does not send again; the next day does
 // =================================================================================================
 await jobLocks.deleteMany({ _id: "daily-digest" });                      // a restart: the in-memory instance and the TTL lock are gone
-const restart = await tick(istAt(D, 21, 30, 0), "inst-restarted-" + s);
-ok("T4: a restarted container ticking at 21:30 on a day already sent sends nothing", restart.status === 200 && restart.data?.fired === false && /already/i.test(String(restart.data?.reason ?? "")), JSON.stringify(restart.data).slice(0, 200));
+const restart = await tick(istAt(D, 22, 30, 0), "inst-restarted-" + s);
+ok("T4: a restarted container ticking at 22:30 on a day already sent sends nothing", restart.status === 200 && restart.data?.fired === false && /already/i.test(String(restart.data?.reason ?? "")), JSON.stringify(restart.data).slice(0, 200));
 ok("T4: ...the day still has exactly its 5 rows", (await digestRows(D, recipients)).length === 5, String((await digestRows(D, recipients)).length));
 const late = await tick(istAt(D, 23, 59, 0), "inst-late-" + s);
 ok("T4: even at 23:59 IST the same day is not sent a second time", late.data?.fired === false && (await digestRows(D, recipients)).length === 5, JSON.stringify(late.data).slice(0, 120));
 await jobLocks.deleteMany({ _id: "daily-digest" });
-const nextDay = await tick(istAt(NEXT, 21, 0, 0), "inst-next-" + s);
+const nextDay = await tick(istAt(NEXT, 22, 0, 0), "inst-next-" + s);
 ok("T4: the NEXT IST day is a new day: it sends again (the key is the day, not a once-ever flag)", nextDay.data?.fired === true && nextDay.data?.day === NEXT && (await digestRows(NEXT, recipients)).length === 5, JSON.stringify(nextDay.data).slice(0, 160));
-ok("T4: a day that never reached 21:00 (00:01 IST) claims nothing", (await tick(istAt("2031-03-20", 0, 1), "inst-z-" + s)).data?.fired === false && (await jobLocks.countDocuments({ _id: { $regex: "^digest-sent:2031-03-20:" } })) === 0, "");
+ok("T4: a day that never reached 22:00 (00:01 IST) claims nothing", (await tick(istAt("2031-03-20", 0, 1), "inst-z-" + s)).data?.fired === false && (await jobLocks.countDocuments({ _id: { $regex: "^digest-sent:2031-03-20:" } })) === 0, "");
 
 // =================================================================================================
 // R - a failed or skipped send does not consume the day (cycle 1, QA-2884). The claim records the outcome:
@@ -1031,29 +1032,29 @@ const rr = (r) => (r.data?.results ?? []).length;
 const RD1 = "2031-04-01", RD2 = "2031-04-02", RD4 = "2031-04-04";
 
 // R1 - failure, then retry, then sent
-const r1a = await tick(istAt(RD1, 21, 0, 0), "r1a-" + s, admin, { simulate: ["failed", "sent"] });
+const r1a = await tick(istAt(RD1, 22, 0, 0), "r1a-" + s, admin, { simulate: ["failed", "sent"] });
 let cl = await claimOf(RD1);
 ok("R1: a first send that FAILS leaves the claim retryable (status retry, 1 attempt, next attempt 10 minutes on) and does not consume the day",
-  r1a.data?.fired === true && cl?.status === "retry" && cl?.attempts === 1 && cl?.last_status === "failed" && new Date(cl?.next_at).getTime() === istAt(RD1, 21, 10, 0).getTime(), JSON.stringify({ r: r1a.data?.results?.[0]?.status, cl: cl && { s: cl.status, a: cl.attempts, n: cl.next_at } }));
-const r1b = await tick(istAt(RD1, 21, 9, 59), "r1b-" + s, admin, { simulate: ["failed", "sent"] });
+  r1a.data?.fired === true && cl?.status === "retry" && cl?.attempts === 1 && cl?.last_status === "failed" && new Date(cl?.next_at).getTime() === istAt(RD1, 22, 10, 0).getTime(), JSON.stringify({ r: r1a.data?.results?.[0]?.status, cl: cl && { s: cl.status, a: cl.attempts, n: cl.next_at } }));
+const r1b = await tick(istAt(RD1, 22, 9, 59), "r1b-" + s, admin, { simulate: ["failed", "sent"] });
 ok("R1: a tick 9:59 after the failure does NOT retry (attempts are at least 10 minutes apart)", r1b.data?.fired === false && (await rowsOf(RD1)) === 1 && (await claimOf(RD1))?.attempts === 1, JSON.stringify({ fired: r1b.data?.fired, rows: await rowsOf(RD1) }));
-const r1c = await tick(istAt(RD1, 21, 10, 0), "r1c-" + s, admin, { simulate: ["failed", "sent"] });
+const r1c = await tick(istAt(RD1, 22, 10, 0), "r1c-" + s, admin, { simulate: ["failed", "sent"] });
 cl = await claimOf(RD1);
 ok("R1: at +10:00 the retry runs: attempt 2, one more mail row, and this time it is SENT (claim final)",
   r1c.data?.fired === true && r1c.data?.results?.[0]?.attempt === 2 && cl?.status === "sent" && cl?.attempts === 2 && (await rowsOf(RD1)) === 2, JSON.stringify({ att: r1c.data?.results?.[0]?.attempt, cl: cl && { s: cl.status, a: cl.attempts }, rows: await rowsOf(RD1) }));
-for (const [hh, mm] of [[21, 30], [23, 59]]) {
+for (const [hh, mm] of [[22, 30], [23, 59]]) {
   const t = await tick(istAt(RD1, hh, mm, 0), `r1d${hh}${mm}-` + s, admin, { simulate: ["failed", "failed", "failed"] });
   ok(`R1: once SENT the claim is never retried (a tick at ${hh}:${mm} sends nothing)`, t.data?.fired === false && (await rowsOf(RD1)) === 2 && (await claimOf(RD1))?.status === "sent", JSON.stringify({ fired: t.data?.fired, rows: await rowsOf(RD1) }));
 }
 
 // R2 - skipped three times (the real, suppressed outcome in a test env), then it stops
 const r2 = [];
-for (const [hh, mm] of [[21, 0], [21, 10], [21, 20]]) r2.push(await tick(istAt(RD2, hh, mm, 0), `r2-${hh}${mm}-` + s, admin, { simulate: [] }));
+for (const [hh, mm] of [[22, 0], [22, 10], [22, 20]]) r2.push(await tick(istAt(RD2, hh, mm, 0), `r2-${hh}${mm}-` + s, admin, { simulate: [] }));
 cl = await claimOf(RD2);
-ok("R2: a mail that is skipped is tried 3 times in all (21:00, 21:10, 21:20): 3 rows, attempts 1,2,3, then the claim is exhausted",
+ok("R2: a mail that is skipped is tried 3 times in all (22:00, 22:10, 22:20): 3 rows, attempts 1,2,3, then the claim is exhausted",
   r2.every((x) => x.data?.fired === true) && r2.map((x) => x.data?.results?.[0]?.attempt).join() === "1,2,3" && (await rowsOf(RD2)) === 3 && cl?.status === "exhausted" && cl?.attempts === 3,
   JSON.stringify({ att: r2.map((x) => x.data?.results?.[0]?.attempt), rows: await rowsOf(RD2), cl: cl && { s: cl.status, a: cl.attempts, last: cl.last_status } }));
-for (const [hh, mm] of [[21, 30], [22, 0], [23, 59]]) {
+for (const [hh, mm] of [[22, 30], [23, 0], [23, 59]]) {
   const t = await tick(istAt(RD2, hh, mm, 0), `r2z${hh}${mm}-` + s, admin, { simulate: [] });
   ok(`R2: after the 3rd attempt nothing more is sent (a tick at ${hh}:${mm})`, t.data?.fired === false && (await rowsOf(RD2)) === 3 && (await claimOf(RD2))?.attempts === 3, JSON.stringify({ fired: t.data?.fired, rows: await rowsOf(RD2) }));
 }
@@ -1062,32 +1063,32 @@ ok("R2: the next IST day's 00:30 does not retry yesterday's claim (a retry never
 
 // R3 - several processes racing a RETRY, with the efficiency lock OFF: the claim alone must give one send.
 // Five independent days so one lucky interleaving cannot pass it; four racers each.
-const raceRounds = ["2031-04-10", "2031-04-11", "2031-04-12", "2031-04-13", "2031-04-14"];
+const raceRounds = ["2031-04-10", "2031-04-11", "2031-04-12", "2031-04-15", "2031-04-14"];
 const raceReport = [];
 for (const d of raceRounds) {
-  await tick(istAt(d, 21, 0, 0), "r3seed-" + s, admin, { simulate: ["failed"] });
-  const racers = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(d, 21, 10, 0), `r3-${i}-` + s, admin, { simulate: ["failed", "sent"], skip_lock: true })));
+  await tick(istAt(d, 22, 0, 0), "r3seed-" + s, admin, { simulate: ["failed"] });
+  const racers = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(d, 22, 10, 0), `r3-${i}-` + s, admin, { simulate: ["failed", "sent"], skip_lock: true })));
   raceReport.push({ d, winners: racers.filter((x) => rr(x) > 0).length, rows: await rowsOf(d), claim: (await claimOf(d))?.status, att: (await claimOf(d))?.attempts });
 }
 ok("R3: 4 processes racing the SAME retry, lock off, 5 rounds: every round exactly one wins (2 rows in all: the failure and the one retry), claim sent, 2 attempts",
   raceReport.every((x) => x.winners === 1 && x.rows === 2 && x.claim === "sent" && x.att === 2), JSON.stringify(raceReport));
 // the FIRST claim, raced without the lock, is exactly-once too (so the lock is demonstrably only an efficiency guard)
 const firstRace = [];
-for (const d of ["2031-04-20", "2031-04-21", "2031-04-22"]) {
-  const racers = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(d, 21, 0, 5), `r3f-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
+for (const d of ["2031-04-21", "2031-04-22", "2031-04-23"]) {
+  const racers = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(d, 22, 0, 5), `r3f-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
   firstRace.push({ d, winners: racers.filter((x) => rr(x) > 0).length, rows: await rowsOf(d) });
 }
 ok("R3: 4 processes racing the FIRST claim with the lock off, 3 rounds: exactly one mail each time", firstRace.every((x) => x.winners === 1 && x.rows === 1), JSON.stringify(firstRace));
 
 // R4 - a SENT claim is never re-sent, whoever ticks and however the outcome is simulated
-await tick(istAt(RD4, 21, 0, 0), "r4a-" + s, admin, { simulate: ["sent"] });
+await tick(istAt(RD4, 22, 0, 0), "r4a-" + s, admin, { simulate: ["sent"] });
 const r4 = [];
-for (const [hh, mm] of [[21, 10], [21, 25], [23, 59]]) r4.push(await tick(istAt(RD4, hh, mm, 0), `r4-${hh}${mm}-` + s, admin, { simulate: ["failed", "failed", "failed"], skip_lock: true }));
+for (const [hh, mm] of [[22, 10], [22, 25], [23, 59]]) r4.push(await tick(istAt(RD4, hh, mm, 0), `r4-${hh}${mm}-` + s, admin, { simulate: ["failed", "failed", "failed"], skip_lock: true }));
 ok("R4: a claim that was SENT is never re-sent: later ticks (lock off, outcomes forced to failed) fire nothing and the day keeps its 1 row", r4.every((x) => x.data?.fired === false) && (await rowsOf(RD4)) === 1 && (await claimOf(RD4))?.status === "sent" && (await claimOf(RD4))?.attempts === 1, JSON.stringify({ rows: await rowsOf(RD4), cl: (await claimOf(RD4))?.status }));
 // R5 - an ineligible recipient (a Trainer account's email) is recorded once and closed, not retried
 await setDefaults({ digest_recipients: uTr.email });
-const r5a = await tick(istAt("2031-04-05", 21, 0, 0), "r5a-" + s, admin, { simulate: [] });
-const r5b = await tick(istAt("2031-04-05", 21, 15, 0), "r5b-" + s, admin, { simulate: [] });
+const r5a = await tick(istAt("2031-04-05", 22, 0, 0), "r5a-" + s, admin, { simulate: [] });
+const r5b = await tick(istAt("2031-04-05", 22, 15, 0), "r5b-" + s, admin, { simulate: [] });
 const clU = await jobLocks.findOne({ _id: `digest-sent:2031-04-05:${uTr.email.toLowerCase()}` });
 ok("R5: a recipient who may never receive it (a Trainer account) is recorded once and CLOSED (not retried: a retry cannot make a Trainer eligible)", r5a.data?.fired === true && r5b.data?.fired === false && clU?.status === "closed" && (await digestRows("2031-04-05", [uTr.email.toLowerCase()])).length === 1, JSON.stringify({ cl: clU?.status, rows: (await digestRows("2031-04-05", [uTr.email.toLowerCase()])).length }));
 await setDefaults({ digest_recipients: listAll });
@@ -1123,7 +1124,7 @@ const putTag = await setDefaults({ digest_recipients: `u:${uAF.id}, ${typedFull.
 const rb2 = await getDef();
 ok("U2: a list of a picked user and a typed address is stored in canonical form (lowercase, tagged, comma separated)", putTag.status === 200 && rb2?.digest_recipients === `u:${uAF.id}, ${typedFull}`, `${putTag.status} ${rb2?.digest_recipients}`);
 await db.collection("users").updateOne({ _id: oid(uAF.id) }, { $set: { email: newEmail } });          // the account is RE-EMAILED after it was picked
-const t2 = await tick(istAt(UD2, 22, 0, 0), "u2-" + s, admin, { simulate: ["sent"] });
+const t2 = await tick(istAt(UD2, 23, 0, 0), "u2-" + s, admin, { simulate: ["sent"] });
 const r2m = Object.fromEntries((t2.data?.results ?? []).map((r) => [r.to, r]));
 ok("U2: a picked user whose email changed after it was picked STILL gets the digest, at the NEW address (the entry is the account, not the text)",
   r2m[newEmail]?.outcome === "mailed" && !r2m[uAF.email.toLowerCase()] && String(r2m[newEmail]?.text ?? "").includes("Rs 1,250"), JSON.stringify(Object.keys(r2m)));
@@ -1138,14 +1139,14 @@ ok("U2: ...and its report is the FULL one: both centres' batches and the cost se
 ok("U2: ...the typed address's claim key is its normalised lowercase email", !!(await jobLocks.findOne({ _id: `digest-sent:${UD2}:${typedFull}` })), "");
 
 // ---- U3 the same person listed twice (ERP user + typed address with the same email): ONE mail, in the account's own view
-const UD3 = "2031-05-03", UD4 = "2031-05-04";
+const UD3 = "2031-05-03", UD4 = "2031-05-13";
 await setDefaults({ digest_recipients: `u:${uA.id}, ${uA.email.toUpperCase()}` });
-const t3 = await tick(istAt(UD3, 21, 0, 0), "u3-" + s, admin, { simulate: ["sent"] });
+const t3 = await tick(istAt(UD3, 22, 0, 0), "u3-" + s, admin, { simulate: ["sent"] });
 const tx3 = String(t3.data?.results?.[0]?.text ?? "");
 ok("U3: an ERP user AND a typed address with the same email: exactly one mail row, one claim, one result", (await digestRows(UD3, [uA.email.toLowerCase()])).length === 1 && t3.data?.results?.length === 1 && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${UD3}:` } })) === 1,
   JSON.stringify({ rows: (await digestRows(UD3, [uA.email.toLowerCase()])).length, results: t3.data?.results?.length }));
 ok("U3: ...and it is the ACCOUNT's view (Location A, no finance): no Costs section, no centre-B batch, kind user and not full (typing the address did not upgrade it to the full report)", tx3.length > 0 && !/Costs|Rs \d/.test(tx3) && !tx3.includes(fx.pb1.code) && t3.data?.results?.[0]?.kind === "user" && t3.data?.results?.[0]?.full !== true, JSON.stringify({ k: t3.data?.results?.[0]?.kind, f: t3.data?.results?.[0]?.full }) + " " + tx3.replace(/\s+/g, " ").slice(0, 200));
-const raceSame = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(UD4, 21, 0, 5), `u3r-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
+const raceSame = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(UD4, 22, 0, 5), `u3r-${i}-` + s, admin, { simulate: ["sent"], skip_lock: true })));
 ok("U3: 4 processes racing that same list with the lock OFF: still exactly one mail row for the person", (await digestRows(UD4, [uA.email.toLowerCase()])).length === 1 && raceSame.filter((x) => (x.data?.results ?? []).length > 0).length === 1,
   JSON.stringify({ rows: (await digestRows(UD4, [uA.email.toLowerCase()])).length, winners: raceSame.filter((x) => (x.data?.results ?? []).length > 0).length }));
 
@@ -1153,7 +1154,7 @@ ok("U3: 4 processes racing that same list with the lock OFF: still exactly one m
 const UD5 = "2031-05-05";
 await setDefaults({ digest_recipients: `${uTr.email}, ${uDead.email}, u:${uGone.id}, ${uA.email}, ${uRej.email}, ${uDrop.email}` });   // picked while the user still existed...
 await db.collection("users").deleteOne({ _id: oid(uGone.id) });                                          // ...then removed
-const t5 = await tick(istAt(UD5, 21, 0, 0), "u4-" + s, admin, { simulate: ["sent"] });
+const t5 = await tick(istAt(UD5, 22, 0, 0), "u4-" + s, admin, { simulate: ["sent"] });
 const r5m = Object.fromEntries((t5.data?.results ?? []).map((r) => [r.to, r]));
 ok("U4: a typed address that is a TRAINER account's email is refused (ineligible, nothing rendered): typing it does not give a Trainer the money report", r5m[uTr.email.toLowerCase()]?.outcome === "ineligible" && !r5m[uTr.email.toLowerCase()]?.text && /trainer/i.test(String(r5m[uTr.email.toLowerCase()]?.reason ?? "")), JSON.stringify(r5m[uTr.email.toLowerCase()]));
 ok("U4: ...so is a typed address that is a DEACTIVATED account's email (reason names it), and a picked user that was removed (reason names it)",
@@ -1164,7 +1165,7 @@ ok("U4: ...and a typed address that IS a Location A account gets that account's 
 ok("U4: each refusal is on the record (a skipped MailLog row with the reason), not silent", (await digestRows(UD5, [uTr.email.toLowerCase(), uDead.email.toLowerCase()])).every((r) => r.status === "skipped" && r.reason), "");
 // a legacy, malformed token in the stored string is refused, never mailed as a "full view"
 await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "not-an-email" } });
-const t5b = await tick(istAt("2031-05-06", 21, 0, 0), "u4b-" + s, admin, { simulate: ["sent"] });
+const t5b = await tick(istAt("2031-05-06", 22, 0, 0), "u4b-" + s, admin, { simulate: ["sent"] });
 ok("U4: a malformed token already in the stored string is refused (ineligible), not treated as a typed address with the full view", t5b.data?.results?.[0]?.outcome === "ineligible" && !t5b.data?.results?.[0]?.text, JSON.stringify(t5b.data?.results?.[0]));
 await db.collection("defaults").updateOne({ _singleton: "defaults" }, { $set: { digest_recipients: "" } });
 
@@ -1198,7 +1199,7 @@ const unchanged = await db.collection("defaults").updateOne({ _singleton: "defau
 const curDef = await getDef();
 const legacySave = await req(admin, "PUT", "/api/defaults", { batch_size: curDef.batch_size, duration_days: curDef.duration_days, digest_recipients: "legacy.one@vidysea-test.local;\nlegacy.two@vidysea-test.local" });
 ok("U5: a whole-form save that sends a LEGACY list back UNCHANGED (newline separated) is not refused: an old value must not block an unrelated save", legacySave.status === 200 && unchanged.matchedCount === 1, `${legacySave.status} ${JSON.stringify(legacySave.data).slice(0, 100)}`);
-const legacyParsed = await tick(istAt("2031-05-07", 21, 0, 0), "u5l-" + s, admin, { simulate: ["sent"] });
+const legacyParsed = await tick(istAt("2031-05-07", 22, 0, 0), "u5l-" + s, admin, { simulate: ["sent"] });
 ok("U5: ...and that legacy plain-email string still reads: both addresses are recipients (typed entries, nothing dropped)", (legacyParsed.data?.results ?? []).map((r) => r.to).sort().join() === "legacy.one@vidysea-test.local,legacy.two@vidysea-test.local", JSON.stringify((legacyParsed.data?.results ?? []).map((r) => r.to)));
 await setDefaults({ digest_recipients: "" });
 const blankOk = await setDefaults({ digest_recipients: "   " });
@@ -1301,10 +1302,10 @@ await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: fa
 const nobody = (await digest(admin, D)).data?.meta;
 const pkHealth = (await req(admin, "GET", "/api/reports/daily/recipients")).data?.health;
 ok("U9: once the last recipient is deactivated the screen data says digest-only is ON and nobody can receive it (daily meta and the Defaults picker both)", nobody?.digest_only_nobody === true && nobody?.deliverable === 0 && pkHealth?.digest_only_nobody === true, JSON.stringify({ nobody, pkHealth }));
-const w1 = await tick(istAt(UD9, 21, 0, 0), "u9a-" + s, admin, { simulate: ["sent"] });
-const w2 = await tick(istAt(UD9, 21, 30, 0), "u9b-" + s, admin, { simulate: ["sent"] });
+const w1 = await tick(istAt(UD9, 22, 0, 0), "u9a-" + s, admin, { simulate: ["sent"] });
+const w2 = await tick(istAt(UD9, 22, 30, 0), "u9b-" + s, admin, { simulate: ["sent"] });
 const warnRows = await mailLogs.find({ entity: "DailyDigestWarning", subject: { $regex: `Daily digest ${UD9}` } }).toArray();
-ok("U9: the 21:00 tick says so on the record: a result warning and exactly ONE system MailLog row for the day (a second tick the same evening adds none)",
+ok("U9: the 22:00 tick says so on the record: a result warning and exactly ONE system MailLog row for the day (a second tick the same evening adds none)",
   /Digest-only is ON/.test(String(w1.data?.warning ?? "")) && /Digest-only is ON/.test(String(w2.data?.warning ?? "")) && warnRows.length === 1 && warnRows[0].status === "skipped" && /going nowhere/.test(String(warnRows[0].reason ?? "")), JSON.stringify({ w1: w1.data?.warning, rows: warnRows.length }));
 await db.collection("users").updateOne({ _id: oid(uD.id) }, { $set: { active: true } });
 const recovered = (await digest(admin, D)).data?.meta;
@@ -1315,18 +1316,18 @@ await setDefaults({ digest_recipients: "" });
 // ---- U10 (A3) a claim left "sending" by a crash is re-taken after 15 minutes, inside the 3-attempt cap
 await setDefaults({ digest_recipients: uA.email });
 const stale = async (day, attempts, at) => { await jobLocks.deleteMany({ _id: { $regex: `^digest-sent:${day}:` } }); await jobLocks.insertOne({ _id: `digest-sent:${day}:${toA}`, day, to: toA, instance: "crashed-" + s, at, status: "sending", attempts }); };
-const SD1 = "2031-05-10", SD2 = "2031-05-11", SD3 = "2031-05-12";
-await stale(SD1, 1, istAt(SD1, 21, 0, 0));
-const sBefore = await tick(istAt(SD1, 21, 14, 59), "u10a-" + s, admin, { simulate: ["failed", "sent"] });
+const SD1 = "2031-05-10", SD2 = "2031-05-14", SD3 = "2031-05-12";
+await stale(SD1, 1, istAt(SD1, 22, 0, 0));
+const sBefore = await tick(istAt(SD1, 22, 14, 59), "u10a-" + s, admin, { simulate: ["failed", "sent"] });
 ok("U10: a claim stuck in 'sending' is NOT re-taken at 14:59 (the first process may just be slow)", sBefore.data?.fired === false && (await rowsOf(SD1)) === 0 && (await claimOf(SD1))?.attempts === 1, JSON.stringify({ f: sBefore.data?.fired, rows: await rowsOf(SD1) }));
-const sAt = await tick(istAt(SD1, 21, 15, 0), "u10b-" + s, admin, { simulate: ["failed", "sent"] });
+const sAt = await tick(istAt(SD1, 22, 15, 0), "u10b-" + s, admin, { simulate: ["failed", "sent"] });
 cl = await claimOf(SD1);
 ok("U10: ...at 15:00 it IS re-taken: attempt 2 (the crashed one counted), the mail goes, the claim is final", sAt.data?.fired === true && sAt.data?.results?.[0]?.attempt === 2 && cl?.status === "sent" && cl?.attempts === 2 && (await rowsOf(SD1)) === 1, JSON.stringify({ att: sAt.data?.results?.[0]?.attempt, cl: cl && { s: cl.status, a: cl.attempts } }));
-await stale(SD2, 3, istAt(SD2, 21, 0, 0));
-const capped = await tick(istAt(SD2, 22, 30, 0), "u10c-" + s, admin, { simulate: ["sent"] });
+await stale(SD2, 3, istAt(SD2, 22, 0, 0));
+const capped = await tick(istAt(SD2, 23, 30, 0), "u10c-" + s, admin, { simulate: ["sent"] });
 ok("U10: a stale claim that already used all 3 attempts is never re-taken (the cap holds)", capped.data?.fired === false && (await rowsOf(SD2)) === 0, JSON.stringify(capped.data).slice(0, 120));
-await stale(SD3, 1, istAt(SD3, 21, 0, 0));
-const staleRace = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(SD3, 21, 16, 0), `u10r-${i}-` + s, admin, { simulate: ["failed", "sent"], skip_lock: true })));
+await stale(SD3, 1, istAt(SD3, 22, 0, 0));
+const staleRace = await Promise.all([0, 1, 2, 3].map((i) => tick(istAt(SD3, 22, 16, 0), `u10r-${i}-` + s, admin, { simulate: ["failed", "sent"], skip_lock: true })));
 ok("U10: 4 processes racing the stale re-take with the lock off: exactly one wins and one mail row is written", staleRace.filter((x) => (x.data?.results ?? []).length > 0).length === 1 && (await rowsOf(SD3)) === 1 && (await claimOf(SD3))?.attempts === 2, JSON.stringify({ w: staleRace.filter((x) => (x.data?.results ?? []).length > 0).length, rows: await rowsOf(SD3) }));
 
 // ---- U11 (A5) Publish now names a reason per category
@@ -1455,15 +1456,15 @@ ok("G2: Publish now reports sent/skipped/failed from the outcomes: test env supp
 ok("G2: ...one row per recipient for that day", (await digestRows(PUBDAY, recipients)).length === pubBefore + 5, String((await digestRows(PUBDAY, recipients)).length));
 const pub2 = await req(admin, "POST", "/api/reports/daily/publish", { date: PUBDAY });
 ok("G2: a second press inside the cooldown is a 429, not a second mailing", pub2.status === 429 && (await digestRows(PUBDAY, recipients)).length === pubBefore + 5, `${pub2.status}`);
-const scheduledAfterManual = await tick(istAt(PUBDAY, 21, 0), "after-manual-" + s);
-ok("G2: manual Publish now does not consume the scheduled day: the same day's 21:00 tick also mails all five recipients",
+const scheduledAfterManual = await tick(istAt(PUBDAY, 22, 0), "after-manual-" + s);
+ok("G2: manual Publish now does not consume the scheduled day: the same day's 22:00 tick also mails all five recipients",
   scheduledAfterManual.data?.fired === true && (await digestRows(PUBDAY, recipients)).length === pubBefore + 10,
   JSON.stringify({ fired: scheduledAfterManual.data?.fired, rows: (await digestRows(PUBDAY, recipients)).length }));
 await jobLocks.deleteMany({ _id: "daily-digest-manual" });
 const pubDefaults = await req(admin, "GET", "/api/reports/daily?date=" + D);
-ok("G2: the screen's data carries the mail state so it can warn when email is off (meta.email_enabled, recipients, hour 21)",
-  typeof pubDefaults.data?.meta?.email_enabled === "boolean" && pubDefaults.data?.meta?.recipients === 5 && pubDefaults.data?.meta?.hour === 21, JSON.stringify(pubDefaults.data?.meta));
-const tickDoorUser = await tick(istAt(D, 21, 0), "inst-user-" + s, uA.cookie);
+ok("G2: the screen's data carries the mail state so it can warn when email is off (meta.email_enabled, recipients, hour 22)",
+  typeof pubDefaults.data?.meta?.email_enabled === "boolean" && pubDefaults.data?.meta?.recipients === 5 && pubDefaults.data?.meta?.hour === 22, JSON.stringify(pubDefaults.data?.meta));
+const tickDoorUser = await tick(istAt(D, 22, 0), "inst-user-" + s, uA.cookie);
 ok("G2: the test-only clock door is refused (403) to a non-Admin", tickDoorUser.status === 403, `${tickDoorUser.status}`);
 
 // =================================================================================================
@@ -1757,7 +1758,7 @@ await arm("AG admins share one digest mail (To = first in the list, CC = the res
   const grp = [L(g1), L(g2), L(g3)];
   await setListDirect([`u:${g1.id}`, `u:${uOps.id}`, `u:${g2.id}`, `u:${uAdm.id}`, `u:${g4.id}`, typed, `u:${g3.id}`].join(", "));
   const AGD = "2031-10-01";
-  const t1 = await tick(istAt(AGD, 21, 0), "ag1-" + s);
+  const t1 = await tick(istAt(AGD, 22, 0), "ag1-" + s);
   const res = t1.data?.results ?? [];
   const by = (to) => res.find((r) => r.to === to);
   ok("AG1: the three admins with the same view are one mail: each result names the same group, To first in list order",
@@ -1774,18 +1775,18 @@ await arm("AG admins share one digest mail (To = first in the list, CC = the res
     !!by(L(uAdm)) && !by(L(uAdm))?.group && admRow && !(admRow.cc_group?.length) && !/^COSTS$/m.test(String(by(L(uAdm))?.text ?? "")) && /^COSTS$/m.test(String(by(grp[0])?.text ?? "")), JSON.stringify(by(L(uAdm))?.group));
   ok("AG4: a typed address that is no account stays individual", !!by(typed) && !by(typed)?.group, JSON.stringify(by(typed)));
   ok("AG5: the deactivated admin is recorded as ineligible and is in nobody's CC", by(L(g4))?.outcome === "ineligible" && rows.every((r) => !(r.cc_group ?? []).includes(L(g4))), JSON.stringify(by(L(g4))));
-  const t2 = await tick(istAt(AGD, 21, 5), "ag2-" + s);
+  const t2 = await tick(istAt(AGD, 22, 5), "ag2-" + s);
   ok("AG6: a second tick the same evening sends nothing to anyone (claims stay per person)", (t2.data?.results ?? []).length === 0 && t2.data?.fired === false, JSON.stringify(t2.data).slice(0, 200));
 
   // a failed group send: every member retries, together, on the next tick; a member already sent is left out
   await setListDirect([`u:${g1.id}`, `u:${g2.id}`, `u:${g3.id}`].join(", "));
   const AGR = "2031-10-02";
-  const f1 = await tick(istAt(AGR, 21, 0), "agr1-" + s, admin, { simulate: ["failed", "sent"] });
+  const f1 = await tick(istAt(AGR, 22, 0), "agr1-" + s, admin, { simulate: ["failed", "sent"] });
   const claims1 = await jobLocks.find({ _id: { $in: grp.map((to) => `digest-sent:${AGR}:${to}`) } }).toArray();
   ok("AG7: a failed group send leaves every member's claim in retry", claims1.length === 3 && claims1.every((c) => c.status === "retry"), JSON.stringify(claims1.map((c) => [c.to, c.status])));
   ok("AG7: ...and the failure was one group attempt", (f1.data?.results ?? []).filter((r) => r.group).length === 3, JSON.stringify((f1.data?.results ?? []).map((r) => [r.to, r.group])));
   await jobLocks.updateOne({ _id: `digest-sent:${AGR}:${grp[1]}` }, { $set: { status: "sent", sent_at: new Date() } });   // say g2's copy went through some other way
-  const f2 = await tick(istAt(AGR, 21, 11), "agr2-" + s, admin, { simulate: ["failed", "sent"] });
+  const f2 = await tick(istAt(AGR, 22, 11), "agr2-" + s, admin, { simulate: ["failed", "sent"] });
   const r2 = f2.data?.results ?? [];
   ok("AG8: the retry regroups only those still owed (g1, g3) and never re-mails the one already sent",
     r2.length === 2 && !r2.some((r) => r.to === grp[1]) && r2.every((r) => JSON.stringify(r.group) === JSON.stringify([grp[0], grp[2]])) && r2.every((r) => r.status === "sent"), JSON.stringify(r2.map((r) => [r.to, r.group, r.status])));
@@ -1807,6 +1808,26 @@ await arm("AG admins share one digest mail (To = first in the list, CC = the res
   await wipeLocks();
 });
 
+// ---- T7 (-355, 23 Nov): the scheduled digest goes Monday to Saturday only. A Sunday tick at 22:00 IST does nothing
+// (no claim, no MailLog row) and says why; the Saturday before and the Monday after fire; Publish now still mails on a Sunday.
+await arm("T7 no scheduled digest on a Sunday", async () => {
+  await wipeLocks();
+  await setListDirect(`u:${uOps.id}`);
+  const SAT = "2031-06-07", SUN = "2031-06-08", MON = "2031-06-09";
+  const sun = await tick(istAt(SUN, 22, 0, 0), "t7sun-" + s);
+  ok("T7: a Sunday tick at 22:00 IST fires nothing and says it is Sunday", sun.status === 200 && sun.data?.fired === false && (sun.data?.results ?? []).length === 0 && /Sunday/.test(String(sun.data?.reason)), JSON.stringify(sun.data).slice(0, 200));
+  const late = await tick(istAt(SUN, 23, 59, 0), "t7sun2-" + s);
+  ok("T7: ...nor later that Sunday evening, and no claim or mail row exists for the Sunday",
+    late.data?.fired === false && (await jobLocks.countDocuments({ _id: { $regex: `^digest-sent:${SUN}:` } })) === 0 && (await mailLogs.countDocuments({ entity: "DailyDigest", subject: mailSubject(SUN) })) === 0, JSON.stringify(late.data).slice(0, 160));
+  const sat = await tick(istAt(SAT, 22, 0, 0), "t7sat-" + s), mon = await tick(istAt(MON, 22, 0, 0), "t7mon-" + s);
+  ok("T7: the Saturday before and the Monday after both fire at 22:00 IST", sat.data?.fired === true && sat.data?.day === SAT && mon.data?.fired === true && mon.data?.day === MON, JSON.stringify([sat.data?.fired, mon.data?.fired]));
+  await jobLocks.deleteMany({ _id: "daily-digest-manual" });
+  const pub = await req(admin, "POST", "/api/reports/daily/publish", { date: SUN });
+  ok("T7: Publish now for a Sunday still mails (a person pressing the button, not the schedule)", pub.status === 200 && pub.data?.attempted === 1 && (await mailLogs.countDocuments({ entity: "DailyDigest", subject: mailSubject(SUN) })) === 1, JSON.stringify({ st: pub.status, a: pub.data?.attempted }));
+  await setListDirect("");
+  await wipeLocks();
+});
+
 // ---- M1 a big joining day: the mail's "by batch" line names at most 10 batches and counts the rest. Last in the
 // suite, on its own day, with Closed batches, so no earlier arm's figures move.
 const CAPD = "2031-09-02";
@@ -1820,7 +1841,7 @@ for (let i = 0; i < 12; i++) {
 }
 await db.collection("batchmembers").insertMany(capTags.map((t) => mem(t, CAPD)));
 await setListDirect(`u:${uAdm.id}`);
-const capTick = await tick(istAt(CAPD, 21, 0), "cap-" + s);
+const capTick = await tick(istAt(CAPD, 22, 0), "cap-" + s);
 const capLine = String(capTick.data?.results?.find((r) => r.to === uAdm.email.toLowerCase())?.text ?? "").split(/\r?\n/).find((l) => l.startsWith("Joined on the day, by batch:")) ?? "";
 const named = capTags.filter((t) => capLine.includes(fx[t].code)).length;
 ok("M1: 12 batches joined on one day: the mail line names 10 of them and says '2 more batches (see the Reports screen)'",
@@ -1828,7 +1849,7 @@ ok("M1: 12 batches joined on one day: the mail line names 10 of them and says '2
 // the edges: exactly 10 names all and adds nothing; 11 says "1 more batch" (singular)
 const capLineFor = async (day, n) => {
   await db.collection("batchmembers").insertMany(capTags.slice(0, n).map((t) => mem(t, day)));
-  const tk = await tick(istAt(day, 21, 0), `cap-${day}-` + s);
+  const tk = await tick(istAt(day, 22, 0), `cap-${day}-` + s);
   return String(tk.data?.results?.find((r) => r.to === uAdm.email.toLowerCase())?.text ?? "").split(/\r?\n/).find((l) => l.startsWith("Joined on the day, by batch:")) ?? "";
 };
 const line10 = await capLineFor("2031-09-03", 10), line11 = await capLineFor("2031-09-04", 11);

@@ -190,12 +190,12 @@ export const suppressFor = (u: { mail_enabled?: unknown }) =>
   (u?.mail_enabled === false ? "mail off for this account (admin toggle)" : undefined);
 
 // mtg-c1 (R4c, Umesh 2026-10-06: "Screen + 1 mail"). When the Defaults switch "digest only" is ON, the
-// PER-EVENT approval mails (a call site marks itself `perEvent: true`) are folded into the 21:00 daily
+// PER-EVENT approval mails (a call site marks itself `perEvent: true`) are folded into the 22:00 daily
 // digest instead of going out one by one. Like the per-account switch above this is honoured at the mail
 // door and leaves a MailLog row - a skipped row naming the reason - rather than dropping the recipient
 // upstream, so "did the approval mail go?" stays answerable. The bell notification is a separate write at
 // each call site and is untouched. The per-account switch wins when both apply (it is the more specific).
-export const DIGEST_ONLY_REASON = "digest-only mode: per-approval mails are folded into the 21:00 daily digest";
+export const DIGEST_ONLY_REASON = "digest-only mode: per-approval mails are folded into the 22:00 daily digest (Monday to Saturday)";
 async function perEventSuppress(perEvent: boolean | undefined): Promise<string | undefined> {
   if (!perEvent) return undefined;
   return (await getDefaults()).digest_only_approval_mails === true ? DIGEST_ONLY_REASON : undefined;

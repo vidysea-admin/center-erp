@@ -1659,7 +1659,7 @@ function DefaultsTab({ error, setError }: any) {
               <span className="block text-xs text-gray-500">Off: every send is skipped and recorded as skipped. Sending also stays off until the mail credentials are configured on the server.</span>
             </span>
           </label>
-          {/* mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"): the 21:00 IST daily digest. Recipients are ERP
+          {/* mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"): the 22:00 IST daily digest. Recipients are ERP
               accounts; the finance section goes only to those who hold finance.view. */}
           <DigestRecipients value={form.digest_recipients ?? ""} onChange={(v) => setForm({ ...form, digest_recipients: v })} toggleOn={form.digest_only_approval_mails === true} reloadKey={savedKey} canType={(_sess?.user as any)?.role === "Admin"} />
           <label className="flex items-start gap-2 text-sm">
@@ -1913,7 +1913,7 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
         <Link href="/reports/daily" data-testid="digest-publish-shortcut" className="text-xs text-blue-700 underline">See today&apos;s digest and Publish now</Link>
       </span>
       <span className="block text-xs text-gray-500">
-        One mail a day at 21:00 IST to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
+        One mail a day at 22:00 IST, Monday to Saturday (none on Sunday), to everyone listed. Pick ERP users (each gets the report for their own centres, and the cost section only if they hold the finance right)
         {canType ? " and/or type any email address (a typed address gets the full report, cost section included). " : ". Only an Admin can add an outside email address. "}Admins whose report is the same get one mail together, each other in copy; everyone else gets a private mail. Empty: no digest mail is sent.
       </span>
       {toggleOn && health?.digest_only_nobody && (
@@ -2063,7 +2063,7 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
   return (
     <Section title="Weekly targets" actions={mayEdit ? <Btn small onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn> : undefined}>
       <p className="mb-3 text-sm text-gray-600">
-        The daily digest (21:00 mail and Reports, Daily digest) shows each week&apos;s actual against these, and the cumulative actual against the
+        The daily digest (22:00 mail and Reports, Daily digest) shows each week&apos;s actual against these, and the cumulative actual against the
         running total. A week runs Monday to Sunday. Leave a figure blank if there is no target for it.
       </p>
       {saved && <div data-testid="targets-saved" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{saved}</div>}

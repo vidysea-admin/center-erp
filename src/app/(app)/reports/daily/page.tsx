@@ -7,7 +7,7 @@ import { Btn, ErrorBanner } from "@/components/ui";
 import { usePerms } from "@/components/shell";
 
 // mtg-c1 (R4) - the daily digest. Karunn sir, 2026-10-06: "all reporting from the system, no Excel";
-// Manual Publish now and the 21:00 IST scheduled mail are both allowed. This is the SCREEN. All three
+// Manual Publish now and the 22:00 IST scheduled mail are both allowed. This is the SCREEN. All three
 // read the same `dailyDigest` (lib/rules.ts), so a number here is the
 // number in the mail. The page computes nothing: every figure arrives finished, already limited to the
 // viewer's centres, and the Costs block arrives only for someone who holds the finance right (it is
@@ -17,7 +17,7 @@ export default function DailyDigestPage() {
 }
 
 // Karunn sir, 2026-11-02: "tabular form - text and visuals are not understood". The tables arrive finished
-// from dailyDigest (every cell already worded, the same cells the 21:00 mail draws); this only lays them out.
+// from dailyDigest (every cell already worded, the same cells the 22:00 mail draws); this only lays them out.
 // Cell testid: digest-cell-<table>-<row>-<col>, so the suite can hold screen = API = mail cell by cell. <row> is the
 // row's index in the DATA, whatever the sort or filter on screen, so the suite's cell ids never move.
 // Umesh, 2026-11-03: the screen is a dashboard, not the mail - sort any column, filter rows, hide zero rows,
@@ -254,7 +254,7 @@ function DailyDigestInner() {
         <div>
           <h1 className="text-xl font-semibold">Daily digest</h1>
           <p className="text-sm text-gray-500">
-            The day at a glance, from the system. The same figures are mailed once a day at {meta?.hour ?? 21}:00 IST.{" "}
+            The day at a glance, from the system. The same figures are mailed at {meta?.hour ?? 22}:00 IST, Monday to Saturday (none on Sunday).{" "}
             <Link href="/reports" className="text-blue-700 underline">Back to Reports</Link>
           </p>
         </div>

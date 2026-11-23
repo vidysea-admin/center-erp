@@ -385,7 +385,7 @@ later" are the create drawer (`batches/page.tsx`) and the detail edit form (`bat
 
 `dailyDigest(dayIST, viewer, opts?)` in `lib/rules.ts` is the only code that computes the day's numbers. Three
 things read it and none re-derives a count: the screen `/reports/daily` (`GET /api/reports/daily`), the
-"Publish now" button (`POST /api/reports/daily/publish`, gated by `defaults.manage`) and the 21:00 IST mail
+"Publish now" button (`POST /api/reports/daily/publish`, gated by `defaults.manage`) and the 22:00 IST mail (Monday to Saturday)
 (`digestTick` in `lib/daily-digest.ts`, the 4th interval in `instrumentation.ts`). It reuses, rather than
 copies: `trainerAvailabilityTag` (now in `lib/person.ts`, was inline in `trainers/page.tsx`),
 `STAGE_BUCKETS`/`BUCKET_KEYS` (now exported from `rules.ts`, were inline in `api/open-positions`),
@@ -401,6 +401,10 @@ re-taken by that same atomic step after `DIGEST_SENDING_STALE_MS` (15 minutes) a
 the cap (trade-off, stated: a send that was only slow, not dead, and finishes after 15 minutes can mail twice;
 the alternative is a crash losing the whole day). The claim key is the NORMALISED LOWERCASE EMAIL, so a person
 listed as an ERP user and as a typed address with the same email is one claim and one mail.
+
+**Schedule (-355, 23 Nov): 22:00 IST, Monday to Saturday.** `DIGEST_HOUR_IST = 22`; `digestTick` returns before any lock
+or claim when the IST day (read from the day string, `istWeekday`, never the process clock) is a Sunday, so a Sunday leaves
+no claim and no MailLog row. Fixed in code by decision, not an Admin setting. Publish now is not limited by the day.
 
 **Admins share one mail (-354, Umesh 2026-11-13).** After each copy is rendered for its own viewer, `groupAdmins`
 (`lib/daily-digest.ts`) puts the deliverable ACCOUNT recipients with role Admin whose html+text are byte-identical into
@@ -457,7 +461,7 @@ an optional `opts.from`. The ONE check is `assertDigestFrom(from, day)` in `rule
 most 366 days back. Both routes call it before anything is read or mailed, and so does `dailyDigest`. With `from`, the
 cumulative column becomes "Range (from to day)", and the target table's cumulative figure sums only the WeeklyTarget weeks
 from `istWeekOf(from)` (that week counted whole). Without it, nothing changes. Publish now passes `{date, from}` through
-`publishDigestNow` → `sendOne` → `dailyDigest`. The subject and the link name the range. The 21:00 tick never sends one.
+`publishDigestNow` → `sendOne` → `dailyDigest`. The subject and the link name the range. The 22:00 tick never sends one.
 The screen (`reports/daily/page.tsx`, `DigestTableView`) is presentation only over the same worded cells:
 - a section dropdown, with `?section=` in the URL, as are `date` and `from`;
 - per-column sort on the number a cell shows (`cellNumber`); sub rows move with their parent;
@@ -498,7 +502,7 @@ from exactly one line of `lib/daily-digest.ts` (pinned by e2e arm U12); `finance
 the Admin bypass. A deliverable recipient is an eligible ERP user (active, non-Trainer, mail switch on) or a
 valid typed address; `digest_only_approval_mails` is refused ON, or saved while ON, with none. If it is ON and
 the last deliverable recipient later goes, `digestHealth()` says so (`meta.digest_only_nobody`, a red warning on
-Defaults and on `/reports/daily`) and the 21:00 tick writes one `DailyDigestWarning` MailLog row per day (a
+Defaults and on `/reports/daily`) and the 22:00 tick writes one `DailyDigestWarning` MailLog row per day (a
 `digest-warn:<day>` claim). "Publish now" returns up to three reasons per category (`not_sent_reasons`) and
 `typed_addresses`.
 

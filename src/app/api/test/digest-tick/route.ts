@@ -5,8 +5,8 @@ import { digestTick } from "@/lib/daily-digest";
 import { istDayOf } from "@/lib/rules";
 
 // TEST-ONLY clock door for the daily digest (mtg-c1). Every test env runs with SCHEDULER_DISABLED=1, so
-// the 21:00 tick never fires on its own; this runs ONE tick as if the clock read `now` and the caller
-// were container `instance`, so a suite can put the clock at 20:59 and 21:00 and race two "containers".
+// the 22:00 tick never fires on its own; this runs ONE tick as if the clock read `now` and the caller
+// were container `instance`, so a suite can put the clock at 21:59 and 22:00 and race two "containers".
 // Same two independent gates as /api/test/reset-sms-cap: it 404s unless MONGODB_DB is a center_erp_ci*
 // test database (checked FIRST, so in production the route does not exist), and it needs an Admin session.
 // It also returns the mail text it composed per recipient, which the real tick does not.

@@ -19,7 +19,7 @@ import type { SessionUser } from "@/auth";
 //     one atomic findOneAndUpdate on {status: "retry", attempts < 3, next_at <= now}, so two processes
 //     racing for the same claim, first or retry, cannot both win it.
 //   * `takeJobLock("daily-digest")` (the same lock the other ticks use) is only an EFFICIENCY guard: it
-//     stops two containers each walking the whole recipient list at 21:00. Nothing relies on it for
+//     stops two containers each walking the whole recipient list at 22:00. Nothing relies on it for
 //     correctness (the suite races ticks with the lock switched off and still gets one mail).
 //   * The claim records the outcome. status: "sending" (taken, mail in flight; a crash here leaves it
 //     "sending" for good: one mail possibly missed, never two sent) -> "sent" (final, never retried) |
@@ -52,7 +52,12 @@ import type { SessionUser } from "@/auth";
 // copy would not show. Everyone else is unchanged: one private mail each. The claims stay per person: each member's claim
 // is taken first, only the winners are grouped, and every member's claim is settled with the group's one outcome, so a
 // failed group send retries them together on a later tick (regrouped from whoever is still owed).
-export const DIGEST_HOUR_IST = 21;
+// -355 (23 Nov): 22:00 IST, Monday to Saturday. Decided in code, not as an admin setting; a Sunday is simply skipped (its
+// figures stay on the Reports screen and in the cumulative column), and Publish now still works on any day.
+export const DIGEST_HOUR_IST = 22;
+export const DIGEST_SEND_DAYS = "Monday to Saturday";
+// The IST weekday of an IST day string, read from the string itself (never the process clock): 0 = Sunday.
+export const istWeekday = (day: string) => new Date(`${day}T00:00:00Z`).getUTCDay();
 export const DIGEST_MAX_ATTEMPTS = 3;
 export const DIGEST_RETRY_GAP_MS = 10 * 60_000;
 export const DIGEST_SENDING_STALE_MS = 15 * 60_000;
@@ -335,6 +340,9 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
   const instance = opts.instance ?? "digest-" + process.pid;
   const day = istDayOf(now);
   if (istMinuteOfDay(now) < DIGEST_HOUR_IST * 60) return { fired: false, day, reason: `before ${DIGEST_HOUR_IST}:00 IST`, results: [] };
+  // -355: no scheduled digest on a Sunday. Checked before any lock or claim, so a Sunday leaves no trace; a Saturday retry
+  // cannot spill into it either, because a retry never leaves its own IST day.
+  if (istWeekday(day) === 0) return { fired: false, day, reason: `no scheduled digest on Sunday (it goes ${DIGEST_SEND_DAYS})`, results: [] };
   await dbConnect();
   if (!opts.skipLock && !(await takeJobLock("daily-digest", 10 * 60_000, instance))) {
     return { fired: false, day, reason: "another container holds the daily-digest lock", results: [] };
@@ -389,7 +397,7 @@ export async function digestTick(opts: { now?: Date; instance?: string; includeT
 }
 
 // "Publish now": mail the digest to the recipient list at once, for any day, from the screen. Does not
-// touch the day claims, so the 21:00 mail still goes (the two are different acts: this one is somebody
+// touch the day claims, so the 22:00 mail still goes (the two are different acts: this one is somebody
 // pressing a button). A 30-second cooldown stops a double click mailing everyone twice. The caller has
 // already checked defaults.manage.
 export async function publishDigestNow(day: string, user: SessionUser, from?: string | null) {

@@ -1334,7 +1334,7 @@ export async function decisionMailFor(
 // Only the requester (the request's initiator) is mailed - never the other approvers, never an
 // address typed anywhere. It goes through mailUsers, so the global email_enabled switch, the
 // per-account switch and the MailLog row apply unchanged (MailLog entity "ApprovalDecision"). It is
-// NOT marked perEvent: digest-only mode folds the per-approval "needed" mails into the 21:00 digest,
+// NOT marked perEvent: digest-only mode folds the per-approval "needed" mails into the 22:00 digest,
 // and that digest never lists decisions, so folding this one would mean the requester is never told.
 // Fire-and-forget at the call site: a mail problem must never fail or undo a decision that has
 // already been made.

@@ -108,7 +108,7 @@ export async function register() {
     }
   };
 
-  // mtg-c1 (R4): the daily digest. Every minute is enough: digestTick returns at once before 21:00 IST,
+  // mtg-c1 (R4): the daily digest. Every minute is enough: digestTick returns at once before 22:00 IST,
   // and after it takes the lock and claims the IST day durably, so it fires once per day however many
   // containers run and however many times one restarts.
   const digestJob = async () => {
@@ -127,5 +127,5 @@ export async function register() {
   setInterval(stagedSweep, 30 * 60_000);
   setTimeout(alertTick, 15_000); // one pass shortly after boot
   setTimeout(stagedSweep, 45_000);
-  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes, staged-certificate sweep every 30, daily digest at 21:00 IST");
+  console.log("[scheduler] registered — sheet sync every minute, alerts every 10 minutes, staged-certificate sweep every 30, daily digest at 22:00 IST, Monday to Saturday");
 }

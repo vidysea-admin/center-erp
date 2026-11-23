@@ -427,7 +427,7 @@ export function istToday(): Date {
 
 // mtg-c1 (R4): the IST calendar day (YYYY-MM-DD) and the IST minute-of-day of ANY instant, not only of
 // "now" - the daily digest's tick is handed its clock as an argument so a test can put it at 20:59 and
-// 21:00 without touching the process clock. `istToday()` above is the same shift applied to the real
+// 22:00 without touching the process clock. `istToday()` above is the same shift applied to the real
 // clock; its literal stays inline because check-user-copy.mjs (QA-1123) reads that shift to prove the
 // client's istTodayInput and the server agree.
 export const IST_OFFSET_MIN = 330;
@@ -6076,7 +6076,7 @@ export async function recentlyApprovedTargets(
 // ---------- The daily digest (mtg-c1, R4) ----------
 // Karunn sir, 2026-10-06: "all reporting from the system, no Excel" - and Umesh's decision on the
 // notification noise: "Screen + 1 mail". ONE function builds the digest; the screen /reports/daily, the
-// "Publish now" button and the 21:00 IST mail (lib/daily-digest.ts) all read it, so the three can never
+// "Publish now" button and the 22:00 IST mail (lib/daily-digest.ts) all read it, so the three can never
 // disagree about a number and none of them re-derives a count.
 //
 // Three sections, and each is built from what the product already defines rather than a second reading:

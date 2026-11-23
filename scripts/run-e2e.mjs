@@ -141,7 +141,7 @@ const SUITES = [
   // approved only, centre-scoped, stamped through the real write door). Its own file and browser.
   "e2e-planning-and-approved.mjs",
   // mtg-c1 (R4, QA-2871/2872/2873, meeting 2026-10-06): the daily digest - dailyDigest(day, viewer) read by the
-  // /reports/daily screen, Publish now and the 21:00 IST mail; once per IST day under a lock and a durable day
+  // /reports/daily screen, Publish now and the 22:00 IST mail; once per IST day under a lock and a durable day
   // key; finance only for finance.view; and the "digest only" toggle on the per-approval mails. Its own file and browser.
   "e2e-daily-digest.mjs",
   // mtg-a3 (R5/R7/R9, QA-2880/2881/2882, meeting 2026-10-06): "Approved by / on" on the register, ledger and export;

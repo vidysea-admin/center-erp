@@ -244,7 +244,8 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // No number is quoted.
 // -354 note: the daily digest goes to the admins as ONE mail together, each other in copy (Umesh, 13 Nov); everyone else
 // keeps a private mail. No number is quoted.
-export const RELEASE = "2026.08.14-354";
+// -355 note: the scheduled daily digest moves to 22:00 IST and goes Monday to Saturday only (23 Nov). No number is quoted.
+export const RELEASE = "2026.08.14-355";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -316,6 +317,14 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-355: the daily report mail now goes at 22:00 IST instead of 21:00, and only from Monday to Saturday. " +
+  "No daily report mail is sent on a Sunday. Sunday's figures are still on the Reports, Daily digest screen, and they count in the cumulative column of the following mails. " +
+  "Publish now on the daily digest screen still works on any day, Sunday included. " +
+  "Who receives the mail, and the one shared mail for the admins, are unchanged. The time and the days are fixed in the system, not an Admin setting. " +
+  "No figure in the report has changed.";
+
+// -355: the -354 note moved here unchanged when -355 became current.
+const RELEASE_NOTE_ARCHIVE_354 =
   "-354: the daily report mail now goes to the admins together. " +
   "Until now every person on the daily digest list got a separate mail and could not see who else had it. Now the admins on the list get one mail between them: it is addressed to the first admin on the list, the other admins are in copy, and the mail starts with a line naming everyone it went to, so they can reply to each other on it. " +
   "Only admins whose report is exactly the same share the mail. An admin who cannot see cost figures, or who sees only some centres, gets their own mail as before, so no one sees a figure through the shared mail that their own report would not show. " +
@@ -2413,6 +2422,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -352: ARCHIVE_351 wired in here in the SAME bump that declared it, same discipline.
   // -353: ARCHIVE_352 wired in here in the SAME bump that declared it, same discipline.
   // -354: ARCHIVE_353 wired in here in the SAME bump that declared it, same discipline.
+  // -355: ARCHIVE_354 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_354 + " " +
   RELEASE_NOTE_ARCHIVE_353 + " " +
   RELEASE_NOTE_ARCHIVE_352 + " " +
   RELEASE_NOTE_ARCHIVE_351 + " " +

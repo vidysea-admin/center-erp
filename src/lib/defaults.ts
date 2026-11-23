@@ -64,7 +64,7 @@ export type AppDefaults = {
   // redeploy. Credentials themselves NEVER live here — defaults are readable by every
   // authenticated user.
   email_enabled: boolean;
-  // mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"). Who gets the 21:00 IST daily digest: ERP-user emails,
+  // mtg-c1 (R4, Umesh 2026-10-06: "Screen + 1 mail"). Who gets the 22:00 IST daily digest: ERP-user emails,
   // comma / semicolon / newline separated. A STRING on purpose - getDefaults() only merges number, string
   // and boolean fields. Empty (the default) means the digest is not mailed to anyone.
   digest_recipients: string;

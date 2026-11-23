@@ -144,7 +144,7 @@ const NAV = [
   // decides who sees which rows, so a centre login opening this sees its own centre and nothing
   // else. Everyone gets the entry; the report itself is what is scoped.
   { href: "/reports", label: "Reports", Icon: IconCap },
-  // mtg-c1 (R4): the daily digest screen; the 21:00 IST mail is the same data.
+  // mtg-c1 (R4): the daily digest screen; the 22:00 IST mail is the same data.
   { href: "/reports/daily", label: "Daily digest", Icon: IconCap, roles: [...ADMIN_OPS, "Location", "Enrollment"] },
 ] as { href: string; label: string; Icon: any; badge?: string; roles?: string[]; perm?: string }[];
 
