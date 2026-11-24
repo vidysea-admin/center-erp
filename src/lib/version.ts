@@ -245,7 +245,9 @@ const RELEASE_NOTE_ARCHIVE_283 =
 // -354 note: the daily digest goes to the admins as ONE mail together, each other in copy (Umesh, 13 Nov); everyone else
 // keeps a private mail. No number is quoted.
 // -355 note: the scheduled daily digest moves to 22:00 IST and goes Monday to Saturday only (23 Nov). No number is quoted.
-export const RELEASE = "2026.08.14-355";
+// -356 note: the daily report mail has no table descriptions; Against target reads trainers as a headcount and students as new
+// ones each week, and gains an enrolment target (Umesh, 24 Nov). No number is quoted.
+export const RELEASE = "2026.08.14-356";
 const RELEASE_NOTE_ARCHIVE_318 =
   "-318 changes what you can see about someone who was dropped from a batch, and what the screen "  +
   "says when several things are done at once and some of them fail. "  +
@@ -317,6 +319,14 @@ const RELEASE_NOTE_ARCHIVE_321 =
 // planning tracker keeps batches waiting for results). Each was shown by the unit's own checks; the pass was recorded by the
 // checker. No number is quoted.
 export const RELEASE_NOTE_CURRENT =
+  "-356: the daily report mail no longer carries the grey description lines under each table. They are still on the Reports, Daily digest screen. " +
+  "Against target now reads each row the way it really works. Trainers are a headcount: the target is the total number of trained trainers we should have by that week, and it is not added up over the weeks, so two weeks of 10 mean 10, not 20. The report compares it with the trainers trained today, those assigned to a live batch plus those free to assign. If a week has no trainer figure, the latest earlier one is used. " +
+  "Students are counted as new ones each week: a week's target is that week's figure, and the cumulative target is the weeks added up from the first target week. " +
+  "A new target, students enrolled (new that week), is added to Against target and to Admin, Targets, which also accepts it in a paste. The running column there now adds up only certified and enrolled, not trainers. " +
+  "Who receives the mail and the time it goes are unchanged.";
+
+// -356: the -355 note moved here unchanged when -356 became current.
+const RELEASE_NOTE_ARCHIVE_355 =
   "-355: the daily report mail now goes at 22:00 IST instead of 21:00, and only from Monday to Saturday. " +
   "No daily report mail is sent on a Sunday. Sunday's figures are still on the Reports, Daily digest screen, and they count in the cumulative column of the following mails. " +
   "Publish now on the daily digest screen still works on any day, Sunday included. " +
@@ -2423,6 +2433,8 @@ const RELEASE_NOTE_ARCHIVE =
   // -353: ARCHIVE_352 wired in here in the SAME bump that declared it, same discipline.
   // -354: ARCHIVE_353 wired in here in the SAME bump that declared it, same discipline.
   // -355: ARCHIVE_354 wired in here in the SAME bump that declared it, same discipline.
+  // -356: ARCHIVE_355 wired in here in the SAME bump that declared it, same discipline.
+  RELEASE_NOTE_ARCHIVE_355 + " " +
   RELEASE_NOTE_ARCHIVE_354 + " " +
   RELEASE_NOTE_ARCHIVE_353 + " " +
   RELEASE_NOTE_ARCHIVE_352 + " " +

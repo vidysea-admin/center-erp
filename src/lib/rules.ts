@@ -6383,7 +6383,8 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   // and the cumulative target, both". Every period column is the SAME reading over a different range, and
   // the "on the day" column must equal the day's figure above it (the e2e pins that): one definition each.
   const week = istWeekOf(dayIST);
-  const targetRows = isScoped(viewer) ? [] : await WeeklyTarget.find({ week_start: { $lte: dayKey(week.from) } }).sort({ week_start: 1 }).lean<any[]>();
+  const weeklyRows = isScoped(viewer) ? [] : await WeeklyTarget.find({ week_start: { $lte: dayKey(week.from) } }).sort({ week_start: 1 }).lean<any[]>();
+  const targetRows = [...weeklyRows];   // the flow rows' weeks; a range cuts this copy, never the trainers' look-back over weeklyRows
   // A chosen range keeps only the target weeks it touches (the week holding `from` counts whole, like the current week).
   if (rangeFrom) { const firstWeek = istWeekOf(rangeFrom).from; for (let i = targetRows.length - 1; i >= 0; i--) if (new Date(targetRows[i].week_start).toISOString().slice(0, 10) < firstWeek) targetRows.splice(i, 1); }
   const cumFrom: string | null = rangeFrom ?? (targetRows.length ? new Date(targetRows[0].week_start).toISOString().slice(0, 10) : null);
@@ -6446,13 +6447,38 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
   // company's target against its own centre's actual and see a false gap) -----------------------------------
   const weekRow = targetRows.find((r) => new Date(r.week_start).toISOString().slice(0, 10) === week.from) ?? null;
   const has = (v: unknown) => v !== null && v !== undefined;
+  // -356 (Umesh, 2026-11-24): each target is one of three kinds and is read as that kind.
+  //  - FLOW (certified, enrolled): new ones each week; the cumulative target is the weekly rows added up (a range: only the weeks it touches).
+  //  - LEVEL (in training): this week's row against the number in training now; no cumulative.
+  //  - STOCK (trainers): the row is the TOTAL we should have by that week, so it is never added up (two weeks of 10 is 10, not 20).
+  //    The target is the current IST week's row (a range: its end week); a blank or missing row takes the latest earlier figure.
   const sumTo = (f: string) => (targetRows.some((r) => has(r[f])) ? targetRows.reduce((s, r) => s + (Number(r[f]) || 0), 0) : null);
   const tgt = (f: string) => (weekRow && has(weekRow[f]) ? Number(weekRow[f]) : null);
+  const trainerRow = [...weeklyRows].reverse().find((r) => has(r.trainers_trained)) ?? null;
+  const trainerFrom = trainerRow ? new Date(trainerRow.week_start).toISOString().slice(0, 10) : null;
+  const trainerTarget = trainerRow ? Number(trainerRow.trainers_trained) : null;
+  // The headcount actual is the Trainers table's own two rows (Assigned to a live batch + Free to assign), not a second count.
+  // It is today's headcount, even when an earlier date is picked (like the Now column).
+  const trainedNowCount = assigned + idle;
+  // Each FLOW measure counts from ITS OWN first target week (a range: the range start), so its cumulative actual covers exactly the
+  // weeks its cumulative target adds up. One shared start (the first week of ANY measure) put a false surplus on a measure whose
+  // targets begin later (trainer totals from 19 Oct, enrolment from 23 Nov). A measure with no target at all keeps cumFrom.
+  const flowFrom = (f: string): string | null => {
+    if (rangeFrom) return rangeFrom;
+    const first = targetRows.find((r) => has(r[f]));
+    return first ? new Date(first.week_start).toISOString().slice(0, 10) : cumFrom;
+  };
+  const certFrom = flowFrom("candidates_certified"), enrFrom = flowFrom("candidates_enrolled");
+  const [certCum, enrCum] = await Promise.all([
+    certFrom === cumFrom ? flows.certified.cum : CandidateResult.countDocuments({ certificate_status: "Issued", certificate_date: inst(certFrom), ...inScopeBatches }),
+    enrFrom === cumFrom ? flows.enrolled.cum : Candidate.countDocuments({ enrolled_at: inst(enrFrom), ...scope }),
+  ]);
   const targets = isScoped(viewer) ? null : {
     week_from: week.from, cumulative_from: cumFrom, rows: [
-      { key: "trainers_trained", label: "Trainers trained (reached Certified)", week_target: tgt("trainers_trained"), week_actual: flows.trainers_entered.certified.week, cum_target: sumTo("trainers_trained"), cum_actual: flows.trainers_entered.certified.cum as number | null },
+      { key: "trainers_trained", label: "Trainers trained (total now)", week_target: trainerTarget, week_actual: trainedNowCount, cum_target: null as number | null, cum_actual: null as number | null },
       { key: "candidates_in_training", label: "Candidates in training (started Active batch, now)", week_target: tgt("candidates_in_training"), week_actual: currentOngoing.length, cum_target: null as number | null, cum_actual: null as number | null },
-      { key: "candidates_certified", label: "Candidates certified (certificate issued)", week_target: tgt("candidates_certified"), week_actual: flows.certified.week, cum_target: sumTo("candidates_certified"), cum_actual: flows.certified.cum as number | null },
+      { key: "candidates_certified", label: "Candidates certified (certificate issued)", week_target: tgt("candidates_certified"), week_actual: flows.certified.week, cum_target: sumTo("candidates_certified"), cum_actual: certCum as number | null },
+      { key: "candidates_enrolled", label: "Candidates enrolled (new)", week_target: tgt("candidates_enrolled"), week_actual: flows.enrolled.week, cum_target: sumTo("candidates_enrolled"), cum_actual: enrCum as number | null },
     ],
   };
 
@@ -6518,8 +6544,13 @@ export async function dailyDigest(dayIST: string, viewer: SessionUser, opts: { f
       cells: [fmtN(r.week_target), fmtN(r.week_actual), fmtVar(r.week_actual, r.week_target), fmtN(r.cum_target), fmtN(r.cum_actual), fmtVar(r.cum_actual, r.cum_target)],
       tones: ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)],
     })),
-    note: weekRow
-      ? `Targets come from the weekly plan (RPL - Revised Plan, Sheet2), entered under Admin, Targets. Week of ${week.from}: the week target is for the whole week, and the actual is counted up to ${dayIST}, so early in the week the +/− shows what is still to do. ${rangeFrom ? `Range target = all weekly targets from the week of ${rangeFrom} (that week counted whole).` : `Cumulative target = all weekly targets since ${cumFrom}, including this whole week.`} In training is the number of candidates in training today, not a running total, so it has no cumulative figure. Trainers trained = trainers moved to Certified in the period, each counted once. It matches the Certified row of the Trainers table in its This week and Cumulative (or Range) columns, not in its Now column. Candidates certified (certificate issued) matches Certificates issued in the Candidates table: it counts certificates, not people.`
+    // -356: what each row counts, in plain words (screen only: the mail carries no notes).
+    note: weekRow || trainerRow
+      ? `${weekRow ? "" : `No target row is set for the week of ${week.from} (Admin, Targets), so only the trainers' figure is shown, carried forward. `}Targets come from the weekly plan (RPL - Revised Plan, Sheet2), entered under Admin, Targets. Week of ${week.from}. `
+        + `Trainers: the target is the total number of trained trainers we should have by this week. It is not added up over the weeks${trainerFrom && trainerFrom !== week.from ? ` (this week has no figure, so the latest earlier one, from the week of ${trainerFrom}, is used)` : ""}. The actual is the trainers trained today: Assigned to a live batch + Free to assign in the Trainers table, today's count even when an earlier date is picked. The +/− is that total against that total, and it has no cumulative figure. `
+        + `Candidates in training: this week's target against the number in training today, not a running total, so it has no cumulative figure. `
+        + `Candidates certified (certificate issued) and Candidates enrolled (new) count NEW ones: the week target is the figure for this week, and the cumulative target is the weekly figures added up ${rangeFrom ? `from the week of ${rangeFrom} (that week counted whole)` : `from the first week that measure has a target (certified from ${certFrom ?? "—"}, enrolled from ${enrFrom ?? "—"}), up to and including this whole week`}, against what actually happened from that same day. The week actual is counted up to ${dayIST}, so early in the week the +/− shows what is still to do. `
+        + `Certified matches Certificates issued in the Candidates table: it counts certificates, not people. Enrolled matches the Enrolled row of the Candidates table in its This week column; in its Cumulative (or Range) column only when both start on the same day (that table starts ${cumFrom ?? "at all time"}).`
       : `No target is set for the week of ${week.from} (Admin, Targets).`,
   });
   // -351 (Umesh, 2026-11-10: "cost wale mai bhi label thik krne hai"): every row names its real date or month. "On the day" and

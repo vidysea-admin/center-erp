@@ -228,7 +228,8 @@ export function digestMailContent(d: DailyDigest, together?: string[]) {
   return renderMail({
     title: `Daily digest, ${d.day}`,
     lines,
-    tables: d.tables,
+    // -356 (Manish ji): the mail carries the tables WITHOUT their descriptions. The API and the screen keep every note.
+    tables: d.tables.map(({ note: _note, ...t }) => t),
     cta: { label: "Open the daily digest", url: `https://www.vidysea.com/erp/reports/daily?date=${d.day}${d.range_from ? `&from=${d.range_from}` : ""}` },
   });
 }

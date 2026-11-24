@@ -422,7 +422,8 @@ person: the tick takes each claim first, groups only the winners, and settles ev
 (`DigestTableView` in `reports/daily/page.tsx`, testid `digest-cell-<table>-<row>-<col>`) only draw them, so they
 cannot disagree (e2e arms K6 and S1 hold mail = API = screen cell for cell). The tables are Trainers, Candidates,
 Against target (unscoped viewers only: targets are organisation-wide, so a centre login gets `targets: null`) and
-Costs (the `finance.view` rule above, unchanged). Columns are Now / On the day / This week / Cumulative. The week is
+Costs (the `finance.view` rule above, unchanged). Columns are Now / On the day / This week / Cumulative. The mail carries the tables
+WITHOUT their `note` descriptions (-356, Manish ji: `digestMailContent` strips them); the API and the screen keep them. The week is
 Monday to Sunday IST (`istWeekOf` in `rules.ts`), and the cumulative column starts at the first `WeeklyTarget` week, or at all time
 when there is none (always all time for a centre login). A trainer ENTERS a stage at its AuditLog row
 `{entity:"Trainer", field:"pipeline_status" | "pipeline_bypass"}` (written by `api/trainers/[id]/transition`;
@@ -446,10 +447,31 @@ trainers whose status is Unavailable, plus Dropped trainers with `dropped_from_s
 re-exported by `models`). It is required when `status` becomes Unavailable (`applyTrainerUnavailableReason` in `rules.ts`,
 called by both trainer write doors) and when a Certified trainer is dropped (`transitionTrainer`, bypass
 included); rows from before 2026-11-02 count as "Reason not set". **Weekly targets** are the `WeeklyTarget` model
-(`week_start` = a Monday, stored as a business date), written only through `PUT /api/targets/weekly`
+(`week_start` = a Monday, stored as a business date; four figures: `trainers_trained`, `candidates_in_training`,
+`candidates_certified`, `candidates_enrolled`), written only through `PUT /api/targets/weekly`
 (`defaults.manage` + `requireEdit`). That route validates the whole list before writing anything (Monday, no duplicate,
 whole number 0–100000 or blank); an all-blank week is removed, every changed figure is audited, and a week the list
-does not mention is left as it is. Entry is Admin → Targets: a grid, or a paste from Excel that the screen only parses.
+does not mention is left as it is. Entry is Admin → Targets: a grid, or a paste from Excel that the screen only parses (week, trainers, in training,
+certified, enrolled; the running column adds up only the two flow figures).
+
+**Stock vs flow (-356, Umesh 2026-11-24; the old rule summed every week's target, so two weeks of 10 trainers read as 20).**
+Each Against target row is one of three kinds and `dailyDigest` treats it as that kind, never summing a stock:
+- **Trainers = a STOCK (headcount).** The week row is the TOTAL of trained trainers we should have by that week (11 then 14 means
+  three more needed, not 14 new). Target = the row of the current IST week (the range's end week with `from`); if that row is blank
+  or missing, the latest earlier non-blank row (carried forward, and the note says from which week). Actual = the live headcount,
+  the Trainers table's own `Assigned to a live batch` + `Free to assign` (same variables, not a second count). Both go in the
+  WEEK columns and the +/− is actual minus target; the cumulative cells are dashes (a headcount has no running total). Because
+  the screen's progress bar reads the week columns, it reads trained now / total needed.
+- **Candidates in training = a LEVEL**, unchanged: this week's row against the number in training today, no cumulative.
+- **Candidates certified and Candidates enrolled (new) = FLOWS.** Week target = this week's row, week actual = new this week;
+  cumulative target = the weekly rows added up from the first target week (or, with `from`, only the weeks the range touches) up
+  to the current week, cumulative actual = new since that first week. Certified counts `CandidateResult` certificates as before;
+  Enrolled counts `Candidate.enrolled_at`, scoped like the Candidates table's Enrolled row (the two agree cell for cell, e2e K4).
+  Each flow counts from ITS OWN first target week (`flowFrom` in `dailyDigest`; with `from`, the range start), so its cumulative actual
+  covers exactly the weeks its cumulative target adds up. A measure whose targets begin later than the others (trainer totals from
+  19 Oct, enrolment from 23 Nov) therefore shows no false surplus. The Candidates table's own Cumulative column still starts at the
+  first target week of any measure (`cumFrom`), so the two agree cell for cell only when they start on the same day; the note says so.
+  The trainers' actual is today's headcount even when an earlier date is picked, and the note says so.
 
 **Activity tracker (same review).** A successful sign-in writes an AuditLog row `{entity:"User", field:"login"}`
 and `User.last_login_at` (`authorize` in `src/auth.ts`; it can never fail a sign-in). `GET /api/users?activity=<day>`
@@ -459,8 +481,8 @@ it in `ActivityOverview`. "Log" opens `GET /api/audit/by-user/<id>?day=<day>`. S
 **Range and dashboard (-342, Umesh 2026-11-03: "Monday, Monday+Tuesday, Monday..Thursday").** `dailyDigest` takes
 an optional `opts.from`. The ONE check is `assertDigestFrom(from, day)` in `rules.ts`: a real day, not after `day`, and at
 most 366 days back. Both routes call it before anything is read or mailed, and so does `dailyDigest`. With `from`, the
-cumulative column becomes "Range (from to day)", and the target table's cumulative figure sums only the WeeklyTarget weeks
-from `istWeekOf(from)` (that week counted whole). Without it, nothing changes. Publish now passes `{date, from}` through
+cumulative column becomes "Range (from to day)", and the target table's cumulative figure for the FLOW rows (certified, enrolled) sums only the WeeklyTarget weeks
+from `istWeekOf(from)` (that week counted whole); the trainers' headcount row uses the range's end week and is never summed (-356). Without it, nothing changes. Publish now passes `{date, from}` through
 `publishDigestNow` → `sendOne` → `dailyDigest`. The subject and the link name the range. The 22:00 tick never sends one.
 The screen (`reports/daily/page.tsx`, `DigestTableView`) is presentation only over the same worded cells:
 - a section dropdown, with `?section=` in the URL, as are `date` and `from`;

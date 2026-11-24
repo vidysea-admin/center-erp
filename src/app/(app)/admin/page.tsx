@@ -1977,9 +1977,10 @@ function DigestRecipients({ value, onChange, toggleOn, reloadKey, canType }: { v
 // (/api/targets/weekly) is the validator: every row is checked before anything is written, and a bad row
 // is refused by number. This screen only reads the paste and shows what will be sent.
 const TARGET_COLS = [
-  ["trainers_trained", "Trainers trained"],
+  ["trainers_trained", "Trainers trained (total)"],
   ["candidates_in_training", "Candidates in training"],
-  ["candidates_certified", "Candidates certified"],
+  ["candidates_certified", "Candidates certified (new that week)"],
+  ["candidates_enrolled", "Students enrolled (new that week)"],
 ] as const;
 const MONTHS: Record<string, string> = { jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06", jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12" };
 // Excel hands dates over as 2026-11-02, 02-11-2026, 02/11/2026 or 2-Nov-2026 / 2 Nov 26 (day first, India).
@@ -2024,7 +2025,7 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
   function addWeek() {
     const last = sorted(rows).at(-1)?.week_start;
     const next = last ? new Date(new Date(`${last}T00:00:00Z`).getTime() + 7 * 86_400_000).toISOString().slice(0, 10) : mondayOf(istTodayInput());
-    setRows((rs) => [...rs, { week_start: next, trainers_trained: "", candidates_in_training: "", candidates_certified: "" }]);
+    setRows((rs) => [...rs, { week_start: next, trainers_trained: "", candidates_in_training: "", candidates_certified: "", candidates_enrolled: "" }]);
   }
   function readPaste() {
     const notes: string[] = [];
@@ -2039,7 +2040,7 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
       if (!day) { if (i > 0 || /\d/.test(cells[0] ?? "")) notes.push(`Line ${i + 1} skipped: "${(cells[0] ?? "").slice(0, 20)}" is not a date.`); return; }
       const mon = mondayOf(day);
       if (mon !== day) notes.push(`Line ${i + 1}: ${day} moved to the Monday of its week, ${mon}.`);
-      byWeek.set(mon, { week_start: mon, trainers_trained: cells[1] ?? "", candidates_in_training: cells[2] ?? "", candidates_certified: cells[3] ?? "" });
+      byWeek.set(mon, { week_start: mon, trainers_trained: cells[1] ?? "", candidates_in_training: cells[2] ?? "", candidates_certified: cells[3] ?? "", candidates_enrolled: cells[4] ?? "" });
       read++;
     });
     setRows([...byWeek.values()]);
@@ -2057,21 +2058,22 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
     } catch (e: any) { setError(e.message); } finally { setBusy(false); }
   }
 
-  // Display only: the running total the digest calls "cumulative target" (the digest computes its own).
+  // Display only: the running total the digest calls "cumulative target" (the digest computes its own). -356: only the two
+  // FLOW figures (certified, enrolled) are added up; trainers are a headcount and are shown as they are, never summed.
   const view = sorted(rows);
   const running: Record<string, number> = {};
   return (
     <Section title="Weekly targets" actions={mayEdit ? <Btn small onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Btn> : undefined}>
       <p className="mb-3 text-sm text-gray-600">
-        The daily digest (22:00 mail and Reports, Daily digest) shows each week&apos;s actual against these, and the cumulative actual against the
-        running total. A week runs Monday to Sunday. Leave a figure blank if there is no target for it.
+        The daily digest (22:00 mail and Reports, Daily digest) shows each week&apos;s actual against these. Trainers: the total we should have by that week
+        (not added up). Students: new ones that week; the running column adds them up. A week runs Monday to Sunday. Leave a figure blank if there is no target for it.
       </p>
       {saved && <div data-testid="targets-saved" className="mb-3 rounded border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{saved}</div>}
       {mayEdit && (
         <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
           <div className="text-sm font-medium">Paste from Excel</div>
-          <p className="mb-2 text-xs text-gray-500">Copy the rows from Manish ji&apos;s sheet: week date, trainers trained, candidates in training, candidates certified, in that order. A header row is skipped.</p>
-          <textarea data-testid="targets-paste" className={inputCls + " h-24 font-mono text-xs"} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"2026-11-02\t5\t120\t40\n2026-11-09\t5\t140\t45"} />
+          <p className="mb-2 text-xs text-gray-500">Copy the rows from Manish ji&apos;s sheet: week date, trainers (total), candidates in training, candidates certified (new that week), students enrolled (new that week), in that order. A header row is skipped.</p>
+          <textarea data-testid="targets-paste" className={inputCls + " h-24 font-mono text-xs"} value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"2026-11-02\t11\t120\t40\t28\n2026-11-09\t14\t140\t45\t30"} />
           <div className="mt-2 flex items-center gap-3">
             <Btn small kind="ghost" onClick={readPaste} disabled={!paste.trim()}>Read paste into the grid</Btn>
             {pasteNote && <span data-testid="targets-paste-note" className="text-xs text-gray-700">{pasteNote}</span>}
@@ -2084,15 +2086,15 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
             <tr>
               <th className="px-3 py-2 text-left">Week (Monday)</th>
               {TARGET_COLS.map(([k, l]) => <th key={k} className="px-3 py-2 text-right">{l}</th>)}
-              <th className="px-3 py-2 text-right">Cumulative trainers / certified</th>
+              <th className="px-3 py-2 text-right">Running total: certified / enrolled</th>
               <th />
             </tr>
           </thead>
           <tbody>
-            {view.length === 0 && <tr><td colSpan={6} className="px-3 py-3 text-gray-400">No targets yet.</td></tr>}
+            {view.length === 0 && <tr><td colSpan={7} className="px-3 py-3 text-gray-400">No targets yet.</td></tr>}
             {view.map((r) => {
               const i = rows.indexOf(r);
-              for (const k of ["trainers_trained", "candidates_certified"]) running[k] = (running[k] ?? 0) + (Number(r[k]) || 0);
+              for (const k of ["candidates_certified", "candidates_enrolled"]) running[k] = (running[k] ?? 0) + (Number(r[k]) || 0);
               const notMonday = r.week_start && mondayOf(r.week_start) !== r.week_start;
               return (
                 <tr key={i} className="border-t border-gray-100">
@@ -2103,7 +2105,7 @@ function WeeklyTargets({ setError }: { setError: (m: string) => void }) {
                   {TARGET_COLS.map(([k]) => (
                     <td key={k} className="px-3 py-1"><input inputMode="numeric" className={inputCls + " text-right"} value={r[k] ?? ""} disabled={!mayEdit} onChange={(e) => setCell(i, k, e.target.value)} /></td>
                   ))}
-                  <td className="px-3 py-1 text-right tabular-nums text-gray-600">{running.trainers_trained} / {running.candidates_certified}</td>
+                  <td className="px-3 py-1 text-right tabular-nums text-gray-600">{running.candidates_certified ?? 0} / {running.candidates_enrolled ?? 0}</td>
                   <td className="px-3 py-1">{mayEdit && <Btn small kind="ghost" onClick={() => { setRemoved((rm) => [...rm, r.week_start]); setRows((rs) => rs.filter((_, j) => j !== i)); }}>Remove</Btn>}</td>
                 </tr>
               );

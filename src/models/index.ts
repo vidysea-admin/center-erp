@@ -1860,14 +1860,17 @@ AuditLogSchema.index({ actor: 1, created_at: -1 });
 // ---------- WeeklyTarget (Karunn sir, review 2026-11-02) ----------
 // "target against which we write plus or minus - the week's target and the cumulative target, both".
 // One row per IST week, keyed by its MONDAY (a business date: UTC midnight of the IST date, like
-// joined_on). Organisation-wide figures that Manish ji holds; cumulative = the sum of the weekly rows
-// up to the week (for in-training, a level, the week's own row). Written only through
-// /api/targets/weekly; read by dailyDigest.
+// joined_on). Organisation-wide figures that Manish ji holds. -356: three kinds of figure. trainers_trained is a
+// STOCK (the total trained trainers wanted by that week; never summed, a blank week carries the latest earlier
+// figure forward). candidates_in_training is a LEVEL (that week's row alone). candidates_certified and
+// candidates_enrolled are FLOWS (new that week; the cumulative is the sum of the weekly rows up to the week).
+// Written only through /api/targets/weekly; read by dailyDigest.
 const WeeklyTargetSchema = new Schema({
   week_start: { type: Date, required: true, unique: true },
   trainers_trained: { type: Number, default: null, min: 0 },
   candidates_in_training: { type: Number, default: null, min: 0 },
   candidates_certified: { type: Number, default: null, min: 0 },
+  candidates_enrolled: { type: Number, default: null, min: 0 },   // -356: new enrolments that week (Candidate.enrolled_at)
   updated_by: oid("User"),
 }, { timestamps: true });
 

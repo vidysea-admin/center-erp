@@ -46,6 +46,9 @@
 //   K8  Umesh 2026-11-03: any range - "Monday, Monday+Tuesday, Monday..Thursday": the cumulative column runs from a chosen
 //       day (?from=), equals the sum of the daily figures over those days, its target sums only the weeks it touches,
 //       and a bad range is refused before anything is read or mailed
+//   K9  -356 (Umesh 2026-11-24): Against target reads trainers as a HEADCOUNT (weeks of 10 and 10 = 10, never 20; a week of 14 = 14;
+//       a blank week carries the latest earlier figure; actual = Assigned + Free) and students as FLOWS (certified, enrolled: new that
+//       week, cumulative = the weeks added up); the mail carries no table descriptions (T5), the API and screen keep them
 //   S4  the screen as a dashboard: section dropdown, sort, row filter, minimum, hide zero rows, CSV = what is shown
 //
 // Every identity is derived from the run stamp. The shared wall DB holds other suites' data, so the EXACT
@@ -735,6 +738,7 @@ const badCases = [
   ["a fraction", [{ week_start: "2031-03-10", candidates_certified: 2.5 }], /whole number/],
   ["a word", [{ week_start: "2031-03-10", candidates_in_training: "ten" }], /whole number/],
   ["a figure above 1,00,000", [{ week_start: "2031-03-10", trainers_trained: 100001 }], /whole number/],
+  ["an enrolment figure that is not a whole number (-356)", [{ week_start: "2031-03-10", candidates_enrolled: "2.5" }], /whole number/],
   ["a date that does not exist", [{ week_start: "2031-02-30", trainers_trained: 1 }], /real date/],
   ["a good row followed by a bad one (nothing half-written)", [{ week_start: "2031-03-03", trainers_trained: 4 }, { week_start: "2031-03-11", trainers_trained: 1 }], /Row 2/],
 ];
@@ -746,32 +750,39 @@ ok("K4: ...and none of those refusals wrote anything", (await TW.countDocuments(
 ok("K4: a body that is not a list of weeks is refused 400", (await req(admin, "PUT", "/api/targets/weekly", { rows: "2031-03-10" })).status === 400, "");
 const auditsBefore = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
 const goodRows = [
-  { week_start: "2031-03-03", trainers_trained: "4", candidates_in_training: "", candidates_certified: 2 },
-  { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: "1,200", candidates_certified: "5" },
+  // -356: trainers are a headcount, so both weeks say 10 (the total we should have), and a sum would read 20. Enrolled is a flow: 20 + 28.
+  { week_start: "2031-03-03", trainers_trained: "10", candidates_in_training: "", candidates_certified: 2, candidates_enrolled: "20" },
+  { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: "1,200", candidates_certified: "5", candidates_enrolled: 28 },
 ];
 const saveT = await putT(admin, goodRows);
 const gotT = Object.fromEntries(((await req(admin, "GET", "/api/targets/weekly")).data?.items ?? []).map((r) => [r.week_start, r]));
 ok("K4: a valid paste is saved (commas read as thousands, blank kept blank) and read back exactly",
-  saveT.status === 200 && saveT.data?.saved === 2 && eq(gotT["2031-03-03"], { week_start: "2031-03-03", trainers_trained: 4, candidates_in_training: null, candidates_certified: 2 })
-  && eq(gotT["2031-03-10"], { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: 1200, candidates_certified: 5 }), JSON.stringify([saveT.data, gotT["2031-03-03"], gotT["2031-03-10"]]));
+  saveT.status === 200 && saveT.data?.saved === 2 && eq(gotT["2031-03-03"], { week_start: "2031-03-03", trainers_trained: 10, candidates_in_training: null, candidates_certified: 2, candidates_enrolled: 20 })
+  && eq(gotT["2031-03-10"], { week_start: "2031-03-10", trainers_trained: 10, candidates_in_training: 1200, candidates_certified: 5, candidates_enrolled: 28 }), JSON.stringify([saveT.data, gotT["2031-03-03"], gotT["2031-03-10"]]));
 const auditsAfter = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
 await putT(admin, goodRows);
 const auditsAgain = await db.collection("auditlogs").countDocuments({ entity: "WeeklyTarget", field: { $regex: /^2031-03-(03|10) / } });
-ok("K4: every figure set is on the audit record (5), and saving the same figures again records nothing new", auditsAfter - auditsBefore === 5 && auditsAgain === auditsAfter, `${auditsAfter - auditsBefore} then +${auditsAgain - auditsAfter}`);
+ok("K4: every figure set is on the audit record (7), and saving the same figures again records nothing new", auditsAfter - auditsBefore === 7 && auditsAgain === auditsAfter, `${auditsAfter - auditsBefore} then +${auditsAgain - auditsAfter}`);
 // the +/- arithmetic, recomputed here from the row's own actual and target
 const fmt = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }));
 const varOf = (a, t) => (a === null || t === null ? "—" : `${a - t >= 0 ? "+" : "−"}${fmt(Math.abs(a - t))}`);
 const toneOf = (a, t) => (a === null || t === null ? "" : a >= t ? "pos" : "neg");
 const allT = await TW.find({ week_start: { $lte: bizDay("2031-03-10") } }).sort({ week_start: 1 }).toArray();
+// -356: only the FLOW rows (certified, enrolled) add up over the weeks; trainers are a headcount and never do.
 const sumF = (f) => (allT.some((r) => r[f] !== null && r[f] !== undefined) ? allT.reduce((s2, r) => s2 + (Number(r[f]) || 0), 0) : null);
 const dAdmT = (await digest(uAdm.cookie, D)).data;
 const tr0 = dAdmT?.targets?.rows ?? [];
 const byKey = Object.fromEntries(tr0.map((r) => [r.key, r]));
-ok("K4: an unscoped viewer gets the target rows: week 2031-03-10 targets 10 / 1,200 / 5; cumulative = every target week up to it",
+const TR_ROW = "Trainers trained (total now)", EN_ROW = "Candidates enrolled (new)";
+// -356: the trainers' actual is the Trainers table's own two cells, Assigned to a live batch + Free to assign.
+const trainedNow = (d) => Number(cellsAt(d, "trainers", "Assigned to a live batch")?.[0]) + Number(cellsAt(d, "trainers", "Free to assign")?.[0]);
+const tn = trainedNow(dAdmT);
+ok("K4: an unscoped viewer gets FOUR target rows (trainers, in training, certified, enrolled): week 2031-03-10 targets 10 / 1,200 / 5 / 28; flows add the weeks up, trainers and in training do not",
   dAdmT?.targets?.week_from === "2031-03-10" && dAdmT?.targets?.cumulative_from === allT[0]?.week_start?.toISOString().slice(0, 10)
-  && byKey.trainers_trained?.week_target === 10 && byKey.candidates_in_training?.week_target === 1200 && byKey.candidates_certified?.week_target === 5
-  && byKey.trainers_trained?.cum_target === sumF("trainers_trained") && byKey.candidates_certified?.cum_target === sumF("candidates_certified")
-  && byKey.candidates_in_training?.cum_target === null, JSON.stringify(dAdmT?.targets).slice(0, 300));
+  && eq(tr0.map((r) => r.key), ["trainers_trained", "candidates_in_training", "candidates_certified", "candidates_enrolled"])
+  && byKey.trainers_trained?.week_target === 10 && byKey.candidates_in_training?.week_target === 1200 && byKey.candidates_certified?.week_target === 5 && byKey.candidates_enrolled?.week_target === 28
+  && byKey.candidates_certified?.cum_target === sumF("candidates_certified") && byKey.candidates_enrolled?.cum_target === 48 && sumF("candidates_enrolled") === 48
+  && byKey.candidates_in_training?.cum_target === null && byKey.trainers_trained?.cum_target === null && byKey.trainers_trained?.cum_actual === null, JSON.stringify(dAdmT?.targets).slice(0, 400));
 const tt = tblOf(dAdmT, "targets");
 const tBad = (tt?.rows ?? []).flatMap((row, i) => {
   const r = tr0[i];
@@ -779,18 +790,75 @@ const tBad = (tt?.rows ?? []).flatMap((row, i) => {
   const tones = ["", "", toneOf(r.week_actual, r.week_target), "", "", toneOf(r.cum_actual, r.cum_target)];
   return eq(row.cells, want) && eq(row.tones, tones) ? [] : [`${row.label}: ${JSON.stringify(row.cells)} ${JSON.stringify(row.tones)} want ${JSON.stringify(want)} ${JSON.stringify(tones)}`];
 });
-ok("K4: the target table's +/- cells are actual minus target, signed and coloured (green at or above target, red below)", tt?.rows?.length === 3 && tBad.length === 0, tBad.join(" | ").slice(0, 300));
-// Review of -351: "need not match Certified now" was vague, and the certificates row still read as people. The note now
-// names the cells each target figure is the same as, and the figures are checked against those cells.
-ok("K4: the target note says what Trainers trained and Candidates certified count, and which cells of the other tables they match",
-  /Trainers trained = trainers moved to Certified in the period, each counted once/.test(tt?.note ?? "")
-  && /It matches the Certified row of the Trainers table in its This week and Cumulative \(or Range\) columns, not in its Now column/.test(tt?.note ?? "")
-  && /Candidates certified \(certificate issued\) matches Certificates issued in the Candidates table: it counts certificates, not people/.test(tt?.note ?? ""), tt?.note);
-ok("K4: ...and they do: Trainers trained = the Certified row's week and cumulative cells, Candidates certified = the Certificates issued row's",
-  eq([fmt(byKey.trainers_trained?.week_actual), fmt(byKey.trainers_trained?.cum_actual)], cellsAt(dAdmT, "trainers", "Certified")?.slice(2))
-  && eq([fmt(byKey.candidates_certified?.week_actual), fmt(byKey.candidates_certified?.cum_actual)], cellsAt(dAdmT, "candidates", "Certificates issued")?.slice(2)),
-  JSON.stringify([byKey.trainers_trained, cellsAt(dAdmT, "trainers", "Certified"), byKey.candidates_certified, cellsAt(dAdmT, "candidates", "Certificates issued")]));
-ok("K4: in this fixture week nobody reached Certified, so trainers trained reads 0 against 10: −10, red", byKey.trainers_trained?.week_actual === 0 && tt?.rows?.[0]?.cells?.[2] === "−10" && tt?.rows?.[0]?.tones?.[2] === "neg", JSON.stringify(tt?.rows?.[0]));
+ok("K4: the target table's +/- cells are actual minus target, signed and coloured (green at or above target, red below); four rows", tt?.rows?.length === 4 && tBad.length === 0, tBad.join(" | ").slice(0, 300));
+// -356 (Umesh 2026-11-24): the note says in plain words what each row counts. Screen only: the mail does not carry it (T5).
+ok("K4: the target note says what each row counts: trainers = the total needed by this week against the trained trainers now (not added up); candidates certified and enrolled = new ones, cumulative = the weeks added up from the first week",
+  /Trainers: the target is the total number of trained trainers we should have by this week\. It is not added up over the weeks/.test(tt?.note ?? "")
+  && /The actual is the trainers trained today: Assigned to a live batch \+ Free to assign in the Trainers table, today's count even when an earlier date is picked/.test(tt?.note ?? "")
+  && /Candidates certified \(certificate issued\) and Candidates enrolled \(new\) count NEW ones/.test(tt?.note ?? "")
+  && /added up from the first week that measure has a target \(certified from 2031-03-03, enrolled from 2031-03-03\)/.test(tt?.note ?? "")
+  && /Certified matches Certificates issued in the Candidates table: it counts certificates, not people/.test(tt?.note ?? "")
+  && /Enrolled matches the Enrolled row of the Candidates table in its This week column; in its Cumulative \(or Range\) column only when both start on the same day/.test(tt?.note ?? ""), tt?.note);
+// (Here every measure starts in the same week, 03-03, so the Candidates table's cumulative column starts on the same day; K9 has the case where it does not.)
+ok("K4: ...and they do: Candidates certified = the Certificates issued row's This week and Cumulative cells, Candidates enrolled = the Enrolled row's",
+  eq([fmt(byKey.candidates_certified?.week_actual), fmt(byKey.candidates_certified?.cum_actual)], cellsAt(dAdmT, "candidates", "Certificates issued")?.slice(2))
+  && eq([fmt(byKey.candidates_enrolled?.week_actual), fmt(byKey.candidates_enrolled?.cum_actual)], cellsAt(dAdmT, "candidates", "Enrolled")?.slice(2)),
+  JSON.stringify([byKey.candidates_certified, cellsAt(dAdmT, "candidates", "Certificates issued"), byKey.candidates_enrolled, cellsAt(dAdmT, "candidates", "Enrolled")]));
+// -356: weeks of 10 and 10 are one headcount of 10. Before, the weeks were added (10 + 10 = 20) and the gap read twice as big.
+ok("K4: trainers weeks 10 and 10 are a target of 10, never 20: the actual is Assigned + Free (the Trainers table's cells), the +/- is that minus 10, the cumulative cells are dashes",
+  tn > 0 && byKey.trainers_trained?.week_target === 10 && byKey.trainers_trained?.week_actual === tn && tt?.rows?.[0]?.label === TR_ROW
+  && eq(tt?.rows?.[0]?.cells, [fmt(10), fmt(tn), varOf(tn, 10), "—", "—", "—"]) && tt?.rows?.[0]?.tones?.[2] === toneOf(tn, 10), JSON.stringify([tn, tt?.rows?.[0]]));
+// -356: the enrolment row against a count the test makes itself: Candidate.enrolled_at in this week, and since the first target week.
+const enrWk = await db.collection("candidates").countDocuments({ enrolled_at: { $gte: istAt("2031-03-10", 0, 0), $lt: istAt("2031-03-15", 0, 0) } });
+const enrCum = await db.collection("candidates").countDocuments({ enrolled_at: { $gte: istAt("2031-03-03", 0, 0), $lt: istAt("2031-03-15", 0, 0) } });
+ok("K4: the enrolment row: week target 28 against the enrolments counted from enrolled_at this week; cumulative target 48 (20 + 28) against the enrolments since the first target week, +/- signed",
+  enrWk > 0 && eq([byKey.candidates_enrolled?.week_actual, byKey.candidates_enrolled?.cum_actual], [enrWk, enrCum])
+  && eq(tt?.rows?.[3]?.cells, [fmt(28), fmt(enrWk), varOf(enrWk, 28), fmt(48), fmt(enrCum), varOf(enrCum, 48)]), JSON.stringify([enrWk, enrCum, tt?.rows?.[3]]));
+// -356 (review): each FLOW measure counts from its OWN first target week. Enrolment targets that begin a week after the other measures
+// (03-03 enrolled blank, 03-10 says 28): the enrolled cumulative target is 28 alone and its actual is the enrolments since 03-10, not
+// since 03-03 (that would put a false surplus against a target that starts later). Certified still starts 03-03. Restored straight after.
+const lateCand = (await db.collection("candidates").insertOne(cand(locA, "late-k9", istAt("2031-03-05", 10, 0)))).insertedId;   // enrolled BETWEEN 03-03 and 03-10: only a count from 03-03 sees it
+try {
+  const lateP = await putT(admin, [{ week_start: "2031-03-03", trainers_trained: 10, candidates_certified: 2, candidates_enrolled: "" }]);
+  const dLate = (await digest(uAdm.cookie, D)).data;
+  const rl = Object.fromEntries((dLate?.targets?.rows ?? []).map((r) => [r.key, r]));
+  const enrSince10 = await db.collection("candidates").countDocuments({ enrolled_at: { $gte: istAt("2031-03-10", 0, 0), $lt: istAt("2031-03-15", 0, 0) } });
+  const enrSince03 = await db.collection("candidates").countDocuments({ enrolled_at: { $gte: istAt("2031-03-03", 0, 0), $lt: istAt("2031-03-15", 0, 0) } });
+  ok("K9: enrolment targets that start a week later than the other measures: the enrolled cumulative target is 28 (its own weeks only) and its actual counts from ITS first week (03-10), not from 03-03",
+    lateP.status === 200 && rl.candidates_enrolled?.cum_target === 28 && rl.candidates_enrolled?.cum_actual === enrSince10 && enrSince03 > enrSince10
+    && rl.candidates_certified?.cum_target === 7 && fmt(rl.candidates_certified?.cum_actual) === cellsAt(dLate, "candidates", "Certificates issued")?.[3]
+    && /certified from 2031-03-03, enrolled from 2031-03-10/.test(tblOf(dLate, "targets")?.note ?? ""),
+    JSON.stringify([lateP.status, rl.candidates_enrolled, enrSince10, enrSince03, rl.candidates_certified]));
+} finally {
+  await putT(admin, [{ week_start: "2031-03-03", trainers_trained: 10, candidates_certified: 2, candidates_enrolled: 20 }]);
+  await db.collection("candidates").deleteOne({ _id: lateCand });
+}
+// -356: a total that changes is compared as that total, and a blank week carries the latest earlier figure forward. Weeks 03-17 and 03-24
+// exist only for these arms and are removed straight after (the later tick arms must see no target for those weeks).
+try {
+  const k9Put = await putT(admin, [{ week_start: "2031-03-17", trainers_trained: 14, candidates_certified: 4, candidates_enrolled: 30 }, { week_start: "2031-03-24", candidates_certified: 3 }, { week_start: "2031-04-07", trainers_trained: 0 }]);
+  const d17 = (await digest(uAdm.cookie, "2031-03-17")).data, d24 = (await digest(uAdm.cookie, "2031-03-24")).data, d31 = (await digest(uAdm.cookie, "2031-03-31")).data;
+  const r17 = Object.fromEntries((d17?.targets?.rows ?? []).map((r) => [r.key, r])), r24 = Object.fromEntries((d24?.targets?.rows ?? []).map((r) => [r.key, r])), r31 = Object.fromEntries((d31?.targets?.rows ?? []).map((r) => [r.key, r]));
+  ok("K9: a week row of 14 after two rows of 10 is a total of 14 (never 10 + 10 + 14, never 10 + 14): target 14, +/- = trained now minus 14, no cumulative trainer figure",
+    k9Put.status === 200 && r17.trainers_trained?.week_target === 14 && r17.trainers_trained?.week_actual === trainedNow(d17) && eq(tblOf(d17, "targets")?.rows?.[0]?.cells, [fmt(14), fmt(trainedNow(d17)), varOf(trainedNow(d17), 14), "—", "—", "—"]),
+    JSON.stringify([k9Put.status, r17.trainers_trained, tblOf(d17, "targets")?.rows?.[0]]));
+  ok("K9: the flows still add up: from the first target week the certified target is 2 + 5 + 4 = 11 and the enrolled target is 20 + 28 + 30 = 78, the week targets are that week's own (4 and 30)",
+    r17.candidates_certified?.week_target === 4 && r17.candidates_certified?.cum_target === 11 && r17.candidates_enrolled?.week_target === 30 && r17.candidates_enrolled?.cum_target === 78, JSON.stringify([r17.candidates_certified, r17.candidates_enrolled]));
+  ok("K9: a week with a blank trainer figure carries the latest earlier one forward (week 03-24 blank, 03-17 says 14: target 14); its flow targets are its own row (certified 3, enrolled blank)",
+    r24.trainers_trained?.week_target === 14 && r24.trainers_trained?.week_actual === trainedNow(d24) && r24.candidates_certified?.week_target === 3 && r24.candidates_certified?.cum_target === 14
+    && r24.candidates_enrolled?.week_target === null && r24.candidates_enrolled?.cum_target === 78 && /latest earlier one, from the week of 2031-03-17, is used/.test(tblOf(d24, "targets")?.note ?? ""),
+    JSON.stringify([r24.trainers_trained, r24.candidates_certified, r24.candidates_enrolled, tblOf(d24, "targets")?.note?.slice(0, 260)]));
+  ok("K9: a week with no row at all (03-31): trainers still carry 14 forward, every flow shows no week target but keeps its cumulative target",
+    r31.trainers_trained?.week_target === 14 && r31.candidates_certified?.week_target === null && r31.candidates_certified?.cum_target === 14 && r31.candidates_enrolled?.cum_target === 78, JSON.stringify([r31.trainers_trained, r31.candidates_certified]));
+  // A target of ZERO is a figure, not a blank: the week of 04-07 says 0 trainers, so it reads 0 and does not carry 14 forward.
+  const d07 = (await digest(uAdm.cookie, "2031-04-07")).data, r07 = (d07?.targets?.rows ?? []).find((r) => r.key === "trainers_trained");
+  ok("K9: a week with trainers_trained 0 reads as a target of 0 (the actual is the whole headcount, a surplus), not carried forward from 14",
+    r07?.week_target === 0 && r07?.week_actual === trainedNow(d07) && tblOf(d07, "targets")?.rows?.[0]?.cells?.[0] === "0" && tblOf(d07, "targets")?.rows?.[0]?.cells?.[2] === varOf(trainedNow(d07), 0) && !/latest earlier one/.test(tblOf(d07, "targets")?.note ?? ""),
+    JSON.stringify([r07, tblOf(d07, "targets")?.rows?.[0]]));
+} finally {
+  await putT(admin, [{ week_start: "2031-03-17" }, { week_start: "2031-03-24" }, { week_start: "2031-04-07" }]);
+}
+ok("K9: ...and those extra weeks are gone again", (await TW.countDocuments({ week_start: { $in: [bizDay("2031-03-17"), bizDay("2031-03-24"), bizDay("2031-04-07")] } })) === 0, "");
 ok("K4: a centre login asking the same day gets no target figures at all", (await digest(uA.cookie, D)).data?.targets === null, "");
 
 // K8 - a chosen range. Flow rows only: their range cell must be the sum of the "on the day" cell over each day in it.
@@ -816,10 +884,14 @@ const k8Def = (await digest(uA.cookie, "2031-03-17")).data;
 ok("K8: with no range chosen nothing changes: range_from is null and the column is the cumulative one", k8Def?.range_from === null && /^Cumulative/.test(tblOf(k8Def, "candidates")?.head?.[4] ?? ""), String(tblOf(k8Def, "candidates")?.head?.[4]));
 const k8T1 = (await digestR(uAdm.cookie, D, "2031-03-10")).data?.targets, k8T2 = (await digestR(uAdm.cookie, D, "2031-03-05")).data?.targets;
 const tk = (t, k) => t?.rows?.find((r) => r.key === k);
-ok("K8: the range target sums only the target weeks the range touches (from 03-10: week 03-10 alone; from 03-05: weeks 03-03 + 03-10)",
-  k8T1?.cumulative_from === "2031-03-10" && tk(k8T1, "trainers_trained")?.cum_target === 10 && tk(k8T1, "candidates_certified")?.cum_target === 5
-  && k8T2?.cumulative_from === "2031-03-05" && tk(k8T2, "trainers_trained")?.cum_target === 14 && tk(k8T2, "candidates_certified")?.cum_target === 7,
-  JSON.stringify([tk(k8T1, "trainers_trained"), tk(k8T2, "trainers_trained")]));
+const k8R = (await digestR(uAdm.cookie, D, "2031-03-12")).data;
+ok("K8: the range target: flows sum only the target weeks the range touches (from 03-10: week 03-10 alone; from 03-05: weeks 03-03 + 03-10), trainers use the range's end week (10) in both, with no cumulative figure",
+  k8T1?.cumulative_from === "2031-03-10" && tk(k8T1, "candidates_certified")?.cum_target === 5 && tk(k8T1, "candidates_enrolled")?.cum_target === 28
+  && k8T2?.cumulative_from === "2031-03-05" && tk(k8T2, "candidates_certified")?.cum_target === 7 && tk(k8T2, "candidates_enrolled")?.cum_target === 48
+  && [k8T1, k8T2].every((t) => tk(t, "trainers_trained")?.week_target === 10 && tk(t, "trainers_trained")?.cum_target === null && tk(t, "trainers_trained")?.week_actual === tn),
+  JSON.stringify([tk(k8T1, "trainers_trained"), tk(k8T2, "trainers_trained"), tk(k8T1, "candidates_enrolled"), tk(k8T2, "candidates_enrolled")]));
+ok("K8: a range from 03-12: the enrolment target is the one touched week (28) and its actual is the Enrolled row's Range cell",
+  tk(k8R?.targets, "candidates_enrolled")?.cum_target === 28 && fmt(tk(k8R?.targets, "candidates_enrolled")?.cum_actual) === cellsAt(k8R, "candidates", "Enrolled")?.[3], JSON.stringify([tk(k8R?.targets, "candidates_enrolled"), cellsAt(k8R, "candidates", "Enrolled")]));
 // review -342: a range starting MID-WEEK must not cut the week column (the stage-move read is bounded by the earlier start)
 // A stage move on the week's MONDAY, before the range start, so a cut week column would show it missing.
 const k8Tr = await db.collection("trainers").findOne({ _id: oid(kIds.k1) });
@@ -851,9 +923,9 @@ try {
   await db.collection("auditlogs").deleteOne({ _id: k8Earlier.insertedId });
 }
 const k8Tt = tk(dK8?.targets, "trainers_trained"), k8Cc = tk(dK8?.targets, "candidates_certified");
-ok("K8: with real moves in the period, Trainers trained equals the Certified row's This week and Cumulative cells (on the day 0, week 1, cumulative 2), and Candidates certified equals the Certificates issued row's",
+ok("K8: with real moves in the period, Candidates certified equals the Certificates issued row's This week and Cumulative cells (on the day 0, week 1, cumulative 2), and the Certified-stage moves do NOT change the trainers' target row (-356: it is the headcount Assigned + Free)",
   dK8?.targets?.cumulative_from === "2031-03-03"
-  && eq(cellsAt(dK8, "trainers", bucketLabel("certified"))?.slice(1), ["0", "1", "2"]) && eq([k8Tt?.week_actual, k8Tt?.cum_actual], [1, 2])
+  && eq(cellsAt(dK8, "trainers", bucketLabel("certified"))?.slice(1), ["0", "1", "2"]) && eq([k8Tt?.week_actual, k8Tt?.cum_actual], [trainedNow(dK8), null])
   && eq(cellsAt(dK8, "candidates", "Certificates issued")?.slice(1), ["0", "1", "2"]) && eq([k8Cc?.week_actual, k8Cc?.cum_actual], [1, 2]),
   JSON.stringify([cellsAt(dK8, "trainers", bucketLabel("certified")), k8Tt, cellsAt(dK8, "candidates", "Certificates issued"), k8Cc]));
 await db.collection("auditlogs").deleteOne({ _id: k8Move.insertedId });
@@ -951,8 +1023,19 @@ ok("T5: the finance recipient's mail carries the exact costs (today Rs 1,250, mo
 ok("T5: ...and its other sections carry the same exact numbers as the screen (joined 4, enrolled 2, mobilised 12 of 30)",
   mailRow(txtF, "Joined into batches")?.[1] === "4" && mailRow(txtF, "Enrolled")?.[1] === "2" && mailRow(txtF, "Mobilised (planning batches)")?.[0] === "12 of 30 (gap 18)", txtF.replace(/\s+/g, " ").slice(0, 400));
 ok("T5: mail uses the same daily learner start and the current totals as the screen, and says the Now column is current, not historical",
-  mailRow(txtF, "Training started")?.[1] === "7" && mailRow(txtF, "Enrolled")?.[0] === "5" && mailRow(txtF, "In training (started Active batch)")?.[0] === "0"
-  && /Now = the position today, even when an earlier date is picked/.test(txtF.replace(/\s+/g, " ")), txtF.replace(/\s+/g, " ").slice(0, 400));
+  mailRow(txtF, "Training started")?.[1] === "7" && mailRow(txtF, "Enrolled")?.[0] === "5" && mailRow(txtF, "In training (started Active batch)")?.[0] === "0", txtF.replace(/\s+/g, " ").slice(0, 400));
+// -356 (Manish ji): the mail carries NO table descriptions. The API (and so the screen, S1) keep them. Checked for every kind of mail:
+// the finance viewer's, the Admin's (with Against target), the typed address's (all four tables) and the centre login's.
+const flatText = (x) => String(x ?? "").replace(/\s+/g, " ");
+const notesIn = (text, tables) => (tables ?? []).filter((t) => t.note && flatText(text).includes(flatText(t.note).slice(0, 40))).map((t) => t.key);
+const apiAdmT = (await digest(uAdm.cookie, D)).data;
+const apiAFearly = (await digest(uAF.cookie, D)).data;
+ok("T5: the mail has NO table descriptions: no table's note is in the finance viewer's, the Admin's, the typed address's or the centre login's mail, while the API still returns every note",
+  (apiAFearly?.tables ?? []).length === 3 && (apiAFearly?.tables ?? []).every((t) => (t.note ?? "").length > 40) && (apiAdmT?.tables ?? []).every((t) => (t.note ?? "").length > 40)
+  && notesIn(mailed(uAF.email)?.text, apiAFearly?.tables).length === 0 && notesIn(mailed(uAdm.email)?.text, apiAdmT?.tables).length === 0
+  && notesIn(mailed(unknownEmail)?.text, [...(apiAdmT?.tables ?? []), ...(apiAFearly?.tables ?? [])]).length === 0 && notesIn(mailed(uA.email)?.text, apiAFearly?.tables).length === 0
+  && !/Now = the position today|Targets come from the weekly plan|A cost that needs approval is counted/.test(flatText(mailed(uAF.email)?.text) + flatText(mailed(uAdm.email)?.text)),
+  `${notesIn(mailed(uAF.email)?.text, apiAFearly?.tables)} | ${notesIn(mailed(uAdm.email)?.text, apiAdmT?.tables)} | ${notesIn(mailed(unknownEmail)?.text, [...(apiAdmT?.tables ?? []), ...(apiAFearly?.tables ?? [])])}`);
 // K: the mail draws the SAME cells as the API (one function): every row of every table, cell for cell
 const apiAF = (await digest(uAF.cookie, D)).data;
 // mailRow reads the FIRST line that carries a label, so the check below only means something if no two rows of one mail share
@@ -964,8 +1047,8 @@ const mailMismatch = (apiAF?.tables ?? []).flatMap((t) => t.rows.filter((r) => !
 ok("K6: mail = API: every row of every table in the finance viewer's mail carries exactly the API's cells", (apiAF?.tables ?? []).length === 3 && mailMismatch.length === 0, mailMismatch.join(" | ").slice(0, 300));
 ok("T5: the SAME digest for a recipient WITHOUT finance.view has no Costs section and no cost figure at all",
   txtN.length > 0 && !/Costs|Rs \d|spend|Payment pending/i.test(txtN) && mailRow(txtN, "Joined into batches")?.[1] === "4", txtN.replace(/\s+/g, " ").slice(0, 300));
-ok("K4: the Admin's mail carries the target table (week of 2031-03-10: trainers trained target 10); a centre login's mail does not",
-  /^AGAINST TARGET$/m.test(txtAdm) && mailRow(txtAdm, "Trainers trained (reached Certified)")?.[0] === "10" && !/AGAINST TARGET/.test(txtN), txtAdm.replace(/\s+/g, " ").slice(0, 300));
+ok("K4: the Admin's mail carries the target table (week of 2031-03-10: trainers target 10 against the trained headcount, enrolment target 28); a centre login's mail does not",
+  /^AGAINST TARGET$/m.test(txtAdm) && eq(mailRow(txtAdm, TR_ROW)?.slice(0, 3), [fmt(10), fmt(tn), varOf(tn, 10)]) && mailRow(txtAdm, EN_ROW)?.[0] === "28" && !/AGAINST TARGET/.test(txtN), txtAdm.replace(/\s+/g, " ").slice(0, 300));
 ok("T5: an Admin recipient gets no Costs section either (no finance.view)", txtAdm.length > 0 && !/Costs|Rs \d/i.test(txtAdm), txtAdm.replace(/\s+/g, " ").slice(0, 200));
 const txtTyped = String(mailed(unknownEmail)?.text ?? "");
 // Review of -351 (round 2): the typed address's mail is the only one with all four tables together (Against target AND Costs),
@@ -981,7 +1064,7 @@ ok("T5: the typed address (no ERP account) gets the FULL report: both centres' b
 ok("T5: a scoped recipient's mail names only its own centre's batches", !txtN.includes(fx.pb1.code) && txtN.includes(fx.pa1.code), "");
 {
   const gone = await req(admin, "PUT", "/api/targets/weekly", { rows: [{ week_start: "2031-03-10" }] });
-  ok("K4: a week sent with all three figures blank is removed (cleanup of this suite's target week)", gone.status === 200 && gone.data?.removed === 1 && (await db.collection("weeklytargets").countDocuments({ week_start: bizDay("2031-03-10") })) === 0, JSON.stringify(gone.data));
+  ok("K4: a week sent with all four figures blank is removed (cleanup of this suite's target week)", gone.status === 200 && gone.data?.removed === 1 && (await db.collection("weeklytargets").countDocuments({ week_start: bizDay("2031-03-10") })) === 0, JSON.stringify(gone.data));
 }
 
 // =================================================================================================

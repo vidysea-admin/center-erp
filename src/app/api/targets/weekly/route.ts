@@ -10,7 +10,7 @@ import { assertDigestDay, istWeekOf } from "@/lib/rules";
 // target, both. Manish ji has the targets." The weekly targets the daily digest compares against. Entered on
 // Admin, Targets (typed, or pasted straight from Manish ji's Excel - both, Umesh 2026-11-02). Organisation-wide
 // (no centre), keyed by the week's MONDAY (Mon-Sun IST, Umesh). Same right as Defaults: defaults.manage.
-const TARGET_FIELDS =["trainers_trained", "candidates_in_training", "candidates_certified"] as const;
+const TARGET_FIELDS = ["trainers_trained", "candidates_in_training", "candidates_certified", "candidates_enrolled"] as const;
 const MAX_ROWS = 260;        // five years of weeks: a paste larger than that is a wrong paste
 const MAX_VALUE = 100_000;   // no weekly target in this programme is near this; a bigger number is a typo
 
@@ -24,8 +24,8 @@ export const GET = apiHandler(async () => {
   return NextResponse.json({ items: rows.map((r) => ({ week_start: keyOf(r.week_start), ...Object.fromEntries(TARGET_FIELDS.map((f) => [f, r[f] ?? null])) })) });
 });
 
-// PUT { rows: [{ week_start: "YYYY-MM-DD" (a Monday), trainers_trained, candidates_in_training, candidates_certified }] }
-// Upserts every listed week; a week whose three figures are all blank is removed. Weeks not listed are left as
+// PUT { rows: [{ week_start: "YYYY-MM-DD" (a Monday), trainers_trained, candidates_in_training, candidates_certified, candidates_enrolled }] }
+// Upserts every listed week; a week whose four figures are all blank is removed. Weeks not listed are left as
 // they are, so pasting next month's weeks never erases this month's. The whole list is validated before
 // anything is written: one bad row refuses the save and names the row, so a paste never lands half-way.
 export const PUT = apiHandler(async (req: NextRequest) => {
